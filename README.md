@@ -86,6 +86,23 @@ The Domain Manager lets WireGuard-connected devices:
 
 Access is restricted by Caddy's `remote_ip` matcher to the WireGuard client subnet (default `10.8.0.0/24`).
 
+## Cloudflare integration
+
+The setup EXE includes a **Cloudflare** tab:
+
+| Field | Purpose |
+|-------|---------|
+| API token | Cloudflare API token with `Zone:DNS:Edit` permission |
+| Root zone | e.g. `example.com` (used to resolve Zone ID) |
+| Zone ID | Optional — auto-detected if blank |
+| Auto-create DNS | Creates A records for WireGuard UI + Domain Manager hostnames |
+| DNS-01 TLS | Uses Cloudflare DNS challenge for Caddy HTTPS certificates |
+| Proxied | Orange-cloud proxy for HTTP domains (WireGuard records stay DNS-only) |
+
+When Cloudflare is configured, the Domain Manager also creates A records automatically when you deploy new domains over VPN.
+
+Create a token at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) with **Edit DNS** permission for your zone.
+
 ## Third-party licenses
 
 | Component | Version | License |

@@ -13,6 +13,12 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request, abort
 
+try:
+    from cloudflare import delete_domain_a_record, upsert_domain_a_record
+except ImportError:
+    upsert_domain_a_record = None
+    delete_domain_a_record = None
+
 app = Flask(__name__)
 
 DOMAINS_DIR = Path(os.environ.get("DOMAINS_DIR", "/domains"))
@@ -47,15 +53,18 @@ def save_domains(domains):
 
 
 def caddy_file_for(domain: str, upstream: str, tls_mode: str = "auto") -> str:
-    tls_line = ""
+    use_cf = os.environ.get("CLOUDFLARE_DNS_TLS", "true").lower() == "true" and os.environ.get("CLOUDFLARE_API_TOKEN")
+    tls_block = ""
     if tls_mode == "internal":
-        tls_line = "\n\ttls internal"
+        tls_block = "\ttls internal\n"
     elif tls_mode == "off":
-        tls_line = "\n\ttls off"
+        tls_block = "\ttls off\n"
+    elif tls_mode == "auto" and use_cf:
+        tls_block = "\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}\n"
 
     return f"""# Managed by Domain Manager — {domain}
 {domain} {{
-\treverse_proxy {upstream}{tls_line}
+{tls_block}\treverse_proxy {upstream}
 }}
 """
 
@@ -329,12 +338,22 @@ def add_domain():
     caddy_path = DOMAINS_DIR / f"{domain.replace('.', '_')}.caddy"
     caddy_path.write_text(caddy_file_for(domain, upstream, tls_mode))
 
+    cf_msg = None
+    if upsert_domain_a_record:
+        try:
+            cf_msg = upsert_domain_a_record(domain)
+        except Exception as exc:
+            caddy_path.unlink(missing_ok=True)
+            return jsonify({"error": f"Cloudflare DNS failed: {exc}"}), 500
+
     entry = {
         "domain": domain,
         "upstream": upstream,
         "tls_mode": tls_mode,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
+    if cf_msg:
+        entry["cloudflare"] = cf_msg
     domains.append(entry)
     save_domains(domains)
 
@@ -359,6 +378,12 @@ def remove_domain(domain):
 
     caddy_path = DOMAINS_DIR / f"{domain.replace('.', '_')}.caddy"
     caddy_path.unlink(missing_ok=True)
+
+    if delete_domain_a_record:
+        try:
+            delete_domain_a_record(domain)
+        except Exception as exc:
+            return jsonify({"error": f"Cloudflare DNS cleanup failed: {exc}"}), 500
 
     domains = [d for d in domains if d["domain"] != domain]
     save_domains(domains)

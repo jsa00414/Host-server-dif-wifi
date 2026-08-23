@@ -37,8 +37,8 @@ if [[ -f /etc/sysctl.conf ]] && ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.co
 fi
 
 echo "==> Building and starting stack..."
-docker compose --env-file "${ENV_FILE}" pull wg-easy caddy 2>/dev/null || true
-docker compose --env-file "${ENV_FILE}" build domain-manager
+docker compose --env-file "${ENV_FILE}" pull wg-easy 2>/dev/null || true
+docker compose --env-file "${ENV_FILE}" build caddy domain-manager
 docker compose --env-file "${ENV_FILE}" up -d
 
 echo ""

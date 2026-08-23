@@ -9,7 +9,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from deployer import DeployConfig, deploy, test_ssh_connection
+from deployer import DeployConfig, deploy, test_cloudflare_connection, test_ssh_connection
 
 APP_TITLE = "VPS WireGuard Setup"
 APP_VERSION = "1.0.0"
@@ -22,8 +22,8 @@ class SetupApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_TITLE} v{APP_VERSION}")
-        self.geometry("720x780")
-        self.minsize(640, 680)
+        self.geometry("720x820")
+        self.minsize(640, 720)
         self.configure(bg="#0f1419")
 
         style = ttk.Style(self)
@@ -134,6 +134,56 @@ class SetupApp(tk.Tk):
             "10.8.0.0/24",
         )
 
+        # --- Cloudflare tab ---
+        cf_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(cf_tab, text="  Cloudflare  ")
+
+        ttk.Label(
+            cf_tab,
+            text=(
+                "Optional: connect Cloudflare to auto-create DNS A records and enable DNS-01 TLS for Caddy.\n"
+                "Create an API token at dash.cloudflare.com with Zone:DNS:Edit permission."
+            ),
+            style="Sub.TLabel",
+            wraplength=640,
+        ).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(cf_tab, text="Cloudflare API token").pack(anchor="w", pady=(8, 2))
+        self.cf_api_token = ttk.Entry(cf_tab, width=60, show="•")
+        self.cf_api_token.pack(fill="x")
+
+        self.cf_zone_name = self._field(cf_tab, "Root zone / domain (e.g. example.com)", "example.com")
+        self.cf_zone_id = self._field(cf_tab, "Zone ID (optional — auto-detected from zone name)", "")
+
+        self.cf_auto_dns = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            cf_tab,
+            text="Auto-create DNS A records for WireGuard UI and Domain Manager",
+            variable=self.cf_auto_dns,
+        ).pack(anchor="w", pady=(8, 4))
+
+        self.cf_dns_tls = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            cf_tab,
+            text="Use Cloudflare DNS-01 for Caddy HTTPS certificates",
+            variable=self.cf_dns_tls,
+        ).pack(anchor="w", pady=(0, 4))
+
+        self.cf_proxied = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            cf_tab,
+            text="Proxy HTTP domains through Cloudflare (orange cloud)",
+            variable=self.cf_proxied,
+        ).pack(anchor="w", pady=(0, 4))
+
+        ttk.Label(
+            cf_tab,
+            text="Note: WireGuard tunnel DNS records are always DNS-only (not proxied).",
+            style="Sub.TLabel",
+        ).pack(anchor="w", pady=(4, 8))
+
+        ttk.Button(cf_tab, text="Test Cloudflare API", command=self._test_cloudflare).pack(anchor="w")
+
         # --- Log + Deploy ---
         bottom = ttk.Frame(self, padding=(12, 0, 12, 12))
         bottom.pack(fill="both", expand=True)
@@ -202,7 +252,28 @@ class SetupApp(tk.Tk):
             caddy_email=self.caddy_email.get().strip(),
             domain_manager_host=self.domain_manager_host.get().strip(),
             vpn_subnet=self.vpn_subnet.get().strip() or "10.8.0.0/24",
+            cloudflare_api_token=self.cf_api_token.get().strip(),
+            cloudflare_zone_name=self.cf_zone_name.get().strip(),
+            cloudflare_zone_id=self.cf_zone_id.get().strip(),
+            cloudflare_proxied=self.cf_proxied.get(),
+            cloudflare_auto_dns=self.cf_auto_dns.get(),
+            cloudflare_dns_tls=self.cf_dns_tls.get(),
         )
+
+    def _test_cloudflare(self):
+        cfg = self._get_config()
+        if not cfg:
+            return
+        if not cfg.cloudflare_api_token:
+            messagebox.showerror("Cloudflare", "Enter a Cloudflare API token first.")
+            return
+        self._log("Testing Cloudflare API...")
+        ok, msg = test_cloudflare_connection(cfg)
+        self._log(msg)
+        if ok:
+            messagebox.showinfo("Cloudflare Test", msg)
+        else:
+            messagebox.showerror("Cloudflare Test Failed", msg)
 
     def _test_ssh(self):
         cfg = self._get_config()

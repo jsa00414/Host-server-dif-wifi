@@ -42,7 +42,7 @@ services:
       - vpn_stack
 
   caddy:
-    image: caddy:2.10.0-alpine
+    build: ./caddy
     container_name: caddy
     restart: unless-stopped
     depends_on:
@@ -54,6 +54,7 @@ services:
       - DOMAIN_MANAGER_HOST=${DOMAIN_MANAGER_HOST:-domains.localhost}
       - VPN_SUBNET=${VPN_SUBNET:-10.8.0.0/24}
       - CADDY_EMAIL=${CADDY_EMAIL:-admin@localhost}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     ports:
       - "80:80/tcp"
       - "443:443/tcp"
@@ -75,6 +76,12 @@ services:
       - DOMAINS_DIR=/domains
       - ADMIN_TOKEN=${DOMAIN_ADMIN_TOKEN}
       - VPN_SUBNET=${VPN_SUBNET:-10.8.0.0/24}
+      - VPS_HOST=${VPS_HOST}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - CLOUDFLARE_ZONE_NAME=${CLOUDFLARE_ZONE_NAME:-}
+      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID:-}
+      - CLOUDFLARE_PROXIED=${CLOUDFLARE_PROXIED:-true}
+      - CLOUDFLARE_DNS_TLS=${CLOUDFLARE_DNS_TLS:-true}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./domains:/domains

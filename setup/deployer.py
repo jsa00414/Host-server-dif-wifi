@@ -13,6 +13,8 @@ from typing import Callable
 
 import paramiko
 
+from cloudflare import CloudflareConfig, CloudflareError, setup_deployment_dns, verify_token
+
 LogFn = Callable[[str], None]
 WG_EASY_VERSION = "15.3.0"
 INSTALL_DIR = "/opt/vps-wireguard"
@@ -41,6 +43,12 @@ class DeployConfig:
     caddy_email: str
     domain_manager_host: str
     vpn_subnet: str
+    cloudflare_api_token: str = ""
+    cloudflare_zone_name: str = ""
+    cloudflare_zone_id: str = ""
+    cloudflare_proxied: bool = True
+    cloudflare_auto_dns: bool = True
+    cloudflare_dns_tls: bool = True
 
 
 def _connect(cfg: DeployConfig) -> paramiko.SSHClient:
@@ -97,6 +105,11 @@ def _build_env(cfg: DeployConfig, admin_token: str) -> str:
         domain_manager_host=domain_manager_host,
         domain_admin_token=admin_token,
         vpn_subnet=cfg.vpn_subnet,
+        cloudflare_api_token=cfg.cloudflare_api_token,
+        cloudflare_zone_name=cfg.cloudflare_zone_name,
+        cloudflare_zone_id=cfg.cloudflare_zone_id,
+        cloudflare_proxied=str(cfg.cloudflare_proxied).lower(),
+        cloudflare_dns_tls=str(cfg.cloudflare_dns_tls).lower(),
     )
 
 
@@ -104,27 +117,40 @@ def _build_caddyfile(cfg: DeployConfig) -> str:
     wg_domain = cfg.wg_domain.strip()
     domain_manager_host = cfg.domain_manager_host.strip() or f"domains.{cfg.vps_host}"
     caddy_email = cfg.caddy_email or "admin@localhost"
+    use_cf_tls = bool(cfg.cloudflare_api_token and cfg.cloudflare_dns_tls)
 
-    lines = [
+    global_block = [
         "{",
         f"\temail {caddy_email}",
         "\tadmin off",
-        "}",
-        "",
     ]
+    if use_cf_tls:
+        global_block.append("\tacme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}")
+    global_block.extend(["}", ""])
+
+    lines = global_block
 
     if wg_domain and wg_domain.lower() not in ("localhost", "127.0.0.1"):
-        lines.extend([
+        wg_lines = [
             f"# WireGuard Easy v{WG_EASY_VERSION} UI over HTTPS",
             f"{wg_domain} {{",
+        ]
+        if use_cf_tls:
+            wg_lines.append("\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}")
+        wg_lines.extend([
             f"\treverse_proxy wg-easy:{cfg.wg_ui_port}",
             "}",
             "",
         ])
+        lines.extend(wg_lines)
 
-    lines.extend([
+    dm_lines = [
         "# Caddy Domain Manager — VPN clients only",
         f"{domain_manager_host} {{",
+    ]
+    if use_cf_tls:
+        dm_lines.append("\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}")
+    dm_lines.extend([
         f"\t@vpn remote_ip {cfg.vpn_subnet} 127.0.0.1/32 172.28.0.0/24",
         "\thandle @vpn {",
         "\t\treverse_proxy domain-manager:8080",
@@ -136,6 +162,7 @@ def _build_caddyfile(cfg: DeployConfig) -> str:
         "import /etc/caddy/domains/*.caddy",
         "",
     ])
+    lines.extend(dm_lines)
     return "\n".join(lines)
 
 
@@ -162,9 +189,13 @@ def _create_tarball(cfg: DeployConfig, admin_token: str) -> bytes:
         domains_keep = SERVER_DIR / "domains" / ".gitkeep"
         add_text("domains/.gitkeep", domains_keep.read_text() if domains_keep.exists() else "")
 
-        for rel in ["domain-manager/Dockerfile", "domain-manager/requirements.txt", "domain-manager/app.py"]:
+        for rel in ["domain-manager/Dockerfile", "domain-manager/requirements.txt", "domain-manager/app.py", "domain-manager/cloudflare.py"]:
             full = SERVER_DIR / rel
             add_text(rel, full.read_text())
+
+        caddy_dockerfile = SERVER_DIR / "caddy" / "Dockerfile"
+        if caddy_dockerfile.exists():
+            add_text("caddy/Dockerfile", caddy_dockerfile.read_text())
 
     buf.seek(0)
     return buf.read()
@@ -174,6 +205,24 @@ def deploy(cfg: DeployConfig, log: LogFn) -> dict:
     """Deploy the full stack to the VPS. Returns connection info dict."""
     if not SERVER_DIR.is_dir():
         raise FileNotFoundError(f"Server bundle not found at {SERVER_DIR}")
+
+    if cfg.cloudflare_api_token:
+        cf_cfg = CloudflareConfig(
+            api_token=cfg.cloudflare_api_token,
+            zone_name=cfg.cloudflare_zone_name,
+            zone_id=cfg.cloudflare_zone_id,
+            proxied=cfg.cloudflare_proxied,
+        )
+        log("Verifying Cloudflare API token...")
+        ok, msg = verify_token(cf_cfg)
+        if not ok:
+            raise CloudflareError(msg)
+        log(msg)
+
+        if cfg.cloudflare_auto_dns:
+            hostnames = [cfg.wg_domain, cfg.domain_manager_host]
+            log("Creating Cloudflare DNS records...")
+            setup_deployment_dns(cf_cfg, cfg.vps_host, hostnames, log)
 
     admin_token = secrets.token_urlsafe(24)
     tarball = _create_tarball(cfg, admin_token)
@@ -219,6 +268,26 @@ def deploy(cfg: DeployConfig, log: LogFn) -> dict:
     finally:
         sftp.close()
         client.close()
+
+
+def test_cloudflare_connection(cfg: DeployConfig) -> tuple[bool, str]:
+    if not cfg.cloudflare_api_token:
+        return False, "Cloudflare API token is empty."
+    cf_cfg = CloudflareConfig(
+        api_token=cfg.cloudflare_api_token,
+        zone_name=cfg.cloudflare_zone_name,
+        zone_id=cfg.cloudflare_zone_id,
+        proxied=cfg.cloudflare_proxied,
+    )
+    ok, msg = verify_token(cf_cfg)
+    if not ok:
+        return False, msg
+    try:
+        from cloudflare import resolve_zone_id
+        zone_id = resolve_zone_id(cf_cfg)
+        return True, f"{msg} Zone ID: {zone_id}"
+    except CloudflareError as exc:
+        return False, str(exc)
 
 
 def test_ssh_connection(cfg: DeployConfig) -> tuple[bool, str]:
