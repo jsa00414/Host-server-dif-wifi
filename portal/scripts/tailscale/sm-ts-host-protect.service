@@ -1,0 +1,12 @@
+[Unit]
+Description=Protect VPS router path while Tailscale is running
+After=network-online.target docker.service wg-easy.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dns/ts-host-protect.sh protect-only
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

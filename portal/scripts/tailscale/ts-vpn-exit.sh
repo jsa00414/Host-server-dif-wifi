@@ -5,6 +5,7 @@ set -uo pipefail
 STATE_FILE="/opt/dns/ts-vpn-exit.state"
 SS_DISABLE="/opt/surfshark/ss-vpn-exit.sh"
 TS_EXIT_DNS="/opt/dns/ts-exit-dns.sh"
+TS_HOST_PROTECT="/opt/dns/ts-host-protect.sh"
 MANGLE_COMMENT="SM-TS-VPN-EXIT"
 MARK="0x174"
 RT_TABLE="52"
@@ -31,13 +32,22 @@ WG_DOCKER_BRIDGE="$(wg_docker_bridge "$WG_EASY_IP")"
 
 del_ip_rules() {
   local prio
-  for prio in 100 101 102 103 104 105 106 107 108 150 160 200; do
+  for prio in 150 160 200; do
     local i=0
     while [ "$i" -lt 12 ]; do
       ip rule del priority "$prio" 2>/dev/null || break
       i=$((i + 1))
     done
   done
+}
+
+add_ip_rules() {
+  if [ -x "$TS_HOST_PROTECT" ]; then
+    "$TS_HOST_PROTECT" enable 2>/dev/null || "$TS_HOST_PROTECT" protect-only 2>/dev/null || true
+  fi
+  del_ip_rules
+  ip rule add priority 150 fwmark "$MARK" lookup "$RT_TABLE" 2>/dev/null || true
+  ip rule add priority 200 from all lookup main 2>/dev/null || true
 }
 
 del_mangle() {
@@ -72,21 +82,6 @@ setup_table() {
   local iface="$1"
   ip route flush table "$RT_TABLE" 2>/dev/null || true
   ip route add default dev "$iface" table "$RT_TABLE" 2>/dev/null || true
-}
-
-add_ip_rules() {
-  del_ip_rules
-  ip rule add priority 100 from "${PUBLIC_IP}/32" lookup main 2>/dev/null || true
-  ip rule add priority 101 to "${PUBLIC_IP}/32" lookup main 2>/dev/null || true
-  ip rule add priority 102 to 10.8.0.0/24 lookup main 2>/dev/null || true
-  ip rule add priority 103 to 192.168.8.0/24 lookup main 2>/dev/null || true
-  ip rule add priority 104 to 10.42.42.0/24 lookup main 2>/dev/null || true
-  ip rule add priority 105 to 10.0.0.0/24 lookup main 2>/dev/null || true
-  ip rule add priority 106 to 172.16.0.0/12 lookup main 2>/dev/null || true
-  ip rule add priority 107 to 127.0.0.0/8 lookup main 2>/dev/null || true
-  ip rule add priority 108 to 100.64.0.0/10 lookup main 2>/dev/null || true
-  ip rule add priority 150 fwmark "$MARK" lookup "$RT_TABLE" 2>/dev/null || true
-  ip rule add priority 200 from all lookup main 2>/dev/null || true
 }
 
 wg_easy_peer_masq_on() {
@@ -180,6 +175,9 @@ disable_vpn_exit() {
   ip route flush table "$RT_TABLE" 2>/dev/null || true
   del_ip_rules
   wg_easy_masq_on
+  if [ -x "$TS_HOST_PROTECT" ]; then
+    "$TS_HOST_PROTECT" protect-only 2>/dev/null || true
+  fi
   save_state 0 "" ""
   echo "tailscale vpn-exit disabled"
 }

@@ -2482,6 +2482,7 @@ TS_EXIT_DNS_SCRIPT = Path("/opt/dns/ts-exit-dns.sh")
 TS_EXIT_DNS_FLAG = Path("/opt/dns/ts-exit-dns.enabled")
 TS_VPN_EXIT_SCRIPT = Path("/opt/dns/ts-vpn-exit.sh")
 TS_VPN_EXIT_STATE = Path("/opt/dns/ts-vpn-exit.state")
+TS_HOST_PROTECT_SCRIPT = Path("/opt/dns/ts-host-protect.sh")
 
 
 def _read_vpn_exit_state() -> dict:
@@ -2528,6 +2529,30 @@ def set_vpn_only_exit(enabled: bool, exit_ip: str = "") -> tuple[bool, str]:
         )
     msg = ((proc.stdout or "") + (proc.stderr or "")).strip()
     return proc.returncode == 0, msg or ("ok" if proc.returncode == 0 else "vpn-exit failed")
+
+
+def set_ts_host_protect(enabled: bool) -> tuple[bool, str]:
+    """Keep VPS→Flint router SSH working while Tailscale is up."""
+    if not TS_HOST_PROTECT_SCRIPT.is_file():
+        return True, "ts-host-protect.sh missing (skipped)"
+    action = "enable" if enabled else "disable"
+    proc = subprocess.run(
+        [str(TS_HOST_PROTECT_SCRIPT), action],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    msg = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if enabled and proc.returncode != 0:
+        proc = subprocess.run(
+            [str(TS_HOST_PROTECT_SCRIPT), "protect-only"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        msg = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    ok = proc.returncode == 0 if enabled else True
+    return ok, msg or ("ok" if ok else "ts-host-protect failed")
 
 
 
@@ -2701,7 +2726,13 @@ def tailscale_status() -> dict:
 
 def tailscale_start_login() -> dict:
     subprocess.Popen(
-        ["tailscale", "up", "--accept-dns=false", "--hostname=vpstruelord-vps"],
+        [
+            "tailscale",
+            "up",
+            "--accept-dns=false",
+            "--accept-routes=false",
+            "--hostname=vpstruelord-vps",
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -2711,6 +2742,7 @@ def tailscale_start_login() -> dict:
         st = tailscale_status()
         auth_url = st.get("auth_url") or ""
         if auth_url or st.get("ips"):
+            set_ts_host_protect(True)
             break
     return {"ok": True, "auth_url": auth_url, **tailscale_status()}
 
@@ -3092,12 +3124,14 @@ def apply_tailscale(payload: dict) -> dict:
     if not enabled:
         vpn_ok, vpn_out = set_vpn_only_exit(False)
         logs.append(f"vpn-exit: {vpn_out}")
+        protect_ok, protect_out = set_ts_host_protect(False)
+        logs.append(f"host-protect: {protect_out}")
         proc = subprocess.run(["tailscale", "down"], capture_output=True, text=True, timeout=30)
         logs.append(((proc.stdout or "") + (proc.stderr or "")).strip())
         dns_ok, dns_out = set_ts_exit_dns(False)
         logs.append(f"exit-dns-filter: {dns_out}")
         st = tailscale_status()
-        ok = proc.returncode == 0 and dns_ok and vpn_ok
+        ok = proc.returncode == 0 and dns_ok and vpn_ok and protect_ok
         st.update({"ok": ok, "stdout": "\n".join(x for x in logs if x), "stderr": ""})
         if not ok:
             st["error"] = (proc.stderr or proc.stdout or dns_out or vpn_out or "tailscale down failed").strip()
@@ -3111,6 +3145,7 @@ def apply_tailscale(payload: dict) -> dict:
                 "tailscale",
                 "up",
                 "--accept-dns=false",
+                "--accept-routes=false",
                 "--hostname=vpstruelord-vps",
                 "--reset",
                 "--exit-node=",
@@ -3142,6 +3177,7 @@ def apply_tailscale(payload: dict) -> dict:
         f"--snat-subnet-routes={'true' if ip_masq else 'false'}",
         f"--advertise-routes={routes}",
         "--accept-dns=false",
+        "--accept-routes=false",
         "--hostname=vpstruelord-vps",
         # Exit node for VPN is applied via ts-vpn-exit.sh (with host protect).
         "--exit-node=",
@@ -3172,6 +3208,11 @@ def apply_tailscale(payload: dict) -> dict:
     dns_ok, dns_out = set_ts_exit_dns(bool(run_exit and enabled))
     logs.append(f"exit-dns-filter: {dns_out}")
     if not dns_ok and run_exit and enabled:
+        ok = False
+
+    protect_ok, protect_out = set_ts_host_protect(True)
+    logs.append(f"host-protect: {protect_out}")
+    if not protect_ok:
         ok = False
 
     st = tailscale_status()
@@ -3827,6 +3868,13 @@ def main() -> None:
     # Ensure sshpass exists
     if subprocess.run(["bash", "-lc", "command -v sshpass"], capture_output=True).returncode != 0:
         raise SystemExit("sshpass is required on the VPS (apt install sshpass)")
+    if TS_HOST_PROTECT_SCRIPT.is_file():
+        try:
+            stj = _tailscale_status_json()
+            if str(stj.get("BackendState") or "") == "Running":
+                set_ts_host_protect(True)
+        except Exception:
+            pass
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"ServerManager panel on http://{HOST}:{PORT}")
     print(f"  title:    {PANEL_TITLE}")
