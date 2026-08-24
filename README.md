@@ -2,6 +2,10 @@
 
 One-click Windows installer that deploys **WireGuard Easy v15.3.0**, **Caddy**, and a **VPN-only Domain Manager** to your VPS server.
 
+## ServerManager Backup Setup (separate EXE)
+
+See [`backup-setup/`](backup-setup/) for a Windows EXE that connects to your VPS and installs automatic config backups to the private GitHub repo [jsa00414/ServerManagerBackup](https://github.com/jsa00414/ServerManagerBackup).
+
 ## What it does
 
 1. **Setup EXE (Windows)** — GUI wizard to enter VPS SSH credentials, WireGuard UI port, and domain settings
