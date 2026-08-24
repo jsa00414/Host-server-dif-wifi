@@ -18,15 +18,16 @@ mkdir -p "$ROOT"
 install -m 0755 "${SCRIPT_DIR}/sm-backup.sh" "$ROOT/sm-backup.sh"
 
 umask 077
-cat > "$ROOT/secrets.env" <<EOF
-GITHUB_OWNER=${GITHUB_OWNER}
-GITHUB_REPO=${GITHUB_REPO}
-GITHUB_TOKEN=${GITHUB_TOKEN}
-GITHUB_BRANCH=${GITHUB_BRANCH}
-BACKUP_NAME=${BACKUP_NAME}
-GIT_NAME=${GIT_NAME}
-GIT_EMAIL=${GIT_EMAIL}
-EOF
+# Quote every value so spaces (e.g. GIT_NAME) survive `source`
+{
+  printf 'GITHUB_OWNER=%q\n' "$GITHUB_OWNER"
+  printf 'GITHUB_REPO=%q\n' "$GITHUB_REPO"
+  printf 'GITHUB_TOKEN=%q\n' "$GITHUB_TOKEN"
+  printf 'GITHUB_BRANCH=%q\n' "$GITHUB_BRANCH"
+  printf 'BACKUP_NAME=%q\n' "$BACKUP_NAME"
+  printf 'GIT_NAME=%q\n' "$GIT_NAME"
+  printf 'GIT_EMAIL=%q\n' "$GIT_EMAIL"
+} > "$ROOT/secrets.env"
 chmod 600 "$ROOT/secrets.env"
 
 # Ensure git + rsync + curl
