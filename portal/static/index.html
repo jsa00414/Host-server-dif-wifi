@@ -827,8 +827,27 @@
         <iframe class="embed-frame" id="frameAdguard" title="AdGuard Home" src="about:blank" data-src="https://dns.vpstruelord.com/?lng=en" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
-      <section class="view embed-view" id="view-buffalo">
-        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
+      <section class="view" id="view-buffalo">
+        <div class="page-head">
+          <h2>Buffalo NAS</h2>
+          <p>LinkStation LS210D · 192.168.8.159 · buffalo.vpstruelord.com</p>
+        </div>
+        <div class="ts-callout">The Buffalo admin UI does not run reliably inside the portal frame. Open it in a full browser tab.</div>
+        <div class="ts-card solo">
+          <div class="ts-row">
+            <div>
+              <label>LinkStation admin</label>
+              <div class="ts-sub">WebAccess, DLNA, BitTorrent, Advanced Settings</div>
+            </div>
+            <button type="button" class="primary" id="buffaloOpenBtn">Open Buffalo</button>
+          </div>
+        </div>
+        <div class="toolbar" style="justify-content:center;margin-top:8px">
+          <button type="button" id="buffaloEmbedBtn">Try embedded view</button>
+        </div>
+        <div id="buffaloEmbedWrap" hidden style="margin-top:12px">
+          <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/" allow="clipboard-read; clipboard-write" style="min-height:70vh;height:70vh;border:1px solid var(--line);border-radius:12px"></iframe>
+        </div>
       </section>
 
       <section class="view" id="view-tailscale">
@@ -1191,18 +1210,29 @@
       }
     }
 
+    function openBuffaloAdmin() {
+      window.open("https://buffalo.vpstruelord.com/", "_blank", "noopener");
+    }
+    document.getElementById("buffaloOpenBtn")?.addEventListener("click", () => openBuffaloAdmin());
+    document.getElementById("buffaloEmbedBtn")?.addEventListener("click", () => {
+      const wrap = document.getElementById("buffaloEmbedWrap");
+      const f = document.getElementById("frameBuffalo");
+      if (!wrap || !f) return;
+      wrap.hidden = false;
+      f.src = f.dataset.src || "https://buffalo.vpstruelord.com/";
+    });
+
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo";
+      const embed = name === "adguard" || name === "pihole";
       document.body.classList.toggle("embed-mode", embed);
       if (name === "adguard") {
         const f = document.getElementById("frameAdguard");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "buffalo") {
-        const f = document.getElementById("frameBuffalo");
-        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+        openBuffaloAdmin();
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }

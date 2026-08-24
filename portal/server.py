@@ -1340,7 +1340,11 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
             lines.append("\thandle @vpn_clients {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\t\theader_up Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\t\theader_down -X-Frame-Options")
+            lines.append("\t\t\theader_down -Content-Security-Policy")
             lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
@@ -1349,7 +1353,11 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         else:
             # Public: plain reverse_proxy only — no client_ip matcher residue.
             lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\theader_up Host {host}")
+            lines.append("\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\theader_down -X-Frame-Options")
+            lines.append("\t\theader_down -Content-Security-Policy")
             lines.append("\t}")
         lines.extend(
             [
