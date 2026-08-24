@@ -23,6 +23,7 @@
       --warn: #e2b45a;
       --sidebar-w: 228px;
       --top-h: 60px;
+      --mobile-nav-h: 52px;
     }
     * { box-sizing: border-box; }
     html, body, .sidebar, .main, .content, .view, .log, .panel, .drawer {
@@ -465,17 +466,23 @@
     }
     @media (max-width: 900px) {
       body {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
-        padding-top: env(safe-area-inset-top);
+        display: block;
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
         padding-bottom: env(safe-area-inset-bottom);
       }
       .topbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 120;
         flex-wrap: nowrap;
         align-items: center;
         height: var(--top-h);
         min-height: var(--top-h);
-        padding: 0 10px;
+        padding: env(safe-area-inset-top, 0px) 10px 0;
         gap: 8px;
       }
       .brand { flex: 0 0 auto; min-width: 0; }
@@ -509,13 +516,37 @@
         white-space: nowrap;
       }
       .sidebar {
-        flex-direction: row; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
-        border-right: none; border-bottom: 1px solid var(--line); padding: 8px 10px; gap: 6px;
+        position: fixed;
+        top: calc(var(--top-h) + env(safe-area-inset-top, 0px));
+        left: 0;
+        right: 0;
+        z-index: 110;
+        height: var(--mobile-nav-h);
+        min-height: var(--mobile-nav-h);
+        flex-direction: row;
+        align-items: center;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        padding: 8px 10px;
+        gap: 6px;
+        background: var(--bg1);
         scrollbar-width: none;
       }
+      .sidebar::-webkit-scrollbar { display: none; }
       .nav-label, .sidebar-foot, .nav-btn small { display: none; }
       .nav-btn { white-space: nowrap; width: auto; flex: none; }
+      .main { min-height: auto; }
       .content { padding: 12px; }
+      .view.embed-view.active {
+        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 48px);
+      }
+      .embed-frame {
+        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
+        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
+      }
       input, select { font-size: 16px; min-height: 44px; }
       button { min-height: 40px; }
     }
