@@ -2325,12 +2325,15 @@ def _probe_dns(server: str, name: str = "example.com") -> bool:
 
 def build_dns_map() -> dict:
     ts = tailscale_status()
+    ss = surfshark_status()
     ag = _probe_dns("127.0.0.1")
     pi = _probe_dns("172.30.0.4")
     un = _probe_dns("172.30.0.2")
     coredns = _probe_dns("10.42.42.42") or _probe_dns("10.8.0.1")
     exit_filter = bool(ts.get("exit_dns_filter"))
     run_exit = bool(ts.get("run_exit_node"))
+    ss_exit = bool(ss.get("exit_dns_filter"))
+    ss_vpn = bool(ss.get("custom_exit_node"))
     paths = [
         {
             "title": "WireGuard / portal DNS",
@@ -2343,6 +2346,22 @@ def build_dns_map() -> dict:
                 {"label": "Internet", "ok": None},
             ],
             "note": "Used by WireGuard peers (phone / Flint tunnel DNS).",
+        },
+        {
+            "title": "Surfshark exit DNS (pass 2)",
+            "nodes": [
+                {"label": "WG / Flint client", "detail": "leaked :53", "ok": None},
+                {"label": "DNS redirect", "detail": "→ AdGuard", "ok": ss_exit if ss_vpn else None},
+                {"label": "AdGuard", "ok": ag if ss_vpn else None},
+                {"label": "Pi-hole", "ok": pi if ss_vpn else None},
+                {"label": "Unbound", "ok": un if ss_vpn else None},
+                {"label": "Surfshark tunnel", "detail": ss.get("server") or "—", "ok": ss_vpn},
+            ],
+            "note": (
+                "Second AdGuard → Pi-hole pass for DNS that would bypass CoreDNS or leave via Surfshark."
+                if ss_vpn and ss_exit
+                else "Inactive — enable Surfshark VPN Exit + DNS filter."
+            ),
         },
         {
             "title": "Tailscale exit-node DNS",
@@ -2371,6 +2390,12 @@ def build_dns_map() -> dict:
             "exit_dns_filter": exit_filter,
             "custom_exit_node": ts.get("custom_exit_node"),
             "exit_node_ip": ts.get("exit_node_ip"),
+        },
+        "surfshark": {
+            "enabled": ss.get("enabled"),
+            "custom_exit_node": ss_vpn,
+            "exit_dns_filter": ss_exit,
+            "server": ss.get("server"),
         },
     }
 
@@ -3085,6 +3110,8 @@ def apply_tailscale(payload: dict) -> dict:
 SS_PORTAL_STATE = Path("/opt/surfshark/surfshark-portal.json")
 SS_VPN_EXIT_SCRIPT = Path("/opt/surfshark/ss-vpn-exit.sh")
 SS_VPN_EXIT_STATE = Path("/opt/surfshark/ss-vpn-exit.state")
+SS_EXIT_DNS_SCRIPT = Path("/opt/surfshark/ss-exit-dns.sh")
+SS_EXIT_DNS_FLAG = Path("/opt/surfshark/ss-exit-dns.enabled")
 SS_CONF_DIR = Path("/opt/surfshark/conf")
 
 
@@ -3096,7 +3123,7 @@ def load_ss_portal_state() -> dict:
                 return data
         except Exception:
             pass
-    return {"auto_disable_exit": True, "enabled": False}
+    return {"auto_disable_exit": True, "enabled": False, "dns_filter": True}
 
 
 def save_ss_portal_state(data: dict) -> None:
@@ -3186,6 +3213,40 @@ def set_surfshark_vpn_exit(enabled: bool, server: str = "") -> tuple[bool, str]:
     return proc.returncode == 0, msg or ("ok" if proc.returncode == 0 else "surfshark vpn-exit failed")
 
 
+def ss_exit_dns_status() -> bool:
+    if not SS_EXIT_DNS_SCRIPT.is_file():
+        return False
+    proc = subprocess.run(
+        [str(SS_EXIT_DNS_SCRIPT), "status"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return "enabled" in (proc.stdout or "")
+
+
+def set_ss_exit_dns(enabled: bool, iface: str = "") -> tuple[bool, str]:
+    if not SS_EXIT_DNS_SCRIPT.is_file():
+        return False, "ss-exit-dns.sh missing"
+    if enabled:
+        SS_EXIT_DNS_FLAG.write_text("1\n", encoding="utf-8")
+        args = [str(SS_EXIT_DNS_SCRIPT), "enable"]
+        if iface.strip():
+            args.append(iface.strip())
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=15)
+    else:
+        if SS_EXIT_DNS_FLAG.exists():
+            SS_EXIT_DNS_FLAG.unlink()
+        proc = subprocess.run(
+            [str(SS_EXIT_DNS_SCRIPT), "disable"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return proc.returncode == 0, out
+
+
 def surfshark_status() -> dict:
     portal = load_ss_portal_state()
     vpn_exit = _read_ss_vpn_exit_state()
@@ -3231,6 +3292,8 @@ def surfshark_status() -> dict:
         "has_configs": bool(servers),
         "egress_ip": egress_ip,
         "auto_disable_exit": bool(portal.get("auto_disable_exit", True)),
+        "dns_filter": bool(portal.get("dns_filter", True)),
+        "exit_dns_filter": ss_exit_dns_status(),
         "setup_hint": (
             "Add Surfshark WireGuard .conf files to /opt/surfshark/conf/ "
             "(Surfshark account → VPN → Manual setup → WireGuard)."
@@ -3244,17 +3307,22 @@ def apply_surfshark(payload: dict) -> dict:
     enabled = bool(payload.get("enabled"))
     custom_exit = bool(payload.get("custom_exit_node"))
     server = str(payload.get("server") or payload.get("exit_node_ip") or "").strip()
+    dns_filter = bool(payload.get("dns_filter", load_ss_portal_state().get("dns_filter", True)))
     if "auto_disable_exit" in payload:
         save_ss_portal_state({"auto_disable_exit": bool(payload.get("auto_disable_exit"))})
+    if "dns_filter" in payload:
+        save_ss_portal_state({"dns_filter": dns_filter})
 
     logs: list[str] = []
 
     if not enabled:
         vpn_ok, vpn_out = set_surfshark_vpn_exit(False)
         logs.append(f"surfshark-vpn-exit: {vpn_out}")
+        dns_ok, dns_out = set_ss_exit_dns(False)
+        logs.append(f"exit-dns-filter: {dns_out}")
         save_ss_portal_state({"enabled": False})
         st = surfshark_status()
-        st.update({"ok": vpn_ok, "stdout": "\n".join(x for x in logs if x), "stderr": ""})
+        st.update({"ok": vpn_ok and dns_ok, "stdout": "\n".join(x for x in logs if x), "stderr": ""})
         if not vpn_ok:
             st["error"] = vpn_out or "surfshark disable failed"
         return st
@@ -3287,14 +3355,21 @@ def apply_surfshark(payload: dict) -> dict:
         vpn_ok, vpn_out = set_surfshark_vpn_exit(False)
 
     logs.append(f"surfshark-vpn-exit: {vpn_out}")
+    iface = str(_read_ss_vpn_exit_state().get("iface") or "")
+    if custom_exit and vpn_ok and dns_filter:
+        dns_ok, dns_out = set_ss_exit_dns(True, iface)
+    else:
+        dns_ok, dns_out = set_ss_exit_dns(False)
+    logs.append(f"exit-dns-filter: {dns_out}")
+    ok = vpn_ok and dns_ok
     st = surfshark_status()
     st.update({
-        "ok": vpn_ok,
+        "ok": ok,
         "stdout": "\n".join(x for x in logs if x) or "Applied",
-        "stderr": "" if vpn_ok else vpn_out,
+        "stderr": "" if ok else (vpn_out + "\n" + dns_out).strip(),
     })
-    if not vpn_ok:
-        st["error"] = vpn_out or "surfshark apply failed"
+    if not ok:
+        st["error"] = vpn_out or dns_out or "surfshark apply failed"
     return st
 
 

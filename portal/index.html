@@ -892,6 +892,13 @@
             </div>
             <label class="switch"><input type="checkbox" id="ssAutoDisable" checked /><span></span></label>
           </div>
+          <div class="ts-row">
+            <div>
+              <label for="ssDnsFilter">DNS filter (AdGuard → Pi-hole ×2)</label>
+              <div class="ts-sub">Pass 1 via CoreDNS; pass 2 catches leaked/tunnel DNS before Surfshark</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="ssDnsFilter" checked /><span></span></label>
+          </div>
         </div>
 
         <div class="panel" style="margin-top:16px">
@@ -1723,6 +1730,8 @@
       document.getElementById("ssCustomExit").checked = !!data.custom_exit_node;
       const autoEl = document.getElementById("ssAutoDisable");
       if (autoEl) autoEl.checked = data.auto_disable_exit !== false;
+      const dnsEl = document.getElementById("ssDnsFilter");
+      if (dnsEl) dnsEl.checked = data.dns_filter !== false;
       document.getElementById("ssExitWrap").classList.toggle("show", !!data.custom_exit_node);
       fillSurfsharkServers(data.servers || [], data.server || "");
       const el = document.getElementById("ssStatus");
@@ -1748,6 +1757,7 @@
           custom_exit_node: document.getElementById("ssCustomExit").checked,
           server: document.getElementById("ssServer").value,
           auto_disable_exit: document.getElementById("ssAutoDisable").checked,
+          dns_filter: document.getElementById("ssDnsFilter").checked,
         };
         const data = await api("/api/surfshark", { method: "POST", body: JSON.stringify(payload) });
         renderSurfsharkControls(data);

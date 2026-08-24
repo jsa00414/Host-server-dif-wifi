@@ -5,6 +5,7 @@ set -uo pipefail
 STATE_FILE="/opt/surfshark/ss-vpn-exit.state"
 MANAGE="/opt/surfshark/ss-manage.sh"
 TS_DISABLE="/opt/dns/ts-vpn-exit.sh"
+SS_EXIT_DNS="/opt/surfshark/ss-exit-dns.sh"
 MANGLE_COMMENT="SM-SS-VPN-EXIT"
 MARK="0x184"
 RT_TABLE="53"
@@ -140,10 +141,16 @@ enable_vpn_exit() {
   add_mangle
   add_ip_rules
   save_state 1 "$server" "$ifname"
+  if [ -x "$SS_EXIT_DNS" ]; then
+    "$SS_EXIT_DNS" enable "$ifname" 2>&1 || true
+  fi
   echo "surfshark vpn-exit enabled via ${server} (${ifname}); VPS→${PUBLIC_IP}"
 }
 
 disable_vpn_exit() {
+  if [ -x "$SS_EXIT_DNS" ]; then
+    "$SS_EXIT_DNS" disable 2>&1 || true
+  fi
   "$MANAGE" disconnect 2>&1 || true
   del_mangle
   ip route flush table "$RT_TABLE" 2>/dev/null || true
