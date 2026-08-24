@@ -1496,10 +1496,11 @@ def sync_coredns_hookups(rules: list[dict]) -> tuple[bool, str]:
     )
     domains = sorted(set(vpn_domains) | set(pub_domains))
     zone_list = ", ".join(domains) if domains else "_disabled_.invalid"
-    # VPN-only names resolve to WireGuard server IP so access requires the tunnel.
+    # Resolve all managed names to the VPS public IP. VPN-only access is
+    # enforced by Caddy remote_ip — not by answering 10.8.0.1 (that address
+    # lives inside wg-easy and has no :443 listener).
     hosts_lines = (
-        [f"        10.8.0.1 {d}" for d in vpn_domains]
-        + [f"        {VPS_PUBLIC_IP} {d}" for d in pub_domains]
+        [f"        {VPS_PUBLIC_IP} {d}" for d in domains]
     ) or ["        # no domains"]
     block = (
         f"{COREDNS_BEGIN}\n"
