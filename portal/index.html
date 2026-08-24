@@ -563,6 +563,9 @@
     <button type="button" class="nav-btn" data-view="tailscale">
       <span class="nav-copy"><span>Tailscale</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="surfshark">
+      <span class="nav-copy"><span>Surfshark</span></span>
+    </button>
     <button type="button" class="nav-btn" data-view="pihole">
       <span class="nav-copy"><span>Pi-hole</span></span>
     </button>
@@ -856,6 +859,57 @@
         <pre id="tsStatus" class="log" style="margin-top:12px;max-height:160px"> </pre>
       </section>
 
+      <section class="view" id="view-surfshark">
+        <div class="page-head">
+          <h2>Surfshark</h2>
+        </div>
+        <div class="ts-callout" id="ssCallout">Loading…</div>
+        <div class="ts-card solo">
+          <div class="ts-row">
+            <div><label for="ssEnable">Enable</label></div>
+            <label class="switch"><input type="checkbox" id="ssEnable" /><span></span></label>
+          </div>
+        </div>
+
+        <div class="ts-section-title">Exit Node</div>
+        <div class="ts-card">
+          <div class="ts-row">
+            <div>
+              <label for="ssCustomExit">VPN Exit (WireGuard)</label>
+              <div class="ts-sub">Send only WireGuard traffic through Surfshark — VPS keeps its public IP</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="ssCustomExit" /><span></span></label>
+          </div>
+          <div class="ts-exit-wrap" id="ssExitWrap">
+            <label class="field"><span>Surfshark server</span>
+              <select id="ssServer"></select>
+            </label>
+          </div>
+          <div class="ts-row">
+            <div>
+              <label for="ssAutoDisable">Auto-disable if exit drops</label>
+              <div class="ts-sub">Clears a dead VPN exit so the VPS and Wi‑Fi stay reachable</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="ssAutoDisable" checked /><span></span></label>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:16px">
+          <div class="panel-head"><h3>Setup</h3></div>
+          <div class="panel-body">
+            <p class="hint" id="ssSetupHint">Add Surfshark WireGuard <code>.conf</code> files to <code>/opt/surfshark/conf/</code> on the VPS (Surfshark account → VPN → Manual setup → WireGuard). Then pick a server above and Apply.</p>
+          </div>
+        </div>
+
+        <div class="ts-apply-wrap">
+          <button type="button" class="primary" id="ssApplyBtn">Apply</button>
+        </div>
+        <div class="toolbar" style="justify-content:center">
+          <button type="button" id="ssRefreshBtn">Refresh</button>
+        </div>
+        <pre id="ssStatus" class="log" style="margin-top:12px;max-height:160px"> </pre>
+      </section>
+
       <section class="view embed-view" id="view-pihole">
         <iframe class="embed-frame" id="framePihole" title="Pi-hole" src="about:blank" data-src="https://pihole.vpstruelord.com/admin/" data-authed="0" allow="clipboard-read; clipboard-write"></iframe>
       </section>
@@ -1088,6 +1142,7 @@
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
       if (name === "tailscale") { refreshTailscale(); }
+      if (name === "surfshark") { refreshSurfshark(); }
       if (name === "backup") { refreshBackupStatus(); }
       if (name === "pihole") { loadPiholeFrame(); }
     }
@@ -1636,6 +1691,79 @@
       } catch (e) {
         showLog(String(e.message || e), true);
       }
+    });
+
+    let ssState = null;
+    function fillSurfsharkServers(servers, selected) {
+      const sel = document.getElementById("ssServer");
+      if (!sel) return;
+      const cur = selected || sel.value || "";
+      const list = servers || [];
+      sel.innerHTML = (list.length ? "" : `<option value="">No configs yet</option>`) +
+        list.map((s) => {
+          const label = s.endpoint ? `${s.name} (${s.endpoint})` : s.name;
+          return `<option value="${esc(s.id)}" ${s.id === cur ? "selected" : ""}>${esc(label)}</option>`;
+        }).join("");
+    }
+    function renderSurfsharkControls(data) {
+      ssState = data;
+      const callout = document.getElementById("ssCallout");
+      if (callout) {
+        if (!data.has_configs) {
+          callout.textContent = "No Surfshark WireGuard configs yet. Add .conf files to /opt/surfshark/conf/ on the VPS.";
+        } else if (data.custom_exit_node) {
+          callout.textContent = `WireGuard VPN exits via Surfshark (${data.server || "server"}). VPS keeps its public IP.${data.egress_ip ? " Egress: " + data.egress_ip : ""}`;
+        } else if (data.enabled) {
+          callout.textContent = "Surfshark enabled. Turn on VPN Exit to route WireGuard through Surfshark.";
+        } else {
+          callout.textContent = "Surfshark off. Enable and choose a server to route WireGuard clients through Surfshark.";
+        }
+      }
+      document.getElementById("ssEnable").checked = !!data.enabled;
+      document.getElementById("ssCustomExit").checked = !!data.custom_exit_node;
+      const autoEl = document.getElementById("ssAutoDisable");
+      if (autoEl) autoEl.checked = data.auto_disable_exit !== false;
+      document.getElementById("ssExitWrap").classList.toggle("show", !!data.custom_exit_node);
+      fillSurfsharkServers(data.servers || [], data.server || "");
+      const el = document.getElementById("ssStatus");
+      if (el) el.textContent = data.text || "";
+      const hint = document.getElementById("ssSetupHint");
+      if (hint && data.setup_hint) hint.textContent = data.setup_hint;
+    }
+    async function refreshSurfshark() {
+      try {
+        const data = await api("/api/surfshark");
+        renderSurfsharkControls(data);
+      } catch (e) {
+        showLog(String(e.message || e), true);
+      }
+    }
+    async function applySurfshark() {
+      const btn = document.getElementById("ssApplyBtn");
+      btn.disabled = true;
+      showLog("Applying Surfshark…", true);
+      try {
+        const payload = {
+          enabled: document.getElementById("ssEnable").checked,
+          custom_exit_node: document.getElementById("ssCustomExit").checked,
+          server: document.getElementById("ssServer").value,
+          auto_disable_exit: document.getElementById("ssAutoDisable").checked,
+        };
+        const data = await api("/api/surfshark", { method: "POST", body: JSON.stringify(payload) });
+        renderSurfsharkControls(data);
+        showLog((data.stdout || "Surfshark applied.") + (data.stderr ? "\n" + data.stderr : ""), !data.ok);
+        setStatus(data.ok ? "Surfshark updated" : (data.error || "Surfshark apply failed"), data.ok ? "ok" : "err");
+      } catch (e) {
+        showLog(String(e.message || e), true);
+        setStatus("Surfshark apply failed", "err");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById("ssRefreshBtn").addEventListener("click", () => refreshSurfshark());
+    document.getElementById("ssApplyBtn").addEventListener("click", () => applySurfshark());
+    document.getElementById("ssCustomExit").addEventListener("change", (e) => {
+      document.getElementById("ssExitWrap").classList.toggle("show", e.target.checked);
     });
 
     let backupState = null;

@@ -3050,6 +3050,15 @@ def apply_tailscale(payload: dict) -> dict:
 
     # VPN-only exit: protect VPS public IP, then attach exit for WG clients
     if custom_exit:
+        # Disable Surfshark VPN exit if active
+        if SS_VPN_EXIT_SCRIPT.is_file():
+            ss_proc = subprocess.run(
+                [str(SS_VPN_EXIT_SCRIPT), "disable"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            logs.append(f"surfshark-vpn-exit-off: {((ss_proc.stdout or '') + (ss_proc.stderr or '')).strip()}")
         vpn_ok, vpn_out = set_vpn_only_exit(True, exit_ip)
     else:
         vpn_ok, vpn_out = set_vpn_only_exit(False)
@@ -3070,6 +3079,222 @@ def apply_tailscale(payload: dict) -> dict:
     })
     if not ok:
         st["error"] = st["stderr"] or "tailscale set failed"
+    return st
+
+
+SS_PORTAL_STATE = Path("/opt/surfshark/surfshark-portal.json")
+SS_VPN_EXIT_SCRIPT = Path("/opt/surfshark/ss-vpn-exit.sh")
+SS_VPN_EXIT_STATE = Path("/opt/surfshark/ss-vpn-exit.state")
+SS_CONF_DIR = Path("/opt/surfshark/conf")
+
+
+def load_ss_portal_state() -> dict:
+    if SS_PORTAL_STATE.is_file():
+        try:
+            data = json.loads(SS_PORTAL_STATE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {"auto_disable_exit": True, "enabled": False}
+
+
+def save_ss_portal_state(data: dict) -> None:
+    cur = load_ss_portal_state()
+    cur.update(data)
+    SS_PORTAL_STATE.parent.mkdir(parents=True, exist_ok=True)
+    SS_PORTAL_STATE.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_ss_vpn_exit_state() -> dict:
+    out = {"enabled": False, "server": "", "iface": "", "public_ip": ""}
+    if not SS_VPN_EXIT_STATE.is_file():
+        return out
+    try:
+        for line in SS_VPN_EXIT_STATE.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip()
+            if k == "ENABLED":
+                out["enabled"] = v in ("1", "true", "True", "yes")
+            elif k == "SERVER":
+                out["server"] = v
+            elif k == "IFACE":
+                out["iface"] = v
+            elif k == "PUBLIC_IP":
+                out["public_ip"] = v
+    except Exception:
+        pass
+    return out
+
+
+def list_surfshark_servers() -> list[dict]:
+    servers: list[dict] = []
+    if not SS_CONF_DIR.is_dir():
+        return servers
+    for path in sorted(SS_CONF_DIR.glob("*.conf")):
+        name = path.stem
+        endpoint = ""
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.strip().lower().startswith("endpoint"):
+                    endpoint = line.split("=", 1)[1].strip()
+                    break
+        except Exception:
+            pass
+        servers.append({"id": name, "name": name, "endpoint": endpoint})
+    return servers
+
+
+def _ss_iface_up(iface: str) -> bool:
+    if not iface:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ip", "link", "show", iface],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        return proc.returncode == 0 and "state UP" in (proc.stdout or "")
+    except Exception:
+        return False
+
+
+def set_surfshark_vpn_exit(enabled: bool, server: str = "") -> tuple[bool, str]:
+    if not SS_VPN_EXIT_SCRIPT.is_file():
+        return False, "ss-vpn-exit.sh missing"
+    if enabled:
+        srv = (server or "").strip()
+        if not srv:
+            return False, "Surfshark server required"
+        proc = subprocess.run(
+            [str(SS_VPN_EXIT_SCRIPT), "enable", srv],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    else:
+        proc = subprocess.run(
+            [str(SS_VPN_EXIT_SCRIPT), "disable"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    msg = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return proc.returncode == 0, msg or ("ok" if proc.returncode == 0 else "surfshark vpn-exit failed")
+
+
+def surfshark_status() -> dict:
+    portal = load_ss_portal_state()
+    vpn_exit = _read_ss_vpn_exit_state()
+    servers = list_surfshark_servers()
+    iface = str(vpn_exit.get("iface") or "")
+    server = str(vpn_exit.get("server") or "")
+    custom_exit = bool(vpn_exit.get("enabled"))
+    enabled = bool(portal.get("enabled")) or custom_exit or _ss_iface_up(iface)
+
+    egress_ip = ""
+    if custom_exit and iface:
+        try:
+            proc = subprocess.run(
+                ["curl", "-4", "-s", "--max-time", "6", "--interface", iface, "ifconfig.me"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            egress_ip = (proc.stdout or "").strip()
+        except Exception:
+            pass
+
+    wg_text = _sh_out(["wg", "show"], timeout=6)
+    text_lines = [
+        f"Surfshark: {'connected' if custom_exit else 'off'}",
+        f"Server: {server or '—'}",
+        f"Interface: {iface or '—'}",
+    ]
+    if egress_ip:
+        text_lines.append(f"VPN egress: {egress_ip}")
+    if wg_text:
+        text_lines.append("")
+        text_lines.append(wg_text)
+
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "custom_exit_node": custom_exit,
+        "vpn_only_exit": True,
+        "server": server if custom_exit else "",
+        "iface": iface,
+        "servers": servers,
+        "has_configs": bool(servers),
+        "egress_ip": egress_ip,
+        "auto_disable_exit": bool(portal.get("auto_disable_exit", True)),
+        "setup_hint": (
+            "Add Surfshark WireGuard .conf files to /opt/surfshark/conf/ "
+            "(Surfshark account → VPN → Manual setup → WireGuard)."
+        ),
+        "text": "\n".join(text_lines),
+    }
+
+
+def apply_surfshark(payload: dict) -> dict:
+    """Apply Surfshark settings — WireGuard VPN exit for WG clients only."""
+    enabled = bool(payload.get("enabled"))
+    custom_exit = bool(payload.get("custom_exit_node"))
+    server = str(payload.get("server") or payload.get("exit_node_ip") or "").strip()
+    if "auto_disable_exit" in payload:
+        save_ss_portal_state({"auto_disable_exit": bool(payload.get("auto_disable_exit"))})
+
+    logs: list[str] = []
+
+    if not enabled:
+        vpn_ok, vpn_out = set_surfshark_vpn_exit(False)
+        logs.append(f"surfshark-vpn-exit: {vpn_out}")
+        save_ss_portal_state({"enabled": False})
+        st = surfshark_status()
+        st.update({"ok": vpn_ok, "stdout": "\n".join(x for x in logs if x), "stderr": ""})
+        if not vpn_ok:
+            st["error"] = vpn_out or "surfshark disable failed"
+        return st
+
+    save_ss_portal_state({"enabled": True})
+
+    if custom_exit:
+        if not list_surfshark_servers():
+            st = surfshark_status()
+            st.update({
+                "ok": False,
+                "error": "No Surfshark configs in /opt/surfshark/conf/",
+                "stdout": "",
+                "stderr": "",
+            })
+            return st
+        if not server and list_surfshark_servers():
+            server = list_surfshark_servers()[0]["id"]
+        # Disable Tailscale VPN exit if active
+        if TS_VPN_EXIT_SCRIPT.is_file():
+            ts_proc = subprocess.run(
+                [str(TS_VPN_EXIT_SCRIPT), "disable"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            logs.append(f"tailscale-vpn-exit-off: {((ts_proc.stdout or '') + (ts_proc.stderr or '')).strip()}")
+        vpn_ok, vpn_out = set_surfshark_vpn_exit(True, server)
+    else:
+        vpn_ok, vpn_out = set_surfshark_vpn_exit(False)
+
+    logs.append(f"surfshark-vpn-exit: {vpn_out}")
+    st = surfshark_status()
+    st.update({
+        "ok": vpn_ok,
+        "stdout": "\n".join(x for x in logs if x) or "Applied",
+        "stderr": "" if vpn_ok else vpn_out,
+    })
+    if not vpn_ok:
+        st["error"] = vpn_out or "surfshark apply failed"
     return st
 
 
@@ -3299,6 +3524,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/surfshark":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, surfshark_status())
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
         if path == "/api/backup":
             if not self._require_auth(api=True):
                 return
@@ -3344,6 +3577,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/tailscale/login":
             try:
                 self._json(200, tailscale_start_login())
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/surfshark":
+            try:
+                payload = self._read_json()
+                result = apply_surfshark(payload if isinstance(payload, dict) else {})
+                self._json(200 if result.get("ok") else 400, result)
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
