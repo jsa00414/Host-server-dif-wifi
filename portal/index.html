@@ -159,32 +159,20 @@
       width: 100%;
       min-height: calc(100dvh - var(--top-h));
       height: calc(100dvh - var(--top-h));
-      overflow: auto;
-      background: #1e1e1e;
+      overflow: hidden;
+      background: #2b2b2b;
       border-radius: 0;
       position: relative;
-      scrollbar-width: none;
-      -ms-overflow-style: none;
     }
-    .buffalo-zoom-host::-webkit-scrollbar { display: none; }
     #frameBuffalo {
-      display: block;
-      width: 100%;
-      height: 100%;
-      min-width: 100%;
-      min-height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
       border: 0;
       border-radius: 0;
-      background: #1e1e1e;
+      background: #2b2b2b;
       transform-origin: top left;
-      zoom: 1.35;
-    }
-    @supports not (zoom: 1) {
-      #frameBuffalo {
-        width: 135%;
-        height: 135%;
-        transform: scale(1.35);
-      }
+      will-change: transform;
     }
     .content:has(.view.embed-view.active) {
       padding: 0;
@@ -1229,6 +1217,48 @@
       }
     }
 
+    function layoutBuffaloZoom() {
+      const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
+      const frame = document.getElementById("frameBuffalo");
+      if (!host || !frame) return;
+      const designW = 1280;
+      const designH = 800;
+      const hw = host.clientWidth || 1;
+      const hh = host.clientHeight || 1;
+      // Cover-fit: scale up until the Buffalo UI fills the portal pane (crops edges).
+      const scale = Math.max(hw / designW, hh / designH);
+      const scaledW = designW * scale;
+      const scaledH = designH * scale;
+      const ox = (hw - scaledW) / 2;
+      const oy = Math.min(0, (hh - scaledH) / 2);
+      frame.style.width = `${designW}px`;
+      frame.style.height = `${designH}px`;
+      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+    }
+
+    function loadBuffaloFrame() {
+      const frame = document.getElementById("frameBuffalo");
+      if (!frame) return;
+      const src = frame.dataset.src || "https://buffalo.vpstruelord.com/";
+      if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
+        frame.src = src;
+      }
+      requestAnimationFrame(() => {
+        layoutBuffaloZoom();
+        requestAnimationFrame(layoutBuffaloZoom);
+      });
+    }
+
+    let buffaloZoomObs = null;
+    function ensureBuffaloZoomObserver() {
+      const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
+      if (!host || buffaloZoomObs) return;
+      buffaloZoomObs = new ResizeObserver(() => layoutBuffaloZoom());
+      buffaloZoomObs.observe(host);
+      window.addEventListener("resize", layoutBuffaloZoom);
+    }
+    ensureBuffaloZoomObserver();
+
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
@@ -1239,10 +1269,7 @@
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "buffalo") {
-        const f = document.getElementById("frameBuffalo");
-        if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
-          f.src = f.dataset.src || "https://buffalo.vpstruelord.com/";
-        }
+        loadBuffaloFrame();
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
