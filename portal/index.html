@@ -428,6 +428,17 @@
     .switch input:checked + span:before { transform: translateX(20px); background: #062016; }
     .ts-exit-wrap { padding: 0 14px 12px; display: none; }
     .ts-exit-wrap.show { display: block; }
+    .ss-server-field { text-align: center; }
+    .ss-server-field span { display: block; }
+    .ss-server-field select {
+      width: 100%;
+      max-width: 280px;
+      margin: 0 auto;
+      display: block;
+      text-align: center;
+      text-align-last: center;
+    }
+    #ssCallout { text-align: center; }
     .ts-apply-wrap { display: flex; justify-content: center; padding: 18px 0 8px; }
     .dns-map { display: grid; gap: 12px; }
     .dns-path {
@@ -881,7 +892,7 @@
             <label class="switch"><input type="checkbox" id="ssCustomExit" /><span></span></label>
           </div>
           <div class="ts-exit-wrap" id="ssExitWrap">
-            <label class="field"><span>Surfshark server</span>
+            <label class="field ss-server-field"><span>Surfshark server</span>
               <select id="ssServer"></select>
             </label>
           </div>
@@ -1701,6 +1712,9 @@
     });
 
     let ssState = null;
+    function surfsharkServerLabel(s) {
+      return s.label || s.name || s.id || "";
+    }
     function fillSurfsharkServers(servers, selected) {
       const sel = document.getElementById("ssServer");
       if (!sel) return;
@@ -1708,18 +1722,20 @@
       const list = servers || [];
       sel.innerHTML = (list.length ? "" : `<option value="">No configs yet</option>`) +
         list.map((s) => {
-          const label = s.endpoint ? `${s.name} (${s.endpoint})` : s.name;
+          const label = surfsharkServerLabel(s);
           return `<option value="${esc(s.id)}" ${s.id === cur ? "selected" : ""}>${esc(label)}</option>`;
         }).join("");
     }
     function renderSurfsharkControls(data) {
       ssState = data;
       const callout = document.getElementById("ssCallout");
+      const active = (data.servers || []).find((s) => s.id === data.server);
+      const serverLabel = active ? surfsharkServerLabel(active) : (data.server || "server");
       if (callout) {
         if (!data.has_configs) {
           callout.textContent = "No Surfshark WireGuard configs yet. Add .conf files to /opt/surfshark/conf/ on the VPS.";
         } else if (data.custom_exit_node) {
-          callout.textContent = `WireGuard VPN exits via Surfshark (${data.server || "server"}). VPS keeps its public IP.${data.egress_ip ? " Egress: " + data.egress_ip : ""}`;
+          callout.textContent = `WireGuard VPN exits via Surfshark (${serverLabel}). VPS keeps its public IP.${data.egress_ip ? " Egress: " + data.egress_ip : ""}`;
         } else if (data.enabled) {
           callout.textContent = "Surfshark enabled. Turn on VPN Exit to route WireGuard through Surfshark.";
         } else {

@@ -3289,8 +3289,48 @@ def list_surfshark_servers() -> list[dict]:
                     break
         except Exception:
             pass
-        servers.append({"id": name, "name": name, "endpoint": endpoint})
+        servers.append({
+            "id": name,
+            "name": name,
+            "label": _surfshark_display_name(name),
+            "endpoint": endpoint,
+        })
     return servers
+
+
+def _surfshark_display_name(server_id: str) -> str:
+    key = str(server_id or "").strip().lower()
+    aliases = {
+        "us-nyc": "New York",
+        "us-new-york": "New York",
+        "us-dtw": "Detroit",
+        "us-lax": "Los Angeles",
+        "us-chi": "Chicago",
+        "us-mia": "Miami",
+        "us-dal": "Dallas",
+        "us-sea": "Seattle",
+        "us-den": "Denver",
+        "us-atl": "Atlanta",
+        "us-phx": "Phoenix",
+        "us-bos": "Boston",
+        "us-hou": "Houston",
+        "us-sfo": "San Francisco",
+        "us-was": "Washington DC",
+        "uk-lon": "London",
+        "ca-tor": "Toronto",
+        "ca-van": "Vancouver",
+        "de-fra": "Frankfurt",
+        "nl-ams": "Amsterdam",
+        "fr-par": "Paris",
+        "jp-tok": "Tokyo",
+        "au-syd": "Sydney",
+    }
+    if key in aliases:
+        return aliases[key]
+    if "-" in key:
+        city = key.split("-", 1)[1].replace("-", " ")
+        return city.title()
+    return server_id
 
 
 def _ss_iface_up(iface: str) -> bool:
@@ -3391,7 +3431,7 @@ def surfshark_status() -> dict:
     wg_text = _sh_out(["wg", "show"], timeout=6)
     text_lines = [
         f"Surfshark: {'connected' if custom_exit else 'off'}",
-        f"Server: {server or '—'}",
+        f"Server: {_surfshark_display_name(server) if server else '—'}",
         f"Interface: {iface or '—'}",
     ]
     if egress_ip:
