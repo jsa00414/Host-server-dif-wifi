@@ -1,0 +1,21 @@
+{
+	email {$CADDY_EMAIL:admin@localhost}
+	admin off
+}
+
+# WireGuard Easy UI over HTTPS (enabled when a public domain is configured)
+{$WG_DOMAIN} {
+	reverse_proxy wg-easy:{$WG_UI_PORT:51821}
+}
+
+# Caddy Domain Manager — VPN clients only
+{$DOMAIN_MANAGER_HOST:domains.localhost} {
+	@vpn remote_ip {$VPN_SUBNET:10.8.0.0/24} 127.0.0.1/32 172.28.0.0/24
+	handle @vpn {
+		reverse_proxy domain-manager:8080
+	}
+	respond "Access denied — connect via WireGuard VPN" 403
+}
+
+# Dynamically managed reverse-proxy sites (added via Domain Manager)
+import /etc/caddy/domains/*.caddy
