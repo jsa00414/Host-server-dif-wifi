@@ -4,10 +4,10 @@ set -euo pipefail
 
 ROOT="/opt/surfshark"
 CONF_DIR="${ROOT}/conf"
-RUNTIME_DIR="${ROOT}/runtime"
+RUNTIME_DIR="/etc/wireguard"
 STATE_FILE="${ROOT}/ss-vpn-exit.state"
 
-mkdir -p "$CONF_DIR" "$RUNTIME_DIR"
+mkdir -p "$CONF_DIR"
 
 list_servers() {
   shopt -s nullglob
@@ -27,22 +27,17 @@ runtime_conf() {
     echo "missing config: $src" >&2
     return 2
   fi
-  python3 - "$src" "$dst" "ss-${name}" <<'PY'
+  python3 - "$src" "$dst" <<'PY'
 import re, sys
-src, dst, ifname = sys.argv[1:4]
+src, dst = sys.argv[1:3]
 text = open(src, encoding="utf-8", errors="replace").read()
-# Strip full-tunnel AllowedIPs default route from peer — policy routing handles egress
 text = re.sub(r"(?m)^AllowedIPs\s*=\s*0\.0\.0\.0/0.*$", "AllowedIPs = 128.0.0.0/1, 0.0.0.0/1", text)
 text = re.sub(r"(?m)^AllowedIPs\s*=\s*::/0.*$", "", text)
 if re.search(r"(?m)^Table\s*=", text):
     text = re.sub(r"(?m)^Table\s*=.*$", "Table = off", text)
 else:
     text = re.sub(r"(\[Interface\]\s*\n)", r"\1Table = off\n", text, count=1)
-if re.search(r"(?m)^Name\s*=", text):
-    text = re.sub(r"(?m)^Name\s*=.*$", f"Name = {ifname}", text)
-else:
-    text = re.sub(r"(\[Interface\]\s*\n)", rf"\1Name = {ifname}\n", text, count=1)
-# Avoid Surfshark pushing DNS onto the VPS host
+text = re.sub(r"(?m)^Name\s*=.*\n", "", text)
 text = re.sub(r"(?m)^DNS\s*=.*\n", "", text)
 open(dst, "w", encoding="utf-8").write(text)
 PY
@@ -61,22 +56,17 @@ connect() {
   local dst
   dst="$(runtime_conf "$name")"
   local ifname="ss-${name}"
-  # Drop any previous surfshark iface
-  wg-quick down "$dst" 2>/dev/null || true
-  wg-quick up "$dst"
+  wg-quick down "$ifname" 2>/dev/null || true
+  wg-quick up "$ifname"
   echo "connected ${ifname}"
 }
 
 disconnect() {
-  local ifname
-  ifname="$(current_iface)"
   shopt -s nullglob
   for f in "$RUNTIME_DIR"/ss-*.conf; do
-    wg-quick down "$f" 2>/dev/null || true
+    base="$(basename "$f" .conf)"
+    wg-quick down "$base" 2>/dev/null || true
   done
-  if [[ -n "$ifname" ]]; then
-    ip link del "$ifname" 2>/dev/null || true
-  fi
   echo "disconnected"
 }
 
