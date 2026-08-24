@@ -612,11 +612,6 @@
             <div class="v">DNS</div>
             <div class="s">full control</div>
           </button>
-          <button type="button" class="stat" data-go="backup">
-            <div class="k">Backup</div>
-            <div class="v" id="ovBackup">—</div>
-            <div class="s" id="ovBackupNote">GitHub</div>
-          </button>
         </div>
 
         <div class="panel" style="margin-bottom:16px">
@@ -1091,7 +1086,7 @@
         const f = document.getElementById("frameAdguard");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
-      if (name === "overview") { refreshVpsStatus(); refreshBackupStatus(true); }
+      if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
       if (name === "tailscale") { refreshTailscale(); }
       if (name === "backup") { refreshBackupStatus(); }
@@ -1648,11 +1643,8 @@
     function renderBackupStatus(data, opts = {}) {
       backupState = data || {};
       const callout = document.getElementById("backupCallout");
-      const ov = document.getElementById("ovBackup");
-      const ovNote = document.getElementById("ovBackupNote");
       if (!data || data.error) {
         if (callout) callout.textContent = (data && data.error) || "Could not load backup status.";
-        if (ov) ov.textContent = "—";
         return;
       }
       const configured = !!data.configured;
@@ -1689,9 +1681,6 @@
       if (opts.showLog) {
         showLog("=== Backup ===\n" + (data.log_tail || "(empty log)"), !!opts.openLog);
       }
-
-      if (ov) ov.textContent = running ? "…" : (data.last_ok === true ? "OK" : data.last_ok === false ? "Err" : configured ? "On" : "Off");
-      if (ovNote) ovNote.textContent = data.repo ? data.repo : "GitHub";
 
       const runBtn = document.getElementById("backupRunBtn");
       if (runBtn) runBtn.disabled = running || !configured;
