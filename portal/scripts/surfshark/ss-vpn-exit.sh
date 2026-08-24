@@ -31,7 +31,7 @@ WG_DOCKER_BRIDGE="$(wg_docker_bridge "$WG_EASY_IP")"
 
 del_ip_rules() {
   local prio
-  for prio in 100 101 102 103 104 105 106 107 108 150 160 200; do
+  for prio in 100 101 102 103 104 105 106 107 108 140 150 160 200; do
     local i=0
     while [ "$i" -lt 12 ]; do
       ip rule del priority "$prio" 2>/dev/null || break
@@ -85,7 +85,7 @@ add_ip_rules() {
   ip rule add priority 106 to 172.16.0.0/12 lookup main 2>/dev/null || true
   ip rule add priority 107 to 127.0.0.0/8 lookup main 2>/dev/null || true
   ip rule add priority 108 to 100.64.0.0/10 lookup main 2>/dev/null || true
-  ip rule add priority 150 fwmark "$MARK" lookup "$RT_TABLE" 2>/dev/null || true
+  ip rule add priority 140 fwmark "$MARK" lookup "$RT_TABLE" 2>/dev/null || true
   ip rule add priority 200 from all lookup main 2>/dev/null || true
 }
 
@@ -106,22 +106,13 @@ wg_easy_masq_off() {
     || true
   wg_easy_peer_masq_on
   local iface="$1"
-  iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 192.168.8.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.0.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
+  # Only SNAT WireGuard client egress via Surfshark — never via ens6 (VPS public IP).
   iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
   iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -s 192.168.8.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
   iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -s 10.0.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  if [ -n "$WG_EASY_IP" ]; then
-    iptables -t nat -C POSTROUTING -s "$WG_EASY_IP"/32 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-      || iptables -t nat -I POSTROUTING 1 -s "$WG_EASY_IP"/32 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  fi
 }
 
 wg_easy_masq_on() {
