@@ -51,7 +51,6 @@ add_mangle() {
   iptables -t mangle -A PREROUTING -s 10.8.0.0/24 -j SM-SS-VPN-EXIT
   iptables -t mangle -A PREROUTING -s 192.168.8.0/24 -i br-1c0f4d1d4b87 -j SM-SS-VPN-EXIT
   iptables -t mangle -A PREROUTING -s 10.0.0.0/24 -i br-1c0f4d1d4b87 -j SM-SS-VPN-EXIT
-  iptables -t mangle -A PREROUTING -s "$WG_EASY_IP"/32 -i br-1c0f4d1d4b87 -j SM-SS-VPN-EXIT
 }
 
 setup_table() {
@@ -75,10 +74,22 @@ add_ip_rules() {
   ip rule add priority 200 from all lookup main 2>/dev/null || true
 }
 
+wg_easy_peer_masq_on() {
+  # Keep SNAT for VPS→Flint management traffic over the wg-easy tunnel.
+  docker exec wg-easy sh -c '
+    for iface in $(wg show interfaces 2>/dev/null); do
+      iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null \
+        || true
+    done
+  ' 2>/dev/null || true
+}
+
 wg_easy_masq_off() {
   docker exec wg-easy iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
     && docker exec wg-easy iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
     || true
+  wg_easy_peer_masq_on
   local iface="$1"
   iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE

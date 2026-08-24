@@ -507,6 +507,67 @@ def _router_host_in_use() -> str:
     return globals().get("_active_router_host") or ROUTER_HOSTS[0]
 
 
+WG_EASY_CONTAINER = os.environ.get("WG_EASY_CONTAINER", "wg-easy").strip()
+ROUTER_SSH_VIA = os.environ.get("ROUTER_SSH_VIA", "auto").strip().lower()
+
+
+def _wg_easy_pid() -> str | None:
+    if not WG_EASY_CONTAINER:
+        return None
+    proc = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Pid}}", WG_EASY_CONTAINER],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    pid = (proc.stdout or "").strip()
+    return pid if pid.isdigit() and pid != "0" else None
+
+
+def _router_ssh_reachable(err: str) -> bool:
+    err = err.lower()
+    markers = (
+        "connection timed out",
+        "connection refused",
+        "no route",
+        "network is unreachable",
+        "operation timed out",
+    )
+    return any(m in err for m in markers)
+
+
+def _router_ssh_cmd(
+    host: str,
+    remote_cmd: str,
+    connect_timeout: int,
+    *,
+    netns_pid: str | None = None,
+) -> list[str]:
+    ssh_cmd = [
+        "sshpass",
+        "-e",
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={ROUTER_KNOWN_HOSTS}",
+        "-o",
+        "PreferredAuthentications=password",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",
+        f"{ROUTER_USER}@{host}",
+        remote_cmd,
+    ]
+    if netns_pid:
+        return ["nsenter", "-t", netns_pid, "-n", *ssh_cmd]
+    return ssh_cmd
+
+
 def router_ssh(
     remote_cmd: str,
     input_text: str | None = None,
@@ -519,42 +580,59 @@ def router_ssh(
     env["SSHPASS"] = ROUTER_PASS
     per_host = max(3, min(6, timeout // max(1, len(ROUTER_HOSTS))))
     last: subprocess.CompletedProcess | None = None
-    for host in ROUTER_HOSTS:
-        cmd = [
-            "sshpass",
-            "-e",
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            f"UserKnownHostsFile={ROUTER_KNOWN_HOSTS}",
-            "-o",
-            "PreferredAuthentications=password",
-            "-o",
-            "PubkeyAuthentication=no",
-            "-o",
-            f"ConnectTimeout={per_host}",
-            f"{ROUTER_USER}@{host}",
-            remote_cmd,
-        ]
-        last = subprocess.run(
-            cmd,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            env=env,
-        )
-        if last.returncode == 0:
-            _active_router_host = host
-            return last
-        err = (last.stderr or last.stdout or "").lower()
-        if "connection timed out" in err or "connection refused" in err or "no route" in err:
+    netns_pid = _wg_easy_pid()
+    if ROUTER_SSH_VIA == "host":
+        paths: list[tuple[str, str | None]] = [("host", None)]
+    elif ROUTER_SSH_VIA in {"netns", "wg-easy"}:
+        paths = [("wg-easy", netns_pid)]
+    else:
+        paths = [("host", None), ("wg-easy", netns_pid)]
+
+    for path_name, pid in paths:
+        if path_name == "wg-easy" and not pid:
             continue
-        _active_router_host = host
-        return last
-    return last or subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="router ssh failed")
+        for host in ROUTER_HOSTS:
+            cmd = _router_ssh_cmd(
+                host,
+                remote_cmd,
+                per_host,
+                netns_pid=pid if path_name == "wg-easy" else None,
+            )
+            last = subprocess.run(
+                cmd,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+            if last.returncode == 0:
+                _active_router_host = host
+                return last
+            err = (last.stderr or last.stdout or "").strip()
+            if _router_ssh_reachable(err):
+                continue
+            _active_router_host = host
+            detail = f"[{path_name}] {err}".strip()
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=last.returncode,
+                stdout=last.stdout,
+                stderr=detail,
+            )
+    if last:
+        prefix = "router:"
+        err = (last.stderr or last.stdout or "router ssh failed").strip()
+        if not err.lower().startswith(prefix):
+            err = f"{prefix} {err}"
+        return subprocess.CompletedProcess(
+            args=last.args,
+            returncode=last.returncode,
+            stdout=last.stdout,
+            stderr=err,
+        )
+    return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="router ssh failed")
 
 
 _active_router_host = ROUTER_HOSTS[0]
