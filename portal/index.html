@@ -675,13 +675,7 @@
               <button type="button" class="primary" id="backupRunBtn">Back up now</button>
               <button type="button" id="backupOpenRepoBtn">Open GitHub repo</button>
             </div>
-            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only.</p>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><h3>Recent log</h3></div>
-          <div class="panel-body">
-            <pre id="backupLog" class="log" style="max-height:280px;margin:0"> </pre>
+            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only. Output goes to the Activity log.</p>
           </div>
         </div>
       </section>
@@ -1651,7 +1645,7 @@
     });
 
     let backupState = null;
-    function renderBackupStatus(data) {
+    function renderBackupStatus(data, opts = {}) {
       backupState = data || {};
       const callout = document.getElementById("backupCallout");
       const ov = document.getElementById("ovBackup");
@@ -1668,7 +1662,7 @@
       else if (!configured) msg = "Backup is not configured yet (missing GitHub repo or token).";
       else if (running) msg = "Backup is running now…";
       else if (data.last_ok === true) msg = `Last backup succeeded. Repo ${data.owner}/${data.repo} @ ${data.branch}.`;
-      else if (data.last_ok === false) msg = `Last backup failed. Check the log below.`;
+      else if (data.last_ok === false) msg = "Last backup failed. See Activity log.";
       else msg = `Ready. Daily backups go to ${data.owner}/${data.repo}.`;
       if (callout) callout.textContent = msg;
 
@@ -1692,8 +1686,9 @@
       if (repo) repo.textContent = data.repo || "—";
       if (repoSub) repoSub.textContent = data.owner ? `${data.owner} · ${data.branch || "main"}` : "—";
 
-      const logEl = document.getElementById("backupLog");
-      if (logEl) logEl.textContent = data.log_tail || "(empty log)";
+      if (opts.showLog) {
+        showLog("=== Backup ===\n" + (data.log_tail || "(empty log)"), !!opts.openLog);
+      }
 
       if (ov) ov.textContent = running ? "…" : (data.last_ok === true ? "OK" : data.last_ok === false ? "Err" : configured ? "On" : "Off");
       if (ovNote) ovNote.textContent = data.repo ? data.repo : "GitHub";
@@ -1704,9 +1699,12 @@
     async function refreshBackupStatus(quiet) {
       try {
         const data = await api("/api/backup");
-        renderBackupStatus(data);
+        renderBackupStatus(data, { showLog: !quiet, openLog: !quiet });
       } catch (e) {
-        if (!quiet) setStatus(String(e.message || e), "err");
+        if (!quiet) {
+          setStatus(String(e.message || e), "err");
+          showLog(String(e.message || e), true);
+        }
         renderBackupStatus({ error: String(e.message || e) });
       }
     }
@@ -1716,12 +1714,13 @@
       setStatus("Backing up to GitHub…");
       const callout = document.getElementById("backupCallout");
       if (callout) callout.textContent = "Running backup…";
+      showLog("Running backup…", true);
       try {
         const data = await api("/api/backup/run", { method: "POST", body: "{}", timeoutMs: 320000 });
         if (data.status) renderBackupStatus(data.status);
-        else await refreshBackupStatus();
+        else await refreshBackupStatus(true);
         const bits = [data.stdout, data.stderr, data.error].filter(Boolean).join("\n");
-        if (bits) showLog(bits, true);
+        showLog(bits || (data.ok ? "Backup pushed." : "Backup failed."), true);
         setStatus(data.ok ? "Backup pushed" : (data.error || "Backup failed"), data.ok ? "ok" : "err");
       } catch (e) {
         setStatus(String(e.message || e), "err");
