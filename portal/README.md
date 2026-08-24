@@ -15,4 +15,16 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 - `POST /api/surfshark` — enable/disable Surfshark WireGuard VPN exit for WG clients only
 - Scripts deployed to `/opt/surfshark/` (`ss-vpn-exit.sh`, `ss-manage.sh`)
 
-Deploy by copying `server.py` and `index.html` to the VPS and restarting `port-forward-ui`.
+Deploy to the VPS (panel reads HTML from `static/index.html`):
+
+```bash
+# From repo root, with SSH access to the VPS:
+VPS=root@74.208.54.132 ./portal/deploy-to-vps.sh
+
+# Or manually:
+scp portal/server.py root@74.208.54.132:/opt/wireguard/port-forward-ui/server.py
+scp portal/static/index.html root@74.208.54.132:/opt/wireguard/port-forward-ui/static/index.html
+ssh root@74.208.54.132 systemctl restart port-forward-ui
+```
+
+Then hard-refresh the portal (Ctrl+Shift+R).

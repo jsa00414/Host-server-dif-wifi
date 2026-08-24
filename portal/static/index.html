@@ -1713,16 +1713,7 @@
 
     let ssState = null;
     function surfsharkServerLabel(s) {
-      if (s.label) return s.label;
-      const id = String(s.id || s.name || "").toLowerCase();
-      const aliases = {
-        "us-nyc": "New York",
-        "us-new-york": "New York",
-        "us-dtw": "Detroit",
-        "us-lax": "Los Angeles",
-      };
-      if (aliases[id]) return aliases[id];
-      return s.name || s.id || "";
+      return s.label || s.name || s.id || "";
     }
     function fillSurfsharkServers(servers, selected) {
       const sel = document.getElementById("ssServer");
