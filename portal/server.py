@@ -1339,14 +1339,18 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
             lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
             lines.append("\thandle @vpn_clients {")
-            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']}")
+            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\t\theader_down -X-Frame-Options")
+            lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
             lines.append('\t\trespond "Forbidden" 403')
             lines.append("\t}")
         else:
             # Public: plain reverse_proxy only — no client_ip matcher residue.
-            lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']}")
+            lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\theader_down -X-Frame-Options")
+            lines.append("\t}")
         lines.extend(
             [
                 "\theader {",

@@ -586,6 +586,9 @@
       <span class="nav-copy"><span>Router</span></span>
       <span class="count" id="routerCount">0</span>
     </button>
+    <button type="button" class="nav-btn" data-view="buffalo">
+      <span class="nav-copy"><span>Buffalo</span></span>
+    </button>
     
     <button type="button" class="nav-btn" data-view="domains">
       <span class="nav-copy"><span>Domains</span></span>
@@ -631,6 +634,11 @@
             <div class="k">Router</div>
             <div class="v" id="ovRouter">0</div>
             <div class="s">Flint redirects</div>
+          </button>
+          <button type="button" class="stat" data-go="buffalo">
+            <div class="k">Buffalo</div>
+            <div class="v">NAS</div>
+            <div class="s">192.168.8.159</div>
           </button>
           <button type="button" class="stat" data-go="domains">
             <div class="k">Domains</div>
@@ -817,6 +825,10 @@
 
       <section class="view embed-view" id="view-adguard">
         <iframe class="embed-frame" id="frameAdguard" title="AdGuard Home" src="about:blank" data-src="https://dns.vpstruelord.com/?lng=en" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
+
+      <section class="view embed-view" id="view-buffalo">
+        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view" id="view-tailscale">
@@ -1182,10 +1194,14 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo";
       document.body.classList.toggle("embed-mode", embed);
       if (name === "adguard") {
         const f = document.getElementById("frameAdguard");
+        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+      }
+      if (name === "buffalo") {
+        const f = document.getElementById("frameBuffalo");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "overview") { refreshVpsStatus(); }
