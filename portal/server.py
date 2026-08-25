@@ -5603,6 +5603,52 @@ body *,body *::before,body *::after{text-shadow:none!important;box-shadow:none!i
 #login_button,#logout_button,.x-btn-text-icon .x-btn-text{color:var(--sm-accent)!important}
 .x-toolbar-separator,.xtb-sep{border-left-color:var(--sm-line)!important;background:var(--sm-line)!important}
 
+/* Auth (admin / Logout) lives on the top menu bar; hide the second toolbar */
+html.sm-auth-top #icon-panel,
+html.sm-auth-top #icon-panel .x-toolbar,
+html.sm-auth-top #icon-panel .x-panel-body,
+html.sm-auth-top #icon-panel .x-panel-bwrap{
+  display:none!important;visibility:hidden!important;
+  height:0!important;min-height:0!important;max-height:0!important;
+  overflow:hidden!important;padding:0!important;margin:0!important;
+  border:0!important;line-height:0!important}
+html.sm-auth-top #menu-bar{
+  display:flex!important;align-items:center!important;
+  justify-content:flex-start!important;gap:4px!important;
+  position:relative!important;padding-right:8px!important}
+html.sm-auth-top #menu-bar .x-toolbar-ct{flex:1 1 auto!important;width:auto!important}
+html.sm-auth-top #sm-auth-slot{
+  display:flex!important;align-items:center!important;justify-content:flex-end!important;
+  gap:8px!important;margin-left:auto!important;flex:0 0 auto!important;
+  padding:0 4px 0 12px!important;min-height:var(--sm-tap)!important;
+  white-space:nowrap!important;z-index:5}
+html.sm-auth-top #sm-auth-slot #userName,
+html.sm-auth-top #sm-auth-slot .user,
+html.sm-auth-top #sm-auth-slot .x-form-item,
+html.sm-auth-top #sm-auth-slot .x-toolbar-cell,
+html.sm-auth-top #menu-bar #userName,
+html.sm-auth-top #menu-bar .user{
+  display:inline-flex!important;align-items:center!important;gap:6px!important;
+  color:var(--sm-muted)!important;font:500 12px/1.2 "Sora",system-ui,sans-serif!important;
+  margin:0!important;padding:0!important;border:0!important;background:transparent!important}
+html.sm-auth-top #sm-auth-slot #login_button,
+html.sm-auth-top #sm-auth-slot #logout_button,
+html.sm-auth-top #menu-bar #login_button,
+html.sm-auth-top #menu-bar #logout_button{
+  display:inline-flex!important;align-items:center!important;
+  min-height:32px!important;margin:0!important}
+html.sm-auth-top #sm-auth-slot #logout_button .x-btn-mc,
+html.sm-auth-top #sm-auth-slot #login_button .x-btn-mc,
+html.sm-auth-top #menu-bar #logout_button .x-btn-mc,
+html.sm-auth-top #menu-bar #login_button .x-btn-mc{
+  background:var(--sm-bg3)!important;border-radius:8px!important;padding:0 10px!important}
+html.sm-auth-top #sm-auth-slot #logout_button .x-btn-text,
+html.sm-auth-top #sm-auth-slot #login_button .x-btn-text,
+html.sm-auth-top #menu-bar #logout_button .x-btn-text,
+html.sm-auth-top #menu-bar #login_button .x-btn-text{
+  color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
+html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
+
 /* Location / search */
 #control-panel,#location-bar,.navi-button,#location-buttons,#location-buttons-ie,#search-panel{
   background:var(--sm-bg2)!important;background-image:none!important;
@@ -6020,6 +6066,114 @@ NAS_FILES_SNIPPET = (
     "smPinCss();"
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',smPinCss,false);"
     "window.addEventListener('load',smPinCss,false);"
+    # Move admin/Logout into #menu-bar and collapse the second toolbar (#icon-panel).
+    "function smAuthSlot(){"
+    "var slot=document.getElementById('sm-auth-slot');"
+    "if(slot)return slot;"
+    "var menu=document.getElementById('menu-bar');"
+    "if(!menu)return null;"
+    "slot=document.createElement('div');"
+    "slot.id='sm-auth-slot';"
+    "menu.appendChild(slot);"
+    "return slot;}"
+    "function smAuthCell(el){"
+    "if(!el)return null;"
+    "var n=el;"
+    "while(n&&n.parentElement){"
+    "var p=n.parentElement;"
+    "if(p.id==='icon-panel'||p.id==='sm-auth-slot'||p.id==='menu-bar')return n;"
+    "if(n.tagName==='TD'&&String(n.className||'').indexOf('x-toolbar-cell')>=0)return n;"
+    "n=p;"
+    "}"
+    "return el;}"
+    "function smHideIconBar(){"
+    "try{document.documentElement.classList.add('sm-auth-top');}catch(e){}"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var icon=Ext.getCmp('icon-panel');"
+    "if(icon){"
+    "try{icon.hide();}catch(e){}"
+    "try{icon.setHeight(0);}catch(e){}"
+    "try{icon.setVisible(false);}catch(e){}"
+    "try{if(icon.ownerCt&&icon.ownerCt.doLayout)icon.ownerCt.doLayout(true,true);}catch(e){}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var el=document.getElementById('icon-panel');"
+    "if(el){"
+    "el.style.display='none';"
+    "el.style.height='0';"
+    "el.style.minHeight='0';"
+    "el.style.overflow='hidden';"
+    "el.style.border='0';"
+    "el.style.padding='0';"
+    "el.style.margin='0';"
+    "}"
+    "}"
+    "function smMoveAuthToTop(){"
+    "try{"
+    "var user=document.getElementById('userName');"
+    "var login=document.getElementById('login_button');"
+    "var logout=document.getElementById('logout_button');"
+    "var menu=document.getElementById('menu-bar');"
+    "if(!menu||(!user&&!login&&!logout))return false;"
+    # Prefer Ext component relocate when toolbars are ready.
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var menuCmp=Ext.getCmp('menu-bar');"
+    "var iconCmp=Ext.getCmp('icon-panel');"
+    "function take(id){"
+    "var c=Ext.getCmp(id);if(!c)return null;"
+    "try{if(c.ownerCt&&c.ownerCt!==menuCmp&&c.ownerCt.remove)c.ownerCt.remove(c,false);}catch(e){}"
+    "return c;}"
+    "if(menuCmp&&!window.__smAuthExt){"
+    "var u=take('userName'),li=take('login_button'),lo=take('logout_button');"
+    "if(u||li||lo){"
+    "try{if(!Ext.getCmp('sm-auth-fill'))menuCmp.add({xtype:'tbfill',id:'sm-auth-fill'});}catch(e){}"
+    "try{if(u)menuCmp.add(u);}catch(e){}"
+    "try{if(li)menuCmp.add(li);}catch(e){}"
+    "try{if(lo)menuCmp.add(lo);}catch(e){}"
+    "try{menuCmp.doLayout();}catch(e){}"
+    "window.__smAuthExt=true;"
+    "}"
+    "}"
+    "if(iconCmp){"
+    "try{iconCmp.hide();}catch(e){}"
+    "try{iconCmp.setHeight(0);}catch(e){}"
+    "try{if(iconCmp.ownerCt&&iconCmp.ownerCt.doLayout)iconCmp.ownerCt.doLayout(true,true);}catch(e){}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var slot=smAuthSlot();"
+    "if(!slot){smHideIconBar();return !!window.__smAuthExt;}"
+    "var moved=false;"
+    "function park(id){"
+    "var el=document.getElementById(id);"
+    "if(!el)return;"
+    "if(slot.contains(el))return;"
+    "var cell=smAuthCell(el);"
+    "if(!cell)return;"
+    "if(cell.parentNode===slot)return;"
+    "slot.appendChild(cell);"
+    "moved=true;"
+    "}"
+    "park('userName');park('login_button');park('logout_button');"
+    "smHideIconBar();"
+    "if(moved||window.__smAuthExt){"
+    "window.__smAuthMoved=true;"
+    "}"
+    "return true;"
+    "}catch(e){return false;}}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;}catch(e){}"
+    "try{"
+    "var _smAuthN=0;"
+    "var _smAuthT=setInterval(function(){"
+    "smMoveAuthToTop();"
+    "if(++_smAuthN>=40)clearInterval(_smAuthT);"
+    "},250);"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();},false);"
+    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();},false);"
+    "}catch(e){}"
     "function smClearStuckMask(){"
     "try{"
     "if(window.Ext&&Ext.app){"
@@ -6091,6 +6245,8 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){}"
     "try{if(Ext.EventManager&&Ext.EventManager.fireResize)Ext.EventManager.fireResize(w,h);}catch(e){}"
+    "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
+    "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
@@ -6302,11 +6458,12 @@ NAS_FILES_SNIPPET = (
     "if(window.Ext&&(Ext.onReady||Ext.app)){"
     "clearInterval(_smExtWait);"
     "try{if(Ext.onReady){Ext.onReady(function(){"
-    "setTimeout(function(){smNasFit(true);},0);"
-    "setTimeout(function(){smNasFit(true);smClearStuckMask();},500);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
+    "setTimeout(function(){smMoveAuthToTop();smHideIconBar();},1200);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
-    "setTimeout(function(){smNasFit(true);smClearStuckMask();},800);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
     "}"
     "}catch(e){}"
     "}"
