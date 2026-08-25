@@ -323,10 +323,10 @@ body#buffalo #header #header-button ul.right {
   height: 36px !important;
   width: auto !important;
 }
-body#buffalo #header #header-button ul li,
-body#buffalo #header #header-button ul li.status,
-body#buffalo #header #header-button ul li.power,
-body#buffalo #header #header-button ul li.logout {
+body#buffalo #header #header-button > ul > li,
+body#buffalo #header #header-button > ul > li.status,
+body#buffalo #header #header-button > ul > li.power,
+body#buffalo #header #header-button > ul > li.logout {
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -340,14 +340,15 @@ body#buffalo #header #header-button ul li.logout {
   border: 0 !important;
   border-radius: 8px !important;
   position: relative !important;
+  overflow: visible !important;
 }
-body#buffalo #header #header-button ul li:hover {
+body#buffalo #header #header-button > ul > li:hover {
   background: var(--sm-bg3) !important;
 }
-body#buffalo #header #header-button ul li a,
-body#buffalo #header #header-button ul li.logout a#logout,
-body#buffalo #header #header-button ul li.logout a#logout:hover,
-body#buffalo #header #header-button ul li.logout a#logout:active {
+body#buffalo #header #header-button > ul > li > a,
+body#buffalo #header #header-button > ul > li.logout > a#logout,
+body#buffalo #header #header-button > ul > li.logout > a#logout:hover,
+body#buffalo #header #header-button > ul > li.logout > a#logout:active {
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -433,11 +434,15 @@ body#buffalo #header .dropmenu-parent .dropmenu {
   left: auto !important;
   border: 1px solid var(--sm-line) !important;
   border-radius: 10px !important;
-  overflow: hidden !important;
+  overflow: visible !important;
   background: var(--sm-bg2) !important;
   background-image: none !important;
   z-index: 1000 !important;
   position: absolute !important;
+  min-width: 160px !important;
+  height: auto !important;
+  max-height: none !important;
+  padding: 4px 0 !important;
 }
 body#buffalo #header .dropmenu-parent .dropmenu.show,
 body#buffalo #header .dropmenu-parent .dropdownbox.show,
@@ -916,7 +921,10 @@ BUFFALO_FIT_SNIPPET = (
     "box.style.setProperty('display','block','important');"
     "box.style.setProperty('visibility','visible','important');"
     "box.style.setProperty('z-index','1000','important');"
-    "box.style.setProperty('min-width','160px','important');}"
+    "box.style.setProperty('min-width','180px','important');"
+    "box.style.setProperty('height','auto','important');"
+    "box.style.setProperty('max-height','none','important');"
+    "box.style.setProperty('overflow','visible','important');}"
     "function toggleFor(anchor,sel){"
     "if(!anchor||!anchor.parentNode)return;"
     "var box=anchor.parentNode.querySelector(sel); if(!box)return;"
@@ -966,6 +974,7 @@ BUFFALO_FIT_SNIPPET = (
     "document.body.style.removeProperty('zoom');}catch(e){}"
     "ensureHeaderImgs();"
     "bindHeaderMenus();"
+    "fillHeaderCaptions();"
     "function force(el,props){if(!el)return;Object.keys(props).forEach(function(k){"
     "el.style.setProperty(k,props[k],'important');});}"
     "['header','nav'].forEach(function(id){var el=document.getElementById(id);"
