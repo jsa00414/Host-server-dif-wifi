@@ -5186,7 +5186,7 @@ NAS_FILES_SNIPPET = (
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smNasFit(true);smClearStuckMask();},800);"
-    "}}"
+    "}"
     "}catch(e){}"
     "}"
     "},100);"
