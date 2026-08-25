@@ -186,8 +186,8 @@
       min-height: 0 !important;
       max-width: none !important;
       max-height: none !important;
-      width: 960px;
-      height: 600px;
+      width: 880px;
+      height: 560px;
       overflow: hidden !important;
       zoom: normal !important;
       scrollbar-width: none;
@@ -1277,10 +1277,10 @@
         requestAnimationFrame(layoutBuffaloZoom);
         return;
       }
-      // LinkStation app panel — cover-scale so tiles fill the portal pane.
-      const designW = 960;
-      const designH = 600;
-      const scale = Math.max(hw / designW, hh / designH);
+      // Punch into the LinkStation app panel and cover the portal pane.
+      const designW = 880;
+      const designH = 560;
+      const scale = Math.max(hw / designW, hh / designH) * 1.12;
       const ox = (hw - designW * scale) / 2;
       const oy = (hh - designH * scale) / 2;
       frame.style.setProperty("width", `${designW}px`, "important");
