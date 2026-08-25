@@ -5056,11 +5056,12 @@ body{
 .x-fullscreen,.x-panel.x-fullscreen,#maindataview{
   position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
   width:100%!important;height:100%!important;max-height:100%!important}
-.x-scroller,.x-scroll-container,.x-dataview,.x-panel-body,.x-list-inner,
+.x-scroller,.x-scroll-container,.x-dataview,.x-list-inner,
 #maindataview .x-panel-body,#maindataview .x-dataview,
-#main-panel .x-panel-body,.icon-panel .x-panel-body{
+#main-panel .x-panel-body,.icon-panel .x-panel-body,
+#main-panel .x-grid3-scroller,.x-grid3-scroller{
   touch-action:pan-y!important;-ms-touch-action:pan-y!important;
-  -webkit-overflow-scrolling:touch;overflow-y:auto!important}
+  -webkit-overflow-scrolling:touch;overflow-y:auto!important;overscroll-behavior:contain!important}
 .x-mask.sm-nas-mask-clear,.x-mask-msg.sm-nas-mask-clear{display:none!important;pointer-events:none!important}
 
 /* In-app file viewer (shared desktop/mobile) */
@@ -5194,11 +5195,17 @@ body{
     padding:8px 12px!important;background:transparent!important}
   .x-panel-ghost{background:var(--sm-bg2)!important;border:1px dashed var(--sm-accent)!important;opacity:.9}
 
-  /* Main file pane — native scroll surface */
-  #main-panel,#main-panel .x-panel-body,.icon-panel,.icon-panel .x-panel-body{
-    background:var(--sm-bg0)!important;overflow-y:auto!important;
-    -webkit-overflow-scrolling:touch!important;touch-action:pan-y!important}
-  #main-panel{border:0!important}
+  /* Main file pane — body is the only scrollport */
+  #main-panel,.icon-panel{
+    background:var(--sm-bg0)!important;overflow:hidden!important;border:0!important}
+  #main-panel .x-panel-body,.icon-panel .x-panel-body,
+  #main-panel .x-grid3-scroller,.x-grid3-scroller{
+    background:var(--sm-bg0)!important;overflow-x:hidden!important;overflow-y:auto!important;
+    -webkit-overflow-scrolling:touch!important;touch-action:pan-y!important;
+    overscroll-behavior:contain!important}
+  .icon-panel .thumb-wrap,.icon-panel .icon-small,.icon-panel .icon-medium,
+  .icon-panel .icon-large,.icon-panel .x-view,.x-dd-drag-proxy{
+    -webkit-user-drag:none!important;user-select:none!important;touch-action:pan-y!important}
   .icon-panel .x-view-over,.icon-small.x-view-over,.icon-medium.x-view-over,
   .icon-large.x-view-over,.x-view-selected,.icon-small.x-view-selected,
   .icon-medium.x-view-selected,.icon-large.x-view-selected{
@@ -5493,6 +5500,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){}"
     "try{smClearStuckMask();}catch(e){}"
+    "try{if(narrow&&typeof window.smPaintScrollPorts==='function')window.smPaintScrollPorts();}catch(e){}"
     "}"
     "var nodes=document.querySelectorAll('.x-viewport');"
     "for(var i=0;i<nodes.length;i++){"
@@ -5505,9 +5513,117 @@ NAS_FILES_SNIPPET = (
     "nodes[i].style.height=h+'px';"
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
+    
     "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;}catch(e){}"
+    "function smMobileScrollFix(){"
+    "if(window.__smMobileScrollFix)return;"
+    "window.__smMobileScrollFix=true;"
+    "function smNarrow(){return (Math.max(document.documentElement.clientWidth||0,window.innerWidth||0)<=900);}"
+    "function smScrollCandidates(){"
+    "return document.querySelectorAll('#main-panel .x-panel-body,.icon-panel .x-panel-body,#main-panel .x-grid3-scroller,.x-grid3-scroller,.x-grid3-body');"
+    "}"
+    "function smPickScroller(from){"
+    "var n=from;"
+    "while(n&&n!==document.body&&n!==document.documentElement){"
+    "try{"
+    "if(n.scrollHeight>n.clientHeight+4){"
+    "var oy='';try{oy=window.getComputedStyle(n).overflowY||'';}catch(e){}"
+    "var cls=String(n.className||'');"
+    "if(oy==='auto'||oy==='scroll'||oy==='overlay'||cls.indexOf('x-panel-body')>=0||cls.indexOf('x-grid3-scroller')>=0||cls.indexOf('x-grid3-body')>=0)return n;"
+    "}"
+    "}catch(e){}"
+    "n=n.parentElement;"
+    "}"
+    "var list=smScrollCandidates();var best=null;var bestExtra=0;"
+    "for(var i=0;i<list.length;i++){"
+    "var el=list[i];var extra=(el.scrollHeight||0)-(el.clientHeight||0);"
+    "if(extra>bestExtra){bestExtra=extra;best=el;}"
+    "}"
+    "return best;"
+    "}"
+    "function smKillExtDrag(){"
+    "try{"
+    "if(!window.Ext||!Ext.ComponentMgr||!Ext.ComponentMgr.all||!Ext.ComponentMgr.all.each)return;"
+    "Ext.ComponentMgr.all.each(function(c){"
+    "try{"
+    "if(!c)return;"
+    "if(c.dragZone){try{if(c.dragZone.lock)c.dragZone.lock();}catch(e){}try{if(c.dragZone.destroy)c.dragZone.destroy();}catch(e){}c.dragZone=null;}"
+    "if(c.dd){try{if(c.dd.unreg)c.dd.unreg();}catch(e){}c.dd=null;}"
+    "if(c.view&&c.view.dragZone){try{if(c.view.dragZone.lock)c.view.dragZone.lock();}catch(e){}try{if(c.view.dragZone.destroy)c.view.dragZone.destroy();}catch(e){}c.view.dragZone=null;}"
+    "if(typeof c.enableDragDrop!=='undefined')c.enableDragDrop=false;"
+    "if(typeof c.dragConfig!=='undefined')c.dragConfig=false;"
+    "}catch(e){}"
+    "});"
+    "}catch(e){}"
+    "}"
+    "function smPaintScrollPorts(){"
+    "if(!smNarrow())return;"
+    "smKillExtDrag();"
+    "var list=smScrollCandidates();"
+    "for(var i=0;i<list.length;i++){"
+    "var el=list[i];"
+    "try{"
+    "el.style.setProperty('overflow-y','auto','important');"
+    "el.style.setProperty('overflow-x','hidden','important');"
+    "el.style.setProperty('touch-action','pan-y','important');"
+    "el.style.setProperty('-webkit-overflow-scrolling','touch','important');"
+    "el.style.setProperty('overscroll-behavior','contain','important');"
+    "}catch(e){}"
+    "}"
+    "try{"
+    "var main=Ext.getCmp&&Ext.getCmp('main-panel');"
+    "if(main&&main.body&&main.body.dom){"
+    "var mh=0;"
+    "try{mh=(main.getInnerHeight&&main.getInnerHeight())||0;}catch(e){}"
+    "if(mh>120){"
+    "main.body.dom.style.setProperty('height',mh+'px','important');"
+    "main.body.dom.style.setProperty('max-height',mh+'px','important');"
+    "}"
+    "}"
+    "}catch(e){}"
+    "}"
+    "try{window.smPaintScrollPorts=smPaintScrollPorts;}catch(e){}"
+    "var _sx=0,_sy=0,_sc=null,_on=false,_moved=false;"
+    "document.addEventListener('touchstart',function(ev){"
+    "if(!smNarrow()||!ev.touches||ev.touches.length!==1)return;"
+    "_sc=smPickScroller(ev.target);_sx=ev.touches[0].clientX;_sy=ev.touches[0].clientY;_on=!!_sc;_moved=false;"
+    "},{capture:true,passive:true});"
+    "document.addEventListener('touchmove',function(ev){"
+    "if(!_on||!_sc||!ev.touches||ev.touches.length!==1)return;"
+    "var x=ev.touches[0].clientX,y=ev.touches[0].clientY;"
+    "var dx=x-_sx,dy=y-_sy;"
+    "if(!_moved){"
+    "if(Math.abs(dy)<6&&Math.abs(dx)<6)return;"
+    "if(Math.abs(dy)<=Math.abs(dx)){_on=false;return;}"
+    "_moved=true;smKillExtDrag();"
+    "}"
+    "_sc.scrollTop=_sc.scrollTop-dy;"
+    "_sx=x;_sy=y;"
+    "try{ev.stopPropagation();}catch(e){}"
+    "try{ev.preventDefault();}catch(e){}"
+    "},{capture:true,passive:false});"
+    "document.addEventListener('touchend',function(){_on=false;_sc=null;},{capture:true,passive:true});"
+    "document.addEventListener('touchcancel',function(){_on=false;_sc=null;},{capture:true,passive:true});"
+    "document.addEventListener('wheel',function(ev){"
+    "if(!smNarrow())return;"
+    "var s=smPickScroller(ev.target);if(!s)return;"
+    "s.scrollTop=s.scrollTop+ev.deltaY;"
+    "try{ev.preventDefault();}catch(e){}"
+    "try{ev.stopPropagation();}catch(e){}"
+    "},{capture:true,passive:false});"
+    "document.addEventListener('mousedown',function(ev){"
+    "if(!smNarrow())return;"
+    "smKillExtDrag();"
+    "},{capture:true,passive:true});"
+    "setTimeout(smPaintScrollPorts,400);"
+    "setTimeout(smPaintScrollPorts,1200);"
+    "setTimeout(smPaintScrollPorts,3000);"
+    "setInterval(smPaintScrollPorts,2000);"
+    "}"
+    "try{smMobileScrollFix();}catch(e){}"
     "try{"
     "window.addEventListener('resize',function(){smNasFit(true);},false);"
+
     "window.addEventListener('orientationchange',function(){setTimeout(function(){smNasFit(true);},50);},false);"
     "if(window.visualViewport){"
     "visualViewport.addEventListener('resize',function(){smNasFit(true);},false);}"
