@@ -29,6 +29,14 @@ VPS copy of the client config: `/root/GL-MT6000-new-vps.conf`
 
 After reconnect: `ping 10.8.0.3` and Buffalo from the portal should work.
 
+### Router SSH “No route to host”
+
+Portal LAN/router SSH needs Flint’s **server AllowedIPs** to include `192.168.8.0/24`.
+`apply-lan-forwards.sh` must update the **live** GL-MT6000 peer pubkey — a stale
+`ROUTER_PUBKEY` creates a ghost peer and clears AllowedIPs to `(none)` on the
+real peer. Set `ROUTER_WG_PUBKEY` in `port-forward-ui.env` to the current client
+public key from https://vpn.vpstruelord.com.
+
 ## Manual DNS (truemailor.com)
 
 This Cloudflare token only manages `vpstruelord.com`. Still on the old IP:

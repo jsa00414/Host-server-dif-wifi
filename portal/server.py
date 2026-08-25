@@ -1584,14 +1584,17 @@ def _router_ssh_cmd(
     *,
     netns_pid: str | None = None,
 ) -> list[str]:
+    # Home Flint LAN admin path: password auth only. Disable host-key prompts so a
+    # router reset/reconnect cannot break portal SSH with "REMOTE HOST IDENTIFICATION
+    # HAS CHANGED" / accept-new conflicts across 10.8.0.3 vs 192.168.8.1.
     ssh_cmd = [
         "sshpass",
         "-e",
         "ssh",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=no",
         "-o",
-        f"UserKnownHostsFile={ROUTER_KNOWN_HOSTS}",
+        "UserKnownHostsFile=/dev/null",
         "-o",
         "PreferredAuthentications=password",
         "-o",
