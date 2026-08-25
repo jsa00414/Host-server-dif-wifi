@@ -2389,32 +2389,74 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
     if not active:
         lines.append("# (no managed domain hookups enabled)")
     for r in active:
-        lines.append(f"{r['domain']} {{")
-        lines.append("\tencode gzip")
-        if r.get("vpn_only"):
-            # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
-            lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
-            lines.append("\thandle @vpn_clients {")
+        domain = r["domain"]
+        lines.append(f"{domain} {{")
+        # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
+        # there so Caddy never buffers an entire movie to compress it.
+        is_portal = domain == PORTAL_HOST or domain.startswith("portal.")
+        if is_portal:
+            lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
+            lines.append("\thandle @nasmedia {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\t\theader_down -X-Frame-Options")
             lines.append("\t\t\theader_down -Content-Security-Policy")
+            lines.append("\t\t\tflush_interval -1")
             lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
-            lines.append('\t\trespond "Forbidden" 403')
+            lines.append("\t\tencode gzip")
+            if r.get("vpn_only"):
+                lines.append(f"\t\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.append("\t\thandle @vpn_clients {")
+                lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\t\theader_up Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\t}")
+                lines.append("\t\t}")
+                lines.append("\t\thandle {")
+                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.append("\t\t}")
+            else:
+                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\theader_up Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t}")
             lines.append("\t}")
         else:
-            # Public: plain reverse_proxy only — no client_ip matcher residue.
-            lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-            lines.append("\t\theader_up Host {host}")
-            lines.append("\t\theader_up X-Forwarded-Host {host}")
-            lines.append("\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\theader_down -X-Frame-Options")
-            lines.append("\t\theader_down -Content-Security-Policy")
-            lines.append("\t}")
+            lines.append("\tencode gzip")
+            if r.get("vpn_only"):
+                # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
+                lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.append("\thandle @vpn_clients {")
+                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\theader_up Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t}")
+                lines.append("\t}")
+                lines.append("\thandle {")
+                lines.append('\t\trespond "Forbidden" 403')
+                lines.append("\t}")
+            else:
+                # Public: plain reverse_proxy only — no client_ip matcher residue.
+                lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\theader_up Host {host}")
+                lines.append("\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\theader_down -X-Frame-Options")
+                lines.append("\t\theader_down -Content-Security-Policy")
+                lines.append("\t}")
         lines.extend(
             [
                 "\theader {",
@@ -3929,16 +3971,23 @@ def buffalo_sso_login() -> dict:
 
 
 def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
-    """Build Set-Cookie headers scoped to buffalo-frame / nas-files paths."""
+    """Build Set-Cookie headers for Buffalo admin / WebAccess sessions.
+
+    webaxs_session uses Path=/ so window.open('/nas-files/rpc/cat/...') in a new
+    tab always receives it (Path=/nas-files/ alone is easy to miss with some
+    browsers when the Files UI is iframed).
+    """
     out: list[str] = []
     admin = data.get("admin") or {}
     files = data.get("files") or {}
     sid = str(admin.get("sid") or "").strip()
     sess = str(files.get("session") or "").strip()
+    # Portal is always served over HTTPS in production.
+    secure = "; Secure"
     if sid:
-        out.append(f"sid={sid}; Path={BUFFALO_PREFIX}/; SameSite=Lax")
+        out.append(f"sid={sid}; Path={BUFFALO_PREFIX}/; SameSite=Lax{secure}")
     if sess:
-        out.append(f"webaxs_session={sess}; Path={NAS_FILES_PREFIX}/; SameSite=Lax")
+        out.append(f"webaxs_session={sess}; Path=/; SameSite=Lax{secure}")
     return out
 
 
@@ -4776,6 +4825,16 @@ NAS_FILES_SNIPPET = (
     "if(u.indexOf('http://files.vpstruelord.com')===0)return P+u.slice(29);"
     "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
     "return u;}"
+    "function openFixed(u,n){"
+    "u=fix(String(u||''));"
+    "var a=document.createElement('a');"
+    "a.href=u;"
+    "a.target=(n&&n!=='_self')?n:'_blank';"
+    "a.rel='noopener noreferrer';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();"
+    "a.remove();"
+    "return null;}"
     "var xo=XMLHttpRequest.prototype.open;"
     "XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=fix(u);}catch(e){}"
     "return xo.apply(this,arguments);};"
@@ -4791,10 +4850,31 @@ NAS_FILES_SNIPPET = (
     "var _replace=window.location.replace.bind(window.location);"
     "window.location.replace=function(u){return _replace(fix(String(u)));};"
     "}catch(e){}"
-    # file_open / file_download use window.open('/rpc/cat...') and form.action='/rpc/download.zip'
+    # Icons use absolute /ui/images/... from base_config; patch element src/href.
+    "try{"
+    "var _sa=Element.prototype.setAttribute;"
+    "Element.prototype.setAttribute=function(n,v){"
+    "if((n==='src'||n==='href')&&typeof v==='string')v=fix(v);"
+    "return _sa.call(this,n,v);};"
+    "}catch(e){}"
+    "try{"
+    "var idesc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');"
+    "if(idesc&&idesc.set){Object.defineProperty(HTMLImageElement.prototype,'src',{"
+    "configurable:true,enumerable:true,"
+    "get:function(){return idesc.get.call(this);},"
+    "set:function(v){idesc.set.call(this,fix(String(v)));}});}"
+    "}catch(e){}"
+    # file_open uses window.open('/rpc/cat...'); prefer <a> click to avoid popup blockers.
     "try{"
     "var _open=window.open;"
-    "window.open=function(u,n,f){try{if(typeof u==='string')u=fix(u);}catch(e){}"
+    "window.open=function(u,n,f){"
+    "try{"
+    "if(typeof u==='string'){"
+    "u=fix(u);"
+    "if(u.indexOf(P+'/rpc/cat')===0||u.indexOf(P+'/rpc/download')===0)"
+    "return openFixed(u,n);"
+    "}"
+    "}catch(e){}"
     "return _open.call(window,u,n,f);};"
     "}catch(e){}"
     "try{"
@@ -4896,6 +4976,22 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
     )
 
 
+def _nas_files_rewrite_json_paths(text: str) -> str:
+    """Rewrite absolute icon/rpc paths in base_config.json and RPC JSON."""
+
+    def repl(match: re.Match[str]) -> str:
+        quote, path = match.group(1), match.group(2)
+        if path.startswith(NAS_FILES_PREFIX + "/") or path == NAS_FILES_PREFIX:
+            return match.group(0)
+        return f"{quote}{NAS_FILES_PREFIX}{path}{quote}"
+
+    return re.sub(
+        r"""(['"])(/(?:rpc|ui|st|webaxs)(?:/[^'"]*)?)\1""",
+        repl,
+        text,
+    )
+
+
 def _nas_files_inject(body: bytes, content_type: str) -> bytes:
     ctype = (content_type or "").lower()
     is_js = (
@@ -4904,7 +5000,8 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
         or ctype in {"application/x-javascript", "text/js"}
     )
     is_html = "text/html" in ctype
-    if not is_js and not is_html:
+    is_json = "application/json" in ctype or "text/json" in ctype or ctype.endswith("+json")
+    if not is_js and not is_html and not is_json:
         return body
     try:
         text = body.decode("utf-8")
@@ -4913,6 +5010,9 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
             text = body.decode("latin-1")
         except Exception:
             return body
+
+    if is_json:
+        return _nas_files_rewrite_json_paths(text).encode("utf-8")
 
     if is_js:
         return _nas_files_rewrite_js_paths(text).encode("utf-8")
@@ -4936,7 +5036,13 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
 
 
 def proxy_nas_files_request(handler: "Handler", method: str) -> None:
-    """Same-origin reverse proxy to Buffalo WebAccess (file manager on :9000)."""
+    """Same-origin reverse proxy to Buffalo WebAccess (file manager on :9000).
+
+    Streams binary file open/download/thumbnail responses (multi‑GB movies) and
+    forwards Range/HEAD so browsers can play video and icons can load.
+    """
+    import shutil
+
     parsed = urlparse(handler.path)
     rel = parsed.path[len(NAS_FILES_PREFIX) :] or "/"
     if not rel.startswith("/"):
@@ -4946,10 +5052,20 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
         upstream = upstream + "?" + parsed.query
 
     length = int(handler.headers.get("Content-Length", "0") or "0")
-    payload = handler.rfile.read(length) if length > 0 else None
+    payload = handler.rfile.read(length) if length > 0 and method != "HEAD" else None
 
     headers = {}
-    for key in ("Accept", "Accept-Language", "Content-Type", "X-Requested-With", "Referer"):
+    for key in (
+        "Accept",
+        "Accept-Language",
+        "Content-Type",
+        "X-Requested-With",
+        "Referer",
+        "Range",
+        "If-Range",
+        "If-None-Match",
+        "If-Modified-Since",
+    ):
         val = handler.headers.get(key)
         if val:
             headers[key] = val
@@ -4966,19 +5082,25 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-NasFilesProxy/1.0"
     headers["Accept-Encoding"] = "identity"
 
+    rel_l = rel.lower()
+    stream_body = method == "HEAD" or any(
+        rel_l.startswith(p)
+        for p in ("/rpc/cat", "/rpc/download", "/rpc/thumbnail")
+    )
+
     req = Request(upstream, data=payload, headers=headers, method=method)
+    resp = None
     try:
-        with urlopen(req, timeout=120) as resp:
-            body = resp.read()
-            status = getattr(resp, "status", 200) or 200
-            upstream_headers = {k: v for k, v in resp.headers.items()}
-            set_cookies = []
-            if hasattr(resp.headers, "get_all"):
-                set_cookies = resp.headers.get_all("Set-Cookie") or []
-            elif resp.headers.get("Set-Cookie"):
-                set_cookies = [resp.headers.get("Set-Cookie")]
+        resp = urlopen(req, timeout=600)
+        status = int(getattr(resp, "status", 200) or 200)
+        upstream_headers = {k: v for k, v in resp.headers.items()}
+        set_cookies: list[str] = []
+        if hasattr(resp.headers, "get_all"):
+            set_cookies = resp.headers.get_all("Set-Cookie") or []
+        elif resp.headers.get("Set-Cookie"):
+            set_cookies = [resp.headers.get("Set-Cookie")]
+        body = b"" if stream_body else resp.read()
     except HTTPError as exc:
-        body = exc.read() if hasattr(exc, "read") else b""
         status = int(getattr(exc, "code", 502) or 502)
         upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
         set_cookies = []
@@ -4986,6 +5108,13 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
             set_cookies = exc.headers.get_all("Set-Cookie") or []
         elif exc.headers and exc.headers.get("Set-Cookie"):
             set_cookies = [exc.headers.get("Set-Cookie")]
+        if stream_body:
+            # Still stream error bodies when present (rare); otherwise empty.
+            resp = exc
+            body = b""
+        else:
+            body = exc.read() if hasattr(exc, "read") else b""
+            resp = None
     except (URLError, TimeoutError, OSError) as exc:
         handler._json(502, {"error": f"nas files proxy failed: {exc}"})
         return
@@ -4995,10 +5124,12 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
         or upstream_headers.get("content-type")
         or "application/octet-stream"
     )
-    # Apache sometimes serves .js as text/plain — still rewrite absolute /rpc paths.
-    if rel.lower().endswith(".js") and "javascript" not in content_type.lower():
+    if (not stream_body) and rel.lower().endswith(".js") and "javascript" not in content_type.lower():
         content_type = "application/javascript; charset=utf-8"
-    body = _nas_files_inject(body, content_type)
+    if (not stream_body) and rel.lower().endswith(".json") and "json" not in content_type.lower():
+        content_type = "application/json; charset=utf-8"
+    if not stream_body:
+        body = _nas_files_inject(body, content_type)
 
     handler.send_response(status)
     skip = {
@@ -5018,13 +5149,52 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
             handler.send_header(key, _nas_files_rewrite_location(value))
         else:
             handler.send_header(key, value)
-    for cookie in set_cookies:
-        if cookie:
-            handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie))
+    for cookie_hdr in set_cookies:
+        if cookie_hdr:
+            handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie_hdr))
+
+    if stream_body:
+        # Preserve upstream Content-Length / Accept-Ranges for video seeking.
+        cl = upstream_headers.get("Content-Length") or upstream_headers.get("content-length")
+        if cl and method != "HEAD":
+            handler.send_header("Content-Length", cl)
+        elif method == "HEAD" and cl:
+            handler.send_header("Content-Length", cl)
+        if not (upstream_headers.get("Accept-Ranges") or upstream_headers.get("accept-ranges")):
+            handler.send_header("Accept-Ranges", "bytes")
+        # Prefer inline playback for /rpc/cat (movies) over forced download.
+        cd = upstream_headers.get("Content-Disposition") or upstream_headers.get("content-disposition")
+        if not cd and rel_l.startswith("/rpc/cat"):
+            handler.send_header("Content-Disposition", "inline")
+        handler.send_header("Cache-Control", "private, max-age=0")
+        handler.end_headers()
+        if method != "HEAD" and resp is not None:
+            try:
+                shutil.copyfileobj(resp, handler.wfile, length=1024 * 256)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+        elif resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        return
+
+    if resp is not None:
+        try:
+            resp.close()
+        except Exception:
+            pass
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
-    handler.wfile.write(body)
+    if method != "HEAD":
+        handler.wfile.write(body)
 
 
 def _buffalo_rewrite_location(value: str) -> str:
@@ -5402,6 +5572,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "GET")
         self._json(404, {"error": "not found"})
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
+        path = urlparse(self.path).path
+        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+            return self.do_GET()
+        if not self._is_authed():
+            if path.startswith("/api/"):
+                self._unauthorized(api=True)
+            else:
+                self._unauthorized(api=False)
+            return
+        if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
+            return proxy_nas_files_request(self, "HEAD")
+        if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
+            return proxy_buffalo_request(self, "HEAD")
+        self.send_response(404)
+        self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
