@@ -4157,6 +4157,7 @@ def build_portal_settings() -> dict:
         {"id": "router", "label": "Flint router", "url": "https://router.vpstruelord.com/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
+        {"id": "tailscale", "label": "Tailscale admin", "url": "https://login.tailscale.com/admin/machines"},
     ]
 
     return {
@@ -4458,6 +4459,12 @@ def build_vps_status() -> dict:
         {"id": "panel", "label": "Portal panel", "ok": True, "detail": "running"},
         {"id": "caddy", "label": "Caddy", "ok": _docker_running("truemail-caddy-1"), "detail": "HTTPS proxy"},
         {"id": "wireguard", "label": "WireGuard", "ok": _docker_running("wg-easy"), "detail": "wg-easy"},
+        {
+            "id": "tailscale",
+            "label": "Tailscale",
+            "ok": bool(ts.get("enabled")),
+            "detail": (ts.get("state") or ("on" if ts.get("enabled") else "off")),
+        },
         {"id": "adguard", "label": "AdGuard", "ok": _docker_running("sm-adguard"), "detail": "DNS filter"},
         {"id": "pihole", "label": "Pi-hole", "ok": _docker_running("sm-pihole"), "detail": "DNS filter"},
         {"id": "unbound", "label": "Unbound", "ok": _docker_running("sm-unbound"), "detail": "recursive DNS"},
