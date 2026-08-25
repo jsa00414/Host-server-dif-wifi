@@ -54,7 +54,7 @@ html, body, body#buffalo {
   background: #d0d0d0 !important;
 }
 body#buffalo {
-  zoom: 1.35;
+  zoom: 1.35 !important;
 }
 body#buffalo .container,
 body#buffalo #header,
@@ -139,9 +139,12 @@ BUFFALO_FIT_SNIPPET = (
     "if(window.fetch){var _f=window.fetch;window.fetch=function(i,n){"
     "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
     "return _f.call(this,i,n);};}"
-    "function fit(){var box=document.getElementById('menu_box');"
+    "function fit(){"
+    "try{document.documentElement.style.setProperty('zoom','1.35','important');"
+    "document.body.style.setProperty('zoom','1.35','important');}catch(e){}"
+    "var box=document.getElementById('menu_box');"
     "if(!box)return;var top=box.getBoundingClientRect().top;"
-    "var z=parseFloat(getComputedStyle(document.body).zoom)||1;"
+    "var z=parseFloat(getComputedStyle(document.body).zoom)||1.35;"
     "box.style.setProperty('width','calc(100% - 24px)','important');"
     "box.style.setProperty('height',Math.max(280,(window.innerHeight/z)-top-36)+'px','important');"
     "box.style.setProperty('max-width','none','important');"
