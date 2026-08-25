@@ -5046,14 +5046,28 @@ html,body{
   overflow:hidden!important;-webkit-text-size-adjust:100%;text-size-adjust:100%;zoom:1!important;
   overscroll-behavior:none!important;overscroll-behavior-y:none!important;
 }
-body{
-  position:relative!important;background:var(--sm-bg0)!important;color:var(--sm-text)!important;
-  font-family:"Sora",system-ui,-apple-system,sans-serif!important;
-  padding-top:var(--sm-safe-top)!important;padding-bottom:var(--sm-safe-bottom)!important;
-  padding-left:var(--sm-safe-left)!important;padding-right:var(--sm-safe-right)!important;
-  box-sizing:border-box!important;
+body{position:relative!important;box-sizing:border-box!important}
+.x-viewport,.x-border-layout-ct{min-height:100%!important;overscroll-behavior:none!important;overscroll-behavior-y:none!important}
+
+/* Desktop: keep Ext light hover/selection readable (do not force light text). */
+@media (min-width:901px){
+  body,.x-viewport,.x-border-layout-ct,.x-panel,.x-panel-body,.icon-panel{
+    color:inherit!important;background-image:none}
+  .icon-panel .x-view-over,.icon-panel .thumb-wrap.x-view-over,
+  .icon-small.x-view-over,.icon-medium.x-view-over,.icon-large.x-view-over,
+  .icon-panel .x-view-selected,.icon-panel .thumb-wrap.x-view-selected,
+  .icon-small.x-view-selected,.icon-medium.x-view-selected,.icon-large.x-view-selected,
+  .x-grid3-row-over,.x-grid3-row-selected,.x-tree-node-over,.x-tree-selected{
+    color:#1a1a1a!important}
+  .icon-panel .x-view-over .x-editable,.icon-panel .x-view-selected .x-editable,
+  .icon-panel .x-view-over .thumb,.icon-panel .x-view-selected .thumb,
+  .icon-panel .x-view-over .icon-info,.icon-panel .x-view-selected .icon-info,
+  .icon-small.x-view-over .x-editable,.icon-medium.x-view-over .x-editable,
+  .icon-large.x-view-over .x-editable,.icon-small.x-view-selected .x-editable,
+  .icon-medium.x-view-selected .x-editable,.icon-large.x-view-selected .x-editable,
+  .x-grid3-row-over .x-grid3-cell-inner,.x-grid3-row-selected .x-grid3-cell-inner{
+    color:#1a1a1a!important;text-shadow:none!important}
 }
-.x-viewport,.x-border-layout-ct{min-height:100%!important;background:var(--sm-bg0)!important;overscroll-behavior:none!important;overscroll-behavior-y:none!important}
 .x-fullscreen,.x-panel.x-fullscreen,#maindataview{
   position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
   width:100%!important;height:100%!important;max-height:100%!important}
@@ -5077,6 +5091,10 @@ body{
 #sm-nas-viewer #sm-nas-viewer-title{color:var(--sm-text)!important}
 
 @media (max-width:900px){
+  html,body{
+    padding-top:var(--sm-safe-top)!important;padding-bottom:var(--sm-safe-bottom)!important;
+    padding-left:var(--sm-safe-left)!important;padding-right:var(--sm-safe-right)!important;
+  }
   html,body,.x-viewport,.x-border-layout-ct,.x-panel,.x-panel-body,.x-toolbar,.x-panel-header,
   .x-panel-bwrap,.x-panel-tbar,.x-panel-bbar,.x-grid3,.x-grid3-viewport,.x-tree,.x-menu,
   .x-window,.x-form-label,.x-form-item-label,.x-btn-text,.x-combo-list{
