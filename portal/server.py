@@ -6885,6 +6885,16 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "\n"
         "}",
     )
+    # HTTP/2 and some reverse proxies leave statusText empty on 200; WebAccess
+    # treats that as failure and shows the JSON body in an error dialog.
+    text = text.replace(
+        "response.status != 200 || response.statusText != \"OK\"",
+        "response.status != 200 || (response.statusText && response.statusText != \"OK\")",
+    )
+    text = text.replace(
+        "_response.status != 200 || _response.statusText != \"OK\"",
+        "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
+    )
     return text
 
 
