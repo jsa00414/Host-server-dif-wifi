@@ -5312,6 +5312,59 @@ body{
   #icon-panel .x-toolbar,#menu-bar{
     overflow-x:auto!important;overflow-y:hidden!important;-webkit-overflow-scrolling:touch;
     white-space:nowrap!important}
+
+  /* Kill Ext framed-panel white chrome / light menu skins (xtheme-buffalo) */
+  .x-panel-tl,.x-panel-tr,.x-panel-tc,.x-panel-ml,.x-panel-mr,.x-panel-mc,
+  .x-panel-bl,.x-panel-br,.x-panel-bc,.x-panel-nofooter .x-panel-bc,
+  .x-panel-btns-ct,.x-panel-bwrap,.x-panel-body-noheader,.x-panel-body-noborder{
+    background:var(--sm-bg1)!important;background-image:none!important;
+    border:0!important;border-color:var(--sm-line)!important}
+  #main-panel,#main-panel .x-panel-bwrap,#main-panel .x-panel-body,
+  #main-panel .x-panel-ml,#main-panel .x-panel-mr,#main-panel .x-panel-mc,
+  #main-panel .x-panel-tl,#main-panel .x-panel-tr,#main-panel .x-panel-tc,
+  #main-panel .x-panel-bl,#main-panel .x-panel-br,#main-panel .x-panel-bc,
+  .icon-panel,.icon-panel .x-panel-body,.x-grid-panel,.x-grid-panel .x-panel-body{
+    border:0!important;outline:0!important;box-shadow:none!important;
+    background:var(--sm-bg0)!important;background-image:none!important}
+  .x-panel-body-noborder,.x-panel-noborder .x-panel-body-noborder{border:0!important}
+
+  /* View Format + all Ext menus — beat xtheme light gray skins */
+  .x-menu,.x-menu-floating,.x-menu-list,.x-menu ul,.x-menu table,
+  .x-menu-list-item,.x-menu-item,.x-menu-item-text,.x-menu-item a{
+    background:var(--sm-bg2)!important;background-color:var(--sm-bg2)!important;
+    background-image:none!important;color:var(--sm-text)!important;
+    border-color:var(--sm-line)!important}
+  .x-menu{border:1px solid var(--sm-line)!important;border-radius:12px!important;
+    box-shadow:0 12px 40px rgba(0,0,0,.5)!important;padding:6px!important}
+  .x-menu-item-active,.x-menu-item-active a,.x-menu-item-active .x-menu-item-text,
+  .x-menu-item-active *{
+    background:var(--sm-accent-dim)!important;background-image:none!important;
+    color:var(--sm-accent)!important;border-color:transparent!important;border-radius:8px!important}
+  .x-menu-check-item .x-menu-item-icon,.x-menu-item-checked .x-menu-item-icon{
+    filter:invert(1) brightness(1.2)}
+
+  /* Icon selection — match Ext's .icon-panel .x-view-selected specificity */
+  .icon-panel .x-view-over,.icon-panel .thumb-wrap.x-view-over{
+    background:rgba(255,255,255,.04)!important;background-image:none!important;
+    border:1px solid var(--sm-line)!important;border-radius:12px!important;padding:4px!important}
+  .icon-panel .x-view-selected,.icon-panel .thumb-wrap.x-view-selected,
+  .icon-panel .x-view-selected .thumb{
+    background:var(--sm-accent-dim)!important;background-image:none!important;
+    border:1px solid var(--sm-accent-strong)!important;border-radius:12px!important}
+
+  /* Grid sort / hover headers — remove Ext blue/white */
+  td.x-grid3-hd-over .x-grid3-hd-inner,td.sort-desc .x-grid3-hd-inner,
+  td.sort-asc .x-grid3-hd-inner,td.x-grid3-hd-menu-open .x-grid3-hd-inner,
+  td.x-grid3-hd-over,td.sort-desc,td.sort-asc,td.x-grid3-hd-menu-open{
+    background:var(--sm-accent-dim)!important;background-image:none!important;
+    border-color:var(--sm-line)!important;color:var(--sm-accent)!important}
+  .x-grid3-cell-selected{background:var(--sm-accent-dim)!important;color:var(--sm-text)!important}
+
+  /* Hide Buffalo / WebAccess chrome on narrow */
+  .logo,#BUFFALO_LOGO,img[src*="logo.png"],img[src*="buffalo"],
+  #menu-bar .logo,.product-name,#webaxs-logo{
+    display:none!important;width:0!important;height:0!important;
+    margin:0!important;padding:0!important;overflow:hidden!important;background:none!important}
 }
 """
 
@@ -5329,6 +5382,12 @@ NAS_FILES_SNIPPET = (
     f"var P='{NAS_FILES_PREFIX}';"
     "try{document.documentElement.style.setProperty('zoom','1','important');"
     "document.body&&document.body.style.setProperty('zoom','1','important');}catch(e){}"
+    "function smPinCss(){try{var s=document.getElementById('sm-nas-mobile');"
+    "if(!s)return;var h=document.head||document.getElementsByTagName('head')[0];"
+    "if(h)h.appendChild(s);}catch(e){}}"
+    "smPinCss();"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',smPinCss,false);"
+    "window.addEventListener('load',smPinCss,false);"
     "function smClearStuckMask(){"
     "try{"
     "if(window.Ext&&Ext.app){"
