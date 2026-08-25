@@ -5188,9 +5188,20 @@ select,.x-combo-list{
   background:var(--sm-bg1)!important}
 .x-tree-node-el{color:var(--sm-text)!important;min-height:32px!important;
   line-height:32px!important;padding:0 10px!important;border-radius:8px!important}
+/* Ext sets .x-tree-node a span { color:black } — force readable light labels */
+.x-tree-node a,.x-tree-node a span,.x-tree-node .x-tree-node-anchor,
+.x-tree-node .x-tree-node-anchor span,.x-dd-drag-ghost a span,
+#tree-panel .x-tree-node a,#tree-panel .x-tree-node a span,
+#left-panel .x-tree-node a,#left-panel .x-tree-node a span{
+  color:var(--sm-text)!important;text-decoration:none!important;background:transparent!important}
+.x-tree-node .x-tree-node-over a span,.x-tree-node-el.x-tree-node-over a span{
+  color:var(--sm-text)!important;background:transparent!important}
 .x-tree-selected,.x-tree-node .x-tree-selected{
   background:var(--sm-accent-dim)!important;color:var(--sm-accent)!important}
+.x-tree-node .x-tree-selected a span,.x-tree-node .x-tree-selected .x-tree-node-anchor span{
+  color:var(--sm-accent)!important;background:transparent!important;font-weight:600!important}
 .x-tree-node-over{background:rgba(255,255,255,.04)!important}
+.x-tree-node .x-tree-node-disabled a span{color:var(--sm-muted)!important}
 .x-tree-node-icon,.x-tree-ec-icon,.x-tree-arrows .x-tree-ec-over .x-tree-ec-icon{
   filter:saturate(.8) brightness(1.15)}
 #details-panel .details-info,p.details-info,.details-title{
