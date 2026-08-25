@@ -898,7 +898,7 @@
       <section class="view embed-view" id="view-buffalo">
         <div class="buffalo-zoom-host">
           <div class="buffalo-zoom-clip">
-            <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/root.html" scrolling="no" allow="clipboard-read; clipboard-write"></iframe>
+            <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/" scrolling="no" allow="clipboard-read; clipboard-write"></iframe>
           </div>
         </div>
       </section>
@@ -1287,7 +1287,7 @@
     function loadBuffaloFrame() {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
-      const src = frame.dataset.src || "https://buffalo.vpstruelord.com/root.html";
+      const src = frame.dataset.src || "https://buffalo.vpstruelord.com/";
       const apply = () => {
         layoutBuffaloZoom();
         requestAnimationFrame(layoutBuffaloZoom);
