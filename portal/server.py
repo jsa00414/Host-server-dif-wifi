@@ -4791,6 +4791,24 @@ NAS_FILES_SNIPPET = (
     "var _replace=window.location.replace.bind(window.location);"
     "window.location.replace=function(u){return _replace(fix(String(u)));};"
     "}catch(e){}"
+    # file_open / file_download use window.open('/rpc/cat...') and form.action='/rpc/download.zip'
+    "try{"
+    "var _open=window.open;"
+    "window.open=function(u,n,f){try{if(typeof u==='string')u=fix(u);}catch(e){}"
+    "return _open.call(window,u,n,f);};"
+    "}catch(e){}"
+    "try{"
+    "var _submit=HTMLFormElement.prototype.submit;"
+    "HTMLFormElement.prototype.submit=function(){"
+    "try{if(this.action)this.setAttribute('action',fix(String(this.action)));}catch(e){}"
+    "return _submit.apply(this,arguments);};"
+    "var desc=Object.getOwnPropertyDescriptor(HTMLFormElement.prototype,'action')||"
+    "Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype,'formAction');"
+    "if(desc&&desc.set){Object.defineProperty(HTMLFormElement.prototype,'action',{"
+    "configurable:true,enumerable:true,"
+    "get:function(){return desc.get.call(this);},"
+    "set:function(v){desc.set.call(this,fix(String(v)));}});}"
+    "}catch(e){}"
     "})();</script>"
 )
 
@@ -4862,9 +4880,31 @@ def _nas_files_rewrite_html_paths(text: str) -> str:
     return text
 
 
+def _nas_files_rewrite_js_paths(text: str) -> str:
+    """Rewrite hardcoded absolute WebAccess paths inside JS sources."""
+    # Avoid double-prefixing if already rewritten.
+    def repl(match: re.Match[str]) -> str:
+        quote, path = match.group(1), match.group(2)
+        if path.startswith(NAS_FILES_PREFIX + "/") or path == NAS_FILES_PREFIX:
+            return match.group(0)
+        return f"{quote}{NAS_FILES_PREFIX}{path}"
+
+    return re.sub(
+        r"""(['"])(/(?:rpc|ui|st|webaxs)(?:/[^'"]*)?)""",
+        repl,
+        text,
+    )
+
+
 def _nas_files_inject(body: bytes, content_type: str) -> bytes:
     ctype = (content_type or "").lower()
-    if "text/html" not in ctype:
+    is_js = (
+        "javascript" in ctype
+        or "ecmascript" in ctype
+        or ctype in {"application/x-javascript", "text/js"}
+    )
+    is_html = "text/html" in ctype
+    if not is_js and not is_html:
         return body
     try:
         text = body.decode("utf-8")
@@ -4873,6 +4913,10 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
             text = body.decode("latin-1")
         except Exception:
             return body
+
+    if is_js:
+        return _nas_files_rewrite_js_paths(text).encode("utf-8")
+
     if "sm-nas-files-js" in text:
         return body
     text = _nas_files_rewrite_html_paths(text)
@@ -4951,6 +4995,9 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
         or upstream_headers.get("content-type")
         or "application/octet-stream"
     )
+    # Apache sometimes serves .js as text/plain — still rewrite absolute /rpc paths.
+    if rel.lower().endswith(".js") and "javascript" not in content_type.lower():
+        content_type = "application/javascript; charset=utf-8"
     body = _nas_files_inject(body, content_type)
 
     handler.send_response(status)
