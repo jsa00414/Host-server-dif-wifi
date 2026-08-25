@@ -7192,8 +7192,8 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         )
     if '"menu_file_upload"' not in text and '"makedir"' in text:
         text = text.replace(
-            '"makedir" : "Create a new folder",',
-            '"makedir" : "Create a new folder",\r\n\t\t\t"menu_file_upload" : "Upload",',
+            '\t\t\t"makedir" : "Create a new folder",',
+            '\t\t\t"makedir" : "Create a new folder",\n\t\t\t"menu_file_upload" : "Upload",',
         )
     return text
 
