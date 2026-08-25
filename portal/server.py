@@ -1193,6 +1193,8 @@ FTP_HOST = os.environ.get("FTP_HOST", urlparse(BUFFALO_UPSTREAM).hostname or "19
 FTP_PORT = int(os.environ.get("FTP_PORT", "21"))
 FTP_USER = (os.environ.get("FTP_USER", "") or BUFFALO_SSO_USER).strip() or "admin"
 FTP_TIMEOUT = float(os.environ.get("FTP_TIMEOUT", "30"))
+FTP_LIST_CACHE_TTL = float(os.environ.get("FTP_LIST_CACHE_TTL", "4"))
+FTP_POOL_MAX_IDLE = float(os.environ.get("FTP_POOL_MAX_IDLE", "120"))
 
 
 def _load_ftp_pass() -> str:
@@ -1234,53 +1236,142 @@ def ftp_parent(path: str) -> str:
     return ftp_norm_path(str(Path(p).parent).replace("\\", "/"))
 
 
-def ftp_connect() -> "ftplib.FTP":
-    if not FTP_PASS:
-        raise RuntimeError("FTP_PASS / FTP_PASS_B64 / BUFFALO_PASS not configured")
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=FTP_TIMEOUT)
-    ftp.login(FTP_USER, FTP_PASS)
-    ftp.set_pasv(True)
-    return ftp
+def ftp_guess_mime(name: str) -> str:
+    ctype, _ = mimetypes.guess_type(name or "")
+    if ctype:
+        return ctype
+    lower = (name or "").lower()
+    if lower.endswith((".md", ".markdown", ".log", ".conf", ".cfg", ".ini", ".env")):
+        return "text/plain; charset=utf-8"
+    if lower.endswith((".ts", ".tsx", ".jsx", ".vue")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
 
 
-def ftp_status() -> dict:
-    try:
-        ftp = ftp_connect()
-        try:
-            pwd = ftp.pwd()
-            welcome = (ftp.getwelcome() or "").strip()
-        finally:
+class _FtpPool:
+    """Reuse one FTP control connection (locked) + short list cache."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._ftp: ftplib.FTP | None = None
+        self._last_used = 0.0
+        self._list_cache: dict[str, tuple[float, dict]] = {}
+
+    def _drop(self) -> None:
+        if self._ftp is not None:
             try:
-                ftp.quit()
+                self._ftp.close()
             except Exception:
+                pass
+        self._ftp = None
+
+    def _ensure(self) -> ftplib.FTP:
+        if not FTP_PASS:
+            raise RuntimeError("FTP_PASS / FTP_PASS_B64 / BUFFALO_PASS not configured")
+        now = time.time()
+        if self._ftp is not None:
+            if now - self._last_used > FTP_POOL_MAX_IDLE:
+                self._drop()
+            else:
                 try:
-                    ftp.close()
+                    self._ftp.voidcmd("NOOP")
+                    self._last_used = now
+                    return self._ftp
                 except Exception:
-                    pass
+                    self._drop()
+        ftp = ftplib.FTP()
+        ftp.connect(FTP_HOST, FTP_PORT, timeout=FTP_TIMEOUT)
+        ftp.login(FTP_USER, FTP_PASS)
+        ftp.set_pasv(True)
+        try:
+            ftp.sendcmd("TYPE I")
+        except Exception:
+            pass
+        self._ftp = ftp
+        self._last_used = now
+        return ftp
+
+    def invalidate(self, path: str | None = None) -> None:
+        with self._lock:
+            if path is None:
+                self._list_cache.clear()
+                return
+            target = ftp_norm_path(path)
+            parent = ftp_parent(target)
+            self._list_cache.pop(target, None)
+            self._list_cache.pop(parent, None)
+
+    def warm(self) -> dict:
+        t0 = time.perf_counter()
+        with self._lock:
+            self._ensure()
+            data = self.list("/disk1", use_cache=False)
         return {
             "ok": True,
             "host": FTP_HOST,
-            "port": FTP_PORT,
-            "user": FTP_USER,
-            "pwd": pwd,
-            "welcome": welcome[:120],
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "host": FTP_HOST,
-            "port": FTP_PORT,
-            "user": FTP_USER,
-            "error": str(exc),
+            "warmed_ms": round((time.perf_counter() - t0) * 1000),
+            "path": data.get("path"),
+            "entries": len(data.get("entries") or []),
         }
 
+    def status(self) -> dict:
+        try:
+            with self._lock:
+                ftp = self._ensure()
+                pwd = ftp.pwd()
+                welcome = (ftp.getwelcome() or "").strip()
+            return {
+                "ok": True,
+                "host": FTP_HOST,
+                "port": FTP_PORT,
+                "user": FTP_USER,
+                "pwd": pwd,
+                "welcome": welcome[:120],
+                "pooled": True,
+            }
+        except Exception as exc:
+            with self._lock:
+                self._drop()
+            return {
+                "ok": False,
+                "host": FTP_HOST,
+                "port": FTP_PORT,
+                "user": FTP_USER,
+                "error": str(exc),
+            }
 
-def ftp_list(path: str) -> dict:
-    target = ftp_norm_path(path)
-    ftp = ftp_connect()
-    entries: list[dict] = []
-    try:
+    def list(self, path: str, *, use_cache: bool = True) -> dict:
+        target = ftp_norm_path(path)
+        now = time.time()
+        if use_cache:
+            hit = self._list_cache.get(target)
+            if hit and now - hit[0] <= FTP_LIST_CACHE_TTL:
+                cached = dict(hit[1])
+                cached["cached"] = True
+                return cached
+
+        with self._lock:
+            if use_cache:
+                hit = self._list_cache.get(target)
+                if hit and time.time() - hit[0] <= FTP_LIST_CACHE_TTL:
+                    cached = dict(hit[1])
+                    cached["cached"] = True
+                    return cached
+            ftp = self._ensure()
+            try:
+                payload = self._list_unlocked(ftp, target)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                payload = self._list_unlocked(ftp, target)
+            self._last_used = time.time()
+            self._list_cache[target] = (self._last_used, payload)
+            out = dict(payload)
+            out["cached"] = False
+            return out
+
+    def _list_unlocked(self, ftp: ftplib.FTP, target: str) -> dict:
+        entries: list[dict] = []
         ftp.cwd(target)
         try:
             for name, facts in ftp.mlsd():
@@ -1300,7 +1391,6 @@ def ftp_list(path: str) -> dict:
                     }
                 )
         except Exception:
-            # Fallback NLST + SIZE/MDTM best-effort
             names = []
             try:
                 names = ftp.nlst()
@@ -1336,186 +1426,206 @@ def ftp_list(path: str) -> dict:
                         "modified": modified,
                     }
                 )
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
+        entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+        crumbs = []
+        acc = ""
+        for part in target.strip("/").split("/"):
+            if not part:
+                continue
+            acc += "/" + part
+            crumbs.append({"name": part, "path": acc})
+        return {
+            "ok": True,
+            "path": target,
+            "parent": ftp_parent(target),
+            "crumbs": crumbs,
+            "entries": entries,
+        }
+
+    def mkdir(self, path: str) -> dict:
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("cannot create root")
+        with self._lock:
+            ftp = self._ensure()
             try:
-                ftp.close()
+                ftp.mkd(target)
             except Exception:
-                pass
-    entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
-    crumbs = []
-    acc = ""
-    for part in target.strip("/").split("/"):
-        if not part:
-            continue
-        acc += "/" + part
-        crumbs.append({"name": part, "path": acc})
-    return {
-        "ok": True,
-        "path": target,
-        "parent": ftp_parent(target),
-        "crumbs": crumbs,
-        "entries": entries,
-    }
+                self._drop()
+                ftp = self._ensure()
+                ftp.mkd(target)
+            self._last_used = time.time()
+            self.invalidate(target)
+        return {"ok": True, "path": target}
+
+    def delete(self, path: str) -> dict:
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("cannot delete root")
+
+        def _rm_tree(ftp: ftplib.FTP, p: str) -> None:
+            try:
+                ftp.cwd(p)
+                kids = []
+                try:
+                    for name, facts in ftp.mlsd():
+                        if name in (".", ".."):
+                            continue
+                        typ = (facts.get("type") or "").lower()
+                        kids.append((name, typ in ("dir", "cdir", "pdir")))
+                except Exception:
+                    for name in ftp.nlst():
+                        base = name.rsplit("/", 1)[-1]
+                        if base in (".", ".."):
+                            continue
+                        full = p.rstrip("/") + "/" + base
+                        is_dir = False
+                        cur = ftp.pwd()
+                        try:
+                            ftp.cwd(full)
+                            is_dir = True
+                            ftp.cwd(cur)
+                        except Exception:
+                            is_dir = False
+                        kids.append((base, is_dir))
+                for name, is_dir in kids:
+                    full = ftp_norm_path(p.rstrip("/") + "/" + name)
+                    if is_dir:
+                        _rm_tree(ftp, full)
+                    else:
+                        ftp.delete(full)
+                ftp.cwd(ftp_parent(p))
+                ftp.rmd(p)
+            except ftplib.error_perm:
+                ftp.delete(p)
+
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                _rm_tree(ftp, target)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                _rm_tree(ftp, target)
+            self._last_used = time.time()
+            self.invalidate(target)
+        return {"ok": True, "path": target}
+
+    def rename(self, src: str, dst: str) -> dict:
+        a = ftp_norm_path(src)
+        b = ftp_norm_path(dst)
+        if a == "/" or b == "/":
+            raise ValueError("invalid rename path")
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                ftp.rename(a, b)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                ftp.rename(a, b)
+            self._last_used = time.time()
+            self.invalidate(a)
+            self.invalidate(b)
+        return {"ok": True, "path": b, "from": a}
+
+    def upload_bytes(self, path: str, data: bytes) -> dict:
+        target = ftp_norm_path(path)
+        if target == "/" or target.endswith("/"):
+            raise ValueError("upload path must be a file path")
+        parent = ftp_parent(target)
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                if parent != "/":
+                    try:
+                        ftp.cwd(parent)
+                    except Exception:
+                        acc = ""
+                        for part in parent.strip("/").split("/"):
+                            acc += "/" + part
+                            try:
+                                ftp.mkd(acc)
+                            except Exception:
+                                pass
+                        ftp.cwd(parent)
+                bio = io.BytesIO(data)
+                ftp.storbinary(f"STOR {target}", bio)
+            except Exception:
+                self._drop()
+                raise
+            self._last_used = time.time()
+            self.invalidate(target)
+        return {"ok": True, "path": target, "size": len(data)}
+
+    def download_to(self, path: str, write) -> tuple[str, str, int | None]:
+        """Stream RETR to write(callback). Returns (name, mime, size|None)."""
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("not a file")
+        name = target.rsplit("/", 1)[-1] or "download"
+        ctype = ftp_guess_mime(name)
+        with self._lock:
+            ftp = self._ensure()
+            size = None
+            try:
+                try:
+                    size = ftp.size(target)
+                except Exception:
+                    size = None
+                ftp.retrbinary(f"RETR {target}", write)
+            except Exception:
+                self._drop()
+                raise
+            self._last_used = time.time()
+        return name, ctype, size
+
+
+_FTP = _FtpPool()
+
+
+def ftp_connect() -> "ftplib.FTP":
+    # Legacy helper — prefer _FTP pool methods.
+    if not FTP_PASS:
+        raise RuntimeError("FTP_PASS / FTP_PASS_B64 / BUFFALO_PASS not configured")
+    ftp = ftplib.FTP()
+    ftp.connect(FTP_HOST, FTP_PORT, timeout=FTP_TIMEOUT)
+    ftp.login(FTP_USER, FTP_PASS)
+    ftp.set_pasv(True)
+    return ftp
+
+
+def ftp_status() -> dict:
+    return _FTP.status()
+
+
+def ftp_warm() -> dict:
+    return _FTP.warm()
+
+
+def ftp_list(path: str) -> dict:
+    return _FTP.list(path)
 
 
 def ftp_mkdir(path: str) -> dict:
-    target = ftp_norm_path(path)
-    if target == "/":
-        raise ValueError("cannot create root")
-    ftp = ftp_connect()
-    try:
-        ftp.mkd(target)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            try:
-                ftp.close()
-            except Exception:
-                pass
-    return {"ok": True, "path": target}
+    return _FTP.mkdir(path)
 
 
 def ftp_delete(path: str) -> dict:
-    target = ftp_norm_path(path)
-    if target == "/":
-        raise ValueError("cannot delete root")
-    ftp = ftp_connect()
-
-    def _rm_tree(p: str) -> None:
-        try:
-            ftp.cwd(p)
-            kids = []
-            try:
-                for name, facts in ftp.mlsd():
-                    if name in (".", ".."):
-                        continue
-                    typ = (facts.get("type") or "").lower()
-                    kids.append((name, typ in ("dir", "cdir", "pdir")))
-            except Exception:
-                for name in ftp.nlst():
-                    base = name.rsplit("/", 1)[-1]
-                    if base in (".", ".."):
-                        continue
-                    full = p.rstrip("/") + "/" + base
-                    is_dir = False
-                    cur = ftp.pwd()
-                    try:
-                        ftp.cwd(full)
-                        is_dir = True
-                        ftp.cwd(cur)
-                    except Exception:
-                        is_dir = False
-                    kids.append((base, is_dir))
-            for name, is_dir in kids:
-                full = ftp_norm_path(p.rstrip("/") + "/" + name)
-                if is_dir:
-                    _rm_tree(full)
-                else:
-                    ftp.delete(full)
-            ftp.cwd(ftp_parent(p))
-            ftp.rmd(p)
-        except ftplib.error_perm:
-            # maybe file
-            ftp.delete(p)
-
-    try:
-        _rm_tree(target)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            try:
-                ftp.close()
-            except Exception:
-                pass
-    return {"ok": True, "path": target}
+    return _FTP.delete(path)
 
 
 def ftp_rename(src: str, dst: str) -> dict:
-    a = ftp_norm_path(src)
-    b = ftp_norm_path(dst)
-    if a == "/" or b == "/":
-        raise ValueError("invalid rename path")
-    ftp = ftp_connect()
-    try:
-        ftp.rename(a, b)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            try:
-                ftp.close()
-            except Exception:
-                pass
-    return {"ok": True, "path": b, "from": a}
+    return _FTP.rename(src, dst)
 
 
 def ftp_upload_bytes(path: str, data: bytes) -> dict:
-    target = ftp_norm_path(path)
-    if target == "/" or target.endswith("/"):
-        raise ValueError("upload path must be a file path")
-    parent = ftp_parent(target)
-    ftp = ftp_connect()
-    try:
-        if parent != "/":
-            try:
-                ftp.cwd(parent)
-            except Exception:
-                # create parents best-effort
-                acc = ""
-                for part in parent.strip("/").split("/"):
-                    acc += "/" + part
-                    try:
-                        ftp.mkd(acc)
-                    except Exception:
-                        pass
-                ftp.cwd(parent)
-        bio = io.BytesIO(data)
-        ftp.storbinary(f"STOR {target}", bio)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            try:
-                ftp.close()
-            except Exception:
-                pass
-    return {"ok": True, "path": target, "size": len(data)}
+    return _FTP.upload_bytes(path, data)
 
-
-
-def ftp_guess_mime(name: str) -> str:
-    ctype, _ = mimetypes.guess_type(name or "")
-    if ctype:
-        return ctype
-    lower = (name or "").lower()
-    if lower.endswith((".md", ".markdown", ".log", ".conf", ".cfg", ".ini", ".env")):
-        return "text/plain; charset=utf-8"
-    if lower.endswith((".ts", ".tsx", ".jsx", ".vue")):
-        return "text/plain; charset=utf-8"
-    return "application/octet-stream"
 
 def ftp_download_bytes(path: str) -> tuple[str, bytes]:
-    target = ftp_norm_path(path)
-    if target == "/":
-        raise ValueError("not a file")
-    ftp = ftp_connect()
     buf = io.BytesIO()
-    try:
-        ftp.retrbinary(f"RETR {target}", buf.write)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            try:
-                ftp.close()
-            except Exception:
-                pass
-    name = target.rsplit("/", 1)[-1] or "download"
+    name, _ctype, _size = _FTP.download_to(path, buf.write)
     return name, buf.getvalue()
 
 
@@ -7108,6 +7218,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, ftp_status())
             return
+        if path == "/api/ftp/warm":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, ftp_warm())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/ftp/list":
             if not self._require_auth(api=True):
                 return
@@ -7127,43 +7245,49 @@ class Handler(BaseHTTPRequestHandler):
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or [""])[0]
                 inline = (qs.get("inline") or ["0"])[0] in ("1", "true", "yes")
-                target = ftp_norm_path(path_q)
-                if target == "/":
-                    raise ValueError("not a file")
-                name = target.rsplit("/", 1)[-1] or "download"
-                ctype = ftp_guess_mime(name)
-                if inline and ctype.startswith("text/") and "charset=" not in ctype:
-                    ctype = ctype + "; charset=utf-8"
-                ftp = ftp_connect()
-                size = None
-                try:
-                    try:
-                        size = ftp.size(target)
-                    except Exception:
+                # Probe metadata then stream under pool lock via download_to
+                # We need headers before body — use a small wrapper.
+                name_holder: dict = {}
+
+                def _prepare_and_stream():
+                    target = ftp_norm_path(path_q)
+                    if target == "/":
+                        raise ValueError("not a file")
+                    name = target.rsplit("/", 1)[-1] or "download"
+                    ctype = ftp_guess_mime(name)
+                    if inline and ctype.startswith("text/") and "charset=" not in ctype:
+                        ctype = ctype + "; charset=utf-8"
+                    name_holder["name"] = name
+                    name_holder["ctype"] = ctype
+                    # SIZE under same connection as RETR
+                    with _FTP._lock:
+                        ftp = _FTP._ensure()
                         size = None
-                    self.send_response(200)
-                    self.send_header("Content-Type", ctype)
-                    disp = "inline" if inline else "attachment"
-                    self.send_header(
-                        "Content-Disposition",
-                        f"{disp}; filename*=UTF-8''{quote(name)}",
-                    )
-                    if size is not None:
-                        self.send_header("Content-Length", str(size))
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("X-Content-Type-Options", "nosniff")
-                    self.end_headers()
-                    ftp.retrbinary(f"RETR {target}", self.wfile.write)
-                finally:
-                    try:
-                        ftp.quit()
-                    except Exception:
                         try:
-                            ftp.close()
+                            try:
+                                size = ftp.size(target)
+                            except Exception:
+                                size = None
+                            self.send_response(200)
+                            self.send_header("Content-Type", ctype)
+                            disp = "inline" if inline else "attachment"
+                            self.send_header(
+                                "Content-Disposition",
+                                f"{disp}; filename*=UTF-8''{quote(name)}",
+                            )
+                            if size is not None:
+                                self.send_header("Content-Length", str(size))
+                            self.send_header("Cache-Control", "no-store")
+                            self.send_header("X-Content-Type-Options", "nosniff")
+                            self.end_headers()
+                            ftp.retrbinary(f"RETR {target}", self.wfile.write)
+                            _FTP._last_used = time.time()
                         except Exception:
-                            pass
+                            _FTP._drop()
+                            raise
+
+                _prepare_and_stream()
             except Exception as exc:
-                # headers may already be sent while streaming
                 try:
                     self._json(500, {"ok": False, "error": str(exc)})
                 except Exception:

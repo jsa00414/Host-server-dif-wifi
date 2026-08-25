@@ -1581,7 +1581,7 @@
     window.addEventListener("message", (ev) => {
       const data = ev && ev.data;
       if (!data || data.type !== "sm-nas-files-reauth") return;
-      loadNasFilesFrame(true);
+      loadFtpFilesFrame(true);
     });
 
     function syncAppHeight() {
@@ -1620,6 +1620,20 @@
       return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
     }
 
+
+
+    function prefetchFtpFiles() {
+      try {
+        fetch("/api/ftp/warm", { credentials: "same-origin" }).catch(() => {});
+      } catch (e) {}
+      const frame = document.getElementById("frameFiles");
+      if (!frame) return;
+      if (frame.getAttribute("src") === "about:blank" || frame.dataset.loaded !== "1") {
+        const src = frame.dataset.src || "/static/files.html";
+        frame.src = src;
+        frame.dataset.loaded = "1";
+      }
+    }
 
     function loadFtpFilesFrame(force) {
       const frame = document.getElementById("frameFiles");
@@ -2160,6 +2174,10 @@
 
     document.querySelectorAll(".nav-btn").forEach((btn) => {
       btn.addEventListener("click", () => showView(btn.dataset.view));
+    });
+    document.querySelectorAll('.nav-btn[data-view="files"]').forEach((btn) => {
+      btn.addEventListener("pointerenter", () => prefetchFtpFiles(), { once: true });
+      btn.addEventListener("focus", () => prefetchFtpFiles(), { once: true });
     });
     document.querySelectorAll("[data-go]").forEach((btn) => {
       btn.addEventListener("click", () => showView(btn.dataset.go));
@@ -2736,6 +2754,7 @@
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
         await load();
+        setTimeout(() => prefetchFtpFiles(), 400);
         const start = initialViewFromPrefs();
         if (start && start !== "overview") showView(start);
         else lockMobileViewport();

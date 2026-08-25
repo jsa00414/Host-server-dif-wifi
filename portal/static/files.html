@@ -4,9 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Files</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg0: #0a0f0d;
@@ -25,7 +22,7 @@
     html, body {
       margin: 0; height: 100%; width: 100%;
       background: var(--bg0); color: var(--text);
-      font-family: "Sora", system-ui, sans-serif;
+      font-family: "Sora", system-ui, -apple-system, sans-serif;
       overflow: hidden;
     }
     button, input { font: inherit; }
@@ -595,6 +592,8 @@
     }
 
     bindFtpUi();
+    // Warm FTP pool in parallel with first listing so connect/login is shared/reused.
+    fetch("/api/ftp/warm", { credentials: "same-origin" }).catch(() => {});
     ftpBrowse("/disk1");
   </script>
 </body>
