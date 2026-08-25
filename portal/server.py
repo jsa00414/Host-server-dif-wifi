@@ -517,6 +517,11 @@ body#buffalo .container.portal {
   background: var(--sm-bg0) !important;
 }
 body#buffalo div#main div#top div#menu_box {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  grid-auto-rows: minmax(140px, auto) !important;
+  gap: 12px !important;
+  align-content: start !important;
   width: calc(100% - 28px) !important;
   max-width: none !important;
   height: calc(100vh - 150px) !important;
@@ -528,6 +533,23 @@ body#buffalo div#main div#top div#menu_box {
   box-sizing: border-box !important;
   background: transparent !important;
   border: 0 !important;
+}
+body#buffalo #menu_box > .item-box,
+body#buffalo #menu_box > div {
+  float: none !important;
+  width: auto !important;
+  max-width: none !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+/* Hide Buffalo layout spacers that force Advanced to the bottom-left */
+body#buffalo #menu_box > .item-box.fixed:not(#advanced) {
+  display: none !important;
+}
+/* Pin Advanced Settings under BitTorrent (3rd column) */
+body#buffalo #menu_box > #advanced {
+  grid-column: 3 !important;
+  display: block !important;
 }
 body#buffalo #main .container_sd {
   width: 100% !important;
@@ -769,27 +791,30 @@ BUFFALO_FIT_SNIPPET = (
     "box.style.setProperty('height',Math.max(280,window.innerHeight-top-48)+'px','important');"
     "box.style.setProperty('max-width','none','important');"
     "box.style.setProperty('overflow','auto','important');"
+    "box.style.setProperty('display','grid','important');"
+    "box.style.setProperty('grid-template-columns','repeat(3, minmax(0, 1fr))','important');"
+    "box.style.setProperty('gap','12px','important');"
     "try{"
+    "var real={initialization:1,webaxs:1,btcloud:1,bittorrent:1,flickr:1,eyefi:1,"
+    "dlna:1,usbdeviceserver:1,access:1,raid:1,domain:1,backup:1,terasearch:1,share:1};"
     "var bt=document.getElementById('bittorrent');"
     "var adv=document.getElementById('advanced');"
-    "if(bt&&adv&&box.contains(bt)&&box.contains(adv)){"
     "var items=Array.prototype.filter.call(box.children,function(n){return n.nodeType===1;});"
-    "if(items.length>1){"
-    "var top0=items[0].getBoundingClientRect().top;"
-    "var cols=0;"
-    "for(var i=0;i<items.length;i++){"
-    "if(Math.abs(items[i].getBoundingClientRect().top-top0)<12)cols++; else break;}"
-    "if(cols<1)cols=3;"
-    "var without=items.filter(function(el){return el!==adv;});"
-    "var btIdx=without.indexOf(bt);"
-    "if(btIdx>=0){"
-    "var insertAt=Math.min(btIdx+cols,without.length);"
-    "var desired=without.slice();"
-    "desired.splice(insertAt,0,adv);"
-    "var same=desired.length===items.length;"
-    "for(var j=0;same&&j<desired.length;j++){if(desired[j]!==items[j])same=false;}"
-    "if(!same){desired.forEach(function(el){box.appendChild(el);})}"
-    "}}}}"
+    "var reals=[], spacers=[];"
+    "items.forEach(function(el){"
+    "if(el===adv)return;"
+    "if(el.id&&real[el.id])reals.push(el); else spacers.push(el);});"
+    "spacers.forEach(function(el){el.style.setProperty('display','none','important');});"
+    "if(adv){adv.style.setProperty('display','block','important');"
+    "adv.style.setProperty('grid-column','3','important');"
+    "var btIdx=bt?reals.indexOf(bt):-1;"
+    "var insertAt=(btIdx>=0)?Math.min(btIdx+3,reals.length):reals.length;"
+    "var desired=reals.slice(); desired.splice(insertAt,0,adv);"
+    "var same=desired.length===items.filter(function(el){return el===adv||(el.id&&real[el.id]);}).length;"
+    "var cur=items.filter(function(el){return el===adv||(el.id&&real[el.id]);});"
+    "same=same&&desired.every(function(el,i){return el===cur[i];});"
+    "if(!same){desired.forEach(function(el){box.appendChild(el);});"
+    "spacers.forEach(function(el){box.appendChild(el);});}}"
     "}catch(e){}"
     "}"
     "document.querySelectorAll('.x-window').forEach(function(w){"
