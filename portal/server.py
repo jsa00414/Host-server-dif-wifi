@@ -5603,11 +5603,12 @@ body *,body *::before,body *::after{text-shadow:none!important;box-shadow:none!i
 #login_button,#logout_button,.x-btn-text-icon .x-btn-text{color:var(--sm-accent)!important}
 .x-toolbar-separator,.xtb-sep{border-left-color:var(--sm-line)!important;background:var(--sm-line)!important}
 
-/* Auth (admin / Logout) lives on the top menu bar; hide the second toolbar */
-html.sm-auth-top #icon-panel,
-html.sm-auth-top #icon-panel .x-toolbar,
-html.sm-auth-top #icon-panel .x-panel-body,
-html.sm-auth-top #icon-panel .x-panel-bwrap{
+/* Hide WebAccess action icon toolbar (Open/Download/…) — File menu has equivalents */
+#icon-panel,
+#icon-panel .x-toolbar,
+#icon-panel .x-panel-body,
+#icon-panel .x-panel-bwrap,
+#btn_open,#btn_download,#btn_newfolder,#btn_remove,#btn_rename,#btn_copy,#btn_move,#btn_upload,#btn_clearthumb,#btn_mailurl,#btn_onetimeurl{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
   overflow:hidden!important;padding:0!important;margin:0!important;
@@ -6058,6 +6059,7 @@ NAS_FILES_SNIPPET = (
     + "</style>"
     "<script id=\"sm-nas-files-js\">(function(){"
     f"var P='{NAS_FILES_PREFIX}';"
+    "try{document.documentElement.classList.add('sm-auth-top');}catch(e){}"
     "try{document.documentElement.style.setProperty('zoom','1','important');"
     "document.body&&document.body.style.setProperty('zoom','1','important');}catch(e){}"
     "function smPinCss(){try{var s=document.getElementById('sm-nas-mobile');"
@@ -6088,19 +6090,37 @@ NAS_FILES_SNIPPET = (
     "return el;}"
     "function smHideIconBar(){"
     "try{document.documentElement.classList.add('sm-auth-top');}catch(e){}"
+    "var actionIds=['btn_open','btn_download','btn_newfolder','btn_remove','btn_rename','btn_copy','btn_move','btn_upload','btn_clearthumb','btn_mailurl','btn_onetimeurl'];"
     "try{"
     "if(window.Ext&&Ext.getCmp){"
     "var icon=Ext.getCmp('icon-panel');"
     "if(icon){"
+    "if(!window.__smIconActionsGone){"
+    "for(var ai=0;ai<actionIds.length;ai++){"
+    "var act=Ext.getCmp(actionIds[ai]);"
+    "if(act){try{act.hide();}catch(e){}try{icon.remove(act,true);}catch(e){}}"
+    "}"
+    "window.__smIconActionsGone=true;"
+    "}"
+    "if(window.__smAuthMoved||window.__smAuthExt){"
+    "if(!window.__smIconRemoved){"
+    "var parent=icon.ownerCt;"
+    "try{parent.remove(icon,true);}catch(e){try{icon.destroy();}catch(e2){}}"
+    "window.__smIconRemoved=true;"
+    "try{if(parent&&parent.doLayout)parent.doLayout(true,true);}catch(e){}"
+    "}"
+    "}else{"
     "try{icon.hide();}catch(e){}"
     "try{icon.setHeight(0);}catch(e){}"
     "try{icon.setVisible(false);}catch(e){}"
     "try{if(icon.ownerCt&&icon.ownerCt.doLayout)icon.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "}"
+    "}"
     "}catch(e){}"
     "var el=document.getElementById('icon-panel');"
     "if(el){"
+    "if(window.__smIconRemoved){try{el.parentNode.removeChild(el);}catch(e){}}"
     "el.style.display='none';"
     "el.style.height='0';"
     "el.style.minHeight='0';"
@@ -6137,11 +6157,6 @@ NAS_FILES_SNIPPET = (
     "window.__smAuthExt=true;"
     "}"
     "}"
-    "if(iconCmp){"
-    "try{iconCmp.hide();}catch(e){}"
-    "try{iconCmp.setHeight(0);}catch(e){}"
-    "try{if(iconCmp.ownerCt&&iconCmp.ownerCt.doLayout)iconCmp.ownerCt.doLayout(true,true);}catch(e){}"
-    "}"
     "}"
     "}catch(e){}"
     "var slot=smAuthSlot();"
@@ -6165,10 +6180,11 @@ NAS_FILES_SNIPPET = (
     "return true;"
     "}catch(e){return false;}}"
     "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;}catch(e){}"
+    "try{smHideIconBar();}catch(e){}"
     "try{"
     "var _smAuthN=0;"
     "var _smAuthT=setInterval(function(){"
-    "smMoveAuthToTop();"
+    "smMoveAuthToTop();smHideIconBar();"
     "if(++_smAuthN>=40)clearInterval(_smAuthT);"
     "},250);"
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();},false);"
