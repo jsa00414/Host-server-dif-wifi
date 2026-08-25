@@ -114,9 +114,9 @@ body#buffalo #nav > .container.portal {
 }
 body#buffalo #header {
   display: block !important;
-  min-height: 52px !important;
-  height: 52px !important;
-  max-height: 52px !important;
+  min-height: 56px !important;
+  height: 56px !important;
+  max-height: 56px !important;
   padding: 0 18px !important;
   box-sizing: border-box !important;
   border-bottom: 1px solid var(--sm-line) !important;
@@ -128,13 +128,14 @@ body#buffalo #header > .container {
   justify-content: space-between !important;
   gap: 16px !important;
   width: 100% !important;
-  height: 52px !important;
-  min-height: 52px !important;
-  max-height: 52px !important;
+  height: 56px !important;
+  min-height: 56px !important;
+  max-height: 56px !important;
   margin: 0 !important;
   padding: 0 !important;
   float: none !important;
   box-sizing: border-box !important;
+  overflow: visible !important;
 }
 /* Brand: replace clipped GIF with crisp CSS wordmark */
 body#buffalo #header #header-logo {
@@ -144,18 +145,19 @@ body#buffalo #header #header-logo {
   flex: 0 0 auto !important;
   width: auto !important;
   min-width: 0 !important;
-  height: 52px !important;
+  height: 56px !important;
   margin: 0 !important;
   padding: 0 !important;
   background: transparent !important;
   background-image: none !important;
+  overflow: visible !important;
 }
 body#buffalo #header #header-logo .logo {
   display: flex !important;
   align-items: center !important;
   margin: 0 !important;
-  padding: 0 !important;
-  line-height: 1 !important;
+  padding: 4px 2px !important;
+  line-height: 1.2 !important;
   overflow: visible !important;
 }
 body#buffalo #header #header-logo .logo img,
@@ -174,12 +176,14 @@ body#buffalo #header #header-logo .logo::before {
   font-family: "Sora", "Segoe UI", sans-serif !important;
   font-weight: 700 !important;
   font-style: italic !important;
-  font-size: 17px !important;
+  font-size: 18px !important;
   letter-spacing: 0.08em !important;
-  line-height: 1 !important;
+  line-height: 1.25 !important;
+  padding: 2px 6px 2px 0 !important;
   color: #ff4d4d !important;
   text-shadow: none !important;
   white-space: nowrap !important;
+  overflow: visible !important;
 }
 /* Drop search/hint clutter from the top bar */
 body#buffalo #header #header-search {
@@ -197,7 +201,7 @@ body#buffalo #header #header-button {
   float: none !important;
   flex: 0 0 auto !important;
   width: auto !important;
-  height: 52px !important;
+  height: 56px !important;
   margin: 0 0 0 auto !important;
   padding: 0 !important;
   background: transparent !important;
@@ -254,30 +258,53 @@ body#buffalo #header #header-button ul li.logout a#logout:active {
   border-radius: 8px !important;
   line-height: 0 !important;
 }
+/* Ext often leaves status/power <img> with no src before NAS login — hide them */
 body#buffalo #header #header-button ul li img,
 body#buffalo #header #header-button ul li .pressbtn,
 body#buffalo #header #header-button ul li .toggle {
-  display: block !important;
-  width: auto !important;
-  height: 18px !important;
-  max-width: 40px !important;
-  max-height: 18px !important;
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
   margin: 0 !important;
   padding: 0 !important;
-  object-fit: contain !important;
-  filter: none !important;
-  background: transparent !important;
   border: 0 !important;
 }
-/* CSS logout glyph (original sprite was wiped by transparent backgrounds) */
+/* Flat CSS glyphs: status / power / logout */
+body#buffalo #header #header-button ul li.status a#status::before,
+body#buffalo #header #header-button ul li.power a#power::before,
 body#buffalo #header #header-button ul li.logout a#logout::before {
   content: "" !important;
   display: block !important;
   width: 18px !important;
   height: 18px !important;
   background-color: var(--sm-muted) !important;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' y1='12' x2='9' y2='12'/%3E%3C/svg%3E") center / contain no-repeat !important;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' y1='12' x2='9' y2='12'/%3E%3C/svg%3E") center / contain no-repeat !important;
+  -webkit-mask-repeat: no-repeat !important;
+  mask-repeat: no-repeat !important;
+  -webkit-mask-position: center !important;
+  mask-position: center !important;
+  -webkit-mask-size: contain !important;
+  mask-size: contain !important;
+}
+body#buffalo #header #header-button ul li.status a#status::before {
+  background-color: #5eb8ff !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' y1='16' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12.01' y2='8'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' y1='16' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12.01' y2='8'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-button ul li.power a#power::before {
+  background-color: var(--sm-danger) !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v10'/%3E%3Cpath d='M18.4 6.6a9 9 0 1 1-12.8 0'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v10'/%3E%3Cpath d='M18.4 6.6a9 9 0 1 1-12.8 0'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-button ul li.logout a#logout::before {
+  background-color: var(--sm-muted) !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' y1='12' x2='9' y2='12'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' y1='12' x2='9' y2='12'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-button ul li.status:hover a#status::before {
+  background-color: #8fd0ff !important;
+}
+body#buffalo #header #header-button ul li.power:hover a#power::before {
+  background-color: #ff8a8a !important;
 }
 body#buffalo #header #header-button ul li.logout:hover a#logout::before {
   background-color: var(--sm-text) !important;
@@ -441,6 +468,23 @@ body#buffalo #nav .name {
 body#buffalo #nav .sep_r,
 body#buffalo #header .sep_r {
   display: none !important;
+}
+/* Quiet empty nav chrome before login */
+body#buffalo #nav .sound,
+body#buffalo #nav p.sound,
+body#buffalo #nav ul li.username #mainField .icon,
+body#buffalo #nav ul li.username #mainField .text:empty,
+body#buffalo #nav ul li.layout[style*="display: none"],
+body#buffalo #nav ul li.language #NAS_07_LABEL_CAPTION:empty {
+  display: none !important;
+}
+body#buffalo #nav ul li.username #mainField {
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
 }
 body#buffalo #footer,
 * body#buffalo #footer {
@@ -663,23 +707,23 @@ BUFFALO_FIT_SNIPPET = (
     "['header','nav'].forEach(function(id){var el=document.getElementById(id);"
     "if(el){el.classList.remove('preload');}});"
     "var hdr=document.getElementById('header');"
-    "force(hdr,{display:'block',height:'52px','min-height':'52px','max-height':'52px',"
+    "force(hdr,{display:'block',height:'56px','min-height':'56px','max-height':'56px',"
     "margin:'0',padding:'0 18px',overflow:'visible',"
     "background:'#111916','background-image':'none','border-bottom':'1px solid rgba(170,210,185,0.14)'});"
     "var hbox=hdr&&hdr.querySelector('.container');"
     "force(hbox,{display:'flex','flex-wrap':'nowrap','align-items':'center',"
-    "'justify-content':'space-between',height:'52px',width:'100%',margin:'0',padding:'0',"
-    "float:'none',background:'transparent','background-image':'none'});"
+    "'justify-content':'space-between',height:'56px',width:'100%',margin:'0',padding:'0',"
+    "float:'none',background:'transparent','background-image':'none',overflow:'visible'});"
     "var search=document.getElementById('header-search');"
     "force(search,{display:'none',width:'0',height:'0',overflow:'hidden'});"
     "var logoWrap=document.getElementById('header-logo');"
     "force(logoWrap,{display:'flex','align-items':'center',float:'none',margin:'0',padding:'0',"
-    "height:'52px',width:'auto',background:'transparent'});"
+    "height:'56px',width:'auto',background:'transparent',overflow:'visible'});"
     "var logo=document.getElementById('BUFFALO_LOGO');"
     "force(logo,{display:'none',width:'0',height:'0'});"
     "var btns=document.getElementById('header-button');"
     "force(btns,{display:'flex','align-items':'center',float:'none',margin:'0 0 0 auto',"
-    "padding:'0',height:'52px',width:'auto',background:'transparent','background-image':'none'});"
+    "padding:'0',height:'56px',width:'auto',background:'transparent','background-image':'none'});"
     "var ul=btns&&btns.querySelector('ul');"
     "force(ul,{display:'flex','flex-wrap':'nowrap','align-items':'center',gap:'4px',"
     "margin:'0',padding:'0',float:'none',height:'36px','list-style':'none'});"
@@ -687,6 +731,9 @@ BUFFALO_FIT_SNIPPET = (
     "force(li,{display:'flex','align-items':'center','justify-content':'center',"
     "float:'none',margin:'0',padding:'0',width:'36px',height:'36px',"
     "background:'transparent','background-image':'none'});});}"
+    "document.querySelectorAll('#header .dropmenu.hide, #header .dropdownbox.hide').forEach(function(el){"
+    "force(el,{display:'none'});});"
+    "var sound=document.querySelector('#nav .sound'); force(sound,{display:'none'});"
     "var nav=document.getElementById('nav');"
     "force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px',"
     "margin:'0',padding:'0 18px',overflow:'visible',"
