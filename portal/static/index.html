@@ -331,6 +331,29 @@
       gap: 8px;
       margin-top: 4px;
     }
+    .settings-form {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .settings-links {
+      display: grid;
+      gap: 8px;
+    }
+    .settings-links a {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--bg2);
+      color: var(--text);
+      text-decoration: none;
+      font-size: .86rem;
+    }
+    .settings-links a:hover { border-color: rgba(61,222,160,.4); }
+    .settings-links a span { color: var(--muted); font-size: .72rem; }
 
     .vps-metrics {
       display: grid;
@@ -1074,6 +1097,48 @@
               </div>
               <div class="settings-actions">
                 <button type="button" class="ghost" id="settingsLogoutBtn">Log out</button>
+                <button type="button" class="ghost" id="settingsLogoutAllBtn">Sign out everywhere</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Change password</h3></div>
+            <div class="panel-body">
+              <div class="settings-form">
+                <label class="field"><span>Current password</span>
+                  <input type="password" id="settingsCurPass" autocomplete="current-password" />
+                </label>
+                <label class="field"><span>New password</span>
+                  <input type="password" id="settingsNewPass" autocomplete="new-password" />
+                </label>
+                <label class="field"><span>Confirm new password</span>
+                  <input type="password" id="settingsNewPass2" autocomplete="new-password" />
+                </label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="primary" id="settingsPassBtn">Update password</button>
+              </div>
+              <p class="hint" style="margin:10px 0 0">Saves to the portal env file and signs out all sessions.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Branding</h3></div>
+            <div class="panel-body">
+              <div class="settings-form">
+                <label class="field"><span>Panel title</span>
+                  <input type="text" id="settingsTitle" maxlength="64" />
+                </label>
+                <label class="field"><span>Tagline</span>
+                  <input type="text" id="settingsTagline" maxlength="120" placeholder="optional" />
+                </label>
+                <label class="field"><span>Session length (hours)</span>
+                  <input type="number" id="settingsSessionHours" min="1" max="168" step="1" />
+                </label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="primary" id="settingsBrandBtn">Save branding</button>
               </div>
             </div>
           </div>
@@ -1090,6 +1155,20 @@
                 <button type="button" id="settingsReauthNasBtn">Refresh NAS login</button>
               </div>
               <p class="hint" style="margin:10px 0 0">Re-runs Buffalo / Files SSO and reloads those embeds.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Quick links</h3></div>
+            <div class="panel-body">
+              <div class="settings-links" id="settingsLinks"><div class="empty">Loading…</div></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Services</h3></div>
+            <div class="panel-body">
+              <div class="vps-svc-list" id="settingsServices"><div class="empty">Loading…</div></div>
             </div>
           </div>
 
@@ -1132,6 +1211,20 @@
                   <small>Keep the bottom log open by default</small>
                 </div>
                 <label class="switch"><input type="checkbox" id="settingsExpandLog" /><span></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="meta">
+                  <strong>Auto-refresh Overview</strong>
+                  <small>Reload VPS status every 30s while Overview is open</small>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingsAutoRefresh" /><span></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="meta">
+                  <strong>Confirm Save &amp; Apply</strong>
+                  <small>Ask before applying Internet / Domains / Firewall changes</small>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingsConfirmSave" checked /><span></span></label>
               </div>
             </div>
           </div>
@@ -1333,6 +1426,7 @@
       try {
         localStorage.setItem("sm_last_view", name);
       } catch (e) {}
+      syncOverviewAutoRefresh();
     }
     function friendlyHost(d) {
       const host = String(d.hostname || "").trim();
@@ -1783,6 +1877,11 @@
     }
 
     async function save() {
+      const prefs = readSettingsPrefs();
+      if (prefs.confirmSave) {
+        const ok = window.confirm("Apply Internet / Domains / Firewall / Router changes now?");
+        if (!ok) return;
+      }
       vpsRules = readVpsForm();
       routerRules = readRouterForm();
       hookupRules = readHookupForm();
@@ -2046,47 +2145,104 @@
       "overview", "backup", "vps", "router", "buffalo", "files",
       "domains", "firewall", "dnsmap", "adguard", "surfshark", "pihole", "settings",
     ]);
+    let settingsState = null;
+    let overviewRefreshTimer = null;
+
+    function fmtUptime(sec) {
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (d) return `${d}d ${h}h`;
+      if (h) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
     function readSettingsPrefs() {
       let defaultView = "overview";
       let remember = false;
       let expandLog = false;
+      let autoRefresh = false;
+      let confirmSave = true;
       try {
         defaultView = localStorage.getItem("sm_default_view") || "overview";
         remember = localStorage.getItem("sm_remember_view") === "1";
         expandLog = localStorage.getItem("sm_expand_log") === "1";
+        autoRefresh = localStorage.getItem("sm_auto_refresh") === "1";
+        const cs = localStorage.getItem("sm_confirm_save");
+        confirmSave = cs === null ? true : cs === "1";
       } catch (e) {}
       if (!SETTINGS_VIEWS.has(defaultView)) defaultView = "overview";
-      return { defaultView, remember, expandLog };
+      return { defaultView, remember, expandLog, autoRefresh, confirmSave };
     }
     function applySettingsPrefsToForm() {
       const prefs = readSettingsPrefs();
       const def = document.getElementById("settingsDefaultView");
       const rem = document.getElementById("settingsRememberView");
       const exp = document.getElementById("settingsExpandLog");
+      const ar = document.getElementById("settingsAutoRefresh");
+      const cs = document.getElementById("settingsConfirmSave");
       if (def) def.value = prefs.defaultView;
       if (rem) rem.checked = prefs.remember;
       if (exp) exp.checked = prefs.expandLog;
+      if (ar) ar.checked = prefs.autoRefresh;
+      if (cs) cs.checked = prefs.confirmSave;
     }
     function persistSettingsPrefs() {
       const def = document.getElementById("settingsDefaultView");
       const rem = document.getElementById("settingsRememberView");
       const exp = document.getElementById("settingsExpandLog");
+      const ar = document.getElementById("settingsAutoRefresh");
+      const cs = document.getElementById("settingsConfirmSave");
       try {
         if (def) localStorage.setItem("sm_default_view", def.value || "overview");
         if (rem) localStorage.setItem("sm_remember_view", rem.checked ? "1" : "0");
         if (exp) localStorage.setItem("sm_expand_log", exp.checked ? "1" : "0");
+        if (ar) localStorage.setItem("sm_auto_refresh", ar.checked ? "1" : "0");
+        if (cs) localStorage.setItem("sm_confirm_save", cs.checked ? "1" : "0");
       } catch (e) {}
       if (exp) drawer.classList.toggle("collapsed", !exp.checked);
+      syncOverviewAutoRefresh();
       setStatus("Preferences saved", "ok");
     }
+    function syncOverviewAutoRefresh() {
+      if (overviewRefreshTimer) {
+        clearInterval(overviewRefreshTimer);
+        overviewRefreshTimer = null;
+      }
+      const prefs = readSettingsPrefs();
+      const onOverview = document.getElementById("view-overview")?.classList.contains("active");
+      if (prefs.autoRefresh && onOverview) {
+        overviewRefreshTimer = setInterval(() => {
+          refreshVpsStatus().catch(() => {});
+        }, 30000);
+      }
+    }
+    function applyBrandingToChrome(data) {
+      const title = data.title || "ServerManager";
+      const tag = data.tagline || "";
+      document.title = title;
+      const h1 = document.querySelector(".brand h1");
+      if (h1) h1.textContent = title;
+      let p = document.querySelector(".brand p");
+      if (tag) {
+        if (!p) {
+          p = document.createElement("p");
+          document.querySelector(".brand > div")?.appendChild(p);
+        }
+        p.textContent = tag;
+      } else if (p) {
+        p.remove();
+      }
+    }
     function renderSettings(data) {
+      settingsState = data;
       const account = document.getElementById("settingsAccountKv");
       const portal = document.getElementById("settingsPortalKv");
       if (account) {
         account.innerHTML = [
           `<div><span class="k">User</span><span class="v">${esc(data.user || "—")}</span></div>`,
           `<div><span class="k">Panel</span><span class="v">${esc(data.title || "—")}</span></div>`,
-          `<div><span class="k">Session</span><span class="v">${esc(String(data.session_hours ?? "—"))}h</span></div>`,
+          `<div><span class="k">Session</span><span class="v">${esc(String(data.session_hours ?? "—"))}h · ${esc(String(data.active_sessions ?? 0))} active</span></div>`,
         ].join("");
       }
       if (portal) {
@@ -2095,10 +2251,35 @@
           : "not configured";
         portal.innerHTML = [
           `<div><span class="k">Host</span><span class="v">${esc(data.portal_host || location.host || "—")}</span></div>`,
+          `<div><span class="k">Hostname</span><span class="v">${esc(data.hostname || "—")}</span></div>`,
           `<div><span class="k">VPS IP</span><span class="v">${esc(data.vps_public_ip || "—")}</span></div>`,
+          `<div><span class="k">Egress</span><span class="v">${esc(data.egress_ip || "—")}</span></div>`,
+          `<div><span class="k">Uptime</span><span class="v">${esc(fmtUptime(data.uptime_sec))}</span></div>`,
           `<div><span class="k">Buffalo SSO</span><span class="v">${esc(sso)}</span></div>`,
         ].join("");
       }
+      const titleEl = document.getElementById("settingsTitle");
+      const tagEl = document.getElementById("settingsTagline");
+      const hoursEl = document.getElementById("settingsSessionHours");
+      if (titleEl) titleEl.value = data.title || "";
+      if (tagEl) tagEl.value = data.tagline || "";
+      if (hoursEl) hoursEl.value = String(data.session_hours ?? 12);
+
+      const links = document.getElementById("settingsLinks");
+      if (links) {
+        const list = data.links || [];
+        links.innerHTML = list.length
+          ? list.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span>open</span></a>`).join("")
+          : `<div class="empty">No links.</div>`;
+      }
+      const svc = document.getElementById("settingsServices");
+      if (svc) {
+        const list = data.services || [];
+        svc.innerHTML = list.length
+          ? list.map((s) => `<div class="vps-svc"><div><div class="name">${esc(s.label || s.id)}</div><div class="detail">${esc(s.detail || "")}</div></div><span class="vps-dot${s.ok ? " ok" : ""}" title="${s.ok ? "up" : "down"}"></span></div>`).join("")
+          : `<div class="empty">No service data.</div>`;
+      }
+      applyBrandingToChrome(data);
       applySettingsPrefsToForm();
     }
     async function refreshSettings() {
@@ -2106,6 +2287,57 @@
       try {
         const data = await api("/api/settings");
         renderSettings(data);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function saveBrandingSettings() {
+      const title = document.getElementById("settingsTitle")?.value || "";
+      const tagline = document.getElementById("settingsTagline")?.value || "";
+      const session_hours = Number(document.getElementById("settingsSessionHours")?.value || 12);
+      setStatus("Saving branding…");
+      try {
+        const data = await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ title, tagline, session_hours }),
+        });
+        if (data.settings) renderSettings(data.settings);
+        setStatus("Branding saved", "ok");
+        showLog("Updated: " + ((data.changed || []).join(", ") || "no changes"), true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+      }
+    }
+    async function savePasswordSettings() {
+      const current_password = document.getElementById("settingsCurPass")?.value || "";
+      const new_password = document.getElementById("settingsNewPass")?.value || "";
+      const confirm_password = document.getElementById("settingsNewPass2")?.value || "";
+      if (!current_password || !new_password) {
+        setStatus("Enter current and new password", "err");
+        return;
+      }
+      setStatus("Updating password…");
+      try {
+        await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ current_password, new_password, confirm_password }),
+        });
+        setStatus("Password updated — sign in again", "ok");
+        location.href = "/login.html";
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+      }
+    }
+    async function logoutAllSessions() {
+      if (!window.confirm("Sign out every active portal session?")) return;
+      try {
+        await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ logout_all_sessions: true }),
+        });
+        location.href = "/login.html";
       } catch (e) {
         setStatus(String(e.message || e), "err");
       }
@@ -2135,10 +2367,15 @@
 
     document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
     document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
+    document.getElementById("settingsLogoutAllBtn")?.addEventListener("click", () => logoutAllSessions());
     document.getElementById("settingsReauthNasBtn")?.addEventListener("click", () => reauthNasFromSettings());
+    document.getElementById("settingsBrandBtn")?.addEventListener("click", () => saveBrandingSettings());
+    document.getElementById("settingsPassBtn")?.addEventListener("click", () => savePasswordSettings());
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
+    document.getElementById("settingsAutoRefresh")?.addEventListener("change", () => persistSettingsPrefs());
+    document.getElementById("settingsConfirmSave")?.addEventListener("change", () => persistSettingsPrefs());
 
     function renderBond(data) {  }
     async function loadBond(){  }

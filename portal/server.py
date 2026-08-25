@@ -4084,8 +4084,81 @@ def _backup_running() -> bool:
         return False
 
 
+PORTAL_ENV_PATH = Path(
+    os.environ.get("PORTAL_ENV_FILE", "/opt/wireguard/port-forward-ui.env")
+)
+
+
+def _env_quote(value: str) -> str:
+    """Quote a value for KEY=value env files (safe for special chars)."""
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _upsert_env_file(path: Path, updates: dict[str, str]) -> None:
+    """Update or append KEY=value lines in an EnvironmentFile."""
+    if not updates:
+        return
+    path = Path(path)
+    existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    lines = existing.splitlines()
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                out.append(f"{key}={_env_quote(updates[key])}")
+                seen.add(key)
+                continue
+        out.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            out.append(f"{key}={_env_quote(val)}")
+    text = "\n".join(out).rstrip() + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Preserve mode when possible.
+    mode = 0o600
+    try:
+        mode = path.stat().st_mode & 0o777
+    except Exception:
+        pass
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.chmod(tmp, mode)
+    tmp.replace(path)
+
+
+def _active_session_count() -> int:
+    with _sessions_lock:
+        _purge_sessions()
+        return len(_sessions)
+
+
 def build_portal_settings() -> dict:
     """Safe, non-secret portal settings for the Settings tab."""
+    services: list[dict] = []
+    try:
+        status = build_vps_status()
+        services = list(status.get("services") or [])
+        hostname = status.get("hostname") or ""
+        egress_ip = status.get("egress_ip") or ""
+        uptime_sec = status.get("uptime_sec") or 0
+    except Exception:
+        hostname = ""
+        egress_ip = ""
+        uptime_sec = 0
+
+    host = PORTAL_HOST or "portal.vpstruelord.com"
+    links = [
+        {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
+        {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
+        {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
+        {"id": "router", "label": "Flint router", "url": "https://router.vpstruelord.com/"},
+        {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
+        {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
+    ]
+
     return {
         "ok": True,
         "user": AUTH_USER,
@@ -4093,11 +4166,100 @@ def build_portal_settings() -> dict:
         "tagline": PANEL_TAGLINE,
         "portal_host": PORTAL_HOST,
         "session_hours": SESSION_HOURS,
+        "active_sessions": _active_session_count(),
         "vps_public_ip": VPS_PUBLIC_IP,
+        "egress_ip": egress_ip,
+        "hostname": hostname,
+        "uptime_sec": uptime_sec,
         "buffalo_user": BUFFALO_SSO_USER,
         "buffalo_sso_configured": bool(BUFFALO_SSO_PASS),
         "nas_files_prefix": NAS_FILES_PREFIX,
         "buffalo_prefix": BUFFALO_PREFIX,
+        "env_file": str(PORTAL_ENV_PATH),
+        "env_writable": PORTAL_ENV_PATH.is_file() and os.access(PORTAL_ENV_PATH, os.W_OK),
+        "services": services,
+        "links": links,
+    }
+
+
+def apply_portal_settings(payload: dict) -> dict:
+    """Update panel branding / session / password; persist to EnvironmentFile."""
+    global AUTH_PASS, PANEL_TITLE, PANEL_TAGLINE, SESSION_HOURS
+
+    if not isinstance(payload, dict):
+        raise ValueError("invalid payload")
+
+    changed: list[str] = []
+    env_updates: dict[str, str] = {}
+    logout_all = bool(payload.get("logout_all_sessions"))
+
+    if "title" in payload:
+        title = str(payload.get("title") or "").strip() or "ServerManager"
+        if len(title) > 64:
+            raise ValueError("title too long (max 64)")
+        if title != PANEL_TITLE:
+            PANEL_TITLE = title
+            env_updates["PANEL_TITLE"] = title
+            changed.append("title")
+
+    if "tagline" in payload:
+        tagline = str(payload.get("tagline") or "").strip()
+        if len(tagline) > 120:
+            raise ValueError("tagline too long (max 120)")
+        if tagline != PANEL_TAGLINE:
+            PANEL_TAGLINE = tagline
+            env_updates["PANEL_TAGLINE"] = tagline
+            changed.append("tagline")
+
+    if "session_hours" in payload:
+        try:
+            hours = float(payload.get("session_hours"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("session_hours must be a number") from exc
+        if hours < 1 or hours > 168:
+            raise ValueError("session_hours must be between 1 and 168")
+        if abs(hours - SESSION_HOURS) > 0.001:
+            SESSION_HOURS = hours
+            env_updates["SESSION_HOURS"] = str(hours)
+            changed.append("session_hours")
+
+    new_password = payload.get("new_password")
+    if new_password is not None and str(new_password) != "":
+        current = str(payload.get("current_password") or "")
+        new_pw = str(new_password)
+        confirm = str(payload.get("confirm_password") or new_pw)
+        if not hmac.compare_digest(current, AUTH_PASS):
+            raise ValueError("current password is incorrect")
+        if new_pw != confirm:
+            raise ValueError("new passwords do not match")
+        if len(new_pw) < 8:
+            raise ValueError("new password must be at least 8 characters")
+        if len(new_pw) > 128:
+            raise ValueError("new password too long")
+        if hmac.compare_digest(new_pw, AUTH_PASS):
+            raise ValueError("new password must be different")
+        AUTH_PASS = new_pw
+        env_updates["PF_PASS"] = new_pw
+        changed.append("password")
+        logout_all = True
+
+    if env_updates:
+        if not PORTAL_ENV_PATH.is_file():
+            raise RuntimeError(f"env file missing: {PORTAL_ENV_PATH}")
+        _upsert_env_file(PORTAL_ENV_PATH, env_updates)
+
+    sessions_cleared = 0
+    if logout_all:
+        with _sessions_lock:
+            sessions_cleared = len(_sessions)
+            _sessions.clear()
+        changed.append("sessions")
+
+    return {
+        "ok": True,
+        "changed": changed,
+        "sessions_cleared": sessions_cleared,
+        "settings": build_portal_settings(),
     }
 
 
@@ -5722,6 +5884,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True}, clear_cookie=True)
             return
         if not self._require_auth(api=True):
+            return
+        if path == "/api/settings":
+            try:
+                payload = self._read_json()
+                result = apply_portal_settings(payload if isinstance(payload, dict) else {})
+                # Password / logout-all clears sessions — drop this browser cookie too.
+                clear = "password" in (result.get("changed") or []) or "sessions" in (
+                    result.get("changed") or []
+                )
+                self._json(
+                    200 if result.get("ok") else 400,
+                    result,
+                    clear_cookie=clear,
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/tailscale":
             try:
