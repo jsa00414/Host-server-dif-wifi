@@ -1540,17 +1540,18 @@
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      // iPhone/Android: Sencha Touch UI (/st/) — desktop Ext UI leaves a large bottom gap.
-      const mobile = isMobileClient();
-      const fallback = mobile ? "/nas-files/st/" : (frame.dataset.src || "/nas-files/ui/");
+      // Prefer Ext UI (/ui/) on mobile too — Sencha Touch (/st/) list scroller is unreliable
+      // inside the portal iframe (frozen list / stuck masks). Ext panel overflow scrolls.
+      const fallback = frame.dataset.src || "/nas-files/ui/";
       try {
         frame.dataset.authed = "0";
         // Bust a mid-load session-timeout loop inside the embed.
         if (force) frame.src = "about:blank";
         const data = await api("/api/buffalo-sso");
         let url = (data.files && data.files.url) || fallback;
-        if (mobile) {
-          url = "/nas-files/st/";
+        // Keep phones on /ui/ for scrollable file lists.
+        if (isMobileClient() && String(url).indexOf("/nas-files/st") === 0) {
+          url = "/nas-files/ui/";
         }
         frame.src = url + (url.includes("?") ? "&" : "?") + "_sm=" + Date.now();
         frame.dataset.authed = "1";
