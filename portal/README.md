@@ -15,6 +15,12 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 - `POST /api/surfshark` — enable/disable Surfshark WireGuard VPN exit for WG clients only
 - Scripts deployed to `/opt/surfshark/` (`ss-vpn-exit.sh`, `ss-manage.sh`)
 
+## NAS Files (WebAccess)
+
+- Sidebar / Overview **Files** tile embeds Buffalo WebAccess
+- Same-origin proxy: `/nas-files/*` → `http://192.168.8.159:9000/*`
+- Default iframe entry: `/nas-files/ui/`
+
 Deploy to the VPS (panel reads HTML from `static/index.html`):
 
 ```bash

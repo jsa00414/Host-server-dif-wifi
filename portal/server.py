@@ -42,6 +42,9 @@ PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
 BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
 BUFFALO_PREFIX = "/buffalo-frame"
+# Buffalo WebAccess file manager (LinkStation :9000)
+NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
+NAS_FILES_PREFIX = "/nas-files"
 # Dark admin theme (ServerManager / AdGuard / Pi-hole style) + full-bleed layout.
 BUFFALO_FIT_CSS = """
 :root {
@@ -4642,6 +4645,209 @@ def check_credentials(username: str, password: str) -> bool:
     )
 
 
+NAS_FILES_SNIPPET = (
+    f"<base href=\"{NAS_FILES_PREFIX}/\" />"
+    "<script id=\"sm-nas-files-js\">(function(){"
+    f"var P='{NAS_FILES_PREFIX}';"
+    "function fix(u){if(typeof u!=='string')return u;"
+    "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0||u.indexOf('javascript:')===0)return u;"
+    "if(u.indexOf(P+'/')===0||u===P)return u;"
+    "if(u.indexOf('http://192.168.8.159:9000')===0)return P+u.slice(26);"
+    "if(u.indexOf('https://192.168.8.159:9000')===0)return P+u.slice(27);"
+    "if(u.indexOf('https://files.vpstruelord.com')===0)return P+u.slice(30);"
+    "if(u.indexOf('http://files.vpstruelord.com')===0)return P+u.slice(29);"
+    "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
+    "return u;}"
+    "var xo=XMLHttpRequest.prototype.open;"
+    "XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=fix(u);}catch(e){}"
+    "return xo.apply(this,arguments);};"
+    "if(window.fetch){var _f=window.fetch;window.fetch=function(i,n){"
+    "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
+    "return _f.call(this,i,n);};}"
+    "var _ps=history.pushState.bind(history), _rs=history.replaceState.bind(history);"
+    "history.pushState=function(s,t,u){try{if(typeof u==='string')u=fix(u);}catch(e){} return _ps(s,t,u);};"
+    "history.replaceState=function(s,t,u){try{if(typeof u==='string')u=fix(u);}catch(e){} return _rs(s,t,u);};"
+    "})();</script>"
+)
+
+
+def _nas_files_rewrite_location(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith(NAS_FILES_PREFIX + "/") or raw == NAS_FILES_PREFIX:
+        return raw
+    lower = raw.lower()
+    for prefix in (
+        NAS_FILES_UPSTREAM,
+        "http://192.168.8.159:9000",
+        "https://192.168.8.159:9000",
+        "https://files.vpstruelord.com",
+        "http://files.vpstruelord.com",
+    ):
+        if lower.startswith(prefix.lower()):
+            rest = raw[len(prefix) :]
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            return NAS_FILES_PREFIX + rest
+    if raw.startswith("/"):
+        return NAS_FILES_PREFIX + raw
+    return raw
+
+
+def _nas_files_rewrite_set_cookie(value: str) -> str:
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    if not parts:
+        return value
+    out = [parts[0]]
+    saw_path = False
+    for part in parts[1:]:
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={NAS_FILES_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            continue
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={NAS_FILES_PREFIX}/")
+    return "; ".join(out)
+
+
+def _nas_files_rewrite_html_paths(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        attr, quote, path = match.group(1), match.group(2), match.group(3)
+        if path.startswith(NAS_FILES_PREFIX + "/") or path == NAS_FILES_PREFIX:
+            return match.group(0)
+        return f"{attr}={quote}{NAS_FILES_PREFIX}{path}{quote}"
+
+    return re.sub(
+        r"\b(href|src|action)=(['\"])(/(?!/|nas-files/)[^'\"]*)\2",
+        repl,
+        text,
+        flags=re.I,
+    )
+
+
+def _nas_files_inject(body: bytes, content_type: str) -> bytes:
+    ctype = (content_type or "").lower()
+    if "text/html" not in ctype:
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = body.decode("latin-1")
+        except Exception:
+            return body
+    if "sm-nas-files-js" in text:
+        return body
+    text = _nas_files_rewrite_html_paths(text)
+    snippet = NAS_FILES_SNIPPET
+    lower = text.lower()
+    head_idx = lower.find("<head>")
+    if head_idx != -1:
+        insert_at = head_idx + len("<head>")
+        text = text[:insert_at] + snippet + text[insert_at:]
+    else:
+        idx = lower.find("</head>")
+        if idx != -1:
+            text = text[:idx] + snippet + text[idx:]
+        else:
+            text = snippet + text
+    return text.encode("utf-8")
+
+
+def proxy_nas_files_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to Buffalo WebAccess (file manager on :9000)."""
+    parsed = urlparse(handler.path)
+    rel = parsed.path[len(NAS_FILES_PREFIX) :] or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    upstream = urljoin(NAS_FILES_UPSTREAM + "/", rel.lstrip("/"))
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers = {}
+    for key in ("Accept", "Accept-Language", "Content-Type", "X-Requested-With", "Referer"):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    headers["Host"] = urlparse(NAS_FILES_UPSTREAM).netloc or "192.168.8.159:9000"
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-NasFilesProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=120) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        handler._json(502, {"error": f"nas files proxy failed: {exc}"})
+        return
+
+    content_type = (
+        upstream_headers.get("Content-Type")
+        or upstream_headers.get("content-type")
+        or "application/octet-stream"
+    )
+    body = _nas_files_inject(body, content_type)
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _nas_files_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie in set_cookies:
+        if cookie:
+            handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 def _buffalo_rewrite_location(value: str) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -4995,6 +5201,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "GET")
+        if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
+            return proxy_nas_files_request(self, "GET")
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -5062,6 +5270,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "POST")
+        if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
+            return proxy_nas_files_request(self, "POST")
         self._json(404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802

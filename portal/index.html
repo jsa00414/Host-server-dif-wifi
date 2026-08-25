@@ -154,7 +154,8 @@
       -ms-overflow-style: none;
     }
     .embed-frame::-webkit-scrollbar { width: 0; height: 0; display: none; }
-    #view-buffalo.active {
+    #view-buffalo.active,
+    #view-files.active {
       position: absolute !important;
       inset: 0 !important;
       min-height: 0 !important;
@@ -162,7 +163,8 @@
       display: block !important;
       background: #0a0f0d;
     }
-    #frameBuffalo {
+    #frameBuffalo,
+    #frameFiles {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
@@ -679,6 +681,9 @@
     <button type="button" class="nav-btn" data-view="buffalo">
       <span class="nav-copy"><span>Buffalo</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="files">
+      <span class="nav-copy"><span>Files</span></span>
+    </button>
     
     <button type="button" class="nav-btn" data-view="domains">
       <span class="nav-copy"><span>Domains</span></span>
@@ -726,6 +731,11 @@
             <div class="k">Buffalo</div>
             <div class="v">NAS</div>
             <div class="s">192.168.8.159</div>
+          </button>
+          <button type="button" class="stat" data-go="files">
+            <div class="k">Files</div>
+            <div class="v">NAS</div>
+            <div class="s">WebAccess</div>
           </button>
           <button type="button" class="stat" data-go="domains">
             <div class="k">Domains</div>
@@ -912,6 +922,10 @@
 
       <section class="view embed-view" id="view-buffalo">
         <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
+
+      <section class="view embed-view" id="view-files">
+        <iframe class="embed-frame" id="frameFiles" title="NAS File Manager" src="about:blank" data-src="/nas-files/ui/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view" id="view-surfshark">
@@ -1114,11 +1128,19 @@
         frame.src = src;
       }
     }
+    function loadNasFilesFrame() {
+      const frame = document.getElementById("frameFiles");
+      if (!frame) return;
+      const src = frame.dataset.src || "/nas-files/ui/";
+      if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
+        frame.src = src;
+      }
+    }
 
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files";
       document.body.classList.toggle("embed-mode", embed);
       if (name === "adguard") {
         const f = document.getElementById("frameAdguard");
@@ -1126,6 +1148,9 @@
       }
       if (name === "buffalo") {
         loadBuffaloFrame();
+      }
+      if (name === "files") {
+        loadNasFilesFrame();
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
