@@ -725,26 +725,33 @@
       .content { padding: 12px; }
       .view.embed-view.active {
         min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        min-height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
       }
       .embed-frame {
         min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        min-height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
         height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
       }
       /* Keep apps full-bleed under fixed chrome; no pinch zoom-out. */
       body.embed-mode {
         display: block;
         padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
-        padding-bottom: env(safe-area-inset-bottom, 0px);
+        padding-bottom: 0;
         height: 100dvh;
+        height: 100svh;
         max-height: 100dvh;
+        max-height: 100svh;
         overflow: hidden !important;
         touch-action: manipulation;
       }
       body.embed-mode .main,
       body.embed-mode .content {
         position: relative;
-        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
         min-height: 0;
+        max-height: none;
         overflow: hidden !important;
       }
       body.embed-mode .embed-view.active,
@@ -754,8 +761,10 @@
       body.embed-mode #view-pihole.active {
         position: absolute !important;
         inset: 0 !important;
+        width: 100% !important;
         height: 100% !important;
         min-height: 0 !important;
+        max-height: none !important;
         overflow: hidden !important;
       }
       body.embed-mode .embed-frame,
@@ -768,10 +777,13 @@
         width: 100% !important;
         height: 100% !important;
         min-height: 0 !important;
+        max-height: none !important;
+        border: 0 !important;
         border-radius: 0 !important;
         transform: none !important;
         zoom: 1 !important;
         touch-action: manipulation;
+        display: block !important;
       }
       /* Sidebar stays reachable so you can switch apps without Overview. */
       body.embed-mode .sidebar {
