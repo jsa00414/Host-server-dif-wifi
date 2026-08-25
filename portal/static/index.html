@@ -1581,7 +1581,7 @@
     window.addEventListener("message", (ev) => {
       const data = ev && ev.data;
       if (!data || data.type !== "sm-nas-files-reauth") return;
-      loadNasFilesFrame(true);
+      loadFtpFilesFrame(true);
     });
 
     function syncAppHeight() {
