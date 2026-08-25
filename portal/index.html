@@ -173,6 +173,13 @@
       background: #2b2b2b;
       transform-origin: top left;
       will-change: transform;
+      /* Sized by layoutBuffaloZoom(); clear .embed-frame viewport sizing. */
+      flex: none;
+      min-width: 0;
+      min-height: 0;
+      width: auto;
+      height: auto;
+      overflow: hidden;
     }
     .content:has(.view.embed-view.active) {
       padding: 0;
@@ -1221,19 +1228,17 @@
       const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
       const frame = document.getElementById("frameBuffalo");
       if (!host || !frame) return;
-      const designW = 1280;
-      const designH = 800;
       const hw = host.clientWidth || 1;
       const hh = host.clientHeight || 1;
-      // Cover-fit: scale up until the Buffalo UI fills the portal pane (crops edges).
-      const scale = Math.max(hw / designW, hh / designH);
-      const scaledW = designW * scale;
-      const scaledH = designH * scale;
-      const ox = (hw - scaledW) / 2;
-      const oy = Math.min(0, (hh - scaledH) / 2);
+      // Punch-in: lay the LinkStation UI out in a smaller canvas, then scale it
+      // up so the tiles fill the portal pane (stays inside the portal, no new tab).
+      const zoom = 1.55;
+      const designW = Math.max(640, Math.round(hw / zoom));
+      const designH = Math.max(480, Math.round(hh / zoom));
       frame.style.width = `${designW}px`;
       frame.style.height = `${designH}px`;
-      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+      frame.style.transform = `scale(${zoom})`;
+      frame.style.transformOrigin = "top left";
     }
 
     function loadBuffaloFrame() {
