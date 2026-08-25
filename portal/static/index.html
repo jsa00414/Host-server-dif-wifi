@@ -1141,8 +1141,12 @@
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
       const fallback = frame.dataset.src || "/nas-files/ui/";
       try {
+        frame.dataset.authed = "0";
+        // Bust a mid-load session-timeout loop inside the embed.
+        if (force) frame.src = "about:blank";
         const data = await api("/api/buffalo-sso");
-        frame.src = (data.files && data.files.url) || fallback;
+        const url = (data.files && data.files.url) || fallback;
+        frame.src = url + (url.includes("?") ? "&" : "?") + "_sm=" + Date.now();
         frame.dataset.authed = "1";
       } catch (e) {
         frame.src = fallback;
@@ -1150,6 +1154,12 @@
         showLog(String(e.message || e), true);
       }
     }
+
+    window.addEventListener("message", (ev) => {
+      const data = ev && ev.data;
+      if (!data || data.type !== "sm-nas-files-reauth") return;
+      loadNasFilesFrame(true);
+    });
 
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
@@ -1164,7 +1174,7 @@
         loadBuffaloFrame();
       }
       if (name === "files") {
-        loadNasFilesFrame();
+        loadNasFilesFrame(true);
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }

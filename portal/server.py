@@ -3970,24 +3970,39 @@ def buffalo_sso_login() -> dict:
     }
 
 
-def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
-    """Build Set-Cookie headers for Buffalo admin / WebAccess sessions.
+def _webaxs_cookie_header(session: str) -> str:
+    """Single canonical webaxs_session cookie for portal HTTPS."""
+    # Path=/ so /nas-files/rpc/cat opens in a new tab still send the session.
+    # Always Secure+SameSite=Lax — must match proxied Set-Cookie rewrites or the
+    # browser keeps a stale duplicate and WebAccess loops on "Session timeout".
+    return f"webaxs_session={session}; Path=/; SameSite=Lax; Secure"
 
-    webaxs_session uses Path=/ so window.open('/nas-files/rpc/cat/...') in a new
-    tab always receives it (Path=/nas-files/ alone is easy to miss with some
-    browsers when the Files UI is iframed).
-    """
+
+def _webaxs_clear_cookie_headers() -> list[str]:
+    """Expire every historical webaxs_session path/secure variant."""
+    # Older builds used Path=/nas-files/ and/or non-Secure cookies.
+    return [
+        "webaxs_session=; Path=/; SameSite=Lax; Secure; Max-Age=0",
+        "webaxs_session=; Path=/; SameSite=Lax; Max-Age=0",
+        f"webaxs_session=; Path={NAS_FILES_PREFIX}/; SameSite=Lax; Secure; Max-Age=0",
+        f"webaxs_session=; Path={NAS_FILES_PREFIX}/; SameSite=Lax; Max-Age=0",
+        "webaxs_session=; Path=/nas-files; SameSite=Lax; Max-Age=0",
+    ]
+
+
+def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
+    """Build Set-Cookie headers for Buffalo admin / WebAccess sessions."""
     out: list[str] = []
     admin = data.get("admin") or {}
     files = data.get("files") or {}
     sid = str(admin.get("sid") or "").strip()
     sess = str(files.get("session") or "").strip()
-    # Portal is always served over HTTPS in production.
-    secure = "; Secure"
     if sid:
-        out.append(f"sid={sid}; Path={BUFFALO_PREFIX}/; SameSite=Lax{secure}")
+        out.append(f"sid={sid}; Path={BUFFALO_PREFIX}/; SameSite=Lax; Secure")
     if sess:
-        out.append(f"webaxs_session={sess}; Path=/; SameSite=Lax{secure}")
+        # Drop stale duplicates first, then set the fresh session.
+        out.extend(_webaxs_clear_cookie_headers())
+        out.append(_webaxs_cookie_header(sess))
     return out
 
 
@@ -4918,11 +4933,24 @@ def _nas_files_rewrite_location(value: str) -> str:
 
 
 def _nas_files_rewrite_set_cookie(value: str) -> str:
+    """Normalize upstream Set-Cookie to the same Path=/; Secure shape as SSO."""
     parts = [p.strip() for p in value.split(";") if p.strip()]
     if not parts:
         return value
+    name = parts[0].split("=", 1)[0].strip().lower()
+    if name == "webaxs_session":
+        raw_val = parts[0].split("=", 1)[1].strip() if "=" in parts[0] else ""
+        # Expiry / empty value → clear all variants.
+        low_join = ";".join(parts).lower()
+        if (not raw_val) or "max-age=0" in low_join or "expires=" in low_join:
+            # Caller may send multiple; return one clear and rely on SSO clears.
+            return "webaxs_session=; Path=/; SameSite=Lax; Secure; Max-Age=0"
+        return _webaxs_cookie_header(raw_val)
+
     out = [parts[0]]
     saw_path = False
+    saw_secure = False
+    saw_samesite = False
     for part in parts[1:]:
         low = part.lower()
         if low.startswith("path="):
@@ -4930,10 +4958,20 @@ def _nas_files_rewrite_set_cookie(value: str) -> str:
             saw_path = True
         elif low.startswith("domain="):
             continue
+        elif low == "secure":
+            saw_secure = True
+            out.append(part)
+        elif low.startswith("samesite="):
+            saw_samesite = True
+            out.append(part)
         else:
             out.append(part)
     if not saw_path:
         out.append(f"Path={NAS_FILES_PREFIX}/")
+    if not saw_samesite:
+        out.append("SameSite=Lax")
+    if not saw_secure:
+        out.append("Secure")
     return "; ".join(out)
 
 
@@ -4969,11 +5007,42 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
             return match.group(0)
         return f"{quote}{NAS_FILES_PREFIX}{path}"
 
-    return re.sub(
+    text = re.sub(
         r"""(['"])(/(?:rpc|ui|st|webaxs)(?:/[^'"]*)?)""",
         repl,
         text,
     )
+    # Session-timeout handler must clear the Secure cookie SSO sets, otherwise
+    # reload keeps the dead session and the UI loops on "Session timeout".
+    text = text.replace(
+        'document.cookie = "webaxs_session=a; path=/; expires=" + (new Date(0)).toGMTString() + ";";',
+        'document.cookie = "webaxs_session=; path=/; Max-Age=0; SameSite=Lax; Secure";'
+        'document.cookie = "webaxs_session=; path=/; Max-Age=0; SameSite=Lax";'
+        'document.cookie = "webaxs_session=; path=/nas-files/; Max-Age=0; SameSite=Lax; Secure";'
+        'document.cookie = "webaxs_session=; path=/nas-files/; Max-Age=0; SameSite=Lax";'
+        "try{if(window.top&&window.top!==window){window.top.postMessage({type:'sm-nas-files-reauth'},'*');}}catch(e){}",
+    )
+    # Only the session-error OK handler should reauth via parent (avoid reload loops).
+    text = text.replace(
+        "function showErrorMessage(message) {\n"
+        "    myAlert(maketextHandle.maketext('error'),\n"
+        "\t    message,\n"
+        "\t    function() {\n"
+        "\t\twindow.location.reload(true);\n"
+        "\t    });\n"
+        "\n"
+        "}",
+        "function showErrorMessage(message) {\n"
+        "    myAlert(maketextHandle.maketext('error'),\n"
+        "\t    message,\n"
+        "\t    function() {\n"
+        "\t\ttry{if(window.top&&window.top!==window){window.top.postMessage({type:'sm-nas-files-reauth'},'*');return;}}catch(e){}\n"
+        "\t\twindow.location.reload(true);\n"
+        "\t    });\n"
+        "\n"
+        "}",
+    )
+    return text
 
 
 def _nas_files_rewrite_json_paths(text: str) -> str:
@@ -5071,11 +5140,25 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
             headers[key] = val
     cookie = handler.headers.get("Cookie")
     if cookie:
-        kept = []
+        # Prefer the last webaxs_session if the browser still has Path=/ and
+        # Path=/nas-files/ duplicates from older builds.
+        kept: list[str] = []
+        webaxs_val: str | None = None
         for part in cookie.split(";"):
-            name = part.strip().split("=", 1)[0].strip()
-            if name and name != COOKIE_NAME:
-                kept.append(part.strip())
+            piece = part.strip()
+            if not piece or "=" not in piece:
+                continue
+            name, val = piece.split("=", 1)
+            name = name.strip()
+            val = val.strip()
+            if not name or name == COOKIE_NAME:
+                continue
+            if name == "webaxs_session":
+                webaxs_val = val
+                continue
+            kept.append(f"{name}={val}")
+        if webaxs_val:
+            kept.append(f"webaxs_session={webaxs_val}")
         if kept:
             headers["Cookie"] = "; ".join(kept)
     headers["Host"] = urlparse(NAS_FILES_UPSTREAM).netloc or "192.168.8.159:9000"
