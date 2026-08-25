@@ -279,6 +279,59 @@
     .panel-body { padding: 12px 14px; }
     .hint { color: var(--muted); font-size: .76rem; line-height: 1.4; }
 
+    .settings-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .settings-row:first-child { padding-top: 0; }
+    .settings-row .meta { min-width: 0; }
+    .settings-row .meta strong {
+      display: block;
+      color: var(--text);
+      font-size: .9rem;
+      font-weight: 600;
+    }
+    .settings-row .meta small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: .74rem;
+      line-height: 1.35;
+    }
+    .settings-kv {
+      display: grid;
+      gap: 8px;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: .78rem;
+    }
+    .settings-kv div {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: var(--bg2);
+      border: 1px solid var(--line);
+    }
+    .settings-kv .k { color: var(--muted); }
+    .settings-kv .v { color: var(--text); text-align: right; word-break: break-all; }
+    .settings-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
     .vps-metrics {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -669,6 +722,9 @@
     <button type="button" class="nav-btn" data-view="backup">
       <span class="nav-copy"><span>Backup</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="settings">
+      <span class="nav-copy"><span>Settings</span></span>
+    </button>
     <div class="nav-label">Network</div>
     <button type="button" class="nav-btn" data-view="vps">
       <span class="nav-copy"><span>Internet</span></span>
@@ -756,6 +812,16 @@
             <div class="k">Pi-hole</div>
             <div class="v">DNS</div>
             <div class="s">full control</div>
+          </button>
+          <button type="button" class="stat" data-go="backup">
+            <div class="k">Backup</div>
+            <div class="v">VPS</div>
+            <div class="s">ServerManager</div>
+          </button>
+          <button type="button" class="stat" data-go="settings">
+            <div class="k">Settings</div>
+            <div class="v">Portal</div>
+            <div class="s">account &amp; prefs</div>
           </button>
         </div>
 
@@ -989,6 +1055,88 @@
       <section class="view embed-view" id="view-pihole">
         <iframe class="embed-frame" id="framePihole" title="Pi-hole" src="about:blank" data-src="https://pihole.vpstruelord.com/admin/" data-authed="0" allow="clipboard-read; clipboard-write"></iframe>
       </section>
+
+      <section class="view" id="view-settings">
+        <div class="page-head">
+          <h2>Settings</h2>
+        </div>
+        <div class="settings-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Account</h3>
+              <button type="button" class="ghost" id="settingsRefreshBtn">Refresh</button>
+            </div>
+            <div class="panel-body">
+              <div class="settings-kv" id="settingsAccountKv">
+                <div><span class="k">User</span><span class="v">—</span></div>
+                <div><span class="k">Panel</span><span class="v">—</span></div>
+                <div><span class="k">Session</span><span class="v">—</span></div>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="ghost" id="settingsLogoutBtn">Log out</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Portal</h3></div>
+            <div class="panel-body">
+              <div class="settings-kv" id="settingsPortalKv">
+                <div><span class="k">Host</span><span class="v">—</span></div>
+                <div><span class="k">VPS IP</span><span class="v">—</span></div>
+                <div><span class="k">Buffalo SSO</span><span class="v">—</span></div>
+              </div>
+              <div class="settings-actions">
+                <button type="button" id="settingsReauthNasBtn">Refresh NAS login</button>
+              </div>
+              <p class="hint" style="margin:10px 0 0">Re-runs Buffalo / Files SSO and reloads those embeds.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>Preferences</h3></div>
+            <div class="panel-body">
+              <div class="settings-row">
+                <div class="meta">
+                  <strong>Default tab</strong>
+                  <small>Opened after you sign in (this browser only)</small>
+                </div>
+                <label class="field" style="min-width:140px;margin:0">
+                  <select id="settingsDefaultView">
+                    <option value="overview">Overview</option>
+                    <option value="backup">Backup</option>
+                    <option value="vps">Internet</option>
+                    <option value="router">Router</option>
+                    <option value="buffalo">Buffalo</option>
+                    <option value="files">Files</option>
+                    <option value="domains">Domains</option>
+                    <option value="firewall">Firewall</option>
+                    <option value="dnsmap">DNS Map</option>
+                    <option value="adguard">AdGuard</option>
+                    <option value="surfshark">Surfshark</option>
+                    <option value="pihole">Pi-hole</option>
+                    <option value="settings">Settings</option>
+                  </select>
+                </label>
+              </div>
+              <div class="settings-row">
+                <div class="meta">
+                  <strong>Remember last tab</strong>
+                  <small>Override default with the tab you used last</small>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingsRememberView" /><span></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="meta">
+                  <strong>Expand activity log</strong>
+                  <small>Keep the bottom log open by default</small>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingsExpandLog" /><span></span></label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div class="drawer collapsed" id="drawer">
@@ -1180,7 +1328,11 @@
       if (name === "dnsmap") { refreshDnsMap(); }
       if (name === "surfshark") { refreshSurfshark(); }
       if (name === "backup") { refreshBackupStatus(); }
+      if (name === "settings") { refreshSettings(); }
       if (name === "pihole") { loadPiholeFrame(); }
+      try {
+        localStorage.setItem("sm_last_view", name);
+      } catch (e) {}
     }
     function friendlyHost(d) {
       const host = String(d.hostname || "").trim();
@@ -1890,12 +2042,120 @@
       else setStatus("No backup repo configured", "err");
     });
 
+    const SETTINGS_VIEWS = new Set([
+      "overview", "backup", "vps", "router", "buffalo", "files",
+      "domains", "firewall", "dnsmap", "adguard", "surfshark", "pihole", "settings",
+    ]);
+    function readSettingsPrefs() {
+      let defaultView = "overview";
+      let remember = false;
+      let expandLog = false;
+      try {
+        defaultView = localStorage.getItem("sm_default_view") || "overview";
+        remember = localStorage.getItem("sm_remember_view") === "1";
+        expandLog = localStorage.getItem("sm_expand_log") === "1";
+      } catch (e) {}
+      if (!SETTINGS_VIEWS.has(defaultView)) defaultView = "overview";
+      return { defaultView, remember, expandLog };
+    }
+    function applySettingsPrefsToForm() {
+      const prefs = readSettingsPrefs();
+      const def = document.getElementById("settingsDefaultView");
+      const rem = document.getElementById("settingsRememberView");
+      const exp = document.getElementById("settingsExpandLog");
+      if (def) def.value = prefs.defaultView;
+      if (rem) rem.checked = prefs.remember;
+      if (exp) exp.checked = prefs.expandLog;
+    }
+    function persistSettingsPrefs() {
+      const def = document.getElementById("settingsDefaultView");
+      const rem = document.getElementById("settingsRememberView");
+      const exp = document.getElementById("settingsExpandLog");
+      try {
+        if (def) localStorage.setItem("sm_default_view", def.value || "overview");
+        if (rem) localStorage.setItem("sm_remember_view", rem.checked ? "1" : "0");
+        if (exp) localStorage.setItem("sm_expand_log", exp.checked ? "1" : "0");
+      } catch (e) {}
+      if (exp) drawer.classList.toggle("collapsed", !exp.checked);
+      setStatus("Preferences saved", "ok");
+    }
+    function renderSettings(data) {
+      const account = document.getElementById("settingsAccountKv");
+      const portal = document.getElementById("settingsPortalKv");
+      if (account) {
+        account.innerHTML = [
+          `<div><span class="k">User</span><span class="v">${esc(data.user || "—")}</span></div>`,
+          `<div><span class="k">Panel</span><span class="v">${esc(data.title || "—")}</span></div>`,
+          `<div><span class="k">Session</span><span class="v">${esc(String(data.session_hours ?? "—"))}h</span></div>`,
+        ].join("");
+      }
+      if (portal) {
+        const sso = data.buffalo_sso_configured
+          ? `configured (${data.buffalo_user || "admin"})`
+          : "not configured";
+        portal.innerHTML = [
+          `<div><span class="k">Host</span><span class="v">${esc(data.portal_host || location.host || "—")}</span></div>`,
+          `<div><span class="k">VPS IP</span><span class="v">${esc(data.vps_public_ip || "—")}</span></div>`,
+          `<div><span class="k">Buffalo SSO</span><span class="v">${esc(sso)}</span></div>`,
+        ].join("");
+      }
+      applySettingsPrefsToForm();
+    }
+    async function refreshSettings() {
+      applySettingsPrefsToForm();
+      try {
+        const data = await api("/api/settings");
+        renderSettings(data);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function reauthNasFromSettings() {
+      setStatus("Refreshing NAS login…");
+      try {
+        await api("/api/buffalo-sso");
+        await Promise.all([loadBuffaloFrame(true), loadNasFilesFrame(true)]);
+        setStatus("NAS login refreshed", "ok");
+        showLog("Buffalo / Files SSO refreshed.", true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+      }
+    }
+    function initialViewFromPrefs() {
+      const prefs = readSettingsPrefs();
+      if (prefs.remember) {
+        try {
+          const last = localStorage.getItem("sm_last_view");
+          if (last && SETTINGS_VIEWS.has(last)) return last;
+        } catch (e) {}
+      }
+      return prefs.defaultView || "overview";
+    }
+
+    document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
+    document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
+    document.getElementById("settingsReauthNasBtn")?.addEventListener("click", () => reauthNasFromSettings());
+    document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
+    document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
+    document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
+
     function renderBond(data) {  }
     async function loadBond(){  }
     async function bondAction(action) { setStatus("WAN bonding has been removed", "err"); }
 
 
-    load().catch((e) => setStatus(e.message, "err"));
+    (async () => {
+      try {
+        const prefs = readSettingsPrefs();
+        if (prefs.expandLog) drawer.classList.remove("collapsed");
+        await load();
+        const start = initialViewFromPrefs();
+        if (start && start !== "overview") showView(start);
+      } catch (e) {
+        setStatus(e.message, "err");
+      }
+    })();
   </script>
 </body>
 </html>

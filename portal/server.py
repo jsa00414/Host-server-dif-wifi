@@ -4084,6 +4084,23 @@ def _backup_running() -> bool:
         return False
 
 
+def build_portal_settings() -> dict:
+    """Safe, non-secret portal settings for the Settings tab."""
+    return {
+        "ok": True,
+        "user": AUTH_USER,
+        "title": PANEL_TITLE,
+        "tagline": PANEL_TAGLINE,
+        "portal_host": PORTAL_HOST,
+        "session_hours": SESSION_HOURS,
+        "vps_public_ip": VPS_PUBLIC_IP,
+        "buffalo_user": BUFFALO_SSO_USER,
+        "buffalo_sso_configured": bool(BUFFALO_SSO_PASS),
+        "nas_files_prefix": NAS_FILES_PREFIX,
+        "buffalo_prefix": BUFFALO_PREFIX,
+    }
+
+
 def build_backup_status() -> dict:
     """GitHub backup agent status for the Backup portal tab (never returns the token)."""
     installed = BACKUP_SCRIPT.is_file()
@@ -5543,6 +5560,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/me":
             self._json(200, {"ok": True, "user": AUTH_USER, "title": PANEL_TITLE})
+            return
+        if path == "/api/settings":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_portal_settings())
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
             return
         if path == "/api/forwards":
             try:
