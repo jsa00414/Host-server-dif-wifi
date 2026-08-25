@@ -186,17 +186,8 @@ body#buffalo #header #header-logo .logo::before {
   overflow: visible !important;
   box-sizing: content-box !important;
 }
-/* Drop search/hint clutter from the top bar */
+/* Utility icons in header-search: home / download / help (keep search field hidden) */
 body#buffalo #header #header-search {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-}
-/* Action icons: flat, single row, right-aligned */
-body#buffalo #header #header-button {
   display: flex !important;
   align-items: center !important;
   float: none !important;
@@ -204,6 +195,116 @@ body#buffalo #header #header-button {
   width: auto !important;
   height: 56px !important;
   margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  background: transparent !important;
+  background-image: none !important;
+}
+body#buffalo #header #header-search .search {
+  display: none !important;
+}
+body#buffalo #header #header-search .text {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+  text-align: left !important;
+  height: 36px !important;
+}
+body#buffalo #header #header-search .text .title {
+  display: none !important;
+}
+body#buffalo #header #header-search .text .back-home,
+body#buffalo #header #header-search .text a.dl,
+body#buffalo #header #header-search .text .hint {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  float: none !important;
+  width: 36px !important;
+  height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  background-image: none !important;
+  position: relative !important;
+}
+body#buffalo #header #header-search .text .back-home:hover,
+body#buffalo #header #header-search .text a.dl:hover,
+body#buffalo #header #header-search .text .hint:hover {
+  background: var(--sm-bg3) !important;
+}
+body#buffalo #header #header-search .text .back-home a,
+body#buffalo #header #header-search .text a.dl,
+body#buffalo #header #header-search .text .hint a#hint {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 36px !important;
+  height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  line-height: 0 !important;
+}
+body#buffalo #header #header-search .text img,
+body#buffalo #header #header-search .text .pressbtn,
+body#buffalo #header #header-search .text .toggle {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+body#buffalo #header #header-search .text .back-home a#back-home::before,
+body#buffalo #header #header-search .text a.dl#dl_utils::before,
+body#buffalo #header #header-search .text .hint a#hint::before {
+  content: "" !important;
+  display: block !important;
+  width: 18px !important;
+  height: 18px !important;
+  background-color: var(--sm-muted) !important;
+  -webkit-mask-repeat: no-repeat !important;
+  mask-repeat: no-repeat !important;
+  -webkit-mask-position: center !important;
+  mask-position: center !important;
+  -webkit-mask-size: contain !important;
+  mask-size: contain !important;
+}
+body#buffalo #header #header-search .text .back-home a#back-home::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10.5L12 3l9 7.5'/%3E%3Cpath d='M5 10v10h14V10'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10.5L12 3l9 7.5'/%3E%3Cpath d='M5 10v10h14V10'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-search .text a.dl#dl_utils::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v12'/%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3Cpath d='M5 21h14'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v12'/%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3Cpath d='M5 21h14'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-search .text .hint a#hint::before {
+  background-color: #5eb8ff !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4'/%3E%3Cline x1='12' y1='17' x2='12.01' y2='17'/%3E%3C/svg%3E") !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4'/%3E%3Cline x1='12' y1='17' x2='12.01' y2='17'/%3E%3C/svg%3E") !important;
+}
+body#buffalo #header #header-search .text .back-home:hover a#back-home::before,
+body#buffalo #header #header-search .text a.dl#dl_utils:hover::before {
+  background-color: var(--sm-text) !important;
+}
+body#buffalo #header #header-search .text .hint:hover a#hint::before {
+  background-color: #8fd0ff !important;
+}
+/* Action icons: status / power / logout */
+body#buffalo #header #header-button {
+  display: flex !important;
+  align-items: center !important;
+  float: none !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  height: 56px !important;
+  margin: 0 0 0 4px !important;
   padding: 0 !important;
   background: transparent !important;
   background-image: none !important;
@@ -764,14 +865,19 @@ BUFFALO_FIT_SNIPPET = (
     "'justify-content':'space-between',height:'56px',width:'100%',margin:'0',padding:'0',"
     "float:'none',background:'transparent','background-image':'none',overflow:'visible'});"
     "var search=document.getElementById('header-search');"
-    "force(search,{display:'none',width:'0',height:'0',overflow:'hidden'});"
+    "force(search,{display:'flex','align-items':'center',float:'none',margin:'0 0 0 auto',"
+    "padding:'0',height:'56px',width:'auto',overflow:'visible',background:'transparent'});"
+    "var searchField=search&&search.querySelector('.search'); force(searchField,{display:'none'});"
+    "var searchText=search&&search.querySelector('.text');"
+    "force(searchText,{display:'flex','flex-wrap':'nowrap','align-items':'center',gap:'4px',"
+    "margin:'0',padding:'0',float:'none',height:'36px'});"
     "var logoWrap=document.getElementById('header-logo');"
     "force(logoWrap,{display:'flex','align-items':'center',float:'none',margin:'0',padding:'0',"
     "height:'56px',width:'auto',background:'transparent',overflow:'visible'});"
     "var logo=document.getElementById('BUFFALO_LOGO');"
     "force(logo,{display:'none',width:'0',height:'0'});"
     "var btns=document.getElementById('header-button');"
-    "force(btns,{display:'flex','align-items':'center',float:'none',margin:'0 0 0 auto',"
+    "force(btns,{display:'flex','align-items':'center',float:'none',margin:'0 0 0 4px',"
     "padding:'0',height:'56px',width:'auto',background:'transparent','background-image':'none'});"
     "var ul=btns&&btns.querySelector('ul');"
     "force(ul,{display:'flex','flex-wrap':'nowrap','align-items':'center',gap:'4px',"
