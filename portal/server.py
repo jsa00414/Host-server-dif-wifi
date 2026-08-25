@@ -5650,8 +5650,24 @@ html.sm-auth-top #menu-bar #login_button .x-btn-text{
   color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
 html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
 
-/* Merge location/search into the menu bar — drop the second chrome row */
-html.sm-merged-chrome #control-panel,
+/* Compact nav row — hide back/forward/up/history buttons, keep location + search */
+html.sm-merged-chrome #control-panel .navi-button,
+html.sm-merged-chrome #control-panel #navi-button-up,
+html.sm-merged-chrome #control-panel #alertButton{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  overflow:hidden!important;margin:0!important;padding:0!important}
+html.sm-merged-chrome #control-panel{
+  display:block!important;visibility:visible!important;
+  height:auto!important;min-height:36px!important;max-height:none!important;
+  overflow:visible!important;padding:2px 8px!important;margin:0!important;
+  border:0!important;border-bottom:1px solid var(--sm-line)!important}
+html.sm-merged-chrome #control-panel .x-toolbar-ct{
+  display:flex!important;align-items:center!important;gap:8px!important;width:100%!important}
+html.sm-merged-chrome #control-panel #location-bar{
+  flex:1 1 auto!important;min-width:120px!important;width:auto!important;
+  max-width:none!important;height:32px!important;margin:0!important}
+html.sm-merged-chrome #control-panel #search-textbox{
+  flex:0 1 220px!important;min-width:120px!important;width:auto!important;margin:0!important}
 #control-panel.sm-nas-gone{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
@@ -6138,32 +6154,19 @@ NAS_FILES_SNIPPET = (
     "if(window.Ext&&Ext.getCmp){"
     "var icon=Ext.getCmp('icon-panel');"
     "if(icon){"
-    "if(!window.__smIconActionsGone){"
     "for(var ai=0;ai<actionIds.length;ai++){"
     "var act=Ext.getCmp(actionIds[ai]);"
-    "if(act){try{act.hide();}catch(e){}try{icon.remove(act,true);}catch(e){}}"
+    "if(act){try{act.hide();}catch(e){}}"
     "}"
-    "window.__smIconActionsGone=true;"
-    "}"
-    "if(window.__smAuthMoved||window.__smAuthExt){"
-    "if(!window.__smIconRemoved){"
-    "var parent=icon.ownerCt;"
-    "try{parent.remove(icon,true);}catch(e){try{icon.destroy();}catch(e2){}}"
-    "window.__smIconRemoved=true;"
-    "try{if(parent&&parent.doLayout)parent.doLayout(true,true);}catch(e){}"
-    "}"
-    "}else{"
     "try{icon.hide();}catch(e){}"
     "try{icon.setHeight(0);}catch(e){}"
     "try{icon.setVisible(false);}catch(e){}"
     "try{if(icon.ownerCt&&icon.ownerCt.doLayout)icon.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "}"
-    "}"
     "}catch(e){}"
     "var el=document.getElementById('icon-panel');"
     "if(el){"
-    "if(window.__smIconRemoved){try{el.parentNode.removeChild(el);}catch(e){}}"
     "el.style.display='none';"
     "el.style.height='0';"
     "el.style.minHeight='0';"
@@ -6175,33 +6178,21 @@ NAS_FILES_SNIPPET = (
     "}"
     "function smMergeNaviBar(){"
     "try{"
-    "if(window.__smNaviMerged){try{document.documentElement.classList.add('sm-merged-chrome');}catch(e){}return true;}"
+    "document.documentElement.classList.add('sm-merged-chrome');"
+    "if(window.__smNaviMerged)return true;"
     "if(!window.Ext||!Ext.getCmp)return false;"
-    "var menu=Ext.getCmp('menu-bar');"
     "var nav=Ext.getCmp('control-panel');"
-    "if(!menu||!nav)return false;"
-    "var authIds={'sm-auth-fill':1,'userName':1,'login_button':1,'logout_button':1};"
-    "var insertAt=menu.items.getCount();"
-    "menu.items.each(function(it,i){"
-    "if(it&&it.id&&authIds[it.id])insertAt=Math.min(insertAt,i);"
+    "if(nav){"
+    "try{"
+    "nav.items.each(function(it,idx){"
+    "if(!it||idx>=5)return;"
+    "try{if(it.hide)it.hide();}catch(e){}"
     "});"
-    "if(!Ext.getCmp('sm-navi-fill')){"
-    "try{menu.insert(insertAt,{xtype:'tbfill',id:'sm-navi-fill'});insertAt++;}catch(e){}"
+    "}catch(e){}"
+    "try{nav.doLayout();}catch(e){}"
+    "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
-    "var all=[];"
-    "nav.items.each(function(it){if(it)all.push(it);});"
-    "for(var i=0;i<all.length;i++){"
-    "if(i<5){try{nav.remove(all[i],true);}catch(e){}continue;}"
-    "try{nav.remove(all[i],false);menu.insert(insertAt+(i-5),all[i]);}catch(e){}"
-    "}"
-    "var parent=nav.ownerCt;"
-    "try{parent.remove(nav,true);}catch(e){try{nav.hide();nav.setHeight(0);}catch(e2){}}"
     "window.__smNaviMerged=true;"
-    "try{document.documentElement.classList.add('sm-merged-chrome');}catch(e){}"
-    "try{menu.doLayout();}catch(e){}"
-    "try{if(parent&&parent.doLayout)parent.doLayout(true,true);}catch(e){}"
-    "var el=document.getElementById('control-panel');"
-    "if(el){el.classList.add('sm-nas-gone');try{el.parentNode.removeChild(el);}catch(e){el.style.display='none';}}"
     "return true;"
     "}catch(e){return false;}}"
     "function smMoveAuthToTop(){"
@@ -6260,28 +6251,38 @@ NAS_FILES_SNIPPET = (
     "if(window.__smKickFilesPending)return false;"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var tree=Ext.getCmp('tree-panel');"
-    "var main=Ext.getCmp('main-panel');"
-    "if(!tree||!main||typeof main.getComponent!=='function')return false;"
-    "var view=main.getComponent(0);"
-    "if(!view||typeof view.updateView!=='function')return false;"
+    "if(!tree)return false;"
     "var node=tree.getSelectionModel().getSelectedNode();"
     "if(!node){node=tree.getNodeById('/');if(node)try{tree.getSelectionModel().select(node);}catch(e){}}"
     "if(!node)return false;"
+    "var dir=node;"
+    "try{if(dir.isLeaf&&dir.isLeaf())dir=dir.parentNode;}catch(e){}"
+    "if(!dir)return false;"
     "window.__smKickFilesPending=true;"
-    "view.updateView(node,function(){"
+    "function smKickDone(){"
     "window.__smKickFilesDone=true;"
     "window.__smKickFilesPending=false;"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
     "try{if(typeof smNasFit==='function')smNasFit(true);}catch(e){}"
-    "});"
+    "}"
+    "if(typeof addRecordWithPath==='function'){"
+    "addRecordWithPath(dir,smKickDone);"
+    "}else{"
+    "var main=Ext.getCmp('main-panel');"
+    "if(!main||typeof main.getComponent!=='function'){window.__smKickFilesPending=false;return false;}"
+    "var view=main.getComponent(0);"
+    "if(!view||typeof view.updateView!=='function'){window.__smKickFilesPending=false;return false;}"
+    "view.updateView(node,smKickDone);"
+    "}"
     "setTimeout(function(){"
     "if(!window.__smKickFilesDone){"
     "window.__smKickFilesPending=false;"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
+    "try{if(typeof smKickFilesLoad==='function')smKickFilesLoad();}catch(e){}"
     "}"
-    "},8000);"
+    "},10000);"
     "return true;"
     "}catch(e){window.__smKickFilesPending=false;return false;}}"
     "try{window.smKickFilesLoad=smKickFilesLoad;}catch(e){}"
@@ -6942,6 +6943,24 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
+    # Guard file-pane update when mainPanel view is mid-layout rebuild.
+    text = text.replace(
+        "\t\tmainPanel.getComponent(0).updateView(node,",
+        "\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+    )
+    # Ensure loading spinner clears on rpc_ls failure.
+    text = text.replace(
+        "\t   },\n"
+        "\t   error_on_rpc_ls\n"
+        "\t  );",
+        "\t   },\n"
+        "\t   function(response, request) {\n"
+        "\t       try { loadingAnimation.hideAll(); } catch(e) {}\n"
+        "\t       error_on_rpc_ls(response, request);\n"
+        "\t   }\n"
+        "\t  );",
+        1,
+    )
     # After toolbar chrome merges, mainPanel.afterlayout may never fire so the
     # "Displaying..." spinner (loadingAnimation) stays up; add a callback fallback.
     text = text.replace(
@@ -6968,6 +6987,17 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "    function _smMainViewFinish() {\n"
         "\tif (_smMainViewCbDone) return;\n"
         "\t_smMainViewCbDone = true;\n"
+        "\ttry {\n"
+        "\t    mainPanel.doLayout(true, true);\n"
+        "\t    var _smCv = mainPanel.getComponent(0);\n"
+        "\t    if (_smCv && _smCv.getDataView) {\n"
+        "\t\tvar _smDv = _smCv.getDataView();\n"
+        "\t\tif (_smDv && _smDv.refresh) _smDv.refresh();\n"
+        "\t    } else if (_smCv && _smCv.view && _smCv.view.getView) {\n"
+        "\t\tvar _smGv = _smCv.view.getView();\n"
+        "\t\tif (_smGv && _smGv.refresh) _smGv.refresh();\n"
+        "\t    }\n"
+        "\t} catch(e) {}\n"
         "\tif (callback) {\n"
         "\t    callback();\n"
         "\t}\n"
@@ -6981,7 +7011,10 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "\t\t\t      single : true\n"
         "\t\t\t  }\n"
         "\t\t\t );\n"
-        "    setTimeout(_smMainViewFinish, 2500);",
+        "    setTimeout(function() {\n"
+        "\ttry { mainPanel.doLayout(true, true); } catch(e) {}\n"
+        "\t_smMainViewFinish();\n"
+        "    }, 2500);",
     )
     # Thumbnail HEAD requests — same empty statusText issue as rpc/ls.
     text = text.replace(
