@@ -1269,17 +1269,22 @@
       if (!host || !frame) return;
       const hw = host.clientWidth || 1;
       const hh = host.clientHeight || 1;
-      // Cover-fit a dashboard-sized canvas so Buffalo fills the portal pane
-      // edge-to-edge (no gray letterbox). Clip wrapper hides transform overflow.
-      const designW = 1200;
-      const designH = 720;
-      const scale = Math.max(hw / designW, hh / designH);
-      const ox = (hw - designW * scale) / 2;
-      const oy = (hh - designH * scale) / 2;
+      // Aspect-matched canvas: ExtJS gets at least 1200x720 (all tiles), scaled
+      // so the iframe fills the portal pane exactly — no letterbox, no tile crop.
+      const minW = 1200;
+      const minH = 720;
+      const aspect = hw / hh;
+      let designW = minW;
+      let designH = designW / aspect;
+      if (designH < minH) {
+        designH = minH;
+        designW = designH * aspect;
+      }
+      const scale = hw / designW;
       frame.style.zoom = "normal";
-      frame.style.width = `${designW}px`;
-      frame.style.height = `${designH}px`;
-      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+      frame.style.width = `${Math.round(designW)}px`;
+      frame.style.height = `${Math.round(designH)}px`;
+      frame.style.transform = `scale(${scale})`;
       frame.style.transformOrigin = "top left";
     }
 
