@@ -159,7 +159,7 @@
       width: 100%;
       min-height: calc(100dvh - var(--top-h));
       height: calc(100dvh - var(--top-h));
-      overflow: hidden;
+      overflow: hidden !important;
       background: #2b2b2b;
       border-radius: 0;
       position: relative;
@@ -171,17 +171,20 @@
       border: 0;
       border-radius: 0;
       background: #2b2b2b;
-      /* Sized + CSS zoom by layoutBuffaloZoom(); clear .embed-frame sizing. */
+      transform-origin: top left;
+      /* Sized by layoutBuffaloZoom(); clear .embed-frame viewport sizing. */
       flex: none;
-      min-width: 0;
-      min-height: 0;
+      min-width: 0 !important;
+      min-height: 0 !important;
       width: auto;
       height: auto;
       overflow: hidden;
-      transform: none;
+      zoom: normal;
     }
-    .content:has(#view-buffalo.active) {
-      overflow: hidden;
+    .content:has(#view-buffalo.active),
+    #view-buffalo.active,
+    #view-buffalo.active .buffalo-zoom-host {
+      overflow: hidden !important;
     }
     .content:has(.view.embed-view.active) {
       padding: 0;
@@ -1232,13 +1235,16 @@
       if (!host || !frame) return;
       const hw = host.clientWidth || 1;
       const hh = host.clientHeight || 1;
-      // Zoom via CSS `zoom` (not transform): ExtJS centers dialogs in the smaller
-      // canvas, then the whole UI enlarges in-place so login stays on-screen.
-      const zoom = 1.6;
-      frame.style.transform = "none";
-      frame.style.width = `${Math.round(hw / zoom)}px`;
-      frame.style.height = `${Math.round(hh / zoom)}px`;
-      frame.style.zoom = String(zoom);
+      // Denser ExtJS canvas + scale-to-fill (no translate). Login stays centered;
+      // host overflow:hidden crops nothing essential and hides scrollbars.
+      const zoom = 1.7;
+      const designW = Math.round(hw / zoom);
+      const designH = Math.round(hh / zoom);
+      frame.style.zoom = "normal";
+      frame.style.width = `${designW}px`;
+      frame.style.height = `${designH}px`;
+      frame.style.transform = `scale(${zoom})`;
+      frame.style.transformOrigin = "top left";
     }
 
     function loadBuffaloFrame() {
