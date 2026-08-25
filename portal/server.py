@@ -46,10 +46,15 @@ BUFFALO_PREFIX = "/buffalo-frame"
 BUFFALO_FIT_CSS = """
 html, body, body#buffalo {
   width: 100% !important;
+  height: 100% !important;
   min-height: 100% !important;
   margin: 0 !important;
   padding: 0 !important;
+  overflow: hidden !important;
   background: #d0d0d0 !important;
+}
+body#buffalo {
+  zoom: 1.35;
 }
 body#buffalo .container,
 body#buffalo #header,
@@ -91,21 +96,25 @@ body#buffalo #header #header-button {
 body#buffalo div#main div#top div#menu_box {
   width: calc(100% - 24px) !important;
   max-width: none !important;
-  height: calc(100vh - 150px) !important;
-  min-height: 420px !important;
+  height: calc((100vh / 1.35) - 140px) !important;
+  min-height: 360px !important;
   max-height: none !important;
   margin: 0 12px !important;
-  overflow: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   box-sizing: border-box !important;
 }
 body#buffalo #main .container_sd {
   width: 100% !important;
   max-width: none !important;
   height: auto !important;
-  min-height: calc(100vh - 140px) !important;
+  min-height: calc((100vh / 1.35) - 120px) !important;
 }
 body#buffalo #nav .name {
   max-width: none !important;
+}
+body#buffalo .x-window {
+  zoom: 1;
 }
 """.strip()
 
@@ -132,9 +141,11 @@ BUFFALO_FIT_SNIPPET = (
     "return _f.call(this,i,n);};}"
     "function fit(){var box=document.getElementById('menu_box');"
     "if(!box)return;var top=box.getBoundingClientRect().top;"
+    "var z=parseFloat(getComputedStyle(document.body).zoom)||1;"
     "box.style.setProperty('width','calc(100% - 24px)','important');"
-    "box.style.setProperty('height',Math.max(280,window.innerHeight-top-36)+'px','important');"
-    "box.style.setProperty('max-width','none','important');}"
+    "box.style.setProperty('height',Math.max(280,(window.innerHeight/z)-top-36)+'px','important');"
+    "box.style.setProperty('max-width','none','important');"
+    "box.style.setProperty('overflow-x','hidden','important');}"
     "window.addEventListener('resize',fit);"
     "document.addEventListener('DOMContentLoaded',fit);"
     "setTimeout(fit,300);setTimeout(fit,1200);setInterval(fit,2000);"
