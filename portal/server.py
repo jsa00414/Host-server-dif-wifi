@@ -42,8 +42,20 @@ PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
 BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
 BUFFALO_PREFIX = "/buffalo-frame"
-# Override LinkStation's fixed ~940px shell so it fills the portal iframe.
+# Dark admin theme (ServerManager / AdGuard / Pi-hole style) + full-bleed layout.
 BUFFALO_FIT_CSS = """
+:root {
+  --sm-bg0: #0a0f0d;
+  --sm-bg1: #111916;
+  --sm-bg2: #17221d;
+  --sm-bg3: #1e2b25;
+  --sm-line: rgba(170, 210, 185, 0.14);
+  --sm-text: #e8f2ec;
+  --sm-muted: #84998c;
+  --sm-accent: #3ddea0;
+  --sm-accent-dim: rgba(61, 222, 160, 0.14);
+  --sm-danger: #ff6b6b;
+}
 html, body, body#buffalo {
   width: 100% !important;
   height: 100% !important;
@@ -51,11 +63,19 @@ html, body, body#buffalo {
   margin: 0 !important;
   padding: 0 !important;
   overflow: hidden !important;
-  background: #d0d0d0 !important;
+  background: var(--sm-bg0) !important;
+  color: var(--sm-text) !important;
+  font-family: "Sora", "Segoe UI", system-ui, sans-serif !important;
+  zoom: normal !important;
 }
-body#buffalo {
-  zoom: 1.35 !important;
+body#buffalo *,
+body#buffalo *::before,
+body#buffalo *::after {
+  border-color: var(--sm-line) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
 }
+body#buffalo a { color: var(--sm-accent) !important; }
 body#buffalo .container,
 body#buffalo #header,
 body#buffalo #nav,
@@ -71,55 +91,237 @@ body#buffalo .container.footer {
   margin-left: 0 !important;
   margin-right: 0 !important;
   box-sizing: border-box !important;
+  background: transparent !important;
 }
-body#buffalo #footer .copyright {
-  width: calc(100% - 40px) !important;
-  max-width: none !important;
+body#buffalo #header,
+body#buffalo #nav {
+  background: var(--sm-bg1) !important;
+  border-bottom: 1px solid var(--sm-line) !important;
+  padding: 10px 16px !important;
 }
 body#buffalo #header {
   display: flex !important;
   flex-wrap: wrap !important;
-  align-items: flex-start !important;
+  align-items: center !important;
   justify-content: space-between !important;
-  padding: 0 12px !important;
+  gap: 10px !important;
+  min-height: 56px !important;
+}
+body#buffalo #header #header-logo,
+body#buffalo #header #header-button,
+body#buffalo #header #header-search {
+  float: none !important;
+  margin: 0 !important;
 }
 body#buffalo #header #header-search {
   width: auto !important;
-  flex: 1 1 auto !important;
-  max-width: none !important;
-  float: none !important;
+  flex: 1 1 240px !important;
+  max-width: 420px !important;
 }
-body#buffalo #header #header-logo,
-body#buffalo #header #header-button {
-  float: none !important;
+body#buffalo #header .logo,
+body#buffalo #header .product-name,
+body#buffalo #nav .name,
+body#buffalo #nav ul li,
+body#buffalo #nav a,
+body#buffalo .copyright,
+body#buffalo .dtcpip-version {
+  color: var(--sm-text) !important;
+}
+body#buffalo #nav .name { color: var(--sm-muted) !important; font-weight: 600 !important; }
+body#buffalo #footer,
+* body#buffalo #footer {
+  background: var(--sm-bg1) !important;
+  border-top: 1px solid var(--sm-line) !important;
+  padding: 10px 16px !important;
+}
+body#buffalo #footer .copyright {
+  width: auto !important;
+  max-width: none !important;
+  background: transparent !important;
+  color: var(--sm-muted) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+body#buffalo #main,
+body#buffalo #top,
+body#buffalo .container.portal {
+  background: var(--sm-bg0) !important;
 }
 body#buffalo div#main div#top div#menu_box {
-  width: calc(100% - 24px) !important;
+  width: calc(100% - 28px) !important;
   max-width: none !important;
-  height: calc((100vh / 1.35) - 140px) !important;
+  height: calc(100vh - 150px) !important;
   min-height: 360px !important;
   max-height: none !important;
-  margin: 0 12px !important;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
+  margin: 12px 14px !important;
+  padding: 8px !important;
+  overflow: auto !important;
   box-sizing: border-box !important;
+  background: transparent !important;
+  border: 0 !important;
 }
 body#buffalo #main .container_sd {
   width: 100% !important;
   max-width: none !important;
   height: auto !important;
-  min-height: calc((100vh / 1.35) - 120px) !important;
+  min-height: calc(100vh - 140px) !important;
+  background: transparent !important;
 }
-body#buffalo #nav .name {
-  max-width: none !important;
+/* Service tiles → dark cards */
+body#buffalo #menu_box > *,
+body#buffalo #menu_box div[id*="icon"],
+body#buffalo #menu_box .preload,
+body#buffalo [class*="icon_"],
+body#buffalo .kantan {
+  background: var(--sm-bg2) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 12px !important;
+  color: var(--sm-text) !important;
+}
+body#buffalo #menu_box img {
+  filter: none !important;
+  opacity: 0.95 !important;
+}
+/* ExtJS chrome */
+body#buffalo .x-body,
+body#buffalo .x-panel-body,
+body#buffalo .x-window-body,
+body#buffalo .x-form-item,
+body#buffalo .x-fieldset,
+body#buffalo .x-panel,
+body#buffalo .x-panel-default,
+body#buffalo .x-container {
+  background: var(--sm-bg1) !important;
+  color: var(--sm-text) !important;
+  border-color: var(--sm-line) !important;
+}
+body#buffalo .x-mask {
+  background-color: rgba(8, 14, 11, 0.72) !important;
+  opacity: 1 !important;
 }
 body#buffalo .x-window {
-  zoom: 1;
+  background: var(--sm-bg1) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 14px !important;
+  overflow: hidden !important;
+  zoom: normal !important;
+}
+body#buffalo .x-window-header,
+body#buffalo .x-panel-header,
+body#buffalo .x-toolbar,
+body#buffalo .x-toolbar-default {
+  background: var(--sm-bg2) !important;
+  border-color: var(--sm-line) !important;
+  color: var(--sm-text) !important;
+}
+body#buffalo .x-window-header-text,
+body#buffalo .x-panel-header-text,
+body#buffalo .x-form-item-label,
+body#buffalo .x-form-cb-label,
+body#buffalo label,
+body#buffalo .x-component {
+  color: var(--sm-text) !important;
+}
+body#buffalo .x-window-body {
+  background: var(--sm-bg1) !important;
+  padding: 14px !important;
+}
+body#buffalo .x-form-text,
+body#buffalo .x-form-field,
+body#buffalo input[type="text"],
+body#buffalo input[type="password"],
+body#buffalo input[type="number"],
+body#buffalo select,
+body#buffalo textarea,
+body#buffalo .x-form-trigger-wrap {
+  background: var(--sm-bg0) !important;
+  color: var(--sm-text) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 9px !important;
+  padding: 8px 10px !important;
+}
+body#buffalo .x-btn,
+body#buffalo .x-btn-default-small,
+body#buffalo .x-btn-default-medium,
+body#buffalo button,
+body#buffalo .pressbtn,
+body#buffalo a.btn9p {
+  background: var(--sm-bg3) !important;
+  color: var(--sm-text) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 9px !important;
+  filter: none !important;
+}
+body#buffalo .x-btn-inner,
+body#buffalo .x-btn button,
+body#buffalo .x-btn a {
+  color: var(--sm-text) !important;
+  font-weight: 600 !important;
+}
+body#buffalo .x-btn-primary,
+body#buffalo .x-btn.x-btn-default-toolbar-small.primary,
+body#buffalo a.btn9p:hover {
+  background: var(--sm-accent) !important;
+  border-color: transparent !important;
+  color: #062016 !important;
+}
+body#buffalo .x-btn-primary .x-btn-inner {
+  color: #062016 !important;
+}
+body#buffalo .x-grid-view,
+body#buffalo .x-grid-table,
+body#buffalo .x-grid-row,
+body#buffalo .x-grid-cell,
+body#buffalo .x-grid-header-ct {
+  background: var(--sm-bg1) !important;
+  color: var(--sm-text) !important;
+  border-color: var(--sm-line) !important;
+}
+body#buffalo .x-grid-row-over .x-grid-cell {
+  background: var(--sm-bg2) !important;
+}
+body#buffalo .x-tab-bar,
+body#buffalo .x-tab,
+body#buffalo .x-tab-default {
+  background: var(--sm-bg2) !important;
+  color: var(--sm-muted) !important;
+  border-color: var(--sm-line) !important;
+}
+body#buffalo .x-tab-active,
+body#buffalo .x-tab.x-tab-active {
+  background: var(--sm-accent-dim) !important;
+  color: var(--sm-accent) !important;
+}
+body#buffalo .x-tip,
+body#buffalo .x-menu,
+body#buffalo .dropdownbox,
+body#buffalo .dropmenu {
+  background: var(--sm-bg2) !important;
+  color: var(--sm-text) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 10px !important;
+}
+body#buffalo .dropmenu li,
+body#buffalo .dropdownbox table,
+body#buffalo .dropdownbox th,
+body#buffalo .dropdownbox td {
+  background: transparent !important;
+  color: var(--sm-text) !important;
+  border-color: var(--sm-line) !important;
+}
+body#buffalo img[src*="footer"],
+body#buffalo img[src*="sidebar-bg"],
+body#buffalo img[src*="header-search-bg"] {
+  opacity: 0 !important;
+  display: none !important;
 }
 """.strip()
 
 BUFFALO_FIT_SNIPPET = (
     "<base href=\"/buffalo-frame/\" />"
+    "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />"
+    "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />"
+    "<link href=\"https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap\" rel=\"stylesheet\" />"
     "<style id=\"sm-buffalo-fit\">"
     + BUFFALO_FIT_CSS.replace("\n", " ")
     + "</style>"
@@ -140,15 +342,22 @@ BUFFALO_FIT_SNIPPET = (
     "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
     "return _f.call(this,i,n);};}"
     "function fit(){"
-    "try{document.documentElement.style.setProperty('zoom','1.35','important');"
-    "document.body.style.setProperty('zoom','1.35','important');}catch(e){}"
+    "try{document.documentElement.style.removeProperty('zoom');"
+    "document.body.style.removeProperty('zoom');}catch(e){}"
     "var box=document.getElementById('menu_box');"
-    "if(!box)return;var top=box.getBoundingClientRect().top;"
-    "var z=parseFloat(getComputedStyle(document.body).zoom)||1.35;"
-    "box.style.setProperty('width','calc(100% - 24px)','important');"
-    "box.style.setProperty('height',Math.max(280,(window.innerHeight/z)-top-36)+'px','important');"
+    "if(box){var top=box.getBoundingClientRect().top;"
+    "box.style.setProperty('width','calc(100% - 28px)','important');"
+    "box.style.setProperty('height',Math.max(280,window.innerHeight-top-48)+'px','important');"
     "box.style.setProperty('max-width','none','important');"
-    "box.style.setProperty('overflow-x','hidden','important');}"
+    "box.style.setProperty('overflow','auto','important');}"
+    "document.querySelectorAll('.x-window').forEach(function(w){"
+    "w.style.setProperty('zoom','normal','important');"
+    "var r=w.getBoundingClientRect();"
+    "if(r.bottom>window.innerHeight-8){"
+    "w.style.top=Math.max(12,(window.innerHeight-r.height)/2)+'px';}"
+    "if(r.right>window.innerWidth-8){"
+    "w.style.left=Math.max(12,(window.innerWidth-r.width)/2)+'px';}"
+    "});}"
     "window.addEventListener('resize',fit);"
     "document.addEventListener('DOMContentLoaded',fit);"
     "setTimeout(fit,300);setTimeout(fit,1200);setInterval(fit,2000);"
