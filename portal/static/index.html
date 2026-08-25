@@ -1230,14 +1230,14 @@
       if (!host || !frame) return;
       const hw = host.clientWidth || 1;
       const hh = host.clientHeight || 1;
-      // Punch-in: lay the LinkStation UI out in a smaller canvas, then scale it
-      // up so the tiles fill the portal pane (stays inside the portal, no new tab).
-      const zoom = 1.55;
-      const designW = Math.max(640, Math.round(hw / zoom));
-      const designH = Math.max(480, Math.round(hh / zoom));
-      frame.style.width = `${designW}px`;
-      frame.style.height = `${designH}px`;
-      frame.style.transform = `scale(${zoom})`;
+      // Digital punch-in: Buffalo lays out at full pane size, then we scale up
+      // and crop gray margins so the tiles/login fill the portal view.
+      const zoom = 1.85;
+      frame.style.width = `${hw}px`;
+      frame.style.height = `${hh}px`;
+      const ox = (hw - hw * zoom) / 2;
+      const oy = Math.min(0, (hh - hh * zoom) * 0.2);
+      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${zoom})`;
       frame.style.transformOrigin = "top left";
     }
 
