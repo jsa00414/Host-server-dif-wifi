@@ -7093,7 +7093,11 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
 
 def _nas_files_patch_st_mobile_upload(text: str) -> str:
     """Add Upload to the Sencha Touch (/st/) mobile action sheet."""
-    if "Ext.app.Base.Toolbar" not in text and "Ext.app.Util" not in text:
+    if (
+        "Ext.app.Base.Toolbar" not in text
+        and "deleteFile: function" not in text
+        and '"makedir"' not in text
+    ):
         return text
     if "id: 'uploadbtn'" not in text and "id: 'mkdirbtn'" in text:
         text = text.replace(
