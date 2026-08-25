@@ -5963,12 +5963,14 @@ a{color:var(--sm-accent)!important}
   ::-webkit-scrollbar{width:0!important;height:0!important}
 }
 
-/* Sencha Touch (/st/) edit mode — keep toolbar visible above portal chrome */
-.edit-menu-box,.x-docked-bottom,.x-toolbar.x-docked-bottom{
+/* Sencha Touch (/st/) edit mode — only the edit menu, not Ext.Msg docked OK bars */
+#maindataview .edit-menu-box,
+#maindataview .x-docked-bottom.edit-menu-box,
+#maindataview .x-dock-item.x-docked-bottom:has(.edit-menu-box),
+#maindataview .x-dock-item.x-docked-bottom:has(.edit-button){
   display:block!important;visibility:visible!important;opacity:1!important;
-  z-index:9999!important;pointer-events:auto!important;
-  padding-bottom:max(8px,env(safe-area-inset-bottom,0px))!important}
-#maindataview .x-dock-item.x-docked-bottom{
+  z-index:40!important;pointer-events:auto!important;
+  padding-bottom:max(8px,env(safe-area-inset-bottom,0px))!important;
   max-height:42vh!important;overflow:visible!important}
 .edit-button .x-button-label,.slc-numBtn,.slc-numBtn .x-button-label{
   color:var(--sm-text)!important;font-size:13px!important}
@@ -5977,6 +5979,24 @@ a{color:var(--sm-accent)!important}
   outline:2px solid var(--sm-accent)!important;background:var(--sm-accent-dim)!important}
 .main-wrap.x-app-row-pressed,.main-wrap.selected-wrap,.main-wrap.selected-wrap-icon{
   touch-action:manipulation!important}
+
+/* MsgBox / ActionSheet — hide when Sencha marks them hidden; prevent OK-bar leaks */
+.x-msgbox.x-hidden,.x-msgbox.x-item-hidden,
+.x-sheet.x-hidden,.x-sheet.x-item-hidden,
+.x-msgbox[style*="display: none"],.x-sheet[style*="display: none"],
+.x-msgbox.x-hidden .x-docked-bottom,.x-msgbox.x-item-hidden .x-docked-bottom,
+.x-sheet.x-hidden .x-docked-bottom,.x-sheet.x-item-hidden .x-docked-bottom,
+.x-msgbox.x-hidden .x-button,.x-msgbox.x-item-hidden .x-button{
+  display:none!important;visibility:hidden!important;opacity:0!important;
+  pointer-events:none!important;height:0!important;min-height:0!important;
+  overflow:hidden!important}
+.x-msgbox,.x-sheet{
+  z-index:10000!important}
+.x-msgbox .x-toolbar,.x-msgbox .x-docked-bottom{
+  background:var(--sm-bg1)!important;border-top:1px solid var(--sm-line)!important}
+.x-msgbox .x-button-label{color:#062016!important;font-weight:700!important}
+.x-msgbox .x-button-confirm,.x-msgbox .x-button-action{
+  background:var(--sm-accent)!important}
 
 
 /* Custom ServerManager toolbar / menu / navi icons (SVG backgrounds) */
@@ -6351,8 +6371,41 @@ NAS_FILES_SNIPPET = (
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();smKickFilesLoad();},false);"
     "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smKickFilesLoad();},false);"
     "}catch(e){}"
+    "function smMsgVisible(){"
+    "try{"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)continue;"
+    "var st=window.getComputedStyle?getComputedStyle(el):null;"
+    "if(st&&(st.display==='none'||st.visibility==='hidden'))continue;"
+    "return true;"
+    "}"
+    "}catch(e){}"
+    "return false;}"
+    "function smHideOrphanDialogs(){"
+    "try{"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')<0&&cls.indexOf('x-item-hidden')<0)continue;"
+    "el.style.setProperty('display','none','important');"
+    "el.style.setProperty('visibility','hidden','important');"
+    "el.style.setProperty('pointer-events','none','important');"
+    "var kids=el.querySelectorAll('.x-docked-bottom,.x-toolbar,.x-button');"
+    "for(var k=0;k<kids.length;k++){"
+    "kids[k].style.setProperty('display','none','important');"
+    "kids[k].style.setProperty('visibility','hidden','important');"
+    "kids[k].style.setProperty('pointer-events','none','important');"
+    "}"
+    "}"
+    "}catch(e){}}"
     "function smClearStuckMask(){"
     "try{"
+    "smHideOrphanDialogs();"
+    "if(smMsgVisible())return;"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(window.Ext&&Ext.getBody)Ext.getBody().unmask();}catch(e){}"
     "var lm=document.getElementById('loading-main');"
@@ -6365,10 +6418,12 @@ NAS_FILES_SNIPPET = (
     "}"
     "var nodes=document.querySelectorAll('.x-mask,.x-mask-msg,.x-loading-spinner,.x-loading-spinner-outer');"
     "for(var i=0;i<nodes.length;i++){"
-    "nodes[i].classList.add('sm-nas-mask-clear');"
-    "nodes[i].style.display='none';"
-    "nodes[i].style.pointerEvents='none';"
-    "nodes[i].style.visibility='hidden';"
+    "var n=nodes[i];"
+    "try{if(n.closest&&(n.closest('.x-msgbox')||n.closest('.x-sheet')))continue;}catch(e){}"
+    "n.classList.add('sm-nas-mask-clear');"
+    "n.style.display='none';"
+    "n.style.pointerEvents='none';"
+    "n.style.visibility='hidden';"
     "}"
     "}catch(e){}}"
     "try{"
@@ -6480,7 +6535,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -7230,6 +7285,23 @@ def _nas_files_patch_st_mobile_edit(text: str) -> str:
                 "\t},\r\n\r\n" + toggle_block + "\r\n\tdeleteFile: function(datas, el)",
                 1,
             )
+    # Clean delete success: exit edit mode, hide mask, no raw JSON leak / stuck OK bar.
+    if "deleteFile: function" in text and "Ext.app.alert(Ext.app.makeTxt('remove result'),r.responseText);" in text:
+        text = text.replace(
+            "if(count == datalength){\r\n"
+            "                            Ext.app.alert(Ext.app.makeTxt('remove result'),r.responseText);\r\n"
+            "                            Ext.app.isPanel.getComponent('data_view').setData();\r\n"
+            "                            return;\r\n"
+            "                        }",
+            "if(count == datalength){\r\n"
+            "                            try{Ext.app.Util.hideMask();}catch(e){}\r\n"
+            "                            try{if(typeof isAction!=='undefined'&&isAction==='edit'&&Ext.app.Util._smToggleEditMode){Ext.app.Util._smToggleEditMode();}}catch(e){}\r\n"
+            "                            try{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}\r\n"
+            "                            try{if(window.smHideOrphanDialogs)smHideOrphanDialogs();if(window.Ext&&Ext.Msg&&Ext.Msg.hide)Ext.Msg.hide();}catch(e){}\r\n"
+            "                            Ext.app.alert(Ext.app.makeTxt('remove result'),'Deleted');\r\n"
+            "                            return;\r\n"
+            "                        }",
+        )
     return text
 
 
