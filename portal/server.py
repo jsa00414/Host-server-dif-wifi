@@ -429,20 +429,21 @@ body#buffalo #nav ul li.logout a span {
 }
 body#buffalo #nav ul li.language,
 body#buffalo #nav ul li.language #language-label,
-body#buffalo #nav ul li.language #language-label a#change-language {
-  width: auto !important;
-  max-width: none !important;
-  background-image: none !important;
-  color: var(--sm-muted) !important;
-  font-size: 12px !important;
-}
+body#buffalo #nav ul li.language #language-label a#change-language,
 body#buffalo #nav ul li.language span#language-name-cover,
-body#buffalo #nav ul li.language span#language-name-cover span#language-name {
-  float: none !important;
-  width: auto !important;
-  display: inline !important;
+body#buffalo #nav ul li.language span#language-name-cover span#language-name,
+body#buffalo #nav ul#language-list,
+body#buffalo #nav ul li.language .dropmenu,
+body#buffalo #nav #language-list {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
   background: transparent !important;
-  color: var(--sm-text) !important;
+  background-image: none !important;
 }
 body#buffalo #nav ul li.layout a,
 body#buffalo #nav ul li.layout a span,
@@ -748,12 +749,12 @@ BUFFALO_FIT_SNIPPET = (
     "if(foot&&foot.classList.contains('preload')){force(foot,{display:'none'});}"
     "var prod=document.getElementById('BUFFALO_PROD_NAME'); force(prod,{display:'none'});"
     "var userLi=document.querySelector('#nav li.username'); force(userLi,{display:'none'});"
+    "var langLi=document.querySelector('#nav li.language'); force(langLi,{display:'none'});"
+    "var langList=document.getElementById('language-list'); force(langList,{display:'none'});"
     "var nav=document.getElementById('nav');"
-    "var langName=document.getElementById('language-name');"
-    "var langText=langName?(langName.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
     "var layoutCap=document.getElementById('NAS_40_BUTTON_CAPTION1');"
     "var layoutText=layoutCap?(layoutCap.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
-    "if(nav&&!langText&&!layoutText){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0',padding:'0',overflow:'hidden'});}"
+    "if(nav&&!layoutText){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0',padding:'0',overflow:'hidden'});}"
     "else if(nav){force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px',"
     "margin:'0',padding:'0 18px',overflow:'visible',"
     "background:'#17221d','background-image':'none',"
