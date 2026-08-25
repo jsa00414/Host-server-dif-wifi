@@ -335,6 +335,50 @@
       display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
     }
     .rule-top .name { flex: 1; min-width: 0; }
+    .rule-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      flex: none;
+      cursor: pointer;
+      user-select: none;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 600;
+      letter-spacing: .02em;
+      line-height: 1.15;
+      white-space: nowrap;
+    }
+    .rule-check input {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      flex: none;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--bg3);
+      display: grid;
+      place-content: center;
+      cursor: pointer;
+    }
+    .rule-check input:checked {
+      background: var(--accent);
+      border-color: transparent;
+    }
+    .rule-check input:checked::after {
+      content: "✓";
+      color: #062016;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .rule-check input:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+    .rule-check:has(input:disabled) { cursor: not-allowed; }
     .flow {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1381,7 +1425,7 @@
         if (locked) el.dataset.external = "1";
         el.innerHTML = `
           <div class="rule-top">
-            <label class="switch"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /> On</label>
+            <label class="rule-check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /> On</label>
             <div class="name field"><span>Name</span><input data-k="name" value="${esc(rule.name)}" ${locked ? "readonly" : ""} /></div>
             ${locked ? chip("existing router", "warn") : ""}
             ${locked ? "" : `<button type="button" class="ghost danger" data-del-r="${idx}">Remove</button>`}
@@ -1416,8 +1460,8 @@
         if (locked) el.dataset.external = "1";
         el.innerHTML = `
           <div class="rule-top">
-            <label class="switch"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /> On</label>
-            <label class="switch" title="Checked = WireGuard/LAN only"><input data-k="vpn_only" type="checkbox" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /> VPN only</label>
+            <label class="rule-check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /> On</label>
+            <label class="rule-check" title="Checked = WireGuard/LAN only"><input data-k="vpn_only" type="checkbox" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /> VPN only</label>
             ${chip(rule.vpn_only ? "VPN" : "public", rule.vpn_only ? "warn" : "ok")}
             ${locked ? chip("existing Caddy", "warn") : ""}
             ${locked ? "" : `<button type="button" class="ghost danger" data-del-h="${idx}">Remove</button>`}
@@ -1465,7 +1509,7 @@
         if (locked) el.dataset.locked = "1";
         el.innerHTML = `
           <div class="rule-top">
-            <label class="switch"><input data-k="vpn_only" type="checkbox" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /> VPN only</label>
+            <label class="rule-check"><input data-k="vpn_only" type="checkbox" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /> VPN only</label>
             ${chip(rule.vpn_only ? "VPN" : "public", rule.vpn_only ? "warn" : "ok")}
             ${locked ? chip("protected", "warn") : ""}
             ${locked ? "" : `<button type="button" class="ghost danger" data-del-fw="${idx}">Remove</button>`}
