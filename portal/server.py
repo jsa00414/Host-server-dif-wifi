@@ -6168,8 +6168,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "function smMergeNaviBar(){"
     "try{"
-    "document.documentElement.classList.add('sm-merged-chrome');"
-    "if(window.__smNaviMerged)return true;"
+    "if(window.__smNaviMerged){try{document.documentElement.classList.add('sm-merged-chrome');}catch(e){}return true;}"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var menu=Ext.getCmp('menu-bar');"
     "var nav=Ext.getCmp('control-panel');"
@@ -6191,6 +6190,7 @@ NAS_FILES_SNIPPET = (
     "var parent=nav.ownerCt;"
     "try{parent.remove(nav,true);}catch(e){try{nav.hide();nav.setHeight(0);}catch(e2){}}"
     "window.__smNaviMerged=true;"
+    "try{document.documentElement.classList.add('sm-merged-chrome');}catch(e){}"
     "try{menu.doLayout();}catch(e){}"
     "try{if(parent&&parent.doLayout)parent.doLayout(true,true);}catch(e){}"
     "var el=document.getElementById('control-panel');"
@@ -6894,6 +6894,32 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
     text = text.replace(
         "_response.status != 200 || _response.statusText != \"OK\"",
         "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
+    )
+    text = _nas_files_patch_removed_toolbar_buttons(text)
+    # Thumbnail HEAD requests — same empty statusText issue as rpc/ls.
+    text = text.replace(
+        "response.status == 200 && response.statusText == \"OK\"",
+        "response.status == 200 && (!response.statusText || response.statusText == \"OK\")",
+    )
+    text = text.replace(
+        "response.status == 204 && response.statusText == \"No Content\"",
+        "response.status == 204 && (!response.statusText || response.statusText == \"No Content\")",
+    )
+    return text
+
+
+def _nas_files_patch_removed_toolbar_buttons(text: str) -> str:
+    """Guard icon-toolbar button calls after #icon-panel action buttons are removed."""
+    text = re.sub(
+        r"Ext\.getCmp\((['\"])(btn_[^'\"]+)\1\)\.(enable|disable|show|hide)\(\)",
+        r"(function(_smB){if(_smB&&_smB.\3)_smB.\3();})(Ext.getCmp(\1\2\1))",
+        text,
+    )
+    text = re.sub(
+        r"iconPanel\.items\.each\(function\s*\(\s*item\s*\)\s*\{[\s\S]*?\}\s*\)\s*;",
+        "try{if(window.iconPanel&&iconPanel.items&&iconPanel.items.each){iconPanel.items.each(function(item){if(item&&item.enable)try{item.enable();}catch(e){}});}}catch(e){}",
+        text,
+        count=1,
     )
     return text
 
