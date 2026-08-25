@@ -246,6 +246,132 @@
     body.embed-mode .top-right .actions #saveBtn,
     body.embed-mode .top-right .actions #reloadBtn { display: none; }
 
+
+    /* ===== Independent FTP Files (Google Drive–like, ServerManager style) ===== */
+    #view-files.ftp-files-view {
+      display: none;
+      flex-direction: column;
+      gap: 0;
+      min-height: 0;
+      height: calc(var(--app-height, 100dvh) - var(--top-h, 56px) - 24px);
+      margin: -4px -4px 0;
+      padding: 0;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(900px 420px at 0% 0%, rgba(61,222,160,.07), transparent 55%),
+        var(--bg1, #111916);
+    }
+    #view-files.ftp-files-view.active { display: flex; }
+    body.files-mode .content { padding: 12px 12px 12px !important; overflow: hidden !important; }
+    body.files-mode .drawer { display: none; }
+    body.files-mode .top-right .actions #saveBtn,
+    body.files-mode .top-right .actions #reloadBtn { display: none; }
+
+    .ftp-shell { display: grid; grid-template-columns: 240px 1fr; min-height: 0; flex: 1; }
+    .ftp-side {
+      border-right: 1px solid var(--line);
+      background: rgba(10,15,13,.45);
+      padding: 16px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      overflow: auto;
+    }
+    .ftp-brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px 14px; font-weight: 700; font-size: .95rem;
+      letter-spacing: -.02em;
+    }
+    .ftp-brand svg { width: 22px; height: 22px; stroke: var(--accent); fill: none; stroke-width: 2; }
+    .ftp-new {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      margin: 0 4px 10px; padding: 12px 14px; border-radius: 999px;
+      border: 0; cursor: pointer; font: inherit; font-weight: 700;
+      background: var(--accent); color: #062016;
+      box-shadow: 0 8px 24px rgba(61,222,160,.18);
+    }
+    .ftp-new:hover { filter: brightness(1.05); }
+    .ftp-side-link {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 999px; border: 0; cursor: pointer;
+      background: transparent; color: var(--muted); font: inherit; font-weight: 600;
+      text-align: left; width: 100%;
+    }
+    .ftp-side-link:hover { background: rgba(255,255,255,.05); color: var(--text); }
+    .ftp-side-link.active {
+      background: rgba(61,222,160,.14); color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(61,222,160,.35);
+    }
+    .ftp-side-link svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; flex: 0 0 auto; }
+    .ftp-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .ftp-top {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      padding: 14px 16px 10px; border-bottom: 1px solid var(--line);
+    }
+    .ftp-search {
+      flex: 1; min-width: 180px; display: flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,.04); border: 1px solid var(--line);
+      border-radius: 999px; padding: 0 14px; height: 42px;
+    }
+    .ftp-search svg { width: 18px; height: 18px; stroke: var(--muted); fill: none; stroke-width: 2; }
+    .ftp-search input {
+      flex: 1; border: 0; outline: none; background: transparent; color: var(--text);
+      font: inherit; font-size: .92rem; min-width: 0;
+    }
+    .ftp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ftp-actions button {
+      border: 1px solid var(--line); background: rgba(255,255,255,.03);
+      color: var(--text); border-radius: 10px; padding: 8px 12px;
+      font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+    }
+    .ftp-actions button:hover { background: rgba(61,222,160,.12); border-color: rgba(61,222,160,.35); color: var(--accent); }
+    .ftp-actions button:disabled { opacity: .4; cursor: not-allowed; }
+    .ftp-crumbs {
+      display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+      padding: 8px 16px 12px; color: var(--muted); font-size: .82rem; font-weight: 600;
+    }
+    .ftp-crumbs button {
+      border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer;
+      padding: 4px 8px; border-radius: 8px;
+    }
+    .ftp-crumbs button:hover { background: rgba(255,255,255,.06); color: var(--text); }
+    .ftp-crumbs .sep { opacity: .5; }
+    .ftp-status { margin-left: auto; font-size: .75rem; color: var(--muted); font-weight: 500; }
+    .ftp-grid {
+      flex: 1; min-height: 0; overflow: auto; padding: 8px 12px 20px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+      gap: 8px; align-content: start;
+    }
+    .ftp-card {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 14px 10px 12px; border-radius: 16px; border: 1px solid transparent;
+      background: transparent; cursor: pointer; color: var(--text); text-align: center;
+      user-select: none;
+    }
+    .ftp-card:hover { background: rgba(255,255,255,.045); border-color: var(--line); }
+    .ftp-card.selected {
+      background: rgba(61,222,160,.14); border-color: rgba(61,222,160,.4);
+    }
+    .ftp-card .ico {
+      width: 64px; height: 52px; display: grid; place-items: center;
+    }
+    .ftp-card .ico svg { width: 56px; height: 48px; }
+    .ftp-card .name {
+      font-size: .78rem; font-weight: 600; line-height: 1.3;
+      max-width: 100%; overflow: hidden; display: -webkit-box;
+      -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word;
+    }
+    .ftp-card .meta { font-size: .68rem; color: var(--muted); }
+    .ftp-empty, .ftp-error {
+      grid-column: 1 / -1; padding: 48px 16px; text-align: center; color: var(--muted);
+    }
+    .ftp-error { color: #ff8f8f; }
+    @media (max-width: 900px) {
+      .ftp-shell { grid-template-columns: 1fr; }
+      .ftp-side { display: none; }
+      #view-files.ftp-files-view { height: calc(var(--app-height, 100dvh) - var(--top-h, 56px) - 16px); }
+    }
+
     .page-head { margin: 0 0 14px; }
     .page-head h2 { margin: 0; font-size: 1.18rem; letter-spacing: -.03em; }
     .page-head p { margin: 6px 0 0; color: var(--muted); font-size: .84rem; line-height: 1.45; max-width: 62ch; }
@@ -1100,9 +1226,49 @@
         <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
-      <section class="view embed-view" id="view-files">
-        <iframe class="embed-frame" id="frameFiles" title="NAS File Manager" src="about:blank" data-src="/nas-files/ui/" allow="clipboard-read; clipboard-write"></iframe>
+
+      <section class="view ftp-files-view" id="view-files">
+        <div class="ftp-shell">
+          <aside class="ftp-side">
+            <div class="ftp-brand">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 10v10h14V10"/></svg>
+              <span>My Drive</span>
+            </div>
+            <button type="button" class="ftp-new" id="ftpNewBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              New
+            </button>
+            <button type="button" class="ftp-side-link active" data-ftp-root="/disk1" id="ftpNavDrive">
+              <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 10v10h14V10"/></svg>
+              My Drive
+            </button>
+            <button type="button" class="ftp-side-link" data-ftp-root="/" id="ftpNavRoot">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16v12H4z"/><path d="M4 7l2-3h12l2 3"/></svg>
+              All disks
+            </button>
+          </aside>
+          <div class="ftp-main">
+            <div class="ftp-top">
+              <label class="ftp-search">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                <input id="ftpSearch" type="search" placeholder="Search in current folder" autocomplete="off" />
+              </label>
+              <div class="ftp-actions">
+                <button type="button" id="ftpUploadBtn">Upload</button>
+                <button type="button" id="ftpMkdirBtn">New folder</button>
+                <button type="button" id="ftpDownloadBtn" disabled>Download</button>
+                <button type="button" id="ftpRenameBtn" disabled>Rename</button>
+                <button type="button" id="ftpDeleteBtn" disabled>Delete</button>
+                <button type="button" id="ftpRefreshBtn">Refresh</button>
+              </div>
+              <input type="file" id="ftpFileInput" multiple hidden />
+            </div>
+            <div class="ftp-crumbs" id="ftpCrumbs"></div>
+            <div class="ftp-grid" id="ftpGrid"><div class="ftp-empty">Loading…</div></div>
+          </div>
+        </div>
       </section>
+
 
       <section class="view" id="view-tailscale">
         <div class="page-head">
@@ -1615,10 +1781,209 @@
       } catch (e) {}
       return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
     }
+
+    /* ===== FTP Drive file manager ===== */
+    const FTP_FOLDER_SVG = `<svg viewBox="0 0 64 52" fill="none" aria-hidden="true"><path d="M2 12c0-3.3 2.7-6 6-6h14l4 4h30c3.3 0 6 2.7 6 6v28c0 3.3-2.7 6-6 6H8c-3.3 0-6-2.7-6-6V12z" fill="rgba(61,222,160,.18)" stroke="#3ddea0" stroke-width="2"/><path d="M2 18h60" stroke="#3ddea0" stroke-opacity=".35" stroke-width="2"/></svg>`;
+    const FTP_FILE_SVG = `<svg viewBox="0 0 48 56" fill="none" aria-hidden="true"><path d="M10 2h20l14 14v34a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6V8a6 6 0 0 1 6-6z" fill="rgba(232,242,236,.06)" stroke="#84998c" stroke-width="2"/><path d="M30 2v14h14" stroke="#84998c" stroke-width="2"/></svg>`;
+    let ftpPath = "/disk1";
+    let ftpEntries = [];
+    let ftpSelected = null;
+    let ftpQuery = "";
+
+    function ftpFmtSize(n) {
+      const x = Number(n) || 0;
+      if (x < 1024) return x + " B";
+      if (x < 1048576) return (x / 1024).toFixed(1) + " KB";
+      if (x < 1073741824) return (x / 1048576).toFixed(1) + " MB";
+      return (x / 1073741824).toFixed(2) + " GB";
+    }
+    function ftpFmtTime(s) {
+      const m = String(s || "");
+      if (m.length >= 12) {
+        return m.slice(0,4)+"-"+m.slice(4,6)+"-"+m.slice(6,8);
+      }
+      return "";
+    }
+    function ftpSetSelected(entry) {
+      ftpSelected = entry;
+      const has = !!entry;
+      const isFile = has && entry.type === "file";
+      document.getElementById("ftpDownloadBtn").disabled = !isFile;
+      document.getElementById("ftpRenameBtn").disabled = !has;
+      document.getElementById("ftpDeleteBtn").disabled = !has;
+      document.querySelectorAll(".ftp-card").forEach((el) => {
+        el.classList.toggle("selected", has && el.dataset.path === entry.path);
+      });
+    }
+    function ftpRenderCrumbs(data) {
+      const el = document.getElementById("ftpCrumbs");
+      const bits = [`<button type="button" data-path="/">NAS</button>`];
+      (data.crumbs || []).forEach((c) => {
+        bits.push(`<span class="sep">/</span>`);
+        bits.push(`<button type="button" data-path="${esc(c.path)}">${esc(c.name)}</button>`);
+      });
+      const st = document.createElement("span");
+      st.className = "ftp-status";
+      st.id = "ftpStatusLine";
+      el.innerHTML = bits.join("") + `<span class="ftp-status" id="ftpStatusLine"></span>`;
+      el.querySelectorAll("button[data-path]").forEach((b) => {
+        b.addEventListener("click", () => ftpBrowse(b.dataset.path));
+      });
+    }
+    function ftpRenderGrid() {
+      const grid = document.getElementById("ftpGrid");
+      const q = ftpQuery.trim().toLowerCase();
+      const list = ftpEntries.filter((e) => !q || e.name.toLowerCase().includes(q));
+      if (!list.length) {
+        grid.innerHTML = `<div class="ftp-empty">${q ? "No matches" : "This folder is empty"}</div>`;
+        return;
+      }
+      grid.innerHTML = list.map((e) => {
+        const meta = e.type === "dir" ? "Folder" : ftpFmtSize(e.size);
+        const when = ftpFmtTime(e.modified);
+        return `<button type="button" class="ftp-card" data-path="${esc(e.path)}" data-type="${esc(e.type)}" title="${esc(e.name)}">
+          <div class="ico">${e.type === "dir" ? FTP_FOLDER_SVG : FTP_FILE_SVG}</div>
+          <div class="name">${esc(e.name)}</div>
+          <div class="meta">${esc(meta)}${when ? " · " + esc(when) : ""}</div>
+        </button>`;
+      }).join("");
+      grid.querySelectorAll(".ftp-card").forEach((card) => {
+        const entry = ftpEntries.find((e) => e.path === card.dataset.path);
+        card.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ftpSetSelected(entry);
+        });
+        card.addEventListener("dblclick", (ev) => {
+          ev.preventDefault();
+          if (!entry) return;
+          if (entry.type === "dir") ftpBrowse(entry.path);
+          else ftpDownload(entry);
+        });
+      });
+      if (ftpSelected) ftpSetSelected(ftpEntries.find((e) => e.path === ftpSelected.path) || null);
+    }
+    async function ftpBrowse(path) {
+      ftpPath = path || "/";
+      ftpSetSelected(null);
+      const grid = document.getElementById("ftpGrid");
+      grid.innerHTML = `<div class="ftp-empty">Loading…</div>`;
+      try {
+        const data = await api("/api/ftp/list?path=" + encodeURIComponent(ftpPath));
+        if (!data.ok) throw new Error(data.error || "list failed");
+        ftpPath = data.path;
+        ftpEntries = data.entries || [];
+        ftpRenderCrumbs(data);
+        ftpRenderGrid();
+        document.querySelectorAll(".ftp-side-link").forEach((b) => {
+          const root = b.getAttribute("data-ftp-root");
+          b.classList.toggle("active", root === ftpPath || (root === "/disk1" && (ftpPath === "/disk1" || ftpPath.startsWith("/disk1/"))));
+        });
+        const st = document.getElementById("ftpStatusLine");
+        if (st) st.textContent = ftpEntries.length + " items";
+        setStatus("FTP " + ftpPath, "ok");
+      } catch (err) {
+        grid.innerHTML = `<div class="ftp-error">${esc(String(err.message || err))}</div>`;
+        setStatus(String(err.message || err), "err");
+      }
+    }
+    async function ftpMkdir() {
+      const name = prompt("New folder name");
+      if (!name) return;
+      const dest = (ftpPath.replace(/\/$/, "") || "") + "/" + name.trim().replace(/^\/+|\/+$/g, "");
+      try {
+        setStatus("Creating folder…");
+        await api("/api/ftp/mkdir", { method: "POST", body: JSON.stringify({ path: dest }) });
+        await ftpBrowse(ftpPath);
+        setStatus("Folder created", "ok");
+      } catch (err) {
+        setStatus(String(err.message || err), "err");
+      }
+    }
+    async function ftpUploadFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      for (const file of files) {
+        const dest = (ftpPath.replace(/\/$/, "") || "") + "/" + file.name;
+        setStatus("Uploading " + file.name + "…");
+        const res = await fetch("/api/ftp/upload?path=" + encodeURIComponent(dest), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: file,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || ("upload failed: " + file.name));
+      }
+      await ftpBrowse(ftpPath);
+      setStatus("Upload complete", "ok");
+    }
+    function ftpDownload(entry) {
+      if (!entry || entry.type !== "file") return;
+      const a = document.createElement("a");
+      a.href = "/api/ftp/download?path=" + encodeURIComponent(entry.path);
+      a.download = entry.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    async function ftpRename() {
+      if (!ftpSelected) return;
+      const next = prompt("Rename to", ftpSelected.name);
+      if (!next || next === ftpSelected.name) return;
+      const dst = ftpParentPath(ftpSelected.path) + "/" + next.trim();
+      try {
+        setStatus("Renaming…");
+        await api("/api/ftp/rename", { method: "POST", body: JSON.stringify({ src: ftpSelected.path, dst }) });
+        await ftpBrowse(ftpPath);
+        setStatus("Renamed", "ok");
+      } catch (err) {
+        setStatus(String(err.message || err), "err");
+      }
+    }
+    function ftpParentPath(p) {
+      const parts = String(p || "/").split("/").filter(Boolean);
+      parts.pop();
+      return parts.length ? "/" + parts.join("/") : "/";
+    }
+    async function ftpDelete() {
+      if (!ftpSelected) return;
+      if (!confirm("Delete " + ftpSelected.name + "?")) return;
+      try {
+        setStatus("Deleting…");
+        await api("/api/ftp/delete", { method: "POST", body: JSON.stringify({ path: ftpSelected.path }) });
+        await ftpBrowse(ftpPath);
+        setStatus("Deleted", "ok");
+      } catch (err) {
+        setStatus(String(err.message || err), "err");
+      }
+    }
+    function bindFtpUi() {
+      document.getElementById("ftpRefreshBtn")?.addEventListener("click", () => ftpBrowse(ftpPath));
+      document.getElementById("ftpMkdirBtn")?.addEventListener("click", () => ftpMkdir());
+      document.getElementById("ftpNewBtn")?.addEventListener("click", () => ftpMkdir());
+      document.getElementById("ftpUploadBtn")?.addEventListener("click", () => document.getElementById("ftpFileInput")?.click());
+      document.getElementById("ftpFileInput")?.addEventListener("change", async (e) => {
+        try { await ftpUploadFiles(e.target.files); }
+        catch (err) { setStatus(String(err.message || err), "err"); }
+        e.target.value = "";
+      });
+      document.getElementById("ftpDownloadBtn")?.addEventListener("click", () => ftpDownload(ftpSelected));
+      document.getElementById("ftpRenameBtn")?.addEventListener("click", () => ftpRename());
+      document.getElementById("ftpDeleteBtn")?.addEventListener("click", () => ftpDelete());
+      document.getElementById("ftpSearch")?.addEventListener("input", (e) => {
+        ftpQuery = e.target.value || "";
+        ftpRenderGrid();
+      });
+      document.querySelectorAll(".ftp-side-link").forEach((b) => {
+        b.addEventListener("click", () => ftpBrowse(b.getAttribute("data-ftp-root") || "/disk1"));
+      });
+    }
+
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo";
+      document.body.classList.toggle("files-mode", name === "files");
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -1634,7 +1999,7 @@
         loadBuffaloFrame();
       }
       if (name === "files") {
-        loadNasFilesFrame(true);
+        ftpBrowse(ftpPath || "/disk1");
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
@@ -2667,9 +3032,12 @@
       setStatus("Refreshing NAS login…");
       try {
         await api("/api/buffalo-sso");
-        await Promise.all([loadBuffaloFrame(true), loadNasFilesFrame(true)]);
+        await loadBuffaloFrame(true);
+        if (document.getElementById("view-files")?.classList.contains("active")) {
+          await ftpBrowse(ftpPath || "/disk1");
+        }
         setStatus("NAS login refreshed", "ok");
-        showLog("Buffalo / Files SSO refreshed.", true);
+        showLog("Buffalo SSO refreshed. Files uses FTP.", true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);
@@ -2690,6 +3058,7 @@
     document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
     document.getElementById("settingsLogoutAllBtn")?.addEventListener("click", () => logoutAllSessions());
     document.getElementById("settingsReauthNasBtn")?.addEventListener("click", () => reauthNasFromSettings());
+    bindFtpUi();
     document.getElementById("settingsBrandBtn")?.addEventListener("click", () => saveBrandingSettings());
     document.getElementById("settingsPassBtn")?.addEventListener("click", () => savePasswordSettings());
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
