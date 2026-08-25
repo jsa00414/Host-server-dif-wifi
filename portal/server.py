@@ -177,13 +177,14 @@ body#buffalo #header #header-logo .logo::before {
   font-weight: 700 !important;
   font-style: italic !important;
   font-size: 18px !important;
-  letter-spacing: 0.08em !important;
-  line-height: 1.25 !important;
-  padding: 2px 6px 2px 0 !important;
+  letter-spacing: 0.1em !important;
+  line-height: 1.4 !important;
+  padding: 6px 8px 6px 2px !important;
   color: #ff4d4d !important;
   text-shadow: none !important;
   white-space: nowrap !important;
   overflow: visible !important;
+  box-sizing: content-box !important;
 }
 /* Drop search/hint clutter from the top bar */
 body#buffalo #header #header-search {
@@ -749,9 +750,9 @@ BUFFALO_FIT_SNIPPET = (
     "var userLi=document.querySelector('#nav li.username'); force(userLi,{display:'none'});"
     "var langName=document.getElementById('language-name');"
     "var langText=langName?(langName.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
-    "var layoutLi=document.querySelector('#nav li.layout');"
-    "var layoutVisible=layoutLi&&getComputedStyle(layoutLi).display!=='none'&&(layoutLi.textContent||'').trim();"
-    "if(nav&&!langText&&!layoutVisible){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0'});}"
+    "var layoutCap=document.getElementById('NAS_40_BUTTON_CAPTION1');"
+    "var layoutText=layoutCap?(layoutCap.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
+    "if(nav&&!langText&&!layoutText){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0',padding:'0',overflow:'hidden'});}"
     "else if(nav){force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px'});}"
     "var nav=document.getElementById('nav');"
     "force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px',"
