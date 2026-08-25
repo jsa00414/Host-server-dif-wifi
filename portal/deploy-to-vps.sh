@@ -12,6 +12,7 @@ echo "Deploying portal to ${VPS}:${REMOTE_UI} …"
 ssh "$VPS" "mkdir -p ${REMOTE_UI}/static"
 scp "$ROOT/server.py" "${VPS}:${REMOTE_UI}/server.py"
 scp "$ROOT/static/index.html" "${VPS}:${REMOTE_UI}/static/index.html"
+scp "$ROOT/static/files.html" "${VPS}:${REMOTE_UI}/static/files.html"
 # Keep public-IP literals aligned with the target host when present in server.py
 case "$VPS" in
   *74.208.76.213*)
