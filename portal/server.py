@@ -5041,7 +5041,7 @@ NAS_FILES_SNIPPET = (
     "@media (max-width:900px){"
     "#footer-panel,.footer,#copyright,#version-text{display:none!important;height:0!important;min-height:0!important;"
     "margin:0!important;padding:0!important;overflow:hidden!important;border:0!important}"
-    /* Ext desktop UI on phones: make the file pane a native scroll surface. */
+    # Ext desktop UI on phones: make the file pane a native scroll surface.
     "#main-panel,#main-panel .x-panel-body,.icon-panel,.icon-panel .x-panel-body{"
     "overflow-y:auto!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-y!important}"
     "}"
