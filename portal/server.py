@@ -5980,18 +5980,29 @@ a{color:var(--sm-accent)!important}
 .main-wrap.x-app-row-pressed,.main-wrap.selected-wrap,.main-wrap.selected-wrap-icon{
   touch-action:manipulation!important}
 
-/* MsgBox / ActionSheet — hide when Sencha marks them hidden; prevent OK-bar leaks */
+/* MsgBox / ActionSheet — hide only when Sencha marks them hidden (no style-attr traps) */
 .x-msgbox.x-hidden,.x-msgbox.x-item-hidden,
 .x-sheet.x-hidden,.x-sheet.x-item-hidden,
-.x-msgbox[style*="display: none"],.x-sheet[style*="display: none"],
 .x-msgbox.x-hidden .x-docked-bottom,.x-msgbox.x-item-hidden .x-docked-bottom,
 .x-sheet.x-hidden .x-docked-bottom,.x-sheet.x-item-hidden .x-docked-bottom,
-.x-msgbox.x-hidden .x-button,.x-msgbox.x-item-hidden .x-button{
+.x-msgbox.x-hidden .x-button,.x-msgbox.x-item-hidden .x-button,
+.x-sheet.x-hidden .x-button,.x-sheet.x-item-hidden .x-button{
   display:none!important;visibility:hidden!important;opacity:0!important;
   pointer-events:none!important;height:0!important;min-height:0!important;
   overflow:hidden!important}
-.x-msgbox,.x-sheet{
+.x-msgbox,.x-sheet,#tapactionsheet{
   z-index:10000!important}
+#tapactionsheet:not(.x-hidden):not(.x-item-hidden),
+#tapactionsheet:not(.x-hidden):not(.x-item-hidden) .x-button{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;height:auto!important;min-height:0!important;
+  overflow:visible!important}
+#uploadbtn,#uploadbtn .x-button-label{position:relative!important}
+#sm-st-upload-input-btn{
+  position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
+  width:100%!important;height:100%!important;opacity:0.01!important;z-index:20!important;
+  border:0!important;margin:0!important;padding:0!important;cursor:pointer!important;
+  -webkit-appearance:none!important;appearance:none!important}
 .x-msgbox .x-toolbar,.x-msgbox .x-docked-bottom{
   background:var(--sm-bg1)!important;border-top:1px solid var(--sm-line)!important}
 .x-msgbox .x-button-label{color:#062016!important;font-weight:700!important}
@@ -7331,6 +7342,43 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
             "\t\t\t\t\t},{\r\n"
             "\t\t\t\t\t\ttext: Ext.app.makeTxt('slideshow'),",
         )
+    # Wire a native file input over the Upload button (iOS-safe; no programmatic click).
+    old_beforeshow = (
+        "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+        "\t\t\t\t\t\t{\r\n"
+        "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
+        "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
+        "\t\t\t\t\t\t\tif(isLogin){\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
+        "\t\t\t\t\t\t\t}else{\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t}\r\n"
+        "\t\t\t\t\t\t}"
+    )
+    new_beforeshow = (
+        "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+        "\t\t\t\t\t\t{\r\n"
+        "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
+        "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
+        "\t\t\t\t\t\t\tif(isLogin){\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
+        "\t\t\t\t\t\t\t}else{\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t}\r\n"
+        "\t\t\t\t\t\t\ttry{if(uploadBtn&&Ext.app.Util&&Ext.app.Util._smWireUploadButton){Ext.defer(function(){try{Ext.app.Util._smWireUploadButton(uploadBtn,this);}catch(e){}},30,this);}}catch(e){}\r\n"
+        "\t\t\t\t\t\t}"
+    )
+    if old_beforeshow in text:
+        text = text.replace(old_beforeshow, new_beforeshow)
+    elif (
+        "id: 'uploadbtn'" in text
+        and "beforeshow:function(cmp)" in text
+        and "_smWireUploadButton" not in text
+    ):
         text = text.replace(
             "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
             "\t\t\t\t\t\t{\r\n"
@@ -7340,18 +7388,7 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
             "\t\t\t\t\t\t\t\tcmp.getComponent(0).hide();\r\n"
             "\t\t\t\t\t\t\t}\r\n"
             "\t\t\t\t\t\t}",
-            "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
-            "\t\t\t\t\t\t{\r\n"
-            "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
-            "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
-            "\t\t\t\t\t\t\tif(isLogin){\r\n"
-            "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
-            "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
-            "\t\t\t\t\t\t\t}else{\r\n"
-            "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
-            "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
-            "\t\t\t\t\t\t\t}\r\n"
-            "\t\t\t\t\t\t}",
+            new_beforeshow,
         )
     upload_block = (
         "\t_smParseRpc: function(text)\r\n"
@@ -7375,11 +7412,35 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         "\t\t\tvar err = (response && response.msg) ? String(response.msg) : (raw || 'upload failed');\r\n"
         "\t\t\ttry{Ext.app.alert(Ext.app.makeTxt('error'), err);}catch(e){Ext.app.alert('Error', err);}\r\n"
         "\t\t}\r\n"
+        "\t},\r\n\r\n\t_smWireUploadButton: function(btn, toolbar)\r\n"
+        "\t{\r\n"
+        "\t\tif(!btn){return;}\r\n"
+        "\t\tvar el = (btn.el && btn.el.dom) || (btn.getEl && btn.getEl() && btn.getEl().dom) || document.getElementById('uploadbtn');\r\n"
+        "\t\tif(!el){return;}\r\n"
+        "\t\ttry{el.style.position = 'relative';}catch(e){}\r\n"
+        "\t\tvar input = el.querySelector('#sm-st-upload-input-btn');\r\n"
+        "\t\tif(!input){\r\n"
+        "\t\t\tinput = document.createElement('input');\r\n"
+        "\t\t\tinput.type = 'file';\r\n"
+        "\t\t\tinput.id = 'sm-st-upload-input-btn';\r\n"
+        "\t\t\tinput.multiple = true;\r\n"
+        "\t\t\tinput.setAttribute('accept', '*/*');\r\n"
+        "\t\t\tinput.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;opacity:0.01;z-index:20;border:0;margin:0;padding:0;';\r\n"
+        "\t\t\tel.appendChild(input);\r\n"
+        "\t\t\tinput.addEventListener('click', function(ev){try{ev.stopPropagation();}catch(e){}});\r\n"
+        "\t\t\tinput.addEventListener('change', function(){\r\n"
+        "\t\t\t\ttry{if(toolbar && toolbar.actions){toolbar.actions.hide();}}catch(e){}\r\n"
+        "\t\t\t\tExt.app.Util._smDoUpload(input);\r\n"
+        "\t\t\t});\r\n"
+        "\t\t}\r\n"
+        "\t\tinput._smActionsEl = toolbar;\r\n"
+        "\t\ttry{input.value = '';}catch(e){}\r\n"
         "\t},\r\n\r\n\t_smDoUpload: function(input)\r\n"
         "\t{\r\n"
         "\t\tvar files = input && input.files;\r\n"
         "\t\tif(!files || !files.length){return;}\r\n"
         "\t\ttry{if(input._smActionsEl && input._smActionsEl.actions){input._smActionsEl.actions.hide();}}catch(e){}\r\n"
+        "\t\ttry{if(window.Ext && Ext.Msg && Ext.Msg.hide){Ext.Msg.hide();}}catch(e){}\r\n"
         "\t\tExt.app.Util.setMask();\r\n"
         "\t\tvar dir = isDir || '/';\r\n"
         f"\t\tvar url = ('{NAS_FILES_PREFIX}/rpc/upload' + dir).split('/').map(encodeURIComponent).join('/');\r\n"
@@ -7403,6 +7464,12 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         "\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('select tree to upload'));\r\n"
         "\t\t\treturn;\r\n"
         "\t\t}\r\n"
+        "\t\ttry{\r\n"
+        "\t\t\tvar btn = (el && el.actions && el.actions.getComponent) ? el.actions.getComponent('uploadbtn') : null;\r\n"
+        "\t\t\tif(btn && Ext.app.Util._smWireUploadButton){Ext.app.Util._smWireUploadButton(btn, el);}\r\n"
+        "\t\t\tvar input = document.getElementById('sm-st-upload-input-btn');\r\n"
+        "\t\t\tif(input){try{input.value='';}catch(e){} try{input.click();return;}catch(e){}}\r\n"
+        "\t\t}catch(e){}\r\n"
         "\t\ttry{\r\n"
         "\t\t\tvar topWin = window.top || window.parent;\r\n"
         "\t\t\tif(topWin && topWin !== window && typeof topWin.smNasUploadPick === 'function'){\r\n"
@@ -7439,9 +7506,10 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         or "sm-st-upload-input" in text
         or "smNasUploadPick" in text
         or "_smUploadFinish" in text
+        or "_smWireUploadButton" in text
     ):
         text = re.sub(
-            r"\t(?:_smParseRpc: function\(text\)\r\n[\s\S]*?)?(?:_smUploadFinish: function\(response, raw, forceOk\)\r\n[\s\S]*?)?(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
+            r"\t(?:_smParseRpc: function\(text\)\r\n[\s\S]*?)?(?:_smUploadFinish: function\(response, raw, forceOk\)\r\n[\s\S]*?)?(?:_smWireUploadButton: function\(btn, toolbar\)\r\n[\s\S]*?)?(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
             upload_block,
             text,
             count=1,
