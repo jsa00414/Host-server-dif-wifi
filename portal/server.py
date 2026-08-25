@@ -7087,6 +7087,114 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "response.status == 204 && response.statusText == \"No Content\"",
         "response.status == 204 && (!response.statusText || response.statusText == \"No Content\")",
     )
+    text = _nas_files_patch_st_mobile_upload(text)
+    return text
+
+
+def _nas_files_patch_st_mobile_upload(text: str) -> str:
+    """Add Upload to the Sencha Touch (/st/) mobile action sheet."""
+    if "Ext.app.Base.Toolbar" not in text and "Ext.app.Util" not in text:
+        return text
+    if "id: 'uploadbtn'" not in text and "id: 'mkdirbtn'" in text:
+        text = text.replace(
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('makedir'),\r\n"
+            "\t\t\t\t\t\tid: 'mkdirbtn',\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('slideshow'),",
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('makedir'),\r\n"
+            "\t\t\t\t\t\tid: 'mkdirbtn',\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('menu_file_upload'),\r\n"
+            "\t\t\t\t\t\tid: 'uploadbtn',\r\n"
+            "\t\t\t\t\t\thandler: function()\r\n"
+            "\t\t\t\t\t\t{\r\n"
+            "\t\t\t\t\t\t\tthis.actions.hide();\r\n"
+            "\t\t\t\t\t\t\tExt.app.Util.upload(this);\r\n"
+            "\t\t\t\t\t\t},\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('slideshow'),",
+        )
+        text = text.replace(
+            "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+            "\t\t\t\t\t\t{\r\n"
+            "\t\t\t\t\t\t\tif(isLogin){\r\n"
+            "\t\t\t\t\t\t\t\tcmp.getComponent(0).show();\r\n"
+            "\t\t\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\t\t\tcmp.getComponent(0).hide();\r\n"
+            "\t\t\t\t\t\t\t}\r\n"
+            "\t\t\t\t\t\t}",
+            "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+            "\t\t\t\t\t\t{\r\n"
+            "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
+            "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
+            "\t\t\t\t\t\t\tif(isLogin){\r\n"
+            "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
+            "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
+            "\t\t\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
+            "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
+            "\t\t\t\t\t\t\t}\r\n"
+            "\t\t\t\t\t\t}",
+        )
+    if "upload: function" not in text and "deleteFile: function" in text:
+        text = text.replace(
+            "\t},\r\n\t\r\n\tdeleteFile: function(datas, el)",
+            "\t},\r\n\r\n\tupload: function(el)\r\n"
+            "\t{\r\n"
+            "\t\tif(!isLogin){\r\n"
+            "\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('select tree to upload'));\r\n"
+            "\t\t\treturn;\r\n"
+            "\t\t}\r\n"
+            "\t\tvar input = document.createElement('input');\r\n"
+            "\t\tinput.type = 'file';\r\n"
+            "\t\tinput.multiple = true;\r\n"
+            "\t\tinput.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;width:1px;height:1px;';\r\n"
+            "\t\tdocument.body.appendChild(input);\r\n"
+            "\t\tvar cleanup = function(){try{document.body.removeChild(input);}catch(e){}};\r\n"
+            "\t\tinput.onchange = function(){\r\n"
+            "\t\t\tvar files = input.files;\r\n"
+            "\t\t\tif(!files || !files.length){cleanup();return;}\r\n"
+            "\t\t\tExt.app.Util.setMask();\r\n"
+            "\t\t\tvar dir = isDir || '/';\r\n"
+            "\t\t\tvar url = ('/rpc/upload' + dir).split('/').map(encodeURIComponent).join('/');\r\n"
+            "\t\t\tvar fd = new FormData();\r\n"
+            "\t\t\tfor(var i = 0; i < files.length; i++){fd.append('filename[]', files[i]);}\r\n"
+            "\t\t\tvar xhr = new XMLHttpRequest();\r\n"
+            "\t\t\txhr.open('POST', url, true);\r\n"
+            "\t\t\txhr.onload = function(){\r\n"
+            "\t\t\t\tExt.app.Util.hideMask();\r\n"
+            "\t\t\t\tcleanup();\r\n"
+            "\t\t\t\ttry{\r\n"
+            "\t\t\t\t\tvar response = Ext.decode(xhr.responseText);\r\n"
+            "\t\t\t\t\tif(response && response.success){\r\n"
+            "\t\t\t\t\t\tif(Ext.app.isPanel && Ext.app.isPanel.getComponent('data_view')){\r\n"
+            "\t\t\t\t\t\t\tExt.app.isPanel.getComponent('data_view').setData();\r\n"
+            "\t\t\t\t\t\t}\r\n"
+            "\t\t\t\t\t\tvar names = '';\r\n"
+            "\t\t\t\t\t\tif(response.result){for(var k in response.result){if(response.result.hasOwnProperty(k)){names += k + '<br/>';}}}\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('confirm'), Ext.app.makeTxt('upload complete', names || ''));\r\n"
+            "\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'), (response && response.msg) ? Ext.app.makeTxt(response.msg) : xhr.responseText);\r\n"
+            "\t\t\t\t\t}\r\n"
+            "\t\t\t\t}catch(e){\r\n"
+            "\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'), xhr.responseText || 'upload failed');\r\n"
+            "\t\t\t\t}\r\n"
+            "\t\t\t};\r\n"
+            "\t\t\txhr.onerror = function(){\r\n"
+            "\t\t\t\tExt.app.Util.hideMask();\r\n"
+            "\t\t\t\tcleanup();\r\n"
+            "\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('terminate a network connection'));\r\n"
+            "\t\t\t};\r\n"
+            "\t\t\txhr.send(fd);\r\n"
+            "\t\t};\r\n"
+            "\t\tsetTimeout(function(){try{input.click();}catch(e){cleanup();}}, 0);\r\n"
+            "\t},\r\n\r\n\tdeleteFile: function(datas, el)",
+        )
+    if '"menu_file_upload"' not in text and '"makedir"' in text:
+        text = text.replace(
+            '"makedir" : "Create a new folder",',
+            '"makedir" : "Create a new folder",\r\n\t\t\t"menu_file_upload" : "Upload",',
+        )
     return text
 
 
