@@ -1530,54 +1530,61 @@ class _FtpPool:
         return {"ok": True, "path": b, "from": a}
 
     def upload_bytes(self, path: str, data: bytes) -> dict:
+        """Dedicated connection so long uploads do not block list pool."""
         target = ftp_norm_path(path)
         if target == "/" or target.endswith("/"):
             raise ValueError("upload path must be a file path")
         parent = ftp_parent(target)
-        with self._lock:
-            ftp = self._ensure()
+        ftp = ftp_connect()
+        try:
+            if parent != "/":
+                try:
+                    ftp.cwd(parent)
+                except Exception:
+                    acc = ""
+                    for part in parent.strip("/").split("/"):
+                        acc += "/" + part
+                        try:
+                            ftp.mkd(acc)
+                        except Exception:
+                            pass
+                    ftp.cwd(parent)
+            bio = io.BytesIO(data)
+            ftp.storbinary(f"STOR {target}", bio)
+        finally:
             try:
-                if parent != "/":
-                    try:
-                        ftp.cwd(parent)
-                    except Exception:
-                        acc = ""
-                        for part in parent.strip("/").split("/"):
-                            acc += "/" + part
-                            try:
-                                ftp.mkd(acc)
-                            except Exception:
-                                pass
-                        ftp.cwd(parent)
-                bio = io.BytesIO(data)
-                ftp.storbinary(f"STOR {target}", bio)
+                ftp.quit()
             except Exception:
-                self._drop()
-                raise
-            self._last_used = time.time()
-            self.invalidate(target)
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+        self.invalidate(target)
         return {"ok": True, "path": target, "size": len(data)}
 
     def download_to(self, path: str, write) -> tuple[str, str, int | None]:
-        """Stream RETR to write(callback). Returns (name, mime, size|None)."""
+        """Dedicated connection so media open does not stall browsing."""
         target = ftp_norm_path(path)
         if target == "/":
             raise ValueError("not a file")
         name = target.rsplit("/", 1)[-1] or "download"
         ctype = ftp_guess_mime(name)
-        with self._lock:
-            ftp = self._ensure()
-            size = None
+        ftp = ftp_connect()
+        size = None
+        try:
             try:
-                try:
-                    size = ftp.size(target)
-                except Exception:
-                    size = None
-                ftp.retrbinary(f"RETR {target}", write)
+                size = ftp.size(target)
             except Exception:
-                self._drop()
-                raise
-            self._last_used = time.time()
+                size = None
+            ftp.retrbinary(f"RETR {target}", write)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
         return name, ctype, size
 
 
@@ -7245,48 +7252,42 @@ class Handler(BaseHTTPRequestHandler):
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or [""])[0]
                 inline = (qs.get("inline") or ["0"])[0] in ("1", "true", "yes")
-                # Probe metadata then stream under pool lock via download_to
-                # We need headers before body — use a small wrapper.
-                name_holder: dict = {}
-
-                def _prepare_and_stream():
-                    target = ftp_norm_path(path_q)
-                    if target == "/":
-                        raise ValueError("not a file")
-                    name = target.rsplit("/", 1)[-1] or "download"
-                    ctype = ftp_guess_mime(name)
-                    if inline and ctype.startswith("text/") and "charset=" not in ctype:
-                        ctype = ctype + "; charset=utf-8"
-                    name_holder["name"] = name
-                    name_holder["ctype"] = ctype
-                    # SIZE under same connection as RETR
-                    with _FTP._lock:
-                        ftp = _FTP._ensure()
+                target = ftp_norm_path(path_q)
+                if target == "/":
+                    raise ValueError("not a file")
+                name = target.rsplit("/", 1)[-1] or "download"
+                ctype = ftp_guess_mime(name)
+                if inline and ctype.startswith("text/") and "charset=" not in ctype:
+                    ctype = ctype + "; charset=utf-8"
+                # Dedicated FTP session so long media streams do not block list pool.
+                ftp = ftp_connect()
+                try:
+                    size = None
+                    try:
+                        size = ftp.size(target)
+                    except Exception:
                         size = None
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    disp = "inline" if inline else "attachment"
+                    self.send_header(
+                        "Content-Disposition",
+                        f"{disp}; filename*=UTF-8''{quote(name)}",
+                    )
+                    if size is not None:
+                        self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    ftp.retrbinary(f"RETR {target}", self.wfile.write)
+                finally:
+                    try:
+                        ftp.quit()
+                    except Exception:
                         try:
-                            try:
-                                size = ftp.size(target)
-                            except Exception:
-                                size = None
-                            self.send_response(200)
-                            self.send_header("Content-Type", ctype)
-                            disp = "inline" if inline else "attachment"
-                            self.send_header(
-                                "Content-Disposition",
-                                f"{disp}; filename*=UTF-8''{quote(name)}",
-                            )
-                            if size is not None:
-                                self.send_header("Content-Length", str(size))
-                            self.send_header("Cache-Control", "no-store")
-                            self.send_header("X-Content-Type-Options", "nosniff")
-                            self.end_headers()
-                            ftp.retrbinary(f"RETR {target}", self.wfile.write)
-                            _FTP._last_used = time.time()
+                            ftp.close()
                         except Exception:
-                            _FTP._drop()
-                            raise
-
-                _prepare_and_stream()
+                            pass
             except Exception as exc:
                 try:
                     self._json(500, {"ok": False, "error": str(exc)})
