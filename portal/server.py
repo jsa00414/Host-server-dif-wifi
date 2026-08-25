@@ -421,30 +421,31 @@ body#buffalo .container.portal {
 body#buffalo div#main div#top div#menu_box {
   display: grid !important;
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  grid-auto-rows: minmax(140px, auto) !important;
-  gap: 12px !important;
+  grid-auto-rows: minmax(200px, auto) !important;
+  gap: 14px !important;
   align-content: start !important;
   width: calc(100% - 28px) !important;
   max-width: none !important;
-  height: calc(100vh - 150px) !important;
+  height: calc(100vh - 120px) !important;
   min-height: 360px !important;
   max-height: none !important;
   margin: 12px 14px !important;
-  padding: 8px !important;
+  padding: 4px !important;
   overflow: auto !important;
   box-sizing: border-box !important;
   background: transparent !important;
   border: 0 !important;
+  box-shadow: none !important;
 }
-body#buffalo #menu_box > .item-box,
-body#buffalo #menu_box > div {
-  float: none !important;
-  width: auto !important;
-  max-width: none !important;
-  margin: 0 !important;
-  box-sizing: border-box !important;
+body#buffalo #main .container_sd,
+body#buffalo #main.kantan,
+body#buffalo #main,
+body#buffalo #top {
+  background: var(--sm-bg0) !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
-/* Hide Buffalo layout spacers that force Advanced to the bottom-left */
+/* Hide Buffalo layout spacers */
 body#buffalo #menu_box > .item-box.fixed:not(#advanced) {
   display: none !important;
 }
@@ -453,27 +454,140 @@ body#buffalo #menu_box > #advanced {
   grid-column: 3 !important;
   display: block !important;
 }
-body#buffalo #main .container_sd {
-  width: 100% !important;
+/* Unified dark service tiles (kill white PNG chrome + double box) */
+body#buffalo #menu_box > .item-box {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  float: none !important;
+  width: auto !important;
   max-width: none !important;
   height: auto !important;
-  min-height: calc(100vh - 140px) !important;
-  background: transparent !important;
-}
-/* Service tiles → dark cards */
-body#buffalo #menu_box > *,
-body#buffalo #menu_box div[id*="icon"],
-body#buffalo #menu_box .preload,
-body#buffalo [class*="icon_"],
-body#buffalo .kantan {
+  min-height: 200px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
   background: var(--sm-bg2) !important;
+  background-image: none !important;
   border: 1px solid var(--sm-line) !important;
-  border-radius: 12px !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
   color: var(--sm-text) !important;
+}
+body#buffalo #menu_box > .item-box:hover {
+  background: var(--sm-bg3) !important;
+  border-color: rgba(61, 222, 160, 0.35) !important;
+}
+body#buffalo #menu_box > .item-box a.panel,
+body#buffalo #menu_box > .item-box a.panel-advanced,
+body#buffalo #menu_box > .item-box a.panel:hover,
+body#buffalo #menu_box > .item-box a.panel:active,
+body#buffalo #menu_box > .item-box a.panel-advanced:hover,
+body#buffalo #menu_box > .item-box a.panel-advanced:active {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 200px !important;
+  margin: 0 !important;
+  padding: 18px 18px 52px !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+  color: var(--sm-text) !important;
+}
+body#buffalo #menu_box > .item-box a h2.title,
+body#buffalo #menu_box > .item-box a.panel-advanced h2.title {
+  color: var(--sm-text) !important;
+  font-family: "Sora", "Segoe UI", sans-serif !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  line-height: 1.3 !important;
+  margin: 10px 0 6px !important;
+  padding: 0 !important;
+}
+body#buffalo #menu_box > .item-box a p.description,
+body#buffalo #menu_box > .item-box a.panel-advanced p.description {
+  color: var(--sm-muted) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+body#buffalo #menu_box > .item-box [id^="wizard-"] {
+  display: inline-block !important;
+  margin: 4px 0 0 !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  filter: brightness(1.05) !important;
+}
+body#buffalo #menu_box > .item-box [id^="function-logo-"] {
+  display: none !important;
+}
+body#buffalo #menu_box > .item-box div.toggle_jscls {
+  position: absolute !important;
+  top: 14px !important;
+  right: 14px !important;
+  left: auto !important;
+  margin: 0 !important;
+  z-index: 3 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+body#buffalo #menu_box > .item-box .setting-btn {
+  position: absolute !important;
+  right: 14px !important;
+  bottom: 14px !important;
+  width: 28px !important;
+  height: 28px !important;
+  margin: 0 !important;
+  z-index: 3 !important;
+  background: var(--sm-bg3) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+}
+body#buffalo #menu_box > .item-box .setting-btn:hover {
+  border-color: var(--sm-accent) !important;
+}
+body#buffalo #menu_box > .item-box .setting-btn span.setting-btn-icon {
+  display: block !important;
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0 !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  filter: brightness(1.25) !important;
 }
 body#buffalo #menu_box img {
   filter: none !important;
   opacity: 0.95 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+body#buffalo #main #top div.subsequent {
+  margin-top: 0 !important;
+  border: 0 !important;
 }
 /* ExtJS chrome */
 body#buffalo .x-body,
