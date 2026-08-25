@@ -5037,6 +5037,9 @@ NAS_FILES_SNIPPET = (
     "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
     "return u;}"
     "function preferInApp(){"
+    # Always in-app when embedded in the portal iframe — mobile Safari blocks
+    # target=_blank / window.open from frames, so new-tab open is a no-op on phones.
+    "try{if(window.parent!==window||window.top!==window)return true;}catch(e){return true;}"
     "try{"
     "if(window.matchMedia&&(window.matchMedia('(max-width:900px)').matches||window.matchMedia('(pointer:coarse)').matches))return true;"
     "if(/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||''))return true;"
@@ -5139,7 +5142,8 @@ NAS_FILES_SNIPPET = (
     "return null;}"
     "function openFixed(u,n){"
     "u=fix(String(u||''));"
-    "if((u.indexOf(P+'/rpc/cat')===0||u.indexOf(P+'/rpc/download')===0)&&preferInApp())"
+    # Snippet only runs via the portal proxy — always view/download in-frame.
+    "if(u.indexOf(P+'/rpc/cat')===0||u.indexOf(P+'/rpc/download')===0)"
     "return openInApp(u);"
     "var a=document.createElement('a');"
     "a.href=u;"
@@ -5150,7 +5154,6 @@ NAS_FILES_SNIPPET = (
     "a.remove();"
     "return null;}"
     "try{document.addEventListener('click',function(ev){"
-    "if(!preferInApp())return;"
     "var t=ev.target;"
     "while(t&&t.tagName!=='A')t=t.parentElement;"
     "if(!t)return;"
