@@ -785,7 +785,7 @@
         border-radius: 0 !important;
         transform: none !important;
         zoom: 1 !important;
-        touch-action: pan-y;
+        touch-action: manipulation;
         overscroll-behavior: none;
         overscroll-behavior-y: none;
         display: block !important;
@@ -2713,16 +2713,6 @@
             visualViewport.addEventListener("resize", syncAppHeight, { passive: true });
             visualViewport.addEventListener("scroll", syncAppHeight, { passive: true });
           }
-          // Block Chrome/Safari pull-to-refresh while an app iframe fills the screen.
-          document.addEventListener(
-            "touchmove",
-            (ev) => {
-              if (!document.body.classList.contains("embed-mode")) return;
-              if (!ev.touches || ev.touches.length !== 1) return;
-              try { ev.preventDefault(); } catch (e) {}
-            },
-            { capture: true, passive: false }
-          );
         } catch (e) {}
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
