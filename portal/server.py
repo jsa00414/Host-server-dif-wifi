@@ -46,19 +46,21 @@ BUFFALO_PREFIX = "/buffalo-frame"
 BUFFALO_FIT_CSS = """
 html, body, body#buffalo {
   width: 100% !important;
-  height: 100% !important;
   min-height: 100% !important;
   margin: 0 !important;
   padding: 0 !important;
-  overflow: hidden !important;
-  background: #d6d6d6 !important;
+  background: #d0d0d0 !important;
 }
 body#buffalo .container,
 body#buffalo #header,
 body#buffalo #nav,
 body#buffalo #nav .container,
 body#buffalo #footer,
-* body#buffalo #footer {
+* body#buffalo #footer,
+body#buffalo #main,
+body#buffalo #top,
+body#buffalo .container.portal,
+body#buffalo .container.footer {
   width: 100% !important;
   max-width: none !important;
   margin-left: 0 !important;
@@ -69,21 +71,30 @@ body#buffalo #footer .copyright {
   width: calc(100% - 40px) !important;
   max-width: none !important;
 }
-body#buffalo #main,
-body#buffalo #top,
-body#buffalo .container.portal,
-body#buffalo .container.footer {
-  width: 100% !important;
+body#buffalo #header {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  padding: 0 12px !important;
+}
+body#buffalo #header #header-search {
+  width: auto !important;
+  flex: 1 1 auto !important;
   max-width: none !important;
-  box-sizing: border-box !important;
+  float: none !important;
+}
+body#buffalo #header #header-logo,
+body#buffalo #header #header-button {
+  float: none !important;
 }
 body#buffalo div#main div#top div#menu_box {
   width: calc(100% - 24px) !important;
   max-width: none !important;
   height: calc(100vh - 150px) !important;
+  min-height: 420px !important;
   max-height: none !important;
-  margin-left: 12px !important;
-  margin-right: 12px !important;
+  margin: 0 12px !important;
   overflow: auto !important;
   box-sizing: border-box !important;
 }
@@ -93,9 +104,7 @@ body#buffalo #main .container_sd {
   height: auto !important;
   min-height: calc(100vh - 140px) !important;
 }
-body#buffalo #header #header-search {
-  width: auto !important;
-  flex: 1 !important;
+body#buffalo #nav .name {
   max-width: none !important;
 }
 """.strip()
@@ -104,6 +113,15 @@ BUFFALO_FIT_SNIPPET = (
     "<style id=\"sm-buffalo-fit\">"
     + BUFFALO_FIT_CSS.replace("\n", " ")
     + "</style>"
+    + "<script id=\"sm-buffalo-fit-js\">(function(){function fit(){var box=document.getElementById(\"menu_box\");"
+    "if(!box)return;var top=box.getBoundingClientRect().top;"
+    "box.style.setProperty(\"width\",\"calc(100% - 24px)\",\"important\");"
+    "box.style.setProperty(\"height\",Math.max(280,window.innerHeight-top-36)+\"px\",\"important\");"
+    "box.style.setProperty(\"max-width\",\"none\",\"important\");}"
+    "window.addEventListener(\"resize\",fit);"
+    "document.addEventListener(\"DOMContentLoaded\",fit);"
+    "setTimeout(fit,300);setTimeout(fit,1200);setInterval(fit,2000);"
+    "})();</script>"
 )
 PANEL_TAGLINE = os.environ.get("PANEL_TAGLINE", "")
 SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))

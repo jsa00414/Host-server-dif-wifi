@@ -874,7 +874,7 @@
       </section>
 
       <section class="view embed-view" id="view-buffalo">
-        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/" allow="clipboard-read; clipboard-write"></iframe>
+        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view" id="view-tailscale">
@@ -1240,7 +1240,7 @@
     function loadBuffaloFrame() {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
-      const src = frame.dataset.src || "/buffalo-frame/";
+      const src = frame.dataset.src || "/buffalo-frame/root.html";
       if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
         frame.src = src;
       }
