@@ -1120,20 +1120,34 @@
       }
     }
 
-    function loadBuffaloFrame() {
+    async function loadBuffaloFrame(force) {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
-      const src = frame.dataset.src || "/buffalo-frame/root.html";
-      if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
-        frame.src = src;
+      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      const fallback = frame.dataset.src || "/buffalo-frame/root.html";
+      try {
+        const data = await api("/api/buffalo-sso");
+        frame.src = (data.admin && data.admin.url) || fallback;
+        frame.dataset.authed = "1";
+      } catch (e) {
+        frame.src = fallback;
+        frame.dataset.authed = "0";
+        showLog(String(e.message || e), true);
       }
     }
-    function loadNasFilesFrame() {
+    async function loadNasFilesFrame(force) {
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
-      const src = frame.dataset.src || "/nas-files/ui/";
-      if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
-        frame.src = src;
+      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      const fallback = frame.dataset.src || "/nas-files/ui/";
+      try {
+        const data = await api("/api/buffalo-sso");
+        frame.src = (data.files && data.files.url) || fallback;
+        frame.dataset.authed = "1";
+      } catch (e) {
+        frame.src = fallback;
+        frame.dataset.authed = "0";
+        showLog(String(e.message || e), true);
       }
     }
 

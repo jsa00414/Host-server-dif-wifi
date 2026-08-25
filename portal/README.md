@@ -20,6 +20,8 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 - Sidebar / Overview **Files** tile embeds Buffalo WebAccess
 - Same-origin proxy: `/nas-files/*` → `http://192.168.8.159:9000/*`
 - Default iframe entry: `/nas-files/ui/`
+- SSO: `GET /api/buffalo-sso` logs into admin + WebAccess and sets `sid` / `webaxs_session` cookies
+  (`BUFFALO_USER`, `BUFFALO_PASS_B64` in `port-forward-ui.env`)
 
 Deploy to the VPS (panel reads HTML from `static/index.html`):
 

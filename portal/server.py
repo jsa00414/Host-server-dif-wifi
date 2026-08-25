@@ -1162,6 +1162,21 @@ PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
 PIHOLE_SSO_URL = os.environ.get(
     "PIHOLE_SSO_URL", "https://pihole.vpstruelord.com/sm-autologin"
 ).strip()
+BUFFALO_SSO_USER = os.environ.get("BUFFALO_USER", "admin").strip() or "admin"
+
+
+def _load_buffalo_pass() -> str:
+    raw = os.environ.get("BUFFALO_PASS", "")
+    b64 = os.environ.get("BUFFALO_PASS_B64", "")
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            return raw
+    return raw
+
+
+BUFFALO_SSO_PASS = _load_buffalo_pass()
 
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
@@ -3825,6 +3840,108 @@ def pihole_sso_url() -> dict:
     base = PIHOLE_SSO_URL.split("?")[0].rstrip("/")
     return {"ok": True, "url": f"{base}?t={token}"}
 
+
+def _buffalo_http_json(url: str, payload: dict | None = None, *, form: dict | None = None) -> tuple[int, dict | str, list[str]]:
+    """POST JSON or form to Buffalo; return status, body, Set-Cookie values."""
+    headers = {"User-Agent": "ServerManager-BuffaloSSO/1.0", "Accept-Encoding": "identity"}
+    data = None
+    if form is not None:
+        from urllib.parse import urlencode
+
+        data = urlencode(form).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+            cookies = []
+            if hasattr(resp.headers, "get_all"):
+                cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                cookies = [resp.headers.get("Set-Cookie")]
+            text = raw.decode("utf-8", errors="replace")
+            try:
+                return status, json.loads(text), cookies
+            except Exception:
+                return status, text, cookies
+    except HTTPError as exc:
+        raw = exc.read() if hasattr(exc, "read") else b""
+        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+        try:
+            body: dict | str = json.loads(text)
+        except Exception:
+            body = text
+        return int(getattr(exc, "code", 502) or 502), body, []
+    except (URLError, TimeoutError, OSError) as exc:
+        return 502, str(exc), []
+
+
+def buffalo_sso_login() -> dict:
+    """Log into Buffalo admin (:80) and WebAccess (:9000); return session tokens."""
+    if not BUFFALO_SSO_PASS:
+        raise RuntimeError("BUFFALO_PASS / BUFFALO_PASS_B64 not configured")
+
+    admin_url = f"{BUFFALO_UPSTREAM}/nasapi/"
+    admin_payload = {
+        "jsonrpc": "2.0",
+        "method": "auth.login",
+        "params": {"username": BUFFALO_SSO_USER, "password": BUFFALO_SSO_PASS},
+        "id": str(int(time.time() * 1000)),
+    }
+    a_status, a_body, _a_cookies = _buffalo_http_json(admin_url, admin_payload)
+    admin_sid = ""
+    if isinstance(a_body, dict):
+        result = a_body.get("result") or {}
+        if isinstance(result, dict):
+            admin_sid = str(result.get("sid") or "").strip()
+        if not admin_sid and a_body.get("error"):
+            raise RuntimeError(f"Buffalo admin login failed: {a_body.get('error')}")
+    if a_status >= 400 or not admin_sid:
+        raise RuntimeError(f"Buffalo admin login failed ({a_status}): {a_body}")
+
+    files_url = f"{NAS_FILES_UPSTREAM}/rpc/login"
+    f_status, f_body, _f_cookies = _buffalo_http_json(
+        files_url,
+        form={"user": BUFFALO_SSO_USER, "password": BUFFALO_SSO_PASS},
+    )
+    webaxs = ""
+    if isinstance(f_body, dict):
+        webaxs = str(f_body.get("webaxs_session") or "").strip()
+    if f_status >= 400 or not webaxs:
+        raise RuntimeError(f"Buffalo WebAccess login failed ({f_status}): {f_body}")
+
+    return {
+        "ok": True,
+        "user": BUFFALO_SSO_USER,
+        "admin": {
+            "sid": admin_sid,
+            "url": f"{BUFFALO_PREFIX}/root.html",
+        },
+        "files": {
+            "session": webaxs,
+            "url": f"{NAS_FILES_PREFIX}/ui/",
+        },
+    }
+
+
+def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
+    """Build Set-Cookie headers scoped to buffalo-frame / nas-files paths."""
+    out: list[str] = []
+    admin = data.get("admin") or {}
+    files = data.get("files") or {}
+    sid = str(admin.get("sid") or "").strip()
+    sess = str(files.get("session") or "").strip()
+    if sid:
+        out.append(f"sid={sid}; Path={BUFFALO_PREFIX}/; SameSite=Lax")
+    if sess:
+        out.append(f"webaxs_session={sess}; Path={NAS_FILES_PREFIX}/; SameSite=Lax")
+    return out
+
+
 def _read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -5054,7 +5171,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
-    def _json(self, code: int, payload: dict, *, set_cookie: str | None = None, clear_cookie: bool = False) -> None:
+    def _json(self, code: int, payload: dict, *, set_cookie: str | None = None, clear_cookie: bool = False, extra_cookies: list[str] | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -5064,6 +5181,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", _cookie_set_header(set_cookie))
         if clear_cookie:
             self.send_header("Set-Cookie", _cookie_clear_header())
+        for cookie in extra_cookies or []:
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
 
@@ -5189,6 +5309,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, pihole_sso_url())
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/buffalo-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = buffalo_sso_login()
+                # Don't echo session secrets back to the browser JSON body.
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "admin": {"url": (data.get("admin") or {}).get("url")},
+                    "files": {"url": (data.get("files") or {}).get("url")},
+                }
+                self._json(200, safe, extra_cookies=_buffalo_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/tailscale":
             if not self._require_auth(api=True):
