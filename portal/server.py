@@ -69,7 +69,10 @@ html, body, body#buffalo {
   background: var(--sm-bg0) !important;
   color: var(--sm-text) !important;
   font-family: "Sora", "Segoe UI", system-ui, sans-serif !important;
-  zoom: normal !important;
+  zoom: 1 !important;
+  touch-action: manipulation !important;
+  -webkit-text-size-adjust: 100% !important;
+  text-size-adjust: 100% !important;
 }
 body#buffalo *,
 body#buffalo *::before,
@@ -769,7 +772,7 @@ body#buffalo .x-window {
   border: 1px solid var(--sm-line) !important;
   border-radius: 14px !important;
   overflow: hidden !important;
-  zoom: normal !important;
+  zoom: 1 !important;
 }
 body#buffalo .x-window-header,
 body#buffalo .x-panel-header,
@@ -884,6 +887,7 @@ body#buffalo img[src*="header-search-bg"] {
 
 BUFFALO_FIT_SNIPPET = (
     "<base href=\"/buffalo-frame/\" />"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover\" />"
     "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />"
     "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />"
     "<link href=\"https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap\" rel=\"stylesheet\" />"
@@ -892,6 +896,8 @@ BUFFALO_FIT_SNIPPET = (
     + "</style>"
     "<script id=\"sm-buffalo-fit-js\">(function(){"
     "var P='/buffalo-frame';"
+    "try{document.documentElement.style.setProperty('zoom','1','important');"
+    "document.body&&document.body.style.setProperty('zoom','1','important');}catch(e){}"
     "function ensureHeaderImgs(){"
     "var skin=(document.getElementById('switch_css')&&"
     "(document.getElementById('switch_css').href||'').indexOf('fortera')>=0)?'fortera':'forlink';"
@@ -982,8 +988,8 @@ BUFFALO_FIT_SNIPPET = (
     "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
     "return _f.call(this,i,n);};}"
     "function fit(){"
-    "try{document.documentElement.style.removeProperty('zoom');"
-    "document.body.style.removeProperty('zoom');}catch(e){}"
+    "try{document.documentElement.style.setProperty('zoom','1','important');"
+    "document.body.style.setProperty('zoom','1','important');}catch(e){}"
     "ensureHeaderImgs();"
     "bindHeaderMenus();"
     "bindBackHome();"
@@ -5015,8 +5021,12 @@ def check_credentials(username: str, password: str) -> bool:
 NAS_FILES_SNIPPET = (
     # Do NOT inject <base href> — WebAccess /ui/ uses relative assets that must
     # resolve against /nas-files/ui/, not /nas-files/.
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover\" />"
+    "<style id=\"sm-nas-mobile\">html,body{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%;zoom:1!important}</style>"
     "<script id=\"sm-nas-files-js\">(function(){"
     f"var P='{NAS_FILES_PREFIX}';"
+    "try{document.documentElement.style.setProperty('zoom','1','important');"
+    "document.body&&document.body.style.setProperty('zoom','1','important');}catch(e){}"
     "function fix(u){if(typeof u!=='string')return u;"
     "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0||u.indexOf('javascript:')===0)return u;"
     "if(u.indexOf(P+'/')===0||u===P)return u;"

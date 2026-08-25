@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>ServerManager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -46,10 +48,12 @@
     html, body { margin: 0; }
     html {
       -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
       overflow-x: hidden;
       overflow-y: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
+      touch-action: manipulation;
     }
     html::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
     body {
@@ -63,6 +67,9 @@
       min-height: 100dvh;
       height: auto;
       overflow: visible;
+      touch-action: manipulation;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
 
     .topbar {
@@ -155,7 +162,9 @@
     }
     .embed-frame::-webkit-scrollbar { width: 0; height: 0; display: none; }
     #view-buffalo.active,
-    #view-files.active {
+    #view-files.active,
+    #view-adguard.active,
+    #view-pihole.active {
       position: absolute !important;
       inset: 0 !important;
       min-height: 0 !important;
@@ -164,7 +173,9 @@
       background: #0a0f0d;
     }
     #frameBuffalo,
-    #frameFiles {
+    #frameFiles,
+    #frameAdguard,
+    #framePihole {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
@@ -175,8 +186,11 @@
       border-radius: 0 !important;
       background: #0a0f0d;
       transform: none !important;
-      zoom: normal !important;
+      zoom: 1 !important;
       overflow: hidden !important;
+      touch-action: manipulation;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
     .content:has(.view.embed-view.active) {
       padding: 0;
@@ -197,6 +211,7 @@
       max-height: 100dvh;
       overflow: hidden !important;
       grid-template-rows: var(--top-h) 1fr;
+      touch-action: manipulation;
     }
     body.embed-mode .main {
       min-height: 0;
@@ -709,11 +724,58 @@
       .main { min-height: auto; }
       .content { padding: 12px; }
       .view.embed-view.active {
-        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 48px);
+        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
       }
       .embed-frame {
-        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
-        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
+        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+      }
+      /* Keep apps full-bleed under fixed chrome; no pinch zoom-out. */
+      body.embed-mode {
+        display: block;
+        padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        height: 100dvh;
+        max-height: 100dvh;
+        overflow: hidden !important;
+        touch-action: manipulation;
+      }
+      body.embed-mode .main,
+      body.embed-mode .content {
+        position: relative;
+        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        min-height: 0;
+        overflow: hidden !important;
+      }
+      body.embed-mode .embed-view.active,
+      body.embed-mode #view-buffalo.active,
+      body.embed-mode #view-files.active,
+      body.embed-mode #view-adguard.active,
+      body.embed-mode #view-pihole.active {
+        position: absolute !important;
+        inset: 0 !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+      }
+      body.embed-mode .embed-frame,
+      body.embed-mode #frameBuffalo,
+      body.embed-mode #frameFiles,
+      body.embed-mode #frameAdguard,
+      body.embed-mode #framePihole {
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        border-radius: 0 !important;
+        transform: none !important;
+        zoom: 1 !important;
+        touch-action: manipulation;
+      }
+      /* Sidebar stays reachable so you can switch apps without Overview. */
+      body.embed-mode .sidebar {
+        display: flex;
       }
       input, select { font-size: 16px; min-height: 44px; }
       button { min-height: 40px; }
@@ -1494,11 +1556,30 @@
       loadNasFilesFrame(true);
     });
 
+    function lockMobileViewport() {
+      const content = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+      let meta = document.querySelector('meta[name="viewport"]');
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.setAttribute("name", "viewport");
+        document.head.appendChild(meta);
+      }
+      meta.setAttribute("content", content);
+      try {
+        document.documentElement.style.setProperty("zoom", "1", "important");
+        document.body.style.setProperty("zoom", "1", "important");
+      } catch (e) {}
+    }
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
       const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files";
       document.body.classList.toggle("embed-mode", embed);
+      lockMobileViewport();
+      if (embed) {
+        // Keep scale locked while using embedded apps on phones.
+        try { window.scrollTo(0, 0); } catch (e) {}
+      }
       if (name === "adguard") {
         const f = document.getElementById("frameAdguard");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
@@ -2578,11 +2659,13 @@
 
     (async () => {
       try {
+        lockMobileViewport();
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
         await load();
         const start = initialViewFromPrefs();
         if (start && start !== "overview") showView(start);
+        else lockMobileViewport();
       } catch (e) {
         setStatus(e.message, "err");
       }
