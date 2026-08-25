@@ -162,7 +162,8 @@
       overflow: hidden !important;
       background: #2b2b2b;
       border-radius: 0;
-      position: relative;
+      position: absolute;
+      inset: 0;
     }
     .buffalo-zoom-clip {
       position: absolute;
@@ -172,21 +173,30 @@
       -ms-overflow-style: none;
     }
     .buffalo-zoom-clip::-webkit-scrollbar { display: none; width: 0; height: 0; }
+    #view-buffalo.active {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 0 !important;
+      overflow: hidden !important;
+    }
     #frameBuffalo {
-      position: absolute;
-      top: 0;
-      left: 0;
-      border: 0;
-      border-radius: 0;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      border: 0 !important;
+      border-radius: 0 !important;
       background: #2b2b2b;
-      transform-origin: top left;
-      flex: none;
+      transform-origin: top left !important;
+      flex: none !important;
       min-width: 0 !important;
       min-height: 0 !important;
-      width: auto;
-      height: auto;
+      max-width: none !important;
+      max-height: none !important;
+      width: 1024px;
+      height: 680px;
       overflow: hidden !important;
-      zoom: normal;
+      zoom: normal !important;
       scrollbar-width: none;
       -ms-overflow-style: none;
     }
@@ -226,6 +236,7 @@
       min-height: 0;
       height: 100%;
       overflow: hidden !important;
+      position: relative;
     }
     body.embed-mode .embed-view.active {
       min-height: 0 !important;
@@ -1267,21 +1278,22 @@
       const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
       const frame = document.getElementById("frameBuffalo");
       if (!host || !frame) return;
-      const hw = host.clientWidth || 1;
-      const hh = host.clientHeight || 1;
-      // LinkStation keeps a fixed ~1024px app panel centered on gray chrome.
-      // Lay out at that panel size, then cover-scale so the app fills the portal
-      // edge-to-edge (zoomed in, no gray letterbox, tiles stay on-screen).
+      const hw = host.clientWidth;
+      const hh = host.clientHeight;
+      if (hw < 40 || hh < 40) {
+        requestAnimationFrame(layoutBuffaloZoom);
+        return;
+      }
+      // LinkStation app panel is ~1024x680; cover-scale it to fill the portal pane.
       const designW = 1024;
       const designH = 680;
       const scale = Math.max(hw / designW, hh / designH);
       const ox = (hw - designW * scale) / 2;
       const oy = (hh - designH * scale) / 2;
-      frame.style.zoom = "normal";
-      frame.style.width = `${designW}px`;
-      frame.style.height = `${designH}px`;
-      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
-      frame.style.transformOrigin = "top left";
+      frame.style.setProperty("width", `${designW}px`, "important");
+      frame.style.setProperty("height", `${designH}px`, "important");
+      frame.style.setProperty("transform", `translate(${ox}px, ${oy}px) scale(${scale})`, "important");
+      frame.style.setProperty("transform-origin", "top left", "important");
     }
 
     function loadBuffaloFrame() {
@@ -1322,6 +1334,10 @@
       }
       if (name === "buffalo") {
         loadBuffaloFrame();
+        requestAnimationFrame(() => {
+          layoutBuffaloZoom();
+          requestAnimationFrame(layoutBuffaloZoom);
+        });
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
