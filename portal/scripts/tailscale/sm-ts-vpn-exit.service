@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore Tailscale VPN exit for WireGuard clients
+After=network-online.target docker.service wg-easy.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dns/ts-vpn-exit.sh protect-only
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
