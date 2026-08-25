@@ -338,94 +338,29 @@ body#buffalo #header .search .dropdownbox {
   border-radius: 10px !important;
   color: var(--sm-text) !important;
 }
-/* Second bar (#nav): quiet utility strip */
-body#buffalo #nav {
-  display: block !important;
-  min-height: 40px !important;
-  height: 40px !important;
-  max-height: 40px !important;
-  padding: 0 18px !important;
-  border-top: 0 !important;
-  border-bottom: 0 !important;
-  background: var(--sm-bg2) !important;
-  background-image: none !important;
-  box-sizing: border-box !important;
-}
+/* Hide entire secondary nav (Rearrange Tiles / language strip) */
+body#buffalo #nav,
 body#buffalo #nav > .container,
-body#buffalo #nav > .container.portal {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  align-items: center !important;
-  justify-content: flex-end !important;
-  gap: 8px !important;
-  width: 100% !important;
-  height: 40px !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  float: none !important;
-  background: transparent !important;
-  background-image: none !important;
-  box-sizing: border-box !important;
-}
+body#buffalo #nav > .container.portal,
+body#buffalo #nav ul,
+body#buffalo #nav ul li,
+body#buffalo #nav ul li.layout,
+body#buffalo #nav #change_layout,
 body#buffalo #nav .back-home,
 body#buffalo #nav .sound,
-body#buffalo #nav .name,
-body#buffalo #nav ul,
-body#buffalo #nav ul li {
-  float: none !important;
-  display: flex !important;
-  align-items: center !important;
+body#buffalo #nav .name {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  width: 0 !important;
   margin: 0 !important;
   padding: 0 !important;
-  height: auto !important;
-  background: transparent !important;
-  background-image: none !important;
+  overflow: hidden !important;
   border: 0 !important;
-}
-body#buffalo #nav ul {
-  gap: 4px !important;
-  list-style: none !important;
-  margin-left: 0 !important;
-  margin-right: 0 !important;
-}
-body#buffalo #nav ul li {
-  width: auto !important;
-  min-width: 0 !important;
-  height: 28px !important;
-  border-radius: 6px !important;
-  padding: 0 6px !important;
-}
-body#buffalo #nav ul li:hover {
-  background: var(--sm-bg3) !important;
-}
-body#buffalo #nav ul li a,
-body#buffalo #nav ul li.logout a,
-body#buffalo #nav ul li a#logout {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  width: auto !important;
-  min-width: 28px !important;
-  height: 28px !important;
-  padding: 0 4px !important;
-  margin: 0 !important;
+  visibility: hidden !important;
   background: transparent !important;
   background-image: none !important;
-  border-radius: 6px !important;
-  color: var(--sm-muted) !important;
-  font-size: 12px !important;
-}
-body#buffalo #nav ul li.logout {
-  margin-left: 0 !important;
-}
-body#buffalo #nav ul li.logout a span {
-  display: block !important;
-  width: 16px !important;
-  height: 16px !important;
-  background-size: contain !important;
-  background-repeat: no-repeat !important;
-  background-position: center !important;
-  filter: brightness(1.2) !important;
 }
 body#buffalo #nav ul li.language,
 body#buffalo #nav ul li.language #language-label,
@@ -434,7 +369,13 @@ body#buffalo #nav ul li.language span#language-name-cover,
 body#buffalo #nav ul li.language span#language-name-cover span#language-name,
 body#buffalo #nav ul#language-list,
 body#buffalo #nav ul li.language .dropmenu,
-body#buffalo #nav #language-list {
+body#buffalo #nav #language-list,
+body#buffalo #nav .sep_r,
+body#buffalo #header .sep_r,
+body#buffalo #nav ul li.username,
+body#buffalo #nav ul li.username #mainField,
+body#buffalo #nav ul li.username #mainField .icon,
+body#buffalo #nav ul li.username #mainField .text {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
@@ -444,46 +385,7 @@ body#buffalo #nav #language-list {
   visibility: hidden !important;
   background: transparent !important;
   background-image: none !important;
-}
-body#buffalo #nav ul li.layout a,
-body#buffalo #nav ul li.layout a span,
-body#buffalo #nav ul li#QT_NAS_08_LABEL_TOOLTIP,
-body#buffalo #nav ul li#QT_NAS_08_LABEL_TOOLTIP div#mainField,
-body#buffalo #nav ul li#QT_NAS_08_LABEL_TOOLTIP div.text,
-body#buffalo #nav ul li#QT_NAS_08_LABEL_TOOLTIP div.icon {
-  float: none !important;
-  width: auto !important;
-  height: auto !important;
-  background-image: none !important;
-  color: var(--sm-muted) !important;
-  font-size: 12px !important;
-  padding: 0 !important;
-}
-body#buffalo #nav .name {
-  color: var(--sm-muted) !important;
-  font-size: 12px !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.04em !important;
-  text-transform: uppercase !important;
-  padding-left: 0 !important;
-}
-body#buffalo #nav .sep_r,
-body#buffalo #header .sep_r {
-  display: none !important;
-}
-/* Quiet empty nav chrome before login */
-body#buffalo #nav .sound,
-body#buffalo #nav p.sound,
-body#buffalo #nav ul li.username,
-body#buffalo #nav ul li.username #mainField,
-body#buffalo #nav ul li.username #mainField .icon,
-body#buffalo #nav ul li.username #mainField .text {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
   border: 0 !important;
-  background: transparent !important;
-  background-image: none !important;
 }
 /* Keep footer at bottom; hide empty product glyph (shows as white box) */
 body#buffalo #footer.preload,
@@ -774,17 +676,8 @@ BUFFALO_FIT_SNIPPET = (
     "var langLi=document.querySelector('#nav li.language'); force(langLi,{display:'none'});"
     "var langList=document.getElementById('language-list'); force(langList,{display:'none'});"
     "var nav=document.getElementById('nav');"
-    "var layoutCap=document.getElementById('NAS_40_BUTTON_CAPTION1');"
-    "var layoutText=layoutCap?(layoutCap.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
-    "if(nav&&!layoutText){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0',padding:'0',overflow:'hidden'});}"
-    "else if(nav){force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px',"
-    "margin:'0',padding:'0 18px',overflow:'visible',"
-    "background:'#17221d','background-image':'none',"
-    "'border-bottom':'0'});"
-    "var nbox=nav&&nav.querySelector('.container');"
-    "force(nbox,{display:'flex','flex-wrap':'nowrap','align-items':'center',"
-    "'justify-content':'flex-end',height:'40px',width:'100%',margin:'0',padding:'0',"
-    "float:'none',background:'transparent','background-image':'none'});}"
+    "force(nav,{display:'none',height:'0','min-height':'0','max-height':'0',"
+    "'border-bottom':'0',padding:'0',margin:'0',overflow:'hidden',visibility:'hidden'});"
     "var box=document.getElementById('menu_box');"
     "if(box){var top=box.getBoundingClientRect().top;"
     "box.style.setProperty('width','calc(100% - 28px)','important');"
