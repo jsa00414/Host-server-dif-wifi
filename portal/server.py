@@ -5963,6 +5963,21 @@ a{color:var(--sm-accent)!important}
   ::-webkit-scrollbar{width:0!important;height:0!important}
 }
 
+/* Sencha Touch (/st/) edit mode — keep toolbar visible above portal chrome */
+.edit-menu-box,.x-docked-bottom,.x-toolbar.x-docked-bottom{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  z-index:9999!important;pointer-events:auto!important;
+  padding-bottom:max(8px,env(safe-area-inset-bottom,0px))!important}
+#maindataview .x-dock-item.x-docked-bottom{
+  max-height:42vh!important;overflow:visible!important}
+.edit-button .x-button-label,.slc-numBtn,.slc-numBtn .x-button-label{
+  color:var(--sm-text)!important;font-size:13px!important}
+.x-button-confirm .x-button-label{color:var(--sm-accent)!important;font-weight:700!important}
+.selected-wrap,.selected-wrap-icon{
+  outline:2px solid var(--sm-accent)!important;background:var(--sm-accent-dim)!important}
+.main-wrap.x-app-row-pressed,.main-wrap.selected-wrap,.main-wrap.selected-wrap-icon{
+  touch-action:manipulation!important}
+
 
 /* Custom ServerManager toolbar / menu / navi icons (SVG backgrounds) */
 #icon-panel .x-btn-text.navi-button,
@@ -7131,6 +7146,90 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "response.status == 204 && (!response.statusText || response.statusText == \"No Content\")",
     )
     text = _nas_files_patch_st_mobile_upload(text)
+    text = _nas_files_patch_st_mobile_edit(text)
+    return text
+
+
+def _nas_files_patch_st_mobile_edit(text: str) -> str:
+    """Fix Sencha Touch mobile Edit (selection mode) on phones."""
+    if "Ext.app.Base.DataViewPanel" in text:
+        old_handler = (
+            "\t\tthis.editBtn.handler = function()\r\n"
+            "\t\t{\r\n"
+            "\t\t\tExt.app.Stage.getDockedComponent('maintool').tapFileAction()\r\n"
+            "\t\t}"
+        )
+        new_handler = (
+            "\t\tthis.editBtn.handler = function()\r\n"
+            "\t\t{\r\n"
+            "\t\t\tif(Ext.app.Util && Ext.app.Util._smToggleEditMode){\r\n"
+            "\t\t\t\tExt.app.Util._smToggleEditMode();\r\n"
+            "\t\t\t}else{\r\n"
+            "\t\t\t\ttry{\r\n"
+            "\t\t\t\t\tvar mt=Ext.app.Stage&&Ext.app.Stage.getDockedComponent('maintool');\r\n"
+            "\t\t\t\t\tif(mt&&mt.tapFileAction)mt.tapFileAction.call(mt);\r\n"
+            "\t\t\t\t}catch(e){}\r\n"
+            "\t\t\t}\r\n"
+            "\t\t}"
+        )
+        if old_handler in text:
+            text = text.replace(old_handler, new_handler)
+    toggle_block = (
+        "\t_smToggleEditMode: function()\r\n"
+        "\t{\r\n"
+        "\t\tvar panel = Ext.app.isPanel;\r\n"
+        "\t\tif(!panel && Ext.app.Stage){panel = Ext.app.isPanel = Ext.app.Stage.getActiveItem();}\r\n"
+        "\t\tif(!panel || !panel.editBtn){return;}\r\n"
+        "\t\tvar dv = (panel.getComponent && (panel.getComponent('data_view') || panel.getComponent(0))) || null;\r\n"
+        "\t\tvar dom = dv && dv.el && dv.el.dom;\r\n"
+        "\t\tvar mt = Ext.app.Stage && Ext.app.Stage.getDockedComponent && Ext.app.Stage.getDockedComponent('maintool');\r\n"
+        "\t\tif(typeof isAction !== 'undefined' && isAction === 'edit'){\r\n"
+        "\t\t\tpanel.editBtn.setText(Ext.app.makeTxt('edit btn'));\r\n"
+        "\t\t\tpanel.editBtn.removeCls('x-button-confirm');\r\n"
+        "\t\t\tif(typeof isDir !== 'undefined' && isDir != '/' && panel.backBtn){panel.backBtn.show();}\r\n"
+        "\t\t\tisAction = 'select';\r\n"
+        "\t\t\tif(panel.edittool && panel.edittool.hide){panel.edittool.hide();}\r\n"
+        "\t\t\tif(mt && mt.show){mt.show();}\r\n"
+        "\t\t\tif(dom){\r\n"
+        "\t\t\t\tExt.select('.main-wrap', dom).removeCls(['selected-wrap','selected-wrap-icon']);\r\n"
+        "\t\t\t\tif(typeof isViewMode !== 'undefined' && isViewMode == 'list'){Ext.select('.arrowimg', dom).show();}\r\n"
+        "\t\t\t}\r\n"
+        "\t\t\tpanel.selectedItem = [];\r\n"
+        "\t\t\ttry{panel.doComponentLayout();if(Ext.app.Stage&&Ext.app.Stage.doComponentLayout)Ext.app.Stage.doComponentLayout();}catch(e){}\r\n"
+        "\t\t\treturn;\r\n"
+        "\t\t}\r\n"
+        "\t\tisAction = 'edit';\r\n"
+        "\t\tif(dom && typeof isViewMode !== 'undefined' && isViewMode == 'list'){Ext.select('.arrowimg', dom).hide();}\r\n"
+        "\t\tpanel.editBtn.addCls('x-button-confirm');\r\n"
+        "\t\tpanel.editBtn.setText(Ext.app.makeTxt('fin btn'));\r\n"
+        "\t\tif(panel.backBtn){panel.backBtn.hide();}\r\n"
+        "\t\tif(mt && mt.hide){mt.hide();}\r\n"
+        "\t\tif(panel.edittool){\r\n"
+        "\t\t\tpanel.edittool.noselect(true);\r\n"
+        "\t\t\tpanel.edittool.show();\r\n"
+        "\t\t}else{\r\n"
+        "\t\t\tvar edit = new Ext.app.editMenu();\r\n"
+        "\t\t\tpanel.addDocked(edit);\r\n"
+        "\t\t\tpanel.edittool = edit;\r\n"
+        "\t\t}\r\n"
+        "\t\ttry{panel.doComponentLayout();if(Ext.app.Stage&&Ext.app.Stage.doComponentLayout)Ext.app.Stage.doComponentLayout();}catch(e){}\r\n"
+        "\t},\r\n\r\n"
+    )
+    if "_smToggleEditMode" not in text and (
+        "_smUploadFinish: function" in text or "deleteFile: function" in text
+    ):
+        if "_smUploadFinish: function" in text and "\tupload: function(el)" in text:
+            text = text.replace(
+                "\t},\r\n\r\n\tupload: function(el)",
+                "\t},\r\n\r\n" + toggle_block + "\tupload: function(el)",
+                1,
+            )
+        elif "deleteFile: function" in text:
+            text = text.replace(
+                "\t},\r\n\t\r\n\tdeleteFile: function(datas, el)",
+                "\t},\r\n\r\n" + toggle_block + "\r\n\tdeleteFile: function(datas, el)",
+                1,
+            )
     return text
 
 
