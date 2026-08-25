@@ -455,10 +455,30 @@ body#buffalo #header .hint .dropmenu.hide {
 }
 body#buffalo #header .dropmenu-parent .dropmenu li,
 body#buffalo #header .dropmenu-parent .dropmenu li a {
+  display: block !important;
+  width: auto !important;
+  min-width: 140px !important;
+  height: auto !important;
+  padding: 10px 14px !important;
+  margin: 0 !important;
   background-color: var(--sm-bg2) !important;
   background-image: none !important;
   color: var(--sm-text) !important;
   border-color: var(--sm-line) !important;
+  font-size: 13px !important;
+  line-height: 1.3 !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu li a:hover {
+  background: var(--sm-bg3) !important;
+  color: var(--sm-accent) !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu li a span {
+  display: inline !important;
+  color: inherit !important;
+  width: auto !important;
+  height: auto !important;
 }
 body#buffalo #header .status .dropdownbox,
 body#buffalo #header .search .dropdownbox {
@@ -879,16 +899,24 @@ BUFFALO_FIT_SNIPPET = (
     "ensureHeaderImgs();"
     "document.addEventListener('DOMContentLoaded',ensureHeaderImgs);"
     "setInterval(ensureHeaderImgs,1500);"
+    "function fillHeaderCaptions(){"
+    "if(!(window.Ext&&Ext.words))return;"
+    "['NAS_04_MENU01_CAPTION','NAS_04_MENU02_CAPTION',"
+    "'NAS_02_MENU01_CAPTION','NAS_02_MENU02_CAPTION','NAS_02_MENU03_CAPTION'].forEach(function(id){"
+    "var el=document.getElementById(id); if(!el)return;"
+    "if(!(el.textContent||'').trim()&&Ext.words[id])el.textContent=Ext.words[id];});}"
     "function bindHeaderMenus(){"
+    "fillHeaderCaptions();"
     "function hideAll(){"
     "document.querySelectorAll('#header .dropmenu,#header .dropdownbox').forEach(function(d){"
     "d.classList.add('hide');d.classList.remove('show');"
     "d.style.setProperty('display','none','important');});}"
-    "function showBox(box){if(!box)return;hideAll();"
+    "function showBox(box){if(!box)return;fillHeaderCaptions();hideAll();"
     "box.classList.remove('hide');box.classList.add('show');"
     "box.style.setProperty('display','block','important');"
     "box.style.setProperty('visibility','visible','important');"
-    "box.style.setProperty('z-index','1000','important');}"
+    "box.style.setProperty('z-index','1000','important');"
+    "box.style.setProperty('min-width','160px','important');}"
     "function toggleFor(anchor,sel){"
     "if(!anchor||!anchor.parentNode)return;"
     "var box=anchor.parentNode.querySelector(sel); if(!box)return;"
@@ -907,6 +935,14 @@ BUFFALO_FIT_SNIPPET = (
     "showBox(box);});return;}catch(e){}"
     "}"
     "toggleFor(el,pair[1]);"
+    "},true);});"
+    "fillHeaderCaptions();"
+    "[['reboot','Ext.header.reboot'],['shutdown','Ext.header.shutdown']].forEach(function(pair){"
+    "var el=document.getElementById(pair[0]); if(!el||el.getAttribute('data-sm-bound')==='1')return;"
+    "el.setAttribute('data-sm-bound','1');"
+    "el.addEventListener('click',function(ev){"
+    "ev.preventDefault(); ev.stopPropagation(); hideAll();"
+    "try{if(window.Ext)Ext.create(pair[1]).init();}catch(e){}"
     "},true);});"
     "document.addEventListener('click',function(ev){"
     "if(!ev.target.closest||!ev.target.closest('#header .dropmenu-parent'))hideAll();"
