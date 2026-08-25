@@ -5044,6 +5044,8 @@ NAS_FILES_MOBILE_CSS = """
 html,body{
   height:100%!important;width:100%!important;margin:0!important;padding:0!important;
   overflow:hidden!important;-webkit-text-size-adjust:100%;text-size-adjust:100%;zoom:1!important;
+  overscroll-behavior:none!important;overscroll-behavior-y:none!important;
+  touch-action:manipulation!important;
 }
 body{
   position:relative!important;background:var(--sm-bg0)!important;color:var(--sm-text)!important;
@@ -5052,7 +5054,7 @@ body{
   padding-left:var(--sm-safe-left)!important;padding-right:var(--sm-safe-right)!important;
   box-sizing:border-box!important;
 }
-.x-viewport,.x-border-layout-ct{min-height:100%!important;background:var(--sm-bg0)!important}
+.x-viewport,.x-border-layout-ct{min-height:100%!important;background:var(--sm-bg0)!important;overscroll-behavior:none!important;overscroll-behavior-y:none!important}
 .x-fullscreen,.x-panel.x-fullscreen,#maindataview{
   position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
   width:100%!important;height:100%!important;max-height:100%!important}
@@ -5061,7 +5063,7 @@ body{
 #main-panel .x-panel-body,.icon-panel .x-panel-body,
 #main-panel .x-grid3-scroller,.x-grid3-scroller{
   touch-action:pan-y!important;-ms-touch-action:pan-y!important;
-  -webkit-overflow-scrolling:touch;overflow-y:auto!important;overscroll-behavior:contain!important}
+  -webkit-overflow-scrolling:touch;overflow-y:auto!important;overscroll-behavior:none!important;overscroll-behavior-y:none!important}
 .x-mask.sm-nas-mask-clear,.x-mask-msg.sm-nas-mask-clear{display:none!important;pointer-events:none!important}
 
 /* In-app file viewer (shared desktop/mobile) */
@@ -5202,7 +5204,7 @@ body{
   #main-panel .x-grid3-scroller,.x-grid3-scroller{
     background:var(--sm-bg0)!important;overflow-x:hidden!important;overflow-y:auto!important;
     -webkit-overflow-scrolling:touch!important;touch-action:pan-y!important;
-    overscroll-behavior:contain!important}
+    overscroll-behavior:none!important;overscroll-behavior-y:none!important}
   .icon-panel .thumb-wrap,.icon-panel .icon-small,.icon-panel .icon-medium,
   .icon-panel .icon-large,.icon-panel .x-view,.x-dd-drag-proxy{
     -webkit-user-drag:none!important;user-select:none!important;touch-action:pan-y!important}
@@ -5567,7 +5569,7 @@ NAS_FILES_SNIPPET = (
     "el.style.setProperty('overflow-x','hidden','important');"
     "el.style.setProperty('touch-action','pan-y','important');"
     "el.style.setProperty('-webkit-overflow-scrolling','touch','important');"
-    "el.style.setProperty('overscroll-behavior','contain','important');"
+    "el.style.setProperty('overscroll-behavior','none','important');el.style.setProperty('overscroll-behavior-y','none','important');"
     "}catch(e){}"
     "}"
     "try{"
@@ -5583,27 +5585,52 @@ NAS_FILES_SNIPPET = (
     "}catch(e){}"
     "}"
     "try{window.smPaintScrollPorts=smPaintScrollPorts;}catch(e){}"
-    "var _sx=0,_sy=0,_sc=null,_on=false,_moved=false;"
+    "try{"
+    "document.documentElement.style.setProperty('overscroll-behavior','none','important');"
+    "document.documentElement.style.setProperty('overscroll-behavior-y','none','important');"
+    "if(document.body){"
+    "document.body.style.setProperty('overscroll-behavior','none','important');"
+    "document.body.style.setProperty('overscroll-behavior-y','none','important');"
+    "}"
+    "}catch(e){}"
+    "var _sx=0,_sy=0,_sc=null,_track=false,_moved=false,_vert=false;"
+    "function smBestScroller(){"
+    "var list=smScrollCandidates();var best=null;var bestExtra=-1;"
+    "for(var i=0;i<list.length;i++){"
+    "var el=list[i];var extra=(el.scrollHeight||0)-(el.clientHeight||0);"
+    "if(extra>bestExtra){bestExtra=extra;best=el;}"
+    "}"
+    "return best||document.querySelector('#main-panel .x-panel-body')||document.querySelector('.icon-panel .x-panel-body');"
+    "}"
+    "function smClampScroll(el,top){"
+    "var max=Math.max(0,(el.scrollHeight||0)-(el.clientHeight||0));"
+    "if(top<0)top=0;if(top>max)top=max;el.scrollTop=top;return top;"
+    "}"
     "document.addEventListener('touchstart',function(ev){"
     "if(!smNarrow()||!ev.touches||ev.touches.length!==1)return;"
-    "_sc=smPickScroller(ev.target);_sx=ev.touches[0].clientX;_sy=ev.touches[0].clientY;_on=!!_sc;_moved=false;"
+    "_sc=smPickScroller(ev.target)||smBestScroller();"
+    "_sx=ev.touches[0].clientX;_sy=ev.touches[0].clientY;"
+    "_track=true;_moved=false;_vert=false;"
     "},{capture:true,passive:true});"
     "document.addEventListener('touchmove',function(ev){"
-    "if(!_on||!_sc||!ev.touches||ev.touches.length!==1)return;"
+    "if(!_track||!ev.touches||ev.touches.length!==1)return;"
     "var x=ev.touches[0].clientX,y=ev.touches[0].clientY;"
     "var dx=x-_sx,dy=y-_sy;"
     "if(!_moved){"
     "if(Math.abs(dy)<6&&Math.abs(dx)<6)return;"
-    "if(Math.abs(dy)<=Math.abs(dx)){_on=false;return;}"
-    "_moved=true;smKillExtDrag();"
+    "_moved=true;"
+    "if(Math.abs(dy)<=Math.abs(dx)){_track=false;_vert=false;return;}"
+    "_vert=true;smKillExtDrag();"
+    "if(!_sc)_sc=smPickScroller(ev.target)||smBestScroller();"
     "}"
-    "_sc.scrollTop=_sc.scrollTop-dy;"
+    "if(!_vert)return;"
+    "if(_sc){smClampScroll(_sc,_sc.scrollTop-dy);}"
     "_sx=x;_sy=y;"
     "try{ev.stopPropagation();}catch(e){}"
     "try{ev.preventDefault();}catch(e){}"
     "},{capture:true,passive:false});"
-    "document.addEventListener('touchend',function(){_on=false;_sc=null;},{capture:true,passive:true});"
-    "document.addEventListener('touchcancel',function(){_on=false;_sc=null;},{capture:true,passive:true});"
+    "document.addEventListener('touchend',function(){_track=false;_sc=null;_vert=false;},{capture:true,passive:true});"
+    "document.addEventListener('touchcancel',function(){_track=false;_sc=null;_vert=false;},{capture:true,passive:true});"
     "document.addEventListener('wheel',function(ev){"
     "if(!smNarrow())return;"
     "var s=smPickScroller(ev.target);if(!s)return;"
