@@ -724,32 +724,26 @@
       .main { min-height: auto; }
       .content { padding: 12px; }
       .view.embed-view.active {
-        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
-        min-height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        min-height: calc(var(--app-height, 100dvh) - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
       }
       .embed-frame {
-        min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
-        min-height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
-        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
-        height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        min-height: calc(var(--app-height, 100dvh) - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        height: calc(var(--app-height, 100dvh) - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
       }
-      /* Keep apps full-bleed under fixed chrome; no pinch zoom-out. */
+      /* Keep apps full-bleed under fixed chrome; track iOS Safari live viewport. */
       body.embed-mode {
         display: block;
         padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
         padding-bottom: 0;
-        height: 100dvh;
-        height: 100svh;
-        max-height: 100dvh;
-        max-height: 100svh;
+        height: var(--app-height, 100dvh);
+        max-height: var(--app-height, 100dvh);
         overflow: hidden !important;
         touch-action: manipulation;
       }
       body.embed-mode .main,
       body.embed-mode .content {
         position: relative;
-        height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
-        height: calc(100svh - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
+        height: calc(var(--app-height, 100dvh) - var(--top-h) - var(--mobile-nav-h) - env(safe-area-inset-top, 0px));
         min-height: 0;
         max-height: none;
         overflow: hidden !important;
@@ -1546,15 +1540,21 @@
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      const fallback = frame.dataset.src || "/nas-files/ui/";
+      // iPhone/Android: Sencha Touch UI (/st/) — desktop Ext UI leaves a large bottom gap.
+      const mobile = isMobileClient();
+      const fallback = mobile ? "/nas-files/st/" : (frame.dataset.src || "/nas-files/ui/");
       try {
         frame.dataset.authed = "0";
         // Bust a mid-load session-timeout loop inside the embed.
         if (force) frame.src = "about:blank";
         const data = await api("/api/buffalo-sso");
-        const url = (data.files && data.files.url) || fallback;
+        let url = (data.files && data.files.url) || fallback;
+        if (mobile) {
+          url = "/nas-files/st/";
+        }
         frame.src = url + (url.includes("?") ? "&" : "?") + "_sm=" + Date.now();
         frame.dataset.authed = "1";
+        syncAppHeight();
       } catch (e) {
         frame.src = fallback;
         frame.dataset.authed = "0";
@@ -1568,6 +1568,20 @@
       loadNasFilesFrame(true);
     });
 
+    function syncAppHeight() {
+      try {
+        let h = window.innerHeight || document.documentElement.clientHeight || 0;
+        const vv = window.visualViewport;
+        if (vv && vv.height) {
+          // Cover the visible Safari viewport; offsetTop accounts for URL-bar slide.
+          h = Math.max(h, Math.round(vv.height + (vv.offsetTop || 0)));
+          h = Math.max(h, Math.round(vv.height));
+        }
+        if (h > 0) {
+          document.documentElement.style.setProperty("--app-height", h + "px");
+        }
+      } catch (e) {}
+    }
     function lockMobileViewport() {
       const content = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
       let meta = document.querySelector('meta[name="viewport"]');
@@ -1581,6 +1595,13 @@
         document.documentElement.style.setProperty("zoom", "1", "important");
         document.body.style.setProperty("zoom", "1", "important");
       } catch (e) {}
+      syncAppHeight();
+    }
+    function isMobileClient() {
+      try {
+        if (window.matchMedia && window.matchMedia("(max-width: 900px), (pointer: coarse)").matches) return true;
+      } catch (e) {}
+      return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
     }
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
@@ -1591,6 +1612,7 @@
       if (embed) {
         // Keep scale locked while using embedded apps on phones.
         try { window.scrollTo(0, 0); } catch (e) {}
+        syncAppHeight();
       }
       if (name === "adguard") {
         const f = document.getElementById("frameAdguard");
@@ -2672,6 +2694,14 @@
     (async () => {
       try {
         lockMobileViewport();
+        try {
+          window.addEventListener("resize", syncAppHeight, { passive: true });
+          window.addEventListener("orientationchange", () => setTimeout(syncAppHeight, 50), { passive: true });
+          if (window.visualViewport) {
+            visualViewport.addEventListener("resize", syncAppHeight, { passive: true });
+            visualViewport.addEventListener("scroll", syncAppHeight, { passive: true });
+          }
+        } catch (e) {}
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
         await load();
