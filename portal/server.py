@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import ftplib
+import io
+import mimetypes
 import base64
 import hashlib
 import hmac
@@ -1183,6 +1186,455 @@ def _load_buffalo_pass() -> str:
 
 
 BUFFALO_SSO_PASS = _load_buffalo_pass()
+
+
+# --- Independent NAS Files via FTP (Drive-style UI) ---
+FTP_HOST = os.environ.get("FTP_HOST", urlparse(BUFFALO_UPSTREAM).hostname or "192.168.8.159").strip()
+FTP_PORT = int(os.environ.get("FTP_PORT", "21"))
+FTP_USER = (os.environ.get("FTP_USER", "") or BUFFALO_SSO_USER).strip() or "admin"
+FTP_TIMEOUT = float(os.environ.get("FTP_TIMEOUT", "30"))
+FTP_LIST_CACHE_TTL = float(os.environ.get("FTP_LIST_CACHE_TTL", "4"))
+FTP_POOL_MAX_IDLE = float(os.environ.get("FTP_POOL_MAX_IDLE", "120"))
+
+
+def _load_ftp_pass() -> str:
+    b64 = os.environ.get("FTP_PASS_B64", "").strip()
+    raw = os.environ.get("FTP_PASS", "")
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    if raw:
+        return raw
+    return BUFFALO_SSO_PASS
+
+
+FTP_PASS = _load_ftp_pass()
+
+
+def ftp_norm_path(path: str) -> str:
+    raw = (path or "/").replace("\\", "/")
+    parts: list[str] = []
+    for part in raw.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        if any(ch in part for ch in ("\x00", "\n", "\r")):
+            raise ValueError("invalid path")
+        parts.append(part)
+    return "/" + "/".join(parts) if parts else "/"
+
+
+def ftp_parent(path: str) -> str:
+    p = ftp_norm_path(path)
+    if p == "/":
+        return "/"
+    return ftp_norm_path(str(Path(p).parent).replace("\\", "/"))
+
+
+def ftp_guess_mime(name: str) -> str:
+    ctype, _ = mimetypes.guess_type(name or "")
+    if ctype:
+        return ctype
+    lower = (name or "").lower()
+    if lower.endswith((".md", ".markdown", ".log", ".conf", ".cfg", ".ini", ".env")):
+        return "text/plain; charset=utf-8"
+    if lower.endswith((".ts", ".tsx", ".jsx", ".vue")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+
+class _FtpPool:
+    """Reuse one FTP control connection (locked) + short list cache."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._ftp: ftplib.FTP | None = None
+        self._last_used = 0.0
+        self._list_cache: dict[str, tuple[float, dict]] = {}
+
+    def _drop(self) -> None:
+        if self._ftp is not None:
+            try:
+                self._ftp.close()
+            except Exception:
+                pass
+        self._ftp = None
+
+    def _ensure(self) -> ftplib.FTP:
+        if not FTP_PASS:
+            raise RuntimeError("FTP_PASS / FTP_PASS_B64 / BUFFALO_PASS not configured")
+        now = time.time()
+        if self._ftp is not None:
+            if now - self._last_used > FTP_POOL_MAX_IDLE:
+                self._drop()
+            else:
+                try:
+                    self._ftp.voidcmd("NOOP")
+                    self._last_used = now
+                    return self._ftp
+                except Exception:
+                    self._drop()
+        ftp = ftplib.FTP()
+        ftp.connect(FTP_HOST, FTP_PORT, timeout=FTP_TIMEOUT)
+        ftp.login(FTP_USER, FTP_PASS)
+        ftp.set_pasv(True)
+        try:
+            ftp.sendcmd("TYPE I")
+        except Exception:
+            pass
+        self._ftp = ftp
+        self._last_used = now
+        return ftp
+
+    def invalidate(self, path: str | None = None) -> None:
+        with self._lock:
+            if path is None:
+                self._list_cache.clear()
+                return
+            target = ftp_norm_path(path)
+            parent = ftp_parent(target)
+            self._list_cache.pop(target, None)
+            self._list_cache.pop(parent, None)
+
+    def warm(self) -> dict:
+        t0 = time.perf_counter()
+        with self._lock:
+            self._ensure()
+            data = self.list("/disk1", use_cache=False)
+        return {
+            "ok": True,
+            "host": FTP_HOST,
+            "warmed_ms": round((time.perf_counter() - t0) * 1000),
+            "path": data.get("path"),
+            "entries": len(data.get("entries") or []),
+        }
+
+    def status(self) -> dict:
+        try:
+            with self._lock:
+                ftp = self._ensure()
+                pwd = ftp.pwd()
+                welcome = (ftp.getwelcome() or "").strip()
+            return {
+                "ok": True,
+                "host": FTP_HOST,
+                "port": FTP_PORT,
+                "user": FTP_USER,
+                "pwd": pwd,
+                "welcome": welcome[:120],
+                "pooled": True,
+            }
+        except Exception as exc:
+            with self._lock:
+                self._drop()
+            return {
+                "ok": False,
+                "host": FTP_HOST,
+                "port": FTP_PORT,
+                "user": FTP_USER,
+                "error": str(exc),
+            }
+
+    def list(self, path: str, *, use_cache: bool = True) -> dict:
+        target = ftp_norm_path(path)
+        now = time.time()
+        if use_cache:
+            hit = self._list_cache.get(target)
+            if hit and now - hit[0] <= FTP_LIST_CACHE_TTL:
+                cached = dict(hit[1])
+                cached["cached"] = True
+                return cached
+
+        with self._lock:
+            if use_cache:
+                hit = self._list_cache.get(target)
+                if hit and time.time() - hit[0] <= FTP_LIST_CACHE_TTL:
+                    cached = dict(hit[1])
+                    cached["cached"] = True
+                    return cached
+            ftp = self._ensure()
+            try:
+                payload = self._list_unlocked(ftp, target)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                payload = self._list_unlocked(ftp, target)
+            self._last_used = time.time()
+            self._list_cache[target] = (self._last_used, payload)
+            out = dict(payload)
+            out["cached"] = False
+            return out
+
+    def _list_unlocked(self, ftp: ftplib.FTP, target: str) -> dict:
+        entries: list[dict] = []
+        ftp.cwd(target)
+        try:
+            for name, facts in ftp.mlsd():
+                if name in (".", ".."):
+                    continue
+                typ = (facts.get("type") or "").lower()
+                is_dir = typ in ("dir", "cdir", "pdir")
+                size = int(facts.get("size") or 0) if not is_dir else 0
+                modified = facts.get("modify") or ""
+                entries.append(
+                    {
+                        "name": name,
+                        "path": ftp_norm_path(target.rstrip("/") + "/" + name),
+                        "type": "dir" if is_dir else "file",
+                        "size": size,
+                        "modified": modified,
+                    }
+                )
+        except Exception:
+            names = []
+            try:
+                names = ftp.nlst()
+            except Exception:
+                names = []
+            for name in names:
+                base = name.rsplit("/", 1)[-1]
+                if base in (".", ".."):
+                    continue
+                full = ftp_norm_path(target.rstrip("/") + "/" + base)
+                is_dir = False
+                size = 0
+                modified = ""
+                try:
+                    ftp.cwd(full)
+                    is_dir = True
+                    ftp.cwd(target)
+                except Exception:
+                    try:
+                        size = int(ftp.size(full) or 0)
+                    except Exception:
+                        size = 0
+                    try:
+                        modified = ftp.voidcmd(f"MDTM {full}")[4:].strip()
+                    except Exception:
+                        modified = ""
+                entries.append(
+                    {
+                        "name": base,
+                        "path": full,
+                        "type": "dir" if is_dir else "file",
+                        "size": size,
+                        "modified": modified,
+                    }
+                )
+        entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+        crumbs = []
+        acc = ""
+        for part in target.strip("/").split("/"):
+            if not part:
+                continue
+            acc += "/" + part
+            crumbs.append({"name": part, "path": acc})
+        return {
+            "ok": True,
+            "path": target,
+            "parent": ftp_parent(target),
+            "crumbs": crumbs,
+            "entries": entries,
+        }
+
+    def mkdir(self, path: str) -> dict:
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("cannot create root")
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                ftp.mkd(target)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                ftp.mkd(target)
+            self._last_used = time.time()
+            self.invalidate(target)
+        return {"ok": True, "path": target}
+
+    def delete(self, path: str) -> dict:
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("cannot delete root")
+
+        def _rm_tree(ftp: ftplib.FTP, p: str) -> None:
+            try:
+                ftp.cwd(p)
+                kids = []
+                try:
+                    for name, facts in ftp.mlsd():
+                        if name in (".", ".."):
+                            continue
+                        typ = (facts.get("type") or "").lower()
+                        kids.append((name, typ in ("dir", "cdir", "pdir")))
+                except Exception:
+                    for name in ftp.nlst():
+                        base = name.rsplit("/", 1)[-1]
+                        if base in (".", ".."):
+                            continue
+                        full = p.rstrip("/") + "/" + base
+                        is_dir = False
+                        cur = ftp.pwd()
+                        try:
+                            ftp.cwd(full)
+                            is_dir = True
+                            ftp.cwd(cur)
+                        except Exception:
+                            is_dir = False
+                        kids.append((base, is_dir))
+                for name, is_dir in kids:
+                    full = ftp_norm_path(p.rstrip("/") + "/" + name)
+                    if is_dir:
+                        _rm_tree(ftp, full)
+                    else:
+                        ftp.delete(full)
+                ftp.cwd(ftp_parent(p))
+                ftp.rmd(p)
+            except ftplib.error_perm:
+                ftp.delete(p)
+
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                _rm_tree(ftp, target)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                _rm_tree(ftp, target)
+            self._last_used = time.time()
+            self.invalidate(target)
+        return {"ok": True, "path": target}
+
+    def rename(self, src: str, dst: str) -> dict:
+        a = ftp_norm_path(src)
+        b = ftp_norm_path(dst)
+        if a == "/" or b == "/":
+            raise ValueError("invalid rename path")
+        with self._lock:
+            ftp = self._ensure()
+            try:
+                ftp.rename(a, b)
+            except Exception:
+                self._drop()
+                ftp = self._ensure()
+                ftp.rename(a, b)
+            self._last_used = time.time()
+            self.invalidate(a)
+            self.invalidate(b)
+        return {"ok": True, "path": b, "from": a}
+
+    def upload_bytes(self, path: str, data: bytes) -> dict:
+        """Dedicated connection so long uploads do not block list pool."""
+        target = ftp_norm_path(path)
+        if target == "/" or target.endswith("/"):
+            raise ValueError("upload path must be a file path")
+        parent = ftp_parent(target)
+        ftp = ftp_connect()
+        try:
+            if parent != "/":
+                try:
+                    ftp.cwd(parent)
+                except Exception:
+                    acc = ""
+                    for part in parent.strip("/").split("/"):
+                        acc += "/" + part
+                        try:
+                            ftp.mkd(acc)
+                        except Exception:
+                            pass
+                    ftp.cwd(parent)
+            bio = io.BytesIO(data)
+            ftp.storbinary(f"STOR {target}", bio)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+        self.invalidate(target)
+        return {"ok": True, "path": target, "size": len(data)}
+
+    def download_to(self, path: str, write) -> tuple[str, str, int | None]:
+        """Dedicated connection so media open does not stall browsing."""
+        target = ftp_norm_path(path)
+        if target == "/":
+            raise ValueError("not a file")
+        name = target.rsplit("/", 1)[-1] or "download"
+        ctype = ftp_guess_mime(name)
+        ftp = ftp_connect()
+        size = None
+        try:
+            try:
+                size = ftp.size(target)
+            except Exception:
+                size = None
+            ftp.retrbinary(f"RETR {target}", write)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+        return name, ctype, size
+
+
+_FTP = _FtpPool()
+
+
+def ftp_connect() -> "ftplib.FTP":
+    # Legacy helper — prefer _FTP pool methods.
+    if not FTP_PASS:
+        raise RuntimeError("FTP_PASS / FTP_PASS_B64 / BUFFALO_PASS not configured")
+    ftp = ftplib.FTP()
+    ftp.connect(FTP_HOST, FTP_PORT, timeout=FTP_TIMEOUT)
+    ftp.login(FTP_USER, FTP_PASS)
+    ftp.set_pasv(True)
+    return ftp
+
+
+def ftp_status() -> dict:
+    return _FTP.status()
+
+
+def ftp_warm() -> dict:
+    return _FTP.warm()
+
+
+def ftp_list(path: str) -> dict:
+    return _FTP.list(path)
+
+
+def ftp_mkdir(path: str) -> dict:
+    return _FTP.mkdir(path)
+
+
+def ftp_delete(path: str) -> dict:
+    return _FTP.delete(path)
+
+
+def ftp_rename(src: str, dst: str) -> dict:
+    return _FTP.rename(src, dst)
+
+
+def ftp_upload_bytes(path: str, data: bytes) -> dict:
+    return _FTP.upload_bytes(path, data)
+
+
+def ftp_download_bytes(path: str) -> tuple[str, bytes]:
+    buf = io.BytesIO()
+    name, _ctype, _size = _FTP.download_to(path, buf.write)
+    return name, buf.getvalue()
+
 
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
@@ -6768,6 +7220,80 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/ftp/status":
+            if not self._require_auth(api=True):
+                return
+            self._json(200, ftp_status())
+            return
+        if path == "/api/ftp/warm":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, ftp_warm())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ftp/list":
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                path_q = (qs.get("path") or ["/"])[0]
+                self._json(200, ftp_list(path_q))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ftp/download":
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import parse_qs, quote
+                qs = parse_qs(urlparse(self.path).query)
+                path_q = (qs.get("path") or [""])[0]
+                inline = (qs.get("inline") or ["0"])[0] in ("1", "true", "yes")
+                target = ftp_norm_path(path_q)
+                if target == "/":
+                    raise ValueError("not a file")
+                name = target.rsplit("/", 1)[-1] or "download"
+                ctype = ftp_guess_mime(name)
+                if inline and ctype.startswith("text/") and "charset=" not in ctype:
+                    ctype = ctype + "; charset=utf-8"
+                # Dedicated FTP session so long media streams do not block list pool.
+                ftp = ftp_connect()
+                try:
+                    size = None
+                    try:
+                        size = ftp.size(target)
+                    except Exception:
+                        size = None
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    disp = "inline" if inline else "attachment"
+                    self.send_header(
+                        "Content-Disposition",
+                        f"{disp}; filename*=UTF-8''{quote(name)}",
+                    )
+                    if size is not None:
+                        self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    ftp.retrbinary(f"RETR {target}", self.wfile.write)
+                finally:
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
+            except Exception as exc:
+                try:
+                    self._json(500, {"ok": False, "error": str(exc)})
+                except Exception:
+                    pass
+            return
         if path == "/api/buffalo-sso":
             if not self._require_auth(api=True):
                 return
@@ -6895,6 +7421,53 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200 if result.get("ok") else 400, result)
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/ftp/mkdir":
+            try:
+                payload = self._read_json()
+                self._json(200, ftp_mkdir(str(payload.get("path") or "")))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ftp/delete":
+            try:
+                payload = self._read_json()
+                self._json(200, ftp_delete(str(payload.get("path") or "")))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ftp/rename":
+            try:
+                payload = self._read_json()
+                self._json(
+                    200,
+                    ftp_rename(str(payload.get("src") or ""), str(payload.get("dst") or "")),
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ftp/upload":
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                path_q = (qs.get("path") or [""])[0]
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length <= 0:
+                    raise ValueError("empty upload")
+                if length > 512 * 1024 * 1024:
+                    raise ValueError("file too large (512MB max)")
+                data = self.rfile.read(length)
+                self._json(200, ftp_upload_bytes(path_q, data))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/backup/run":
             try:

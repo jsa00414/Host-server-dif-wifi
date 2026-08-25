@@ -246,6 +246,8 @@
     body.embed-mode .top-right .actions #saveBtn,
     body.embed-mode .top-right .actions #reloadBtn { display: none; }
 
+
+
     .page-head { margin: 0 0 14px; }
     .page-head h2 { margin: 0; font-size: 1.18rem; letter-spacing: -.03em; }
     .page-head p { margin: 6px 0 0; color: var(--muted); font-size: .84rem; line-height: 1.45; max-width: 62ch; }
@@ -1100,9 +1102,11 @@
         <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
+
       <section class="view embed-view" id="view-files">
         <iframe class="embed-frame" id="frameFiles" title="NAS File Manager" src="about:blank" data-src="/nas-files/ui/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
+
 
       <section class="view" id="view-tailscale">
         <div class="page-head">
@@ -1615,6 +1619,10 @@
       } catch (e) {}
       return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
     }
+
+
+
+
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
