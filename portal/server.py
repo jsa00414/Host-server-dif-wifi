@@ -110,16 +110,33 @@ body#buffalo #nav .name {
 """.strip()
 
 BUFFALO_FIT_SNIPPET = (
+    "<base href=\"/buffalo-frame/\" />"
     "<style id=\"sm-buffalo-fit\">"
     + BUFFALO_FIT_CSS.replace("\n", " ")
     + "</style>"
-    + "<script id=\"sm-buffalo-fit-js\">(function(){function fit(){var box=document.getElementById(\"menu_box\");"
+    "<script id=\"sm-buffalo-fit-js\">(function(){"
+    "var P='/buffalo-frame';"
+    "function fix(u){if(typeof u!=='string')return u;"
+    "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0)return u;"
+    "if(u.indexOf(P+'/')===0||u===P)return u;"
+    "if(u.indexOf('http://192.168.8.159')===0)return P+u.slice(20);"
+    "if(u.indexOf('https://buffalo.vpstruelord.com')===0)return P+u.slice(30);"
+    "if(u.indexOf('http://buffalo.vpstruelord.com')===0)return P+u.slice(29);"
+    "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
+    "return u;}"
+    "var xo=XMLHttpRequest.prototype.open;"
+    "XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=fix(u);}catch(e){}"
+    "return xo.apply(this,arguments);};"
+    "if(window.fetch){var _f=window.fetch;window.fetch=function(i,n){"
+    "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
+    "return _f.call(this,i,n);};}"
+    "function fit(){var box=document.getElementById('menu_box');"
     "if(!box)return;var top=box.getBoundingClientRect().top;"
-    "box.style.setProperty(\"width\",\"calc(100% - 24px)\",\"important\");"
-    "box.style.setProperty(\"height\",Math.max(280,window.innerHeight-top-36)+\"px\",\"important\");"
-    "box.style.setProperty(\"max-width\",\"none\",\"important\");}"
-    "window.addEventListener(\"resize\",fit);"
-    "document.addEventListener(\"DOMContentLoaded\",fit);"
+    "box.style.setProperty('width','calc(100% - 24px)','important');"
+    "box.style.setProperty('height',Math.max(280,window.innerHeight-top-36)+'px','important');"
+    "box.style.setProperty('max-width','none','important');}"
+    "window.addEventListener('resize',fit);"
+    "document.addEventListener('DOMContentLoaded',fit);"
     "setTimeout(fit,300);setTimeout(fit,1200);setInterval(fit,2000);"
     "})();</script>"
 )
@@ -3738,6 +3755,21 @@ def _buffalo_rewrite_set_cookie(value: str) -> str:
     return "; ".join(out)
 
 
+def _buffalo_rewrite_html_paths(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        attr, quote, path = match.group(1), match.group(2), match.group(3)
+        if path.startswith(BUFFALO_PREFIX + "/") or path == BUFFALO_PREFIX:
+            return match.group(0)
+        return f"{attr}={quote}{BUFFALO_PREFIX}{path}{quote}"
+
+    return re.sub(
+        r"\b(href|src|action)=(['\"])(/(?!/|buffalo-frame/)[^'\"]*)\2",
+        repl,
+        text,
+        flags=re.I,
+    )
+
+
 def _buffalo_inject_fit_css(body: bytes, content_type: str) -> bytes:
     ctype = (content_type or "").lower()
     if "text/html" not in ctype:
@@ -3751,13 +3783,20 @@ def _buffalo_inject_fit_css(body: bytes, content_type: str) -> bytes:
             return body
     if "sm-buffalo-fit" in text:
         return body
+    text = _buffalo_rewrite_html_paths(text)
     snippet = BUFFALO_FIT_SNIPPET
     lower = text.lower()
-    idx = lower.find("</head>")
-    if idx != -1:
-        text = text[:idx] + snippet + text[idx:]
+    # Inject BEFORE other scripts so XHR/fetch patch is active for ExtJS.
+    head_idx = lower.find("<head>")
+    if head_idx != -1:
+        insert_at = head_idx + len("<head>")
+        text = text[:insert_at] + snippet + text[insert_at:]
     else:
-        text = snippet + text
+        idx = lower.find("</head>")
+        if idx != -1:
+            text = text[:idx] + snippet + text[idx:]
+        else:
+            text = snippet + text
     return text.encode("utf-8")
 
 
