@@ -32,6 +32,10 @@
       scrollbar-width: none;
       -ms-overflow-style: none;
     }
+    html {
+      overscroll-behavior: none;
+      overscroll-behavior-y: none;
+    }
     html::-webkit-scrollbar,
     body::-webkit-scrollbar,
     .sidebar::-webkit-scrollbar,
@@ -159,6 +163,7 @@
       overflow: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
+      overscroll-behavior: none;
     }
     .embed-frame::-webkit-scrollbar { width: 0; height: 0; display: none; }
     #view-buffalo.active,
@@ -212,6 +217,8 @@
       overflow: hidden !important;
       grid-template-rows: var(--top-h) 1fr;
       touch-action: manipulation;
+      overscroll-behavior: none;
+      overscroll-behavior-y: none;
     }
     body.embed-mode .main {
       min-height: 0;
@@ -739,6 +746,8 @@
         max-height: var(--app-height, 100dvh);
         overflow: hidden !important;
         touch-action: manipulation;
+        overscroll-behavior: none;
+        overscroll-behavior-y: none;
       }
       body.embed-mode .main,
       body.embed-mode .content {
@@ -777,6 +786,8 @@
         transform: none !important;
         zoom: 1 !important;
         touch-action: manipulation;
+        overscroll-behavior: none;
+        overscroll-behavior-y: none;
         display: block !important;
       }
       /* Sidebar stays reachable so you can switch apps without Overview. */
