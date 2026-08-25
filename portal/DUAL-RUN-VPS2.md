@@ -1,52 +1,46 @@
-# Dual-run: old VPS + new VPS (`74.208.76.213`)
+# VPS cutover complete → `74.208.76.213`
 
-Primary (DNS / HTTPS): `74.208.54.132` (`mail.truemailor.com`)  
-Standby clone: `74.208.76.213` (`vps2.vpstruelord.com`)
+Primary is now **74.208.76.213** (`vps2.vpstruelord.com`). Old `74.208.54.132` is retired.
 
-Both are online until you delete the old host. Domains still resolve to the old IP.
+## Live now
 
-## What was copied
-
-| Stack | Path on both |
+| Service | URL |
 | --- | --- |
-| Portal (ServerManager) | `/opt/wireguard/port-forward-ui` + `port-forward-ui.service` |
-| WireGuard (wg-easy) | `/opt/wireguard` — **fresh** peer DB on new (new endpoint IP) |
-| DNS (AdGuard / Pi-hole / Unbound) | `/opt/dns` |
-| Caddy + mail + facesearch | `/opt/truemail` (+ mail-data) |
-| Surfshark / Tailscale helpers | `/opt/surfshark`, `/opt/dns/ts-*` |
-| Remote desktop | `/opt/remote-desktop` |
-| Backup agent files | `/opt/servermanager-backup` |
+| Portal | https://portal.vpstruelord.com/ |
+| WireGuard UI | https://vpn.vpstruelord.com/ (or `:5001`) |
+| AdGuard | https://dns.vpstruelord.com/ |
+| Pi-hole | https://pihole.vpstruelord.com/ |
 
-## How to use the new server now
+Cloudflare A records for `*.vpstruelord.com` point at **74.208.76.213**.  
+Caddy has real TLS again. Dual-run bridge to the old VPS is removed.  
+WireGuard peers restored (same keys); server endpoint host = `74.208.76.213:5000`.
 
-- Portal: **http://74.208.76.213/** (login same as old: `admin` / portal password)
-- WireGuard admin UI: **http://74.208.76.213:5001/**
-- LAN (Buffalo / Flint): works on new via host WireGuard client `vps2-to-old` → old VPS → home
-  - Config: `/etc/wireguard/vps2-to-old.conf`
-  - Boot unit: `vps2-lan-bridge.service` (idempotent `wg-quick up`)
-- HTTPS domain certs on new use `tls internal` until DNS points here (avoids Let’s Encrypt fights with old)
-- UFW on new allows Docker bridge subnets so Caddy can reach host portal `:5002`
+## Required once: update Flint (home GL-MT6000)
 
-## Edits made on the new server only
+LAN / Buffalo stay down until Flint’s WireGuard **Endpoint** leaves the old IP:
 
-- `WG_HOST` / `VPS_PUBLIC_IP` → `74.208.76.213`
-- Caddy: `http://74.208.76.213` → portal; domain blocks use `tls internal` + `auto_https disable_redirects`
-- Old VPS Caddy VPN allowlists include `74.208.76.213/32` so dual access stays consistent
+1. On home Wi‑Fi open http://192.168.8.1  
+2. VPN → WireGuard → edit **GL-MT6000**  
+3. Set Endpoint to **`74.208.76.213:5000`**  
+   - or re-import from https://vpn.vpstruelord.com  
+4. Enable / reconnect  
 
-## Before deleting the old server
+VPS copy of the client config: `/root/GL-MT6000-new-vps.conf`
 
-1. Cloudflare: point `portal`, `vpn`, `dns`, `pihole`, `buffalo`, `router`, mail hosts, etc. A records to `74.208.76.213`.
-2. On new Caddyfile: remove `tls internal` and `auto_https disable_redirects`; reload Caddy so Let’s Encrypt can issue.
-3. Move Flint / home WireGuard endpoint to the new VPS (add peer on new wg-easy, update Flint), then `wg-quick down vps2-to-old` and disable that unit.
-4. Confirm mail MX / SPF / DKIM for the new IP.
-5. Retire `74.208.54.132`.
+After reconnect: `ping 10.8.0.3` and Buffalo from the portal should work.
 
-## Deploy portal code to either host
+## Manual DNS (truemailor.com)
+
+This Cloudflare token only manages `vpstruelord.com`. Still on the old IP:
+
+- `mail.truemailor.com`
+- `truemailor.com`
+- `remote.truemailor.com`
+
+Point those A records to **74.208.76.213** at their DNS provider.
+
+## Deploy portal
 
 ```bash
-# old
-VPS=root@74.208.54.132 ./portal/deploy-to-vps.sh
-
-# new
 VPS=root@74.208.76.213 ./portal/deploy-to-vps.sh
 ```
