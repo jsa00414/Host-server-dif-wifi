@@ -269,6 +269,7 @@ body#buffalo #header #header-search .text .hint a#hint::before {
   width: 18px !important;
   height: 18px !important;
   background-color: var(--sm-muted) !important;
+  pointer-events: none !important;
   -webkit-mask-repeat: no-repeat !important;
   mask-repeat: no-repeat !important;
   -webkit-mask-position: center !important;
@@ -372,6 +373,17 @@ body#buffalo #header #header-button ul li .toggle {
   border: 0 !important;
 }
 /* Flat CSS glyphs: status / power / logout */
+body#buffalo #header #header-button ul li.status a#status,
+body#buffalo #header #header-button ul li.power a#power,
+body#buffalo #header #header-button ul li.logout a#logout,
+body#buffalo #header #header-search .text .back-home a,
+body#buffalo #header #header-search .text a.dl,
+body#buffalo #header #header-search .text .hint a#hint {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  position: relative !important;
+  z-index: 2 !important;
+}
 body#buffalo #header #header-button ul li.status a#status::before,
 body#buffalo #header #header-button ul li.power a#power::before,
 body#buffalo #header #header-button ul li.logout a#logout::before {
@@ -380,6 +392,7 @@ body#buffalo #header #header-button ul li.logout a#logout::before {
   width: 18px !important;
   height: 18px !important;
   background-color: var(--sm-muted) !important;
+  pointer-events: none !important;
   -webkit-mask-repeat: no-repeat !important;
   mask-repeat: no-repeat !important;
   -webkit-mask-position: center !important;
@@ -423,6 +436,22 @@ body#buffalo #header .dropmenu-parent .dropmenu {
   overflow: hidden !important;
   background: var(--sm-bg2) !important;
   background-image: none !important;
+  z-index: 1000 !important;
+  position: absolute !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu.show,
+body#buffalo #header .dropmenu-parent .dropdownbox.show,
+body#buffalo #header .status .dropdownbox.show,
+body#buffalo #header .hint .dropmenu.show {
+  display: block !important;
+  visibility: visible !important;
+  z-index: 1000 !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu.hide,
+body#buffalo #header .dropmenu-parent .dropdownbox.hide,
+body#buffalo #header .status .dropdownbox.hide,
+body#buffalo #header .hint .dropmenu.hide {
+  display: none !important;
 }
 body#buffalo #header .dropmenu-parent .dropmenu li,
 body#buffalo #header .dropmenu-parent .dropmenu li a {
@@ -835,6 +864,48 @@ BUFFALO_FIT_SNIPPET = (
     + "</style>"
     "<script id=\"sm-buffalo-fit-js\">(function(){"
     "var P='/buffalo-frame';"
+    "function ensureHeaderImgs(){"
+    "var skin=(document.getElementById('switch_css')&&"
+    "(document.getElementById('switch_css').href||'').indexOf('fortera')>=0)?'fortera':'forlink';"
+    "var map={"
+    "'QT_NAS_03_BUTTON_TOOLTIP':'img/common/'+skin+'/header-status-btn-off.png',"
+    "'QT_NAS_04_BUTTON_TOOLTIP':'img/common/'+skin+'/header-power-btn-off.png',"
+    "'QT_NAS_02_BUTTON_TOOLTIP':'img/common/'+skin+'/header-hint-btn-off.gif',"
+    "'QT_NAS_00604_LABEL_CAPTION':'img/common/'+skin+'/nav-home-btn.gif'"
+    "};"
+    "Object.keys(map).forEach(function(id){"
+    "var el=document.getElementById(id);"
+    "if(el&&!el.getAttribute('src'))el.setAttribute('src',map[id]);});}"
+    "ensureHeaderImgs();"
+    "document.addEventListener('DOMContentLoaded',ensureHeaderImgs);"
+    "setInterval(ensureHeaderImgs,1500);"
+    "function bindHeaderMenus(){"
+    "function hideAll(){"
+    "document.querySelectorAll('#header .dropmenu,#header .dropdownbox').forEach(function(d){"
+    "d.classList.add('hide');d.classList.remove('show');});}"
+    "function showBox(box){if(!box)return;hideAll();box.classList.remove('hide');box.classList.add('show');}"
+    "function toggleFor(anchor,sel){"
+    "if(!anchor||!anchor.parentNode)return;"
+    "var box=anchor.parentNode.querySelector(sel); if(!box)return;"
+    "if(box.classList.contains('hide'))showBox(box); else hideAll();"
+    "}"
+    "[['status','.dropdownbox'],['power','.dropmenu'],['hint','.dropmenu']].forEach(function(pair){"
+    "var el=document.getElementById(pair[0]); if(!el||el.getAttribute('data-sm-bound')==='1')return;"
+    "el.setAttribute('data-sm-bound','1');"
+    "el.addEventListener('click',function(ev){"
+    "ev.preventDefault(); ev.stopPropagation();"
+    "var box=el.parentNode&&el.parentNode.querySelector(pair[1]);"
+    "if(pair[0]==='status'&&box&&box.classList.contains('hide')&&"
+    "window.Ext&&Ext.header&&Ext.header.get_portal_info){"
+    "try{Ext.header.get_portal_info(function(){"
+    "try{if(Ext.header.status&&Ext.header.status.load)Ext.header.status.load();}catch(e){}"
+    "showBox(box);});return;}catch(e){}"
+    "}"
+    "toggleFor(el,pair[1]);"
+    "},true);});"
+    "document.addEventListener('click',function(ev){"
+    "if(!ev.target.closest||!ev.target.closest('#header .dropmenu-parent'))hideAll();"
+    "});}"
     "function fix(u){if(typeof u!=='string')return u;"
     "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0)return u;"
     "if(u.indexOf(P+'/')===0||u===P)return u;"
@@ -852,6 +923,8 @@ BUFFALO_FIT_SNIPPET = (
     "function fit(){"
     "try{document.documentElement.style.removeProperty('zoom');"
     "document.body.style.removeProperty('zoom');}catch(e){}"
+    "ensureHeaderImgs();"
+    "bindHeaderMenus();"
     "function force(el,props){if(!el)return;Object.keys(props).forEach(function(k){"
     "el.style.setProperty(k,props[k],'important');});}"
     "['header','nav'].forEach(function(id){var el=document.getElementById(id);"
