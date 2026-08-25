@@ -651,9 +651,6 @@
     <button type="button" class="nav-btn" data-view="adguard">
       <span class="nav-copy"><span>AdGuard</span></span>
     </button>
-    <button type="button" class="nav-btn" data-view="tailscale">
-      <span class="nav-copy"><span>Tailscale</span></span>
-    </button>
     <button type="button" class="nav-btn" data-view="surfshark">
       <span class="nav-copy"><span>Surfshark</span></span>
     </button>
@@ -700,10 +697,6 @@
             <div class="k">AdGuard</div>
             <div class="v">DNS</div>
             <div class="s">full control</div>
-          </button>
-          <button type="button" class="stat" data-go="tailscale">
-            <div class="k">Tailscale</div>
-            <div class="v">VPN</div>
           </button>
           <button type="button" class="stat" data-go="pihole">
             <div class="k">Pi-hole</div>
@@ -877,88 +870,6 @@
         <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
-      <section class="view" id="view-tailscale">
-        <div class="page-head">
-          <h2>Tailscale</h2>
-        </div>
-        <div class="ts-callout" id="tsCallout">Loading…</div>
-        <div class="ts-card solo">
-          <div class="ts-row">
-            <div><label for="tsEnable">Enable</label></div>
-            <label class="switch"><input type="checkbox" id="tsEnable" /><span></span></label>
-          </div>
-        </div>
-
-        <div class="ts-section-title">Exit Node</div>
-        <div class="ts-card">
-          <div class="ts-row">
-            <div>
-              <label for="tsCustomExit">VPN Exit (WireGuard)</label>
-              <div class="ts-sub">Send only WireGuard traffic through a Tailscale exit — VPS keeps its public IP</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsCustomExit" /><span></span></label>
-          </div>
-          <div class="ts-exit-wrap" id="tsExitWrap">
-            <label class="field"><span>Exit node</span>
-              <select id="tsExitNode"></select>
-            </label>
-          </div>
-          <div class="ts-row">
-            <div>
-              <label for="tsRunExit">Run Exit Node</label>
-              <div class="ts-sub">Advertise this VPS as an exit for Tailscale clients (+ AdGuard → Pi-hole DNS)</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsRunExit" /><span></span></label>
-          </div>
-          <div class="ts-row">
-            <div>
-              <label for="tsAutoDisable">Auto-disable if exit drops</label>
-              <div class="ts-sub">Clears a dead VPN exit so the VPS and Wi‑Fi stay reachable</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsAutoDisable" checked /><span></span></label>
-          </div>
-        </div>
-
-        <div class="ts-section-title">Subnet Routes</div>
-        <div class="ts-card">
-          <div class="ts-row">
-            <div>
-              <label for="tsAdvWan">Advertise WAN Subnets</label>
-              <div class="ts-sub">Not used on this VPS</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsAdvWan" disabled /><span></span></label>
-          </div>
-          <div class="ts-row">
-            <div>
-              <label for="tsAdvLan">Advertise LAN Subnets</label>
-              <div class="ts-sub">192.168.8.0/24 · 10.8.0.0/24</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsAdvLan" /><span></span></label>
-          </div>
-        </div>
-
-        <div class="ts-section-title">NAT</div>
-        <div class="ts-card">
-          <div class="ts-row">
-            <div>
-              <label for="tsMasq">IP Masquerading</label>
-              <div class="ts-sub">SNAT subnet route traffic through this node</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="tsMasq" /><span></span></label>
-          </div>
-        </div>
-
-        <div class="ts-apply-wrap">
-          <button type="button" class="primary" id="tsApplyBtn">Apply</button>
-        </div>
-        <div class="toolbar" style="justify-content:center">
-          <button type="button" id="tsOpenAdmin">Open admin</button>
-          <button type="button" id="tsRefreshBtn">Refresh</button>
-          <button type="button" id="tsLoginBtn" hidden>Get login link</button>
-        </div>
-        <pre id="tsStatus" class="log" style="margin-top:12px;max-height:160px"> </pre>
-      </section>
-
       <section class="view" id="view-surfshark">
         <div class="page-head">
           <h2>Surfshark</h2>
@@ -1079,53 +990,6 @@
       }
     }
 
-    let tsState = null;
-    function fillExitNodes(nodes, selected) {
-      const sel = document.getElementById("tsExitNode");
-      if (!sel) return;
-      const cur = selected || sel.value || "";
-      sel.innerHTML = `<option value="">Select exit node…</option>` + (nodes || []).map((n) => {
-        const label = `${n.name || n.ip}${n.online ? "" : " (offline)"}`;
-        return `<option value="${esc(n.ip)}" ${n.ip === cur ? "selected" : ""}>${esc(label)}</option>`;
-      }).join("");
-    }
-    function renderTailscaleControls(data) {
-      tsState = data;
-      const callout = document.getElementById("tsCallout");
-      if (callout) {
-        if (data.needs_login) callout.textContent = "Tailscale is installed but not logged in. Use Get login link.";
-        else {
-          let msg = `Connected as ${data.hostname || "vpstruelord-vps"}${data.ips?.length ? " · " + data.ips.join(", ") : ""}.`;
-          msg += " VPS keeps its public IP.";
-          if (data.custom_exit_node) {
-            msg += " WireGuard VPN exits via Tailscale exit node.";
-          } else {
-            msg += " WireGuard VPN exits via VPS public IP.";
-          }
-          if (data.run_exit_node) {
-            msg += data.exit_dns_filter
-              ? " Tailscale clients can use this exit (DNS via AdGuard → Pi-hole)."
-              : " Exit advertised, but DNS filter is not active — hit Apply.";
-          }
-          callout.textContent = msg;
-        }
-      }
-      document.getElementById("tsEnable").checked = !!data.enabled;
-      document.getElementById("tsRunExit").checked = !!data.run_exit_node;
-      document.getElementById("tsCustomExit").checked = !!data.custom_exit_node;
-      document.getElementById("tsAdvLan").checked = !!data.advertise_lan;
-      document.getElementById("tsMasq").checked = !!data.ip_masquerading;
-      const autoEl = document.getElementById("tsAutoDisable");
-      if (autoEl) autoEl.checked = data.auto_disable_exit !== false;
-      document.getElementById("tsExitWrap").classList.toggle("show", !!data.custom_exit_node);
-      fillExitNodes(data.exit_nodes || [], data.exit_node_ip || "");
-      const loginBtn = document.getElementById("tsLoginBtn");
-      if (loginBtn) loginBtn.hidden = !(data.needs_login || data.auth_url);
-      const el = document.getElementById("tsStatus");
-      if (el) el.textContent = data.text || "";
-    }
-    
-    
     function fmtBytes(n) {
       n = Number(n) || 0;
       if (n >= 1099511627776) return (n / 1099511627776).toFixed(1) + " TB";
@@ -1168,9 +1032,8 @@
         ? list.map((s) => `<div class="vps-svc"><div><div class="name">${esc(s.label || s.id)}</div><div class="detail">${esc(s.detail || "")}</div></div><span class="vps-dot${s.ok ? " ok" : ""}" title="${s.ok ? "up" : "down"}"></span></div>`).join("")
         : `<div class="empty">No service data.</div>`;
       const eg = data.egress_ip || "—";
-      const tip = (data.tailscale?.ips || []).join(", ") || "—";
       if (meta) {
-        meta.textContent = `Public ${data.public_ip || "—"} · Egress ${eg} · Tailscale ${tip}`;
+        meta.textContent = `Public ${data.public_ip || "—"} · Egress ${eg}`;
       }
     }
     async function refreshVpsStatus() {
@@ -1199,44 +1062,6 @@
       }
     }
 
-    async function refreshTailscale() {
-      const el = document.getElementById("tsStatus");
-      if (el) el.textContent = "Loading…";
-      try {
-        const data = await api("/api/tailscale");
-        renderTailscaleControls(data);
-      } catch (e) {
-        if (el) el.textContent = String(e.message || e);
-      }
-    }
-    async function applyTailscale() {
-      const btn = document.getElementById("tsApplyBtn");
-      btn.disabled = true;
-      showLog("Applying Tailscale…", true);
-      try {
-        const payload = {
-          enabled: document.getElementById("tsEnable").checked,
-          run_exit_node: document.getElementById("tsRunExit").checked,
-          custom_exit_node: document.getElementById("tsCustomExit").checked,
-          exit_node_ip: document.getElementById("tsExitNode").value || "",
-          advertise_lan: document.getElementById("tsAdvLan").checked,
-          advertise_wan: false,
-          ip_masquerading: document.getElementById("tsMasq").checked,
-          auto_disable_exit: document.getElementById("tsAutoDisable").checked,
-        };
-        const data = await api("/api/tailscale", { method: "POST", body: JSON.stringify(payload) });
-        if (!data.ok) throw new Error(data.error || data.stderr || data.stdout || "Apply failed");
-        renderTailscaleControls(data);
-        showLog((data.stdout || "Tailscale applied.") + (data.stderr ? "\n" + data.stderr : ""), !data.ok);
-        setStatus("Tailscale updated", "ok");
-      } catch (e) {
-        showLog(String(e.message || e), true);
-        setStatus("Tailscale apply failed", "err");
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
     function loadBuffaloFrame() {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
@@ -1260,7 +1085,6 @@
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }
-      if (name === "tailscale") { refreshTailscale(); }
       if (name === "surfshark") { refreshSurfshark(); }
       if (name === "backup") { refreshBackupStatus(); }
       if (name === "pihole") { loadPiholeFrame(); }
@@ -1793,24 +1617,6 @@
       refreshLanDevices().catch((e) => setStatus(e.message, "err"));
     });
     document.getElementById("logoutBtn").addEventListener("click", () => { location.href = "/logout"; });
-
-    document.getElementById("tsOpenAdmin").addEventListener("click", () => {
-      window.open("https://login.tailscale.com/admin/machines", "_blank", "noopener");
-    });
-    document.getElementById("tsRefreshBtn").addEventListener("click", () => refreshTailscale());
-    document.getElementById("tsApplyBtn").addEventListener("click", () => applyTailscale());
-    document.getElementById("tsCustomExit").addEventListener("change", (e) => {
-      document.getElementById("tsExitWrap").classList.toggle("show", e.target.checked);
-    });
-    document.getElementById("tsLoginBtn").addEventListener("click", async () => {
-      try {
-        const data = await api("/api/tailscale/login", { method: "POST", body: "{}" });
-        if (data.auth_url) window.open(data.auth_url, "_blank", "noopener");
-        await refreshTailscale();
-      } catch (e) {
-        showLog(String(e.message || e), true);
-      }
-    });
 
     let ssState = null;
     function surfsharkServerLabel(s) {

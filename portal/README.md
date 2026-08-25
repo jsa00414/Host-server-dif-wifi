@@ -10,7 +10,7 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 
 ## Surfshark tab
 
-- Sidebar **Surfshark** view (mirrors Tailscale VPN Exit pattern)
+- Sidebar **Surfshark** view (WireGuard VPN Exit for WG clients)
 - `GET /api/surfshark` — status + server list from `/opt/surfshark/conf/*.conf`
 - `POST /api/surfshark` — enable/disable Surfshark WireGuard VPN exit for WG clients only
 - Scripts deployed to `/opt/surfshark/` (`ss-vpn-exit.sh`, `ss-manage.sh`)
