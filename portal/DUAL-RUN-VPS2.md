@@ -22,8 +22,10 @@ Both are online until you delete the old host. Domains still resolve to the old 
 - Portal: **http://74.208.76.213/** (login same as old: `admin` / portal password)
 - WireGuard admin UI: **http://74.208.76.213:5001/**
 - LAN (Buffalo / Flint): works on new via host WireGuard client `vps2-to-old` → old VPS → home
-  - Config: `/etc/wireguard/vps2-to-old.conf` (enabled as `wg-quick@vps2-to-old`)
+  - Config: `/etc/wireguard/vps2-to-old.conf`
+  - Boot unit: `vps2-lan-bridge.service` (idempotent `wg-quick up`)
 - HTTPS domain certs on new use `tls internal` until DNS points here (avoids Let’s Encrypt fights with old)
+- UFW on new allows Docker bridge subnets so Caddy can reach host portal `:5002`
 
 ## Edits made on the new server only
 
