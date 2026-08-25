@@ -5668,6 +5668,22 @@ html.sm-merged-chrome #control-panel #location-bar{
   max-width:none!important;height:32px!important;margin:0!important}
 html.sm-merged-chrome #control-panel #search-textbox{
   flex:0 1 220px!important;min-width:120px!important;width:auto!important;margin:0!important}
+/* Full path text in location bar (e.g. /Movies_And_Shows/Movies) */
+html.sm-path-text #location-buttons,
+html.sm-path-text #location-buttons-ie,
+html.sm-path-text #location-bar .x-box-item img[src*="location_spacer"]{
+  display:none!important;visibility:hidden!important}
+html.sm-path-text #control-panel #location-bar,
+html.sm-merged-chrome #control-panel #location-bar{
+  flex:1 1 auto!important;min-width:0!important;max-width:none!important}
+html.sm-path-text #location-bar .x-panel-body,
+html.sm-path-text #location-bar .x-form-field-wrap,
+html.sm-path-text #location-textfield{
+  width:100%!important;max-width:none!important;box-sizing:border-box!important}
+html.sm-path-text #location-textfield{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important;
+  font-size:13px!important;letter-spacing:.01em!important;
+  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
 #control-panel.sm-nas-gone{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
@@ -6193,6 +6209,13 @@ NAS_FILES_SNIPPET = (
     "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "window.__smNaviMerged=true;"
+    "try{document.documentElement.classList.add('sm-path-text');}catch(e){}"
+    "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
+    "var _smTree=Ext.getCmp('tree-panel');"
+    "var _smNode=_smTree&&_smTree.getSelectionModel().getSelectedNode();"
+    "if(_smNode&&_smNode.path)update_location_bar(_smNode.path);"
+    "else update_location_bar('/');"
+    "}}catch(e){}"
     "return true;"
     "}catch(e){return false;}}"
     "function smMoveAuthToTop(){"
@@ -6943,10 +6966,49 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
+    # Show full directory path as text in the location bar.
+    text = re.sub(
+        r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
+        "    locations.doLayout();\r\n"
+        "    try {\r\n"
+        "        var _smTf = Ext.getCmp('location-textfield');\r\n"
+        "        var _smBar = Ext.getCmp('location-bar');\r\n"
+        "        if (_smTf && _smBar) {\r\n"
+        "            _smTf.setValue(path || '/');\r\n"
+        "            _smBar.layout.setActiveItem(1);\r\n"
+        "            try { document.documentElement.classList.add('sm-path-text'); } catch(e) {}\r\n"
+        "        }\r\n"
+        "    } catch(e) {}\r\n"
+        "}\r\n\r\nfunction update_location_bar_search",
+        text,
+        count=1,
+    )
+    text = re.sub(
+        r"function update_location_bar_search\(path, words\) \{[\s\S]*?\r?\n\}\r?\n\r?\n/\*\*\*\*\*\*\* search box",
+        "function update_location_bar_search(path, words) {\r\n"
+        "    update_location_bar(path);\r\n"
+        "    try {\r\n"
+        "        var _smTf = Ext.getCmp('location-textfield');\r\n"
+        "        var _smBar = Ext.getCmp('location-bar');\r\n"
+        "        if (_smTf && _smBar) {\r\n"
+        "            _smTf.setValue((path || '/') + ' : \"' + words + '\"');\r\n"
+        "            _smBar.layout.setActiveItem(1);\r\n"
+        "        }\r\n"
+        "    } catch(e) {}\r\n"
+        "}\r\n\r\n/******* search box",
+        text,
+        count=1,
+    )
     # Guard file-pane update when mainPanel view is mid-layout rebuild.
     text = text.replace(
         "\t\tmainPanel.getComponent(0).updateView(node,",
-        "\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+        "\t\ttry { update_location_bar(node.path); } catch(e) {}\n\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+    )
+    text = re.sub(
+        r"addHistory\(node\);\s+mainPanel\.getComponent\(0\)\.updateView\(node,",
+        "addHistory(node);\n\t\ttry { update_location_bar(node.path); } catch(e) {}\n\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+        text,
+        count=1,
     )
     # Ensure loading spinner clears on rpc_ls failure.
     text = text.replace(
