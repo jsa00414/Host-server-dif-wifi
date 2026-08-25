@@ -4646,7 +4646,8 @@ def check_credentials(username: str, password: str) -> bool:
 
 
 NAS_FILES_SNIPPET = (
-    f"<base href=\"{NAS_FILES_PREFIX}/\" />"
+    # Do NOT inject <base href> — WebAccess /ui/ uses relative assets that must
+    # resolve against /nas-files/ui/, not /nas-files/.
     "<script id=\"sm-nas-files-js\">(function(){"
     f"var P='{NAS_FILES_PREFIX}';"
     "function fix(u){if(typeof u!=='string')return u;"
@@ -4667,6 +4668,12 @@ NAS_FILES_SNIPPET = (
     "var _ps=history.pushState.bind(history), _rs=history.replaceState.bind(history);"
     "history.pushState=function(s,t,u){try{if(typeof u==='string')u=fix(u);}catch(e){} return _ps(s,t,u);};"
     "history.replaceState=function(s,t,u){try{if(typeof u==='string')u=fix(u);}catch(e){} return _rs(s,t,u);};"
+    "try{"
+    "var _assign=window.location.assign.bind(window.location);"
+    "window.location.assign=function(u){return _assign(fix(String(u)));};"
+    "var _replace=window.location.replace.bind(window.location);"
+    "window.location.replace=function(u){return _replace(fix(String(u)));};"
+    "}catch(e){}"
     "})();</script>"
 )
 
@@ -4722,12 +4729,20 @@ def _nas_files_rewrite_html_paths(text: str) -> str:
             return match.group(0)
         return f"{attr}={quote}{NAS_FILES_PREFIX}{path}{quote}"
 
-    return re.sub(
+    text = re.sub(
         r"\b(href|src|action)=(['\"])(/(?!/|nas-files/)[^'\"]*)\2",
         repl,
         text,
         flags=re.I,
     )
+    # Root redirect page uses location = "/ui/" ... — keep it under the proxy.
+    text = re.sub(
+        r"""((?:window\.)?location(?:\.href)?\s*=\s*['"])(/(?!/|nas-files/)[^'"]*)""",
+        lambda m: f"{m.group(1)}{NAS_FILES_PREFIX}{m.group(2)}",
+        text,
+        flags=re.I,
+    )
+    return text
 
 
 def _nas_files_inject(body: bytes, content_type: str) -> bytes:
