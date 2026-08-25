@@ -1617,8 +1617,8 @@
         const resp = await fetch(url, { method: "POST", body: fd, credentials: "include" });
         const text = await resp.text();
         let response = null;
-        try { response = JSON.parse(text); } catch (e) {}
-        const ok = !!(response && response.success);
+        try { response = JSON.parse(String(text || "").trim()); } catch (e) {}
+        const ok = !!(response && (response.success === true || response.success === "true" || response.success === 1));
         if (source) {
           source.postMessage({ type: "sm-nas-files-upload-done", success: ok, response, raw: text }, "*");
         } else if (!ok) {

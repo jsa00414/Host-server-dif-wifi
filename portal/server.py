@@ -6844,14 +6844,19 @@ NAS_FILES_SNIPPET = (
     "var el=window.__smUploadActionsEl;"
     "try{if(el&&el.actions)el.actions.hide();}catch(e){}"
     "window.__smUploadActionsEl=null;"
-    "if(d.success){"
+    "var response=d.response;"
+    "if((!response||typeof response!=='object')&&d.raw&&window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util._smParseRpc){"
+    "response=Ext.app.Util._smParseRpc(d.raw);"
+    "}"
+    "var ok=d.success;"
+    "if(!ok&&response&&(response.success===true||response.success==='true'||response.success===1))ok=true;"
+    "if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util._smUploadFinish){"
+    "Ext.app.Util._smUploadFinish(response,d.raw,ok);"
+    "}else if(ok){"
     "try{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}"
-    "var names='';var result=d.response&&d.response.result;"
-    "if(result){for(var k in result){if(result.hasOwnProperty(k))names+=k+'<br/>';}}"
-    "Ext.app.alert(Ext.app.makeTxt('confirm'),Ext.app.makeTxt('upload complete',names||''));"
+    "Ext.app.alert('Done','Upload complete');"
     "}else{"
-    "var msg=(d.response&&d.response.msg)?Ext.app.makeTxt(d.response.msg):(d.raw||d.error||'upload failed');"
-    "Ext.app.alert(Ext.app.makeTxt('error'),msg);"
+    "Ext.app.alert('Error',(response&&response.msg)?String(response.msg):(d.raw||d.error||'upload failed'));"
     "}"
     "}catch(e){}"
     "},false);"
@@ -7178,7 +7183,28 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
             "\t\t\t\t\t\t}",
         )
     upload_block = (
-        "\t_smDoUpload: function(input)\r\n"
+        "\t_smParseRpc: function(text)\r\n"
+        "\t{\r\n"
+        "\t\tvar raw = String(text || '').trim();\r\n"
+        "\t\tif(!raw){return null;}\r\n"
+        "\t\ttry{if(typeof JSON !== 'undefined' && JSON.parse){return JSON.parse(raw);}}catch(e){}\r\n"
+        "\t\ttry{return Ext.decode(raw);}catch(e){}\r\n"
+        "\t\treturn null;\r\n"
+        "\t},\r\n\r\n\t_smUploadFinish: function(response, raw, forceOk)\r\n"
+        "\t{\r\n"
+        "\t\tif(!response && raw){response = Ext.app.Util._smParseRpc(raw);}\r\n"
+        "\t\tvar ok = forceOk || (response && (response.success === true || response.success === 'true' || response.success === 1));\r\n"
+        "\t\tif(ok){\r\n"
+        "\t\t\ttry{if(Ext.app.isPanel && Ext.app.isPanel.getComponent('data_view')){Ext.app.isPanel.getComponent('data_view').setData();}}catch(e){}\r\n"
+        "\t\t\tvar names = '';\r\n"
+        "\t\t\tif(response && response.result){for(var k in response.result){if(response.result.hasOwnProperty(k)){names += k + '<br/>';}}}\r\n"
+        "\t\t\tvar body = names ? ('Uploaded:<br/>' + names) : 'Upload complete';\r\n"
+        "\t\t\ttry{Ext.app.alert(Ext.app.makeTxt('confirm'), body);}catch(e){Ext.app.alert('Done', body);}\r\n"
+        "\t\t}else{\r\n"
+        "\t\t\tvar err = (response && response.msg) ? String(response.msg) : (raw || 'upload failed');\r\n"
+        "\t\t\ttry{Ext.app.alert(Ext.app.makeTxt('error'), err);}catch(e){Ext.app.alert('Error', err);}\r\n"
+        "\t\t}\r\n"
+        "\t},\r\n\r\n\t_smDoUpload: function(input)\r\n"
         "\t{\r\n"
         "\t\tvar files = input && input.files;\r\n"
         "\t\tif(!files || !files.length){return;}\r\n"
@@ -7193,21 +7219,7 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         "\t\txhr.onload = function(){\r\n"
         "\t\t\tExt.app.Util.hideMask();\r\n"
         "\t\t\ttry{input.value = '';}catch(e){}\r\n"
-        "\t\t\ttry{\r\n"
-        "\t\t\t\tvar response = Ext.decode(xhr.responseText);\r\n"
-        "\t\t\t\tif(response && response.success){\r\n"
-        "\t\t\t\t\tif(Ext.app.isPanel && Ext.app.isPanel.getComponent('data_view')){\r\n"
-        "\t\t\t\t\t\tExt.app.isPanel.getComponent('data_view').setData();\r\n"
-        "\t\t\t\t\t}\r\n"
-        "\t\t\t\t\tvar names = '';\r\n"
-        "\t\t\t\t\tif(response.result){for(var k in response.result){if(response.result.hasOwnProperty(k)){names += k + '<br/>';}}}\r\n"
-        "\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('confirm'), Ext.app.makeTxt('upload complete', names || ''));\r\n"
-        "\t\t\t\t}else{\r\n"
-        "\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'), (response && response.msg) ? Ext.app.makeTxt(response.msg) : xhr.responseText);\r\n"
-        "\t\t\t\t}\r\n"
-        "\t\t\t}catch(e){\r\n"
-        "\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'), xhr.responseText || 'upload failed');\r\n"
-        "\t\t\t}\r\n"
+        "\t\t\tExt.app.Util._smUploadFinish(Ext.app.Util._smParseRpc(xhr.responseText), xhr.responseText);\r\n"
         "\t\t};\r\n"
         "\t\txhr.onerror = function(){\r\n"
         "\t\t\tExt.app.Util.hideMask();\r\n"
@@ -7255,9 +7267,10 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         "setTimeout(function(){try{input.click()" in text
         or "sm-st-upload-input" in text
         or "smNasUploadPick" in text
+        or "_smUploadFinish" in text
     ):
         text = re.sub(
-            r"\t(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
+            r"\t(?:_smParseRpc: function\(text\)\r\n[\s\S]*?)?(?:_smUploadFinish: function\(response, raw, forceOk\)\r\n[\s\S]*?)?(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
             upload_block,
             text,
             count=1,
