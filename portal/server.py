@@ -5650,6 +5650,42 @@ html.sm-auth-top #menu-bar #login_button .x-btn-text{
   color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
 html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
 
+/* Merge location/search into the menu bar — drop the second chrome row */
+html.sm-merged-chrome #control-panel,
+#control-panel.sm-nas-gone{
+  display:none!important;visibility:hidden!important;
+  height:0!important;min-height:0!important;max-height:0!important;
+  overflow:hidden!important;padding:0!important;margin:0!important;
+  border:0!important}
+html.sm-merged-chrome #menu-bar{
+  display:flex!important;align-items:center!important;flex-wrap:nowrap!important;
+  gap:6px!important;padding:4px 8px!important;
+  border-bottom:1px solid var(--sm-line)!important}
+html.sm-merged-chrome #menu-bar .x-toolbar-ct{
+  display:flex!important;align-items:center!important;flex:1 1 auto!important;
+  width:100%!important;gap:6px!important}
+html.sm-merged-chrome #menu-bar #location-bar{
+  flex:1 1 auto!important;min-width:100px!important;width:auto!important;
+  max-width:none!important;height:32px!important;margin:0!important;
+  border:0!important;border-bottom:0!important;background:transparent!important}
+html.sm-merged-chrome #menu-bar #location-buttons,
+html.sm-merged-chrome #menu-bar #location-buttons-ie{
+  height:30px!important;border:0!important;background:transparent!important}
+html.sm-merged-chrome #menu-bar #search-textbox,
+html.sm-merged-chrome #menu-bar #location-textfield{
+  flex:0 1 160px!important;width:160px!important;min-width:96px!important;
+  max-width:220px!important;min-height:32px!important;margin:0!important}
+html.sm-merged-chrome #menu-bar .location_item,
+html.sm-merged-chrome #menu-bar .location_item2{
+  min-height:28px!important;line-height:28px!important;font-size:12px!important}
+@media (max-width:900px){
+  html.sm-merged-chrome #menu-bar{flex-wrap:wrap!important}
+  html.sm-merged-chrome #menu-bar #location-bar{
+    flex:1 1 100%!important;order:10!important}
+  html.sm-merged-chrome #menu-bar #search-textbox{
+    flex:1 1 120px!important;order:11!important}
+}
+
 /* Location / search */
 #control-panel,#location-bar,.navi-button,#location-buttons,#location-buttons-ie,#search-panel{
   background:var(--sm-bg2)!important;background-image:none!important;
@@ -6130,6 +6166,37 @@ NAS_FILES_SNIPPET = (
     "el.style.margin='0';"
     "}"
     "}"
+    "function smMergeNaviBar(){"
+    "try{"
+    "document.documentElement.classList.add('sm-merged-chrome');"
+    "if(window.__smNaviMerged)return true;"
+    "if(!window.Ext||!Ext.getCmp)return false;"
+    "var menu=Ext.getCmp('menu-bar');"
+    "var nav=Ext.getCmp('control-panel');"
+    "if(!menu||!nav)return false;"
+    "var authIds={'sm-auth-fill':1,'userName':1,'login_button':1,'logout_button':1};"
+    "var insertAt=menu.items.getCount();"
+    "menu.items.each(function(it,i){"
+    "if(it&&it.id&&authIds[it.id])insertAt=Math.min(insertAt,i);"
+    "});"
+    "if(!Ext.getCmp('sm-navi-fill')){"
+    "try{menu.insert(insertAt,{xtype:'tbfill',id:'sm-navi-fill'});insertAt++;}catch(e){}"
+    "}"
+    "var all=[];"
+    "nav.items.each(function(it){if(it)all.push(it);});"
+    "for(var i=0;i<all.length;i++){"
+    "if(i<5){try{nav.remove(all[i],true);}catch(e){}continue;}"
+    "try{nav.remove(all[i],false);menu.insert(insertAt+(i-5),all[i]);}catch(e){}"
+    "}"
+    "var parent=nav.ownerCt;"
+    "try{parent.remove(nav,true);}catch(e){try{nav.hide();nav.setHeight(0);}catch(e2){}}"
+    "window.__smNaviMerged=true;"
+    "try{menu.doLayout();}catch(e){}"
+    "try{if(parent&&parent.doLayout)parent.doLayout(true,true);}catch(e){}"
+    "var el=document.getElementById('control-panel');"
+    "if(el){el.classList.add('sm-nas-gone');try{el.parentNode.removeChild(el);}catch(e){el.style.display='none';}}"
+    "return true;"
+    "}catch(e){return false;}}"
     "function smMoveAuthToTop(){"
     "try{"
     "var user=document.getElementById('userName');"
@@ -6179,16 +6246,16 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;}catch(e){}"
     "try{smHideIconBar();}catch(e){}"
     "try{"
     "var _smAuthN=0;"
     "var _smAuthT=setInterval(function(){"
-    "smMoveAuthToTop();smHideIconBar();"
+    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();"
     "if(++_smAuthN>=40)clearInterval(_smAuthT);"
     "},250);"
-    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();},false);"
-    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();},false);"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();},false);"
+    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();},false);"
     "}catch(e){}"
     "function smClearStuckMask(){"
     "try{"
@@ -6263,6 +6330,7 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.EventManager&&Ext.EventManager.fireResize)Ext.EventManager.fireResize(w,h);}catch(e){}"
     "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
+    "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
@@ -6476,7 +6544,7 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smHideIconBar();},1200);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();},1200);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
