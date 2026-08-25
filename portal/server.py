@@ -6833,6 +6833,28 @@ NAS_FILES_SNIPPET = (
     "get:function(){return desc.get.call(this);},"
     "set:function(v){desc.set.call(this,fix(String(v)));}});}"
     "}catch(e){}"
+    "window.addEventListener('message',function(ev){"
+    "var d=ev&&ev.data;if(!d)return;"
+    "if(d.type==='sm-nas-files-upload-start'){"
+    "try{if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util.setMask)Ext.app.Util.setMask();}catch(e){}"
+    "return;}"
+    "if(d.type!=='sm-nas-files-upload-done')return;"
+    "try{"
+    "if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util.hideMask)Ext.app.Util.hideMask();"
+    "var el=window.__smUploadActionsEl;"
+    "try{if(el&&el.actions)el.actions.hide();}catch(e){}"
+    "window.__smUploadActionsEl=null;"
+    "if(d.success){"
+    "try{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}"
+    "var names='';var result=d.response&&d.response.result;"
+    "if(result){for(var k in result){if(result.hasOwnProperty(k))names+=k+'<br/>';}}"
+    "Ext.app.alert(Ext.app.makeTxt('confirm'),Ext.app.makeTxt('upload complete',names||''));"
+    "}else{"
+    "var msg=(d.response&&d.response.msg)?Ext.app.makeTxt(d.response.msg):(d.raw||d.error||'upload failed');"
+    "Ext.app.alert(Ext.app.makeTxt('error'),msg);"
+    "}"
+    "}catch(e){}"
+    "},false);"
     "})();</script>"
 )
 
@@ -7198,6 +7220,14 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
         "\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('select tree to upload'));\r\n"
         "\t\t\treturn;\r\n"
         "\t\t}\r\n"
+        "\t\ttry{\r\n"
+        "\t\t\tvar topWin = window.top || window.parent;\r\n"
+        "\t\t\tif(topWin && topWin !== window && typeof topWin.smNasUploadPick === 'function'){\r\n"
+        "\t\t\t\twindow.__smUploadActionsEl = el;\r\n"
+        "\t\t\t\ttopWin.smNasUploadPick(isDir || '/', window);\r\n"
+        "\t\t\t\treturn;\r\n"
+        "\t\t\t}\r\n"
+        "\t\t}catch(e){}\r\n"
         "\t\tvar wrap = document.getElementById('sm-st-upload-wrap');\r\n"
         "\t\tvar input = document.getElementById('sm-st-upload-input');\r\n"
         "\t\tif(!wrap || !input){\r\n"
@@ -7221,7 +7251,11 @@ def _nas_files_patch_st_mobile_upload(text: str) -> str:
     )
     if "upload: function" not in text and "deleteFile: function" in text:
         text = text.replace("\t},\r\n\t\r\n\tdeleteFile: function(datas, el)", "\t},\r\n\r\n" + upload_block)
-    elif "setTimeout(function(){try{input.click()" in text or "sm-st-upload-input" in text:
+    elif (
+        "setTimeout(function(){try{input.click()" in text
+        or "sm-st-upload-input" in text
+        or "smNasUploadPick" in text
+    ):
         text = re.sub(
             r"\t(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
             upload_block,
