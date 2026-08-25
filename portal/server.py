@@ -5803,6 +5803,13 @@ td.x-grid3-hd-over,td.sort-desc,td.sort-asc,td.x-grid3-hd-menu-open{
 .x-grid3-cell-inner,.x-grid3-hd-inner{color:var(--sm-text)!important;font-size:13px!important;
   line-height:40px!important;min-height:40px!important}
 .x-grid3-cell-selected{background:var(--sm-accent-dim)!important;color:var(--sm-text)!important}
+/* Detail/list grid — Ext sets inline white backgrounds; keep dark theme readable */
+#main-panel .x-grid-panel,#main-panel .x-grid-panel .x-panel-body,
+#main-panel .x-grid-panel .x-panel-bwrap,#main-panel .x-grid3,
+#main-panel .x-grid3-viewport,#main-panel .x-grid3-scroller,#main-panel .x-grid3-body{
+  background:var(--sm-bg0)!important;background-color:var(--sm-bg0)!important}
+#main-panel .x-grid3-row td,#main-panel .x-grid3-cell-inner{
+  color:var(--sm-text)!important;background:transparent!important}
 .x-grid3-hd-btn{filter:invert(1) brightness(1.2)}
 .x-grid3-resize-marker,.x-grid3-resize-proxy{background:var(--sm-accent)!important}
 
@@ -6247,15 +6254,34 @@ NAS_FILES_SNIPPET = (
     "return true;"
     "}catch(e){return false;}}"
     "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;}catch(e){}"
+    "function smKickFilesLoad(){"
+    "try{"
+    "if(window.__smKickFilesDone)return true;"
+    "if(!window.Ext||!Ext.getCmp)return false;"
+    "var tree=Ext.getCmp('tree-panel');"
+    "var main=Ext.getCmp('main-panel');"
+    "if(!tree||!main||typeof main.getComponent!=='function')return false;"
+    "var view=main.getComponent(0);"
+    "if(!view||typeof view.updateView!=='function')return false;"
+    "var node=tree.getSelectionModel().getSelectedNode();"
+    "if(!node){node=tree.getNodeById('/');if(node)try{tree.getSelectionModel().select(node);}catch(e){}}"
+    "if(!node)return false;"
+    "view.updateView(node,function(){"
+    "window.__smKickFilesDone=true;"
+    "try{if(typeof smNasFit==='function')smNasFit(true);}catch(e){}"
+    "});"
+    "return true;"
+    "}catch(e){return false;}}"
+    "try{window.smKickFilesLoad=smKickFilesLoad;}catch(e){}"
     "try{smHideIconBar();}catch(e){}"
     "try{"
     "var _smAuthN=0;"
     "var _smAuthT=setInterval(function(){"
-    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();"
+    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smKickFilesLoad();"
     "if(++_smAuthN>=40)clearInterval(_smAuthT);"
     "},250);"
-    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();},false);"
-    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();},false);"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();smKickFilesLoad();},false);"
+    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smKickFilesLoad();},false);"
     "}catch(e){}"
     "function smClearStuckMask(){"
     "try{"
@@ -6331,6 +6357,7 @@ NAS_FILES_SNIPPET = (
     "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
+    "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone)smKickFilesLoad();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
@@ -6544,7 +6571,7 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();},1200);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();},1200);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
@@ -6909,9 +6936,9 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
 
 
 def _nas_files_patch_removed_toolbar_buttons(text: str) -> str:
-    """Guard icon-toolbar button calls after #icon-panel action buttons are removed."""
+    """Guard Ext.getCmp().enable/disable calls for UI parts removed from the chrome."""
     text = re.sub(
-        r"Ext\.getCmp\((['\"])(btn_[^'\"]+)\1\)\.(enable|disable|show|hide)\(\)",
+        r"Ext\.getCmp\((['\"])([^'\"]+)\1\)\.(enable|disable|show|hide)\(\)",
         r"(function(_smB){if(_smB&&_smB.\3)_smB.\3();})(Ext.getCmp(\1\2\1))",
         text,
     )
