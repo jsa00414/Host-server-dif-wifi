@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ftplib
 import io
+import mimetypes
 import base64
 import hashlib
 import hmac
@@ -1485,6 +1486,18 @@ def ftp_upload_bytes(path: str, data: bytes) -> dict:
                 pass
     return {"ok": True, "path": target, "size": len(data)}
 
+
+
+def ftp_guess_mime(name: str) -> str:
+    ctype, _ = mimetypes.guess_type(name or "")
+    if ctype:
+        return ctype
+    lower = (name or "").lower()
+    if lower.endswith((".md", ".markdown", ".log", ".conf", ".cfg", ".ini", ".env")):
+        return "text/plain; charset=utf-8"
+    if lower.endswith((".ts", ".tsx", ".jsx", ".vue")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
 
 def ftp_download_bytes(path: str) -> tuple[str, bytes]:
     target = ftp_norm_path(path)
@@ -7113,19 +7126,48 @@ class Handler(BaseHTTPRequestHandler):
                 from urllib.parse import parse_qs, quote
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or [""])[0]
-                name, data = ftp_download_bytes(path_q)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header(
-                    "Content-Disposition",
-                    f"attachment; filename*=UTF-8''{quote(name)}",
-                )
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(data)
+                inline = (qs.get("inline") or ["0"])[0] in ("1", "true", "yes")
+                target = ftp_norm_path(path_q)
+                if target == "/":
+                    raise ValueError("not a file")
+                name = target.rsplit("/", 1)[-1] or "download"
+                ctype = ftp_guess_mime(name)
+                if inline and ctype.startswith("text/") and "charset=" not in ctype:
+                    ctype = ctype + "; charset=utf-8"
+                ftp = ftp_connect()
+                size = None
+                try:
+                    try:
+                        size = ftp.size(target)
+                    except Exception:
+                        size = None
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    disp = "inline" if inline else "attachment"
+                    self.send_header(
+                        "Content-Disposition",
+                        f"{disp}; filename*=UTF-8''{quote(name)}",
+                    )
+                    if size is not None:
+                        self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    ftp.retrbinary(f"RETR {target}", self.wfile.write)
+                finally:
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
             except Exception as exc:
-                self._json(500, {"ok": False, "error": str(exc)})
+                # headers may already be sent while streaming
+                try:
+                    self._json(500, {"ok": False, "error": str(exc)})
+                except Exception:
+                    pass
             return
         if path == "/api/buffalo-sso":
             if not self._require_auth(api=True):

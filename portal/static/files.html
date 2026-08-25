@@ -138,6 +138,52 @@
     }
     .ftp-toast.show { opacity: 1; }
     .ftp-toast.err { color: #ffb4b4; border-color: rgba(255,107,107,.35); }
+    .ftp-viewer {
+      position: fixed; inset: 0; z-index: 40; display: none;
+      flex-direction: column;
+      background: rgba(10,15,13,.96);
+    }
+    .ftp-viewer.open { display: flex; }
+    .ftp-viewer-bar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 12px 14px; border-bottom: 1px solid var(--line);
+      background: var(--bg1);
+    }
+    .ftp-viewer-bar .title {
+      flex: 1; min-width: 120px; font-weight: 700; font-size: .92rem;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ftp-viewer-bar button {
+      border: 1px solid var(--line); background: rgba(255,255,255,.04);
+      color: var(--text); border-radius: 10px; padding: 8px 12px;
+      font-size: .8rem; font-weight: 600; cursor: pointer;
+    }
+    .ftp-viewer-bar button.primary {
+      background: var(--accent); color: #062016; border-color: transparent;
+    }
+    .ftp-viewer-body {
+      flex: 1; min-height: 0; display: grid; place-items: center;
+      padding: 12px; overflow: auto;
+    }
+    .ftp-viewer-body img,
+    .ftp-viewer-body video {
+      max-width: 100%; max-height: 100%; border-radius: 12px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.45);
+    }
+    .ftp-viewer-body audio { width: min(560px, 100%); }
+    .ftp-viewer-body iframe {
+      width: 100%; height: 100%; border: 0; border-radius: 12px; background: #fff;
+    }
+    .ftp-viewer-body pre {
+      margin: 0; width: 100%; max-width: 960px; max-height: 100%;
+      overflow: auto; padding: 16px 18px; border-radius: 12px;
+      background: var(--bg2); border: 1px solid var(--line);
+      color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .82rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+    }
+    .ftp-viewer-fallback {
+      text-align: center; color: var(--muted); max-width: 36ch; line-height: 1.45;
+    }
     @media (max-width: 900px) {
       .ftp-shell { grid-template-columns: 1fr; }
       .ftp-side { display: none; }
@@ -186,6 +232,14 @@
     </div>
   </div>
   <div class="ftp-toast" id="ftpToast"></div>
+  <div class="ftp-viewer" id="ftpViewer" aria-hidden="true">
+    <div class="ftp-viewer-bar">
+      <div class="title" id="ftpViewerTitle">File</div>
+      <button type="button" class="primary" id="ftpViewerDownload">Download</button>
+      <button type="button" id="ftpViewerClose">Close</button>
+    </div>
+    <div class="ftp-viewer-body" id="ftpViewerBody"></div>
+  </div>
 
   <script>
     const FTP_FOLDER_SVG = `<svg viewBox="0 0 64 52" fill="none" aria-hidden="true"><path d="M2 12c0-3.3 2.7-6 6-6h14l4 4h30c3.3 0 6 2.7 6 6v28c0 3.3-2.7 6-6 6H8c-3.3 0-6-2.7-6-6V12z" fill="rgba(61,222,160,.18)" stroke="#3ddea0" stroke-width="2"/><path d="M2 18h60" stroke="#3ddea0" stroke-opacity=".35" stroke-width="2"/></svg>`;
@@ -261,10 +315,82 @@
       });
     }
 
+    function ftpFileKind(name) {
+      const n = String(name || "").toLowerCase();
+      const ext = (n.split(".").pop() || "");
+      if (["png","jpg","jpeg","gif","webp","bmp","svg","avif","ico"].includes(ext)) return "image";
+      if (["mp4","webm","ogg","mov","m4v"].includes(ext)) return "video";
+      if (["mp3","wav","flac","m4a","aac","oga"].includes(ext)) return "audio";
+      if (ext === "pdf") return "pdf";
+      if (["txt","md","markdown","log","json","csv","tsv","xml","html","htm","css","js","ts","tsx","jsx","py","sh","conf","cfg","ini","env","yaml","yml","toml","c","cpp","h","java","go","rs","rb","php","sql"].includes(ext)) return "text";
+      return "other";
+    }
+
+    function ftpInlineUrl(entry) {
+      return "/api/ftp/download?path=" + encodeURIComponent(entry.path) + "&inline=1";
+    }
+
+    function ftpCloseViewer() {
+      const viewer = document.getElementById("ftpViewer");
+      const body = document.getElementById("ftpViewerBody");
+      viewer.classList.remove("open");
+      viewer.setAttribute("aria-hidden", "true");
+      body.innerHTML = "";
+      ftpViewerEntry = null;
+    }
+
+    let ftpViewerEntry = null;
+
+    async function ftpOpenFile(entry) {
+      if (!entry || entry.type !== "file") return;
+      ftpSetSelected(entry);
+      const kind = ftpFileKind(entry.name);
+      const url = ftpInlineUrl(entry);
+      const viewer = document.getElementById("ftpViewer");
+      const body = document.getElementById("ftpViewerBody");
+      const title = document.getElementById("ftpViewerTitle");
+      ftpViewerEntry = entry;
+      title.textContent = entry.name;
+      body.innerHTML = `<div class="ftp-empty">Opening…</div>`;
+      viewer.classList.add("open");
+      viewer.setAttribute("aria-hidden", "false");
+
+      try {
+        if (kind === "image") {
+          body.innerHTML = `<img src="${esc(url)}" alt="${esc(entry.name)}" />`;
+          return;
+        }
+        if (kind === "video") {
+          body.innerHTML = `<video controls autoplay src="${esc(url)}"></video>`;
+          return;
+        }
+        if (kind === "audio") {
+          body.innerHTML = `<audio controls autoplay src="${esc(url)}"></audio>`;
+          return;
+        }
+        if (kind === "pdf") {
+          body.innerHTML = `<iframe title="${esc(entry.name)}" src="${esc(url)}"></iframe>`;
+          return;
+        }
+        if (kind === "text") {
+          const res = await fetch(url, { credentials: "same-origin" });
+          if (!res.ok) throw new Error("Could not open file");
+          const text = await res.text();
+          const clipped = text.length > 800000 ? text.slice(0, 800000) + "\n\n… (truncated)" : text;
+          body.innerHTML = `<pre>${esc(clipped)}</pre>`;
+          return;
+        }
+        body.innerHTML = `<div class="ftp-viewer-fallback">This file type can’t be previewed in the browser.<br/>Use Download to save it.</div>`;
+      } catch (err) {
+        body.innerHTML = `<div class="ftp-error">${esc(String(err.message || err))}</div>`;
+        toast(String(err.message || err), "err");
+      }
+    }
+
     function ftpOpenSelected() {
       if (!ftpSelected) return;
       if (ftpSelected.type === "dir") ftpBrowse(ftpSelected.path);
-      else ftpDownload(ftpSelected);
+      else ftpOpenFile(ftpSelected);
     }
 
     function ftpRenderCrumbs(data) {
@@ -310,9 +436,9 @@
             ftpBrowse(entry.path);
             return;
           }
-          // Files: first click selects; click again (or Open) downloads.
+          // Files: first click selects; click again opens in viewer.
           if (ftpSelected && ftpSelected.path === entry.path) {
-            ftpDownload(entry);
+            ftpOpenFile(entry);
             return;
           }
           ftpSetSelected(entry);
@@ -321,7 +447,7 @@
           ev.preventDefault();
           if (!entry) return;
           if (entry.type === "dir") ftpBrowse(entry.path);
-          else ftpDownload(entry);
+          else ftpOpenFile(entry);
         });
       });
 
@@ -442,6 +568,10 @@
       document.getElementById("ftpDownloadBtn").addEventListener("click", () => ftpDownload(ftpSelected));
       document.getElementById("ftpRenameBtn").addEventListener("click", () => ftpRename());
       document.getElementById("ftpDeleteBtn").addEventListener("click", () => ftpDelete());
+      document.getElementById("ftpViewerClose").addEventListener("click", () => ftpCloseViewer());
+      document.getElementById("ftpViewerDownload").addEventListener("click", () => {
+        if (ftpViewerEntry) ftpDownload(ftpViewerEntry);
+      });
       document.getElementById("ftpSearch").addEventListener("input", (e) => {
         ftpQuery = e.target.value || "";
         ftpRenderGrid();
@@ -450,8 +580,14 @@
         b.addEventListener("click", () => ftpBrowse(b.getAttribute("data-ftp-root") || "/disk1"));
       });
       document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && document.getElementById("ftpViewer").classList.contains("open")) {
+          e.preventDefault();
+          ftpCloseViewer();
+          return;
+        }
         if (e.key === "Enter") ftpOpenSelected();
         if (e.key === "Backspace" && !(e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA"))) {
+          if (document.getElementById("ftpViewer").classList.contains("open")) return;
           e.preventDefault();
           if (ftpPath !== "/") ftpBrowse(ftpParentPath(ftpPath));
         }
