@@ -472,19 +472,28 @@ body#buffalo #header .sep_r {
 /* Quiet empty nav chrome before login */
 body#buffalo #nav .sound,
 body#buffalo #nav p.sound,
+body#buffalo #nav ul li.username,
+body#buffalo #nav ul li.username #mainField,
 body#buffalo #nav ul li.username #mainField .icon,
-body#buffalo #nav ul li.username #mainField .text:empty,
-body#buffalo #nav ul li.layout[style*="display: none"],
-body#buffalo #nav ul li.language #NAS_07_LABEL_CAPTION:empty {
+body#buffalo #nav ul li.username #mainField .text {
   display: none !important;
-}
-body#buffalo #nav ul li.username #mainField {
-  width: auto !important;
-  height: auto !important;
-  min-height: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
   background: transparent !important;
   background-image: none !important;
-  border: 0 !important;
+}
+/* Keep footer at bottom; hide empty product glyph (shows as white box) */
+body#buffalo #footer.preload,
+body#buffalo div#footer.preload {
+  display: none !important;
+}
+body#buffalo #BUFFALO_PROD_NAME,
+body#buffalo #footer .product-name img {
+  display: none !important;
+}
+body#buffalo #main {
+  min-height: calc(100vh - 96px) !important;
 }
 body#buffalo #footer,
 * body#buffalo #footer {
@@ -734,6 +743,16 @@ BUFFALO_FIT_SNIPPET = (
     "document.querySelectorAll('#header .dropmenu.hide, #header .dropdownbox.hide').forEach(function(el){"
     "force(el,{display:'none'});});"
     "var sound=document.querySelector('#nav .sound'); force(sound,{display:'none'});"
+    "var foot=document.getElementById('footer');"
+    "if(foot&&foot.classList.contains('preload')){force(foot,{display:'none'});}"
+    "var prod=document.getElementById('BUFFALO_PROD_NAME'); force(prod,{display:'none'});"
+    "var userLi=document.querySelector('#nav li.username'); force(userLi,{display:'none'});"
+    "var langName=document.getElementById('language-name');"
+    "var langText=langName?(langName.textContent||'').replace(/\\u00a0/g,' ').trim():'';"
+    "var layoutLi=document.querySelector('#nav li.layout');"
+    "var layoutVisible=layoutLi&&getComputedStyle(layoutLi).display!=='none'&&(layoutLi.textContent||'').trim();"
+    "if(nav&&!langText&&!layoutVisible){force(nav,{display:'none',height:'0','min-height':'0','max-height':'0','border-bottom':'0'});}"
+    "else if(nav){force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px'});}"
     "var nav=document.getElementById('nav');"
     "force(nav,{display:'block',height:'40px','min-height':'40px','max-height':'40px',"
     "margin:'0',padding:'0 18px',overflow:'visible',"
