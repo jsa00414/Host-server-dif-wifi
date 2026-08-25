@@ -157,45 +157,23 @@
     #view-buffalo.active {
       position: absolute !important;
       inset: 0 !important;
-      width: auto !important;
-      height: auto !important;
       min-height: 0 !important;
       overflow: hidden !important;
       display: block !important;
-    }
-    .buffalo-zoom-host {
-      position: absolute !important;
-      inset: 0 !important;
-      width: auto !important;
-      height: auto !important;
-      min-height: 0 !important;
-      overflow: hidden !important;
-      background: #2b2b2b;
-      border-radius: 0;
+      background: #d6d6d6;
     }
     #frameBuffalo {
       position: absolute !important;
-      top: 0 !important;
-      left: 0 !important;
-      border: 0 !important;
-      border-radius: 0 !important;
-      background: #2b2b2b;
-      transform-origin: top left !important;
-      flex: none !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
       min-width: 0 !important;
       min-height: 0 !important;
-      max-width: none !important;
-      max-height: none !important;
-      width: 880px;
-      height: 560px;
-      overflow: hidden !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+      background: #d6d6d6;
+      transform: none !important;
       zoom: normal !important;
-      scrollbar-width: none;
-      -ms-overflow-style: none;
-    }
-    .content:has(#view-buffalo.active),
-    #view-buffalo.active,
-    #view-buffalo.active .buffalo-zoom-host {
       overflow: hidden !important;
     }
     .content:has(.view.embed-view.active) {
@@ -615,10 +593,6 @@
         min-height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
         height: calc(100dvh - var(--top-h) - var(--mobile-nav-h) - 24px);
       }
-      .buffalo-zoom-host {
-        min-height: 0;
-        height: 100%;
-      }
       input, select { font-size: 16px; min-height: 44px; }
       button { min-height: 40px; }
     }
@@ -900,11 +874,7 @@
       </section>
 
       <section class="view embed-view" id="view-buffalo">
-        <div class="buffalo-zoom-host">
-          <div class="buffalo-zoom-clip">
-            <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="https://buffalo.vpstruelord.com/" scrolling="no" allow="clipboard-read; clipboard-write"></iframe>
-          </div>
-        </div>
+        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view" id="view-tailscale">
@@ -1267,54 +1237,14 @@
       }
     }
 
-    function layoutBuffaloZoom() {
-      const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
-      const frame = document.getElementById("frameBuffalo");
-      if (!host || !frame) return;
-      const hw = host.clientWidth;
-      const hh = host.clientHeight;
-      if (hw < 40 || hh < 40) {
-        requestAnimationFrame(layoutBuffaloZoom);
-        return;
-      }
-      // Punch into the LinkStation app panel and cover the portal pane.
-      const designW = 880;
-      const designH = 560;
-      const scale = Math.max(hw / designW, hh / designH) * 1.12;
-      const ox = (hw - designW * scale) / 2;
-      const oy = (hh - designH * scale) / 2;
-      frame.style.setProperty("width", `${designW}px`, "important");
-      frame.style.setProperty("height", `${designH}px`, "important");
-      frame.style.setProperty("transform", `translate(${ox}px, ${oy}px) scale(${scale})`, "important");
-      frame.style.setProperty("transform-origin", "top left", "important");
-    }
-
     function loadBuffaloFrame() {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
-      const src = frame.dataset.src || "https://buffalo.vpstruelord.com/";
-      const apply = () => {
-        layoutBuffaloZoom();
-        requestAnimationFrame(layoutBuffaloZoom);
-        setTimeout(layoutBuffaloZoom, 250);
-        setTimeout(layoutBuffaloZoom, 1000);
-      };
+      const src = frame.dataset.src || "/buffalo-frame/";
       if (frame.getAttribute("src") === "about:blank" || !frame.getAttribute("src")) {
-        frame.addEventListener("load", apply, { once: true });
         frame.src = src;
       }
-      apply();
     }
-
-    let buffaloZoomObs = null;
-    function ensureBuffaloZoomObserver() {
-      const host = document.querySelector("#view-buffalo .buffalo-zoom-host");
-      if (!host || buffaloZoomObs) return;
-      buffaloZoomObs = new ResizeObserver(() => layoutBuffaloZoom());
-      buffaloZoomObs.observe(host);
-      window.addEventListener("resize", layoutBuffaloZoom);
-    }
-    ensureBuffaloZoomObserver();
 
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
@@ -1327,10 +1257,6 @@
       }
       if (name === "buffalo") {
         loadBuffaloFrame();
-        requestAnimationFrame(() => {
-          layoutBuffaloZoom();
-          requestAnimationFrame(layoutBuffaloZoom);
-        });
       }
       if (name === "overview") { refreshVpsStatus(); }
       if (name === "dnsmap") { refreshDnsMap(); }

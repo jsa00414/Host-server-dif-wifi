@@ -19,7 +19,9 @@ import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 CONF_PATH = Path(os.environ.get("FORWARDS_CONF", "/opt/servermanager/scripts/forwards.conf"))
 APPLY_SCRIPT = Path(
@@ -38,6 +40,71 @@ AUTH_USER = os.environ.get("PF_USER", "admin")
 AUTH_PASS = os.environ.get("PF_PASS", "")
 PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
+BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
+BUFFALO_PREFIX = "/buffalo-frame"
+# Override LinkStation's fixed ~940px shell so it fills the portal iframe.
+BUFFALO_FIT_CSS = """
+html, body, body#buffalo {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: #d6d6d6 !important;
+}
+body#buffalo .container,
+body#buffalo #header,
+body#buffalo #nav,
+body#buffalo #nav .container,
+body#buffalo #footer,
+* body#buffalo #footer {
+  width: 100% !important;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  box-sizing: border-box !important;
+}
+body#buffalo #footer .copyright {
+  width: calc(100% - 40px) !important;
+  max-width: none !important;
+}
+body#buffalo #main,
+body#buffalo #top,
+body#buffalo .container.portal,
+body#buffalo .container.footer {
+  width: 100% !important;
+  max-width: none !important;
+  box-sizing: border-box !important;
+}
+body#buffalo div#main div#top div#menu_box {
+  width: calc(100% - 24px) !important;
+  max-width: none !important;
+  height: calc(100vh - 150px) !important;
+  max-height: none !important;
+  margin-left: 12px !important;
+  margin-right: 12px !important;
+  overflow: auto !important;
+  box-sizing: border-box !important;
+}
+body#buffalo #main .container_sd {
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: calc(100vh - 140px) !important;
+}
+body#buffalo #header #header-search {
+  width: auto !important;
+  flex: 1 !important;
+  max-width: none !important;
+}
+""".strip()
+
+BUFFALO_FIT_SNIPPET = (
+    "<style id=\"sm-buffalo-fit\">"
+    + BUFFALO_FIT_CSS.replace("\n", " ")
+    + "</style>"
+)
 PANEL_TAGLINE = os.environ.get("PANEL_TAGLINE", "")
 SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))
 COOKIE_NAME = "sm_session"
@@ -3610,6 +3677,158 @@ def check_credentials(username: str, password: str) -> bool:
     )
 
 
+def _buffalo_rewrite_location(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith(BUFFALO_PREFIX + "/") or raw == BUFFALO_PREFIX:
+        return raw
+    lower = raw.lower()
+    for prefix in (
+        BUFFALO_UPSTREAM,
+        "http://192.168.8.159",
+        "https://buffalo.vpstruelord.com",
+        "http://buffalo.vpstruelord.com",
+    ):
+        if lower.startswith(prefix.lower()):
+            rest = raw[len(prefix) :]
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            return BUFFALO_PREFIX + rest
+    if raw.startswith("/"):
+        return BUFFALO_PREFIX + raw
+    return raw
+
+
+def _buffalo_rewrite_set_cookie(value: str) -> str:
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    if not parts:
+        return value
+    out = [parts[0]]
+    saw_path = False
+    for part in parts[1:]:
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={BUFFALO_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            continue
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={BUFFALO_PREFIX}/")
+    return "; ".join(out)
+
+
+def _buffalo_inject_fit_css(body: bytes, content_type: str) -> bytes:
+    ctype = (content_type or "").lower()
+    if "text/html" not in ctype:
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = body.decode("latin-1")
+        except Exception:
+            return body
+    if "sm-buffalo-fit" in text:
+        return body
+    snippet = BUFFALO_FIT_SNIPPET
+    lower = text.lower()
+    idx = lower.find("</head>")
+    if idx != -1:
+        text = text[:idx] + snippet + text[idx:]
+    else:
+        text = snippet + text
+    return text.encode("utf-8")
+
+
+def proxy_buffalo_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to the LinkStation, with CSS fit injection."""
+    parsed = urlparse(handler.path)
+    rel = parsed.path[len(BUFFALO_PREFIX) :] or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    upstream = urljoin(BUFFALO_UPSTREAM + "/", rel.lstrip("/"))
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers = {}
+    for key in ("Accept", "Accept-Language", "Content-Type", "X-Requested-With", "Referer"):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        # Drop portal session cookie; NAS only needs its own cookies.
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    headers["Host"] = urlparse(BUFFALO_UPSTREAM).netloc
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-BuffaloProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        handler._json(502, {"error": f"buffalo proxy failed: {exc}"})
+        return
+
+    content_type = upstream_headers.get("Content-Type") or upstream_headers.get("content-type") or "application/octet-stream"
+    body = _buffalo_inject_fit_css(body, content_type)
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _buffalo_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie in set_cookies:
+        if cookie:
+            handler.send_header("Set-Cookie", _buffalo_rewrite_set_cookie(cookie))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ServerManager/1.2"
 
@@ -3787,6 +4006,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
+            return proxy_buffalo_request(self, "GET")
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -3852,6 +4073,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
+            return proxy_buffalo_request(self, "POST")
         self._json(404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
