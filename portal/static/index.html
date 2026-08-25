@@ -157,8 +157,8 @@
     .buffalo-zoom-host {
       flex: 1;
       width: 100%;
-      min-height: calc(100dvh - var(--top-h));
-      height: calc(100dvh - var(--top-h));
+      min-height: 0;
+      height: 100%;
       overflow: hidden !important;
       background: #2b2b2b;
       border-radius: 0;
@@ -188,7 +188,7 @@
     }
     .content:has(.view.embed-view.active) {
       padding: 0;
-      overflow: auto;
+      overflow: hidden;
       scrollbar-width: none;
       -ms-overflow-style: none;
     }
@@ -199,6 +199,29 @@
     body.embed-mode .embed-view {
       scrollbar-width: none !important;
       -ms-overflow-style: none !important;
+    }
+    body.embed-mode {
+      height: 100dvh;
+      max-height: 100dvh;
+      overflow: hidden !important;
+      grid-template-rows: var(--top-h) 1fr;
+    }
+    body.embed-mode .main {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden !important;
+      grid-template-rows: 1fr;
+    }
+    body.embed-mode .content {
+      padding: 0 !important;
+      min-height: 0;
+      height: 100%;
+      overflow: hidden !important;
+    }
+    body.embed-mode .embed-view.active {
+      min-height: 0 !important;
+      height: 100%;
+      overflow: hidden !important;
     }
     body.embed-mode::-webkit-scrollbar,
     body.embed-mode .main::-webkit-scrollbar,
@@ -1235,15 +1258,17 @@
       if (!host || !frame) return;
       const hw = host.clientWidth || 1;
       const hh = host.clientHeight || 1;
-      // Denser ExtJS canvas + scale-to-fill (no translate). Login stays centered;
-      // host overflow:hidden crops nothing essential and hides scrollbars.
-      const zoom = 1.7;
-      const designW = Math.round(hw / zoom);
-      const designH = Math.round(hh / zoom);
+      // Full dashboard canvas (all tiles + Advanced + footer). Contain-scale so
+      // the whole LinkStation UI fits the portal pane — no clipped tiles, no scrollbars.
+      const designW = 1360;
+      const designH = 820;
+      const scale = Math.min(hw / designW, hh / designH);
+      const ox = (hw - designW * scale) / 2;
+      const oy = (hh - designH * scale) / 2;
       frame.style.zoom = "normal";
       frame.style.width = `${designW}px`;
       frame.style.height = `${designH}px`;
-      frame.style.transform = `scale(${zoom})`;
+      frame.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
       frame.style.transformOrigin = "top left";
     }
 
