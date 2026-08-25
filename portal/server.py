@@ -97,37 +97,272 @@ body#buffalo #header,
 body#buffalo #nav {
   background: var(--sm-bg1) !important;
   border-bottom: 1px solid var(--sm-line) !important;
-  padding: 10px 16px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  float: none !important;
+  position: relative !important;
+  z-index: 20 !important;
+  overflow: visible !important;
 }
 body#buffalo #header {
   display: flex !important;
-  flex-wrap: wrap !important;
+  flex-wrap: nowrap !important;
   align-items: center !important;
   justify-content: space-between !important;
-  gap: 10px !important;
+  gap: 12px !important;
   min-height: 56px !important;
+  height: 56px !important;
+  max-height: 56px !important;
+  padding: 0 16px !important;
+  box-sizing: border-box !important;
+}
+body#buffalo #header > .container {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+  background: transparent !important;
 }
 body#buffalo #header #header-logo,
 body#buffalo #header #header-button,
 body#buffalo #header #header-search {
+  display: flex !important;
+  align-items: center !important;
   float: none !important;
   margin: 0 !important;
+  padding: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  background: transparent !important;
+}
+body#buffalo #header #header-logo {
+  flex: 0 0 auto !important;
+  min-width: 120px !important;
+}
+body#buffalo #header #header-logo .logo {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 0 !important;
+  overflow: visible !important;
+}
+body#buffalo #header #header-logo .logo img,
+body#buffalo #header #BUFFALO_LOGO {
+  display: block !important;
+  width: auto !important;
+  height: 22px !important;
+  max-height: 22px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  object-fit: contain !important;
+  overflow: visible !important;
+}
+body#buffalo #header #header-logo .product-name {
+  display: none !important;
 }
 body#buffalo #header #header-search {
-  width: auto !important;
-  flex: 1 1 240px !important;
-  max-width: 420px !important;
+  flex: 1 1 auto !important;
+  max-width: none !important;
+  justify-content: flex-end !important;
+  min-width: 0 !important;
 }
-body#buffalo #header .logo,
-body#buffalo #header .product-name,
-body#buffalo #nav .name,
-body#buffalo #nav ul li,
-body#buffalo #nav a,
-body#buffalo .copyright,
-body#buffalo .dtcpip-version {
+body#buffalo #header #header-search .search {
+  display: none !important;
+}
+body#buffalo #header #header-search .text {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 0 !important;
+  float: none !important;
+  text-align: right !important;
+}
+body#buffalo #header #header-search .text .title,
+body#buffalo #header #header-search .text .back-home,
+body#buffalo #header #header-search .text a.dl {
+  display: none !important;
+}
+body#buffalo #header #header-button {
+  flex: 0 0 auto !important;
+}
+body#buffalo #header #header-button ul,
+body#buffalo #header #header-button ul.right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+  list-style: none !important;
+  height: 36px !important;
+}
+body#buffalo #header #header-button ul li {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  float: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 36px !important;
+  height: 36px !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 9px !important;
+  position: relative !important;
+}
+body#buffalo #header #header-button ul li:hover {
+  background: var(--sm-bg3) !important;
+}
+body#buffalo #header #header-button ul li a {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 36px !important;
+  height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 9px !important;
+  line-height: 0 !important;
+}
+body#buffalo #header #header-button ul li img,
+body#buffalo #header #header-button ul li .pressbtn,
+body#buffalo #header #header-button ul li .toggle {
+  display: block !important;
+  width: 20px !important;
+  height: 20px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: 20px !important;
+  max-height: 20px !important;
+  object-fit: contain !important;
+  filter: brightness(1.15) saturate(0.85) !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+body#buffalo #header #header-button ul li.logout {
+  margin-left: 0 !important;
+}
+body#buffalo #header #header-button ul li.power {
+  margin-left: 0 !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu {
+  top: 40px !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 10px !important;
+  overflow: hidden !important;
+  background: var(--sm-bg2) !important;
+}
+body#buffalo #header .dropmenu-parent .dropmenu li,
+body#buffalo #header .dropmenu-parent .dropmenu li a {
+  background-color: var(--sm-bg2) !important;
+  color: var(--sm-text) !important;
+  border-color: var(--sm-line) !important;
+}
+body#buffalo #header .status .dropdownbox,
+body#buffalo #header .search .dropdownbox {
+  background: var(--sm-bg2) !important;
+  border: 1px solid var(--sm-line) !important;
+  border-radius: 10px !important;
   color: var(--sm-text) !important;
 }
-body#buffalo #nav .name { color: var(--sm-muted) !important; font-weight: 600 !important; }
+/* Second bar (#nav): clean toolbar under header */
+body#buffalo #nav {
+  display: flex !important;
+  align-items: center !important;
+  min-height: 44px !important;
+  height: 44px !important;
+  padding: 0 16px !important;
+  border-top: 0 !important;
+  background: var(--sm-bg2) !important;
+}
+body#buffalo #nav > .container,
+body#buffalo #nav > .container.portal {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+}
+body#buffalo #nav .back-home,
+body#buffalo #nav .sound,
+body#buffalo #nav .name,
+body#buffalo #nav ul,
+body#buffalo #nav ul li {
+  float: none !important;
+  display: flex !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  height: auto !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+body#buffalo #nav ul {
+  gap: 6px !important;
+  list-style: none !important;
+  margin-left: auto !important;
+}
+body#buffalo #nav ul li {
+  width: auto !important;
+  min-width: 36px !important;
+  height: 32px !important;
+  border-radius: 8px !important;
+}
+body#buffalo #nav ul li:hover {
+  background: var(--sm-bg3) !important;
+}
+body#buffalo #nav ul li a,
+body#buffalo #nav ul li.logout a {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border-radius: 8px !important;
+}
+body#buffalo #nav ul li.logout {
+  margin-left: 0 !important;
+}
+body#buffalo #nav ul li.logout a span {
+  display: block !important;
+  width: 18px !important;
+  height: 18px !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  filter: brightness(1.2) !important;
+}
+body#buffalo #nav ul li.language {
+  width: auto !important;
+  padding: 0 8px !important;
+  color: var(--sm-muted) !important;
+  font-size: 12px !important;
+}
+body#buffalo #nav .name {
+  color: var(--sm-muted) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  padding-left: 0 !important;
+}
+body#buffalo #nav .sep_r,
+body#buffalo #header .sep_r {
+  display: none !important;
+}
 body#buffalo #footer,
 * body#buffalo #footer {
   background: var(--sm-bg1) !important;
@@ -344,6 +579,12 @@ BUFFALO_FIT_SNIPPET = (
     "function fit(){"
     "try{document.documentElement.style.removeProperty('zoom');"
     "document.body.style.removeProperty('zoom');}catch(e){}"
+    "['header','nav'].forEach(function(id){var el=document.getElementById(id);"
+    "if(el){el.classList.remove('preload');el.style.setProperty('overflow','visible','important');}});"
+    "var logo=document.getElementById('BUFFALO_LOGO');"
+    "if(logo){logo.style.setProperty('height','22px','important');"
+    "logo.style.setProperty('max-height','22px','important');"
+    "logo.style.setProperty('width','auto','important');}"
     "var box=document.getElementById('menu_box');"
     "if(box){var top=box.getBoundingClientRect().top;"
     "box.style.setProperty('width','calc(100% - 28px)','important');"
