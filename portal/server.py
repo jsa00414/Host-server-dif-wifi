@@ -50,6 +50,121 @@ BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
 NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
 NAS_FILES_PREFIX = "/nas-files"
+# Flint / school WireGuard client profile (Endpoint :443, MTU 1280).
+WG_CLIENT_CONF = Path(
+    os.environ.get("WG_CLIENT_CONF", "/opt/wireguard/GL-MT6000.conf")
+)
+WG_CLIENT_DOWNLOAD_NAME = os.environ.get(
+    "WG_CLIENT_DOWNLOAD_NAME", "GL-MT6000-school.conf"
+)
+WG_CLIENT_NAME = os.environ.get("WG_CLIENT_NAME", "GL-MT6000")
+WG_EASY_DB_CONTAINER = os.environ.get("WG_EASY_DB_CONTAINER", "wg-easy")
+WG_EASY_DB_PATH = os.environ.get("WG_EASY_DB_PATH", "/etc/wireguard/wg-easy.db")
+
+
+def build_flint_wireguard_conf(client_name: str = "") -> bytes:
+    """Build a client .conf from live wg-easy keys (never trust a stale on-disk copy)."""
+    import sqlite3
+    import tempfile
+
+    name = (client_name or WG_CLIENT_NAME).strip() or "GL-MT6000"
+    tmp = Path(tempfile.mkdtemp(prefix="wg-easy-db-"))
+    db_local = tmp / "wg-easy.db"
+    try:
+        proc = subprocess.run(
+            ["docker", "cp", f"{WG_EASY_DB_CONTAINER}:{WG_EASY_DB_PATH}", str(db_local)],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0 or not db_local.is_file():
+            raise RuntimeError((proc.stderr or proc.stdout or "docker cp failed").strip())
+        pub_proc = subprocess.run(
+            ["docker", "exec", WG_EASY_DB_CONTAINER, "wg", "show", "wg0", "public-key"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if pub_proc.returncode != 0:
+            raise RuntimeError((pub_proc.stderr or "wg public-key failed").strip())
+        server_pub = (pub_proc.stdout or "").strip()
+        if not server_pub:
+            raise RuntimeError("empty server public key")
+
+        conn = sqlite3.connect(str(db_local))
+        conn.row_factory = sqlite3.Row
+        try:
+            cli = conn.execute(
+                "SELECT * FROM clients_table WHERE name = ? LIMIT 1", (name,)
+            ).fetchone()
+            if cli is None:
+                raise RuntimeError(f"client {name!r} not found in wg-easy")
+            cfg = conn.execute(
+                "SELECT * FROM user_configs_table WHERE id = ? LIMIT 1",
+                (cli["interface_id"],),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        host = str((cfg["host"] if cfg else None) or "74.208.76.213").strip()
+        port = int((cfg["port"] if cfg else None) or 443)
+        mtu = int(cli["mtu"] or 1280)
+        keepalive = int(cli["persistent_keepalive"] or 25)
+        try:
+            dns = json.loads(cli["dns"] or '["10.8.0.1"]')
+        except Exception:
+            dns = ["10.8.0.1"]
+        try:
+            allowed = json.loads(cli["allowed_ips"] or '["10.8.0.0/24","10.42.42.0/24"]')
+        except Exception:
+            allowed = ["10.8.0.0/24", "10.42.42.0/24"]
+        if not isinstance(dns, list) or not dns:
+            dns = ["10.8.0.1"]
+        if not isinstance(allowed, list) or not allowed:
+            allowed = ["10.8.0.0/24", "10.42.42.0/24"]
+        addr = str(cli["ipv4_address"] or "").strip()
+        if addr and "/" not in addr:
+            addr = addr + "/32"
+        if not addr:
+            raise RuntimeError("client has no ipv4 address")
+
+        text = (
+            "[Interface]\n"
+            f"PrivateKey = {cli['private_key']}\n"
+            f"Address = {addr}\n"
+            f"DNS = {', '.join(str(x) for x in dns)}\n"
+            f"MTU = {mtu}\n"
+            "\n"
+            "[Peer]\n"
+            f"PublicKey = {server_pub}\n"
+            f"PresharedKey = {cli['pre_shared_key']}\n"
+            f"Endpoint = {host}:{port}\n"
+            f"AllowedIPs = {', '.join(str(x) for x in allowed)}\n"
+            f"PersistentKeepalive = {keepalive}\n"
+        )
+        body = text.encode("utf-8")
+        try:
+            WG_CLIENT_CONF.write_bytes(body)
+            WG_CLIENT_CONF.chmod(0o600)
+        except Exception:
+            pass
+        return body
+    finally:
+        try:
+            if db_local.exists():
+                db_local.unlink()
+            tmp.rmdir()
+        except Exception:
+            pass
+
+
+def load_flint_wireguard_conf() -> bytes:
+    try:
+        return build_flint_wireguard_conf()
+    except Exception:
+        if WG_CLIENT_CONF.is_file():
+            return WG_CLIENT_CONF.read_bytes()
+        raise
 # Dark admin theme (ServerManager / AdGuard / Pi-hole style) + full-bleed layout.
 BUFFALO_FIT_CSS = """
 :root {
@@ -8551,6 +8666,32 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(500, {"ok": False, "error": str(exc)})
                 except Exception:
                     pass
+            return
+        if path in (
+            "/api/wireguard/config",
+            "/download/GL-MT6000-school.conf",
+            "/download/wireguard.conf",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_flint_wireguard_conf()
+                name = WG_CLIENT_DOWNLOAD_NAME
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-wireguard-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
             return
         if path == "/api/buffalo-sso":
             if not self._require_auth(api=True):
