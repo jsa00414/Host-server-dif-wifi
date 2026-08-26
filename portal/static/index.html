@@ -898,6 +898,13 @@
       <span class="nav-copy"><span>Firewall</span></span>
       <span class="count" id="fwCount">0</span>
     </button>
+    <div class="nav-label">VPN</div>
+    <button type="button" class="nav-btn" data-view="wireguard">
+      <span class="nav-copy"><span>WireGuard</span></span>
+    </button>
+    <button type="button" class="nav-btn" data-view="openvpn">
+      <span class="nav-copy"><span>OpenVPN</span></span>
+    </button>
     <div class="nav-label">DNS</div>
     <button type="button" class="nav-btn" data-view="dnsmap">
       <span class="nav-copy"><span>DNS Map</span></span>
@@ -1297,6 +1304,43 @@
         <iframe class="embed-frame" id="framePihole" title="Pi-hole" src="about:blank" data-src="https://pihole.vpstruelord.com/admin/" data-authed="0" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
+      <section class="view" id="view-wireguard">
+        <div class="page-head">
+          <h2>WireGuard</h2>
+          <p class="hint" style="margin:6px 0 0">Flint school / campus profile from live wg-easy keys.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Flint download</h3></div>
+          <div class="panel-body">
+            <p class="hint" style="margin:0 0 10px">Endpoint <code>74.208.76.213:5000</code>, MTU <code>1280</code>. Import on the Flint, then <strong>enable</strong> the tunnel (upload alone is not enough). Prefer OpenVPN on campus Wi‑Fi if WireGuard data stalls.</p>
+            <div class="settings-actions">
+              <a class="primary" id="wgConfigDownloadLink" href="https://portal.vpstruelord.com/api/wireguard/config" download="GL-MT6000-school.conf">Download config</a>
+            </div>
+            <p class="hint" style="margin:10px 0 0">Direct link (while logged in): <code>https://portal.vpstruelord.com/api/wireguard/config</code></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-openvpn">
+        <div class="page-head">
+          <h2>OpenVPN</h2>
+          <p class="hint" style="margin:6px 0 0">School tunnel over TCP 443 — preferred on campus Wi‑Fi.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Client profiles</h3></div>
+          <div class="panel-body">
+            <p class="hint" style="margin:0 0 10px">TCP <code>74.208.76.213:443</code> (shares HTTPS), <code>tls-auth</code> + <code>AES-256-CBC</code>. On the Flint: disable WireGuard, <strong>delete any old OpenVPN client</strong>, import this profile, then enable it.</p>
+            <div class="settings-actions">
+              <a class="primary" id="ovpnFlintDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/flint" download="GL-MT6000.ovpn">Download Flint .ovpn</a>
+              <a class="ghost" id="ovpnPhoneDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/phone" download="james-iphone.ovpn">Download iPhone .ovpn</a>
+              <a class="ghost" id="ovpnAllowSshDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/allow-ssh" download="flint-allow-vpn-ssh.sh">Allow VPN SSH script</a>
+            </div>
+            <p class="hint" style="margin:10px 0 0">Portal SSH needs one Flint step: join Flint Wi‑Fi → <code>192.168.8.1</code> → Terminal → run the Allow VPN SSH script.</p>
+            <p class="hint" style="margin:10px 0 0">Direct links: <code>https://portal.vpstruelord.com/api/openvpn/flint</code> · <code>https://portal.vpstruelord.com/api/openvpn/phone</code></p>
+          </div>
+        </div>
+      </section>
+
       <section class="view" id="view-settings">
         <div class="page-head">
           <h2>Settings</h2>
@@ -1377,27 +1421,13 @@
           </div>
 
           <div class="panel">
-            <div class="panel-head"><h3>WireGuard (Flint)</h3></div>
+            <div class="panel-head"><h3>VPN downloads</h3></div>
             <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px">School / campus profile — endpoint <code>74.208.76.213:5000</code>, MTU <code>1280</code>. Import on the Flint, then <strong>enable</strong> the tunnel (upload alone is not enough).</p>
+              <p class="hint" style="margin:0 0 10px">Use the sidebar <strong>WireGuard</strong> and <strong>OpenVPN</strong> tabs for Flint / phone profiles.</p>
               <div class="settings-actions">
-                <a class="primary" id="wgConfigDownloadLink" href="https://portal.vpstruelord.com/api/wireguard/config" download="GL-MT6000-school.conf">Download config</a>
+                <button type="button" class="primary" data-go="openvpn">Open OpenVPN</button>
+                <button type="button" class="ghost" data-go="wireguard">Open WireGuard</button>
               </div>
-              <p class="hint" style="margin:10px 0 0">Direct link (while logged in): <code>https://portal.vpstruelord.com/api/wireguard/config</code></p>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head"><h3>OpenVPN (school)</h3></div>
-            <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px">Preferred on campus Wi‑Fi. TCP <code>74.208.76.213:443</code> (shares HTTPS), <code>tls-auth</code> + <code>AES-256-CBC</code>. On the Flint: disable WireGuard, <strong>delete any old OpenVPN client</strong>, import this profile, then enable it.</p>
-              <div class="settings-actions">
-                <a class="primary" id="ovpnFlintDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/flint" download="GL-MT6000.ovpn">Download Flint .ovpn</a>
-                <a class="ghost" id="ovpnPhoneDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/phone" download="james-iphone.ovpn">Download iPhone .ovpn</a>
-                <a class="ghost" id="ovpnAllowSshDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/allow-ssh" download="flint-allow-vpn-ssh.sh">Allow VPN SSH script</a>
-              </div>
-              <p class="hint" style="margin:10px 0 0">Portal SSH needs one Flint step: join Flint Wi‑Fi → <code>192.168.8.1</code> → Terminal → paste/run the Allow VPN SSH script. Then LAN refresh works over OpenVPN.</p>
-              <p class="hint" style="margin:10px 0 0">Direct links (while logged in): <code>https://portal.vpstruelord.com/api/openvpn/flint</code> · <code>https://portal.vpstruelord.com/api/openvpn/phone</code></p>
             </div>
           </div>
 
@@ -1433,6 +1463,8 @@
                     <option value="files">Files</option>
                     <option value="domains">Domains</option>
                     <option value="firewall">Firewall</option>
+                    <option value="wireguard">WireGuard</option>
+                    <option value="openvpn">OpenVPN</option>
                     <option value="dnsmap">DNS Map</option>
                     <option value="adguard">AdGuard</option>
                     <option value="tailscale">Tailscale</option>
