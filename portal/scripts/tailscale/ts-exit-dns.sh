@@ -1,15 +1,12 @@
 #!/bin/bash
-# Force Surfshark / WireGuard-exit DNS through AdGuard -> Pi-hole.
+# Force Tailscale / WireGuard-exit DNS through AdGuard -> Pi-hole.
 #
-# AdGuard is published on 127.0.0.1:53 only. iptables REDIRECT for forwarded
-# packets targets the ingress iface IP (e.g. 10.42.42.1:53), not loopback, so
-# client DNS dies and phones/LAN look like "no internet". DNAT to AdGuard's
-# address on the wg-easy docker bridge keeps DNS on the container network
-# (private dest → no Surfshark mark) and avoids UFW INPUT DROP on 127.0.0.1.
+# Same as ss-exit-dns.sh: REDIRECT to :53 breaks clients because AdGuard only
+# binds 127.0.0.1:53. DNAT to AdGuard on the wg-easy docker bridge instead.
 set -euo pipefail
-COMMENT="SM-SS-EXIT-DNS"
+COMMENT="SM-TS-EXIT-DNS"
 ACTION="${1:-status}"
-IFACE="${2:-}"
+IFACE="${2:-tailscale0}"
 ADGUARD_CONTAINER="${ADGUARD_CONTAINER:-sm-adguard}"
 
 del_rules() {
@@ -29,7 +26,6 @@ del_rules() {
 }
 
 adguard_bridge_ip() {
-  # Prefer AdGuard on the same docker network as wg-easy (typically 10.42.42.0/24).
   local ip
   ip="$(
     docker inspect "$ADGUARD_CONTAINER" \
@@ -60,20 +56,19 @@ add_rules() {
   fi
   del_rules
   local iface="$IFACE"
-  if [ -z "$iface" ] && [ -f /opt/surfshark/ss-vpn-exit.state ]; then
-    iface=$(grep '^IFACE=' /opt/surfshark/ss-vpn-exit.state 2>/dev/null | cut -d= -f2- || true)
+  if [ -z "$iface" ] && [ -f /opt/dns/ts-vpn-exit.state ]; then
+    iface=$(grep '^IFACE=' /opt/dns/ts-vpn-exit.state 2>/dev/null | cut -d= -f2- || true)
   fi
+  iface="${iface:-tailscale0}"
   local wg_ip
   wg_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' wg-easy 2>/dev/null | awk 'NF{print; exit}')"
   wg_ip="${wg_ip:-10.42.42.42}"
-  # Client / Flint DNS -> AdGuard on docker bridge (not REDIRECT/127.0.0.1)
   for src in 10.8.0.0/24 192.168.8.0/24 10.0.0.0/24 "${wg_ip}/32"; do
     for proto in udp tcp; do
       iptables -t nat -A PREROUTING -s "$src" -p "$proto" --dport 53 \
         -m comment --comment "$COMMENT" -j DNAT --to-destination "${ag_ip}:53"
     done
   done
-  # Host DNS that would leave via Surfshark -> local AdGuard (OUTPUT REDIRECT hits 127.0.0.1)
   if [ -n "$iface" ] && ip link show "$iface" >/dev/null 2>&1; then
     for proto in udp tcp; do
       iptables -t nat -A OUTPUT -o "$iface" -p "$proto" --dport 53 \
