@@ -1880,6 +1880,48 @@ def ensure_ovpn_home_lan_routes() -> dict:
     return {"ok": True, "actions": actions}
 
 
+def _prepare_nas_files_proxy(*, force: bool = False) -> dict:
+    """Ensure VPS routes and Flint OVPN→LAN access before NAS Files proxy."""
+    try:
+        return ensure_flint_ovpn_lan_access(force=force)
+    except Exception as exc:
+        try:
+            routes = ensure_ovpn_home_lan_routes()
+            return {"ok": True, "routes": routes, "warn": str(exc)}
+        except Exception as exc2:
+            return {"ok": False, "error": str(exc2)}
+
+
+def _nas_files_error_detail(exc: Exception) -> dict:
+    """Actionable JSON for NAS Files proxy failures."""
+    host = urlparse(NAS_FILES_UPSTREAM).hostname or "192.168.8.159"
+    port = int(urlparse(NAS_FILES_UPSTREAM).port or 9000)
+    ovpn = _ovpn_flint_connected()
+    detail: dict = {
+        "error": f"nas files proxy failed: {exc}",
+        "upstream": f"{host}:{port}",
+        "openvpn_flint": ovpn,
+    }
+    err = str(exc).lower()
+    if "no route to host" in err or "errno 113" in err or "host unreachable" in err:
+        if ovpn:
+            detail["hint"] = (
+                f"OpenVPN to home is connected, but the Buffalo NAS at {host} is not "
+                "responding on your home network. Power it on and confirm it is on Wi‑Fi/Ethernet."
+            )
+        else:
+            detail["hint"] = (
+                "Home OpenVPN is not connected. Use the OpenVPN client profile from the "
+                "portal while on a restricted network, or check the Flint router at home."
+            )
+    elif "timed out" in err or "timeout" in err:
+        detail["hint"] = (
+            "The NAS did not respond in time. Check home network routing or wake the NAS "
+            f"at {host} if it is in sleep mode."
+        )
+    return detail
+
+
 _flint_lan_ensure_ts = 0.0
 _flint_lan_ensure_lock = threading.Lock()
 
@@ -8937,6 +8979,11 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     headers["Accept-Encoding"] = "identity"
     headers["Connection"] = "keep-alive"
 
+    try:
+        _prepare_nas_files_proxy(force=False)
+    except Exception:
+        pass
+
     rel_l = rel.lower()
     stream_body = method == "HEAD" or any(
         rel_l.startswith(p)
@@ -8993,6 +9040,11 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     except (URLError, TimeoutError, OSError) as exc:
         # Fallback to urllib once if keep-alive path fails hard.
         try:
+            _prepare_nas_files_proxy(force=True)
+        except Exception:
+            pass
+        _nas_files_reset_conn()
+        try:
             req = Request(upstream, data=payload, headers=headers, method=method)
             resp = urlopen(req, timeout=600)
             status = int(getattr(resp, "status", 200) or 200)
@@ -9026,15 +9078,7 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
                 body = http_exc.read() if hasattr(http_exc, "read") else b""
                 resp = None
         except (URLError, TimeoutError, OSError) as exc:
-            try:
-                threading.Thread(
-                    target=lambda: ensure_flint_ovpn_lan_access(force=True),
-                    name="flint-ovpn-lan-files",
-                    daemon=True,
-                ).start()
-            except Exception:
-                pass
-            handler._json(502, {"error": f"nas files proxy failed: {exc}"})
+            handler._json(502, _nas_files_error_detail(exc))
             return
 
     content_type = (
