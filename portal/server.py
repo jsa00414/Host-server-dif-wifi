@@ -51,6 +51,17 @@ BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
 NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
 NAS_FILES_PREFIX = "/nas-files"
+# wg-easy UI (themed same-origin embed under /wg-ui/)
+WG_UI_UPSTREAM = os.environ.get("WG_UI_UPSTREAM", "http://127.0.0.1:5001").rstrip("/")
+WG_UI_PREFIX = os.environ.get("WG_UI_PREFIX", "/wg-ui").rstrip("/") or "/wg-ui"
+WG_UI_PUBLIC_HOSTS = tuple(
+    h.strip().lower()
+    for h in os.environ.get(
+        "WG_UI_PUBLIC_HOSTS",
+        "vpn.vpstruelord.com,https://vpn.vpstruelord.com,http://vpn.vpstruelord.com",
+    ).split(",")
+    if h.strip()
+)
 # Flint / school WireGuard client profile (Endpoint :443, MTU 1280).
 WG_CLIENT_CONF = Path(
     os.environ.get("WG_CLIENT_CONF", "/opt/wireguard/GL-MT6000.conf")
@@ -68,6 +79,151 @@ OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
 )
+OVPN_CREATE_SCRIPT = Path(
+    os.environ.get("OVPN_CREATE_SCRIPT", "/opt/openvpn/scripts/create-client.sh")
+)
+OVPN_BUILD_SCRIPT = Path(
+    os.environ.get("OVPN_BUILD_SCRIPT", "/opt/openvpn/scripts/build-client.sh")
+)
+OVPN_REVOKE_SCRIPT = Path(
+    os.environ.get("OVPN_REVOKE_SCRIPT", "/opt/openvpn/scripts/revoke-client.sh")
+)
+OVPN_PROTECTED_CLIENTS = {
+    x.strip().lower()
+    for x in os.environ.get("OVPN_PROTECTED_CLIENTS", "flint,server,ca").split(",")
+    if x.strip()
+}
+_OVPN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+
+
+def _ovpn_validate_name(name: str) -> str:
+    name = str(name or "").strip()
+    if not _OVPN_NAME_RE.match(name):
+        raise ValueError("invalid client name (use letters, numbers, . _ -)")
+    if name.lower() in {"server", "ca"}:
+        raise ValueError("reserved client name")
+    return name
+
+
+def list_openvpn_clients() -> list[dict]:
+    """List issued OpenVPN clients with online + download state."""
+    status = parse_openvpn_status(
+        OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+        if OVPN_STATUS_LOG.is_file()
+        else ""
+    )
+    online = {
+        str(c.get("name") or "").strip().lower(): c for c in (status.get("clients") or [])
+    }
+    issued_dir = Path(os.environ.get("OVPN_PKI", "/opt/openvpn/easy-rsa/pki")) / "issued"
+    clients: list[dict] = []
+    names: set[str] = set()
+    if issued_dir.is_dir():
+        for crt in sorted(issued_dir.glob("*.crt")):
+            name = crt.stem
+            if name.lower() == "server":
+                continue
+            names.add(name)
+    # Also include any leftover .ovpn without crt (unlikely)
+    if OVPN_CLIENT_DIR.is_dir():
+        for ovpn in OVPN_CLIENT_DIR.glob("*.ovpn"):
+            if ovpn.stem in {"GL-MT6000"}:
+                continue
+            names.add(ovpn.stem)
+    for name in sorted(names, key=str.lower):
+        ovpn_path = OVPN_CLIENT_DIR / f"{name}.ovpn"
+        live = online.get(name.lower())
+        clients.append(
+            {
+                "name": name,
+                "protected": name.lower() in OVPN_PROTECTED_CLIENTS,
+                "has_profile": ovpn_path.is_file(),
+                "download": f"/api/openvpn/clients/{name}",
+                "online": bool(live),
+                "real_address": (live or {}).get("real_address") or "",
+                "bytes_received": (live or {}).get("bytes_received") or 0,
+                "bytes_sent": (live or {}).get("bytes_sent") or 0,
+                "connected_since": (live or {}).get("connected_since") or "",
+            }
+        )
+    return clients
+
+
+def create_openvpn_client(name: str, redirect_gateway: bool = True) -> dict:
+    """Create (or rebuild) an OpenVPN client profile via easy-rsa."""
+    name = _ovpn_validate_name(name)
+    if not OVPN_CREATE_SCRIPT.is_file():
+        raise RuntimeError(f"missing create script {OVPN_CREATE_SCRIPT}")
+    redirect = "1" if redirect_gateway and name.lower() != "flint" else "0"
+    proc = subprocess.run(
+        ["bash", str(OVPN_CREATE_SCRIPT), name, redirect],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "OVPN_REDIRECT_GATEWAY": redirect},
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "create failed").strip()
+        raise RuntimeError(err[-500:])
+    ovpn = OVPN_CLIENT_DIR / f"{name}.ovpn"
+    if not ovpn.is_file():
+        raise RuntimeError("client created but profile missing")
+    return {
+        "ok": True,
+        "name": name,
+        "download": f"/api/openvpn/clients/{name}",
+        "stdout": (proc.stdout or "").strip()[-500:],
+        "clients": list_openvpn_clients(),
+    }
+
+
+def revoke_openvpn_client(name: str) -> dict:
+    """Revoke a client cert and remove its .ovpn."""
+    name = _ovpn_validate_name(name)
+    if name.lower() in OVPN_PROTECTED_CLIENTS:
+        raise ValueError(f"refusing to revoke protected client {name}")
+    if not OVPN_REVOKE_SCRIPT.is_file():
+        raise RuntimeError(f"missing revoke script {OVPN_REVOKE_SCRIPT}")
+    proc = subprocess.run(
+        ["bash", str(OVPN_REVOKE_SCRIPT), name],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "revoke failed").strip()
+        raise RuntimeError(err[-500:])
+    return {
+        "ok": True,
+        "name": name,
+        "stdout": (proc.stdout or "").strip()[-500:],
+        "clients": list_openvpn_clients(),
+    }
+
+
+def load_openvpn_client_by_name(name: str) -> tuple[str, bytes]:
+    name = _ovpn_validate_name(name)
+    path = OVPN_CLIENT_DIR / f"{name}.ovpn"
+    if not path.is_file():
+        # Rebuild from cert if present
+        if OVPN_BUILD_SCRIPT.is_file() and (
+            Path("/opt/openvpn/easy-rsa/pki/issued") / f"{name}.crt"
+        ).is_file():
+            subprocess.run(
+                ["bash", str(OVPN_BUILD_SCRIPT), name],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+    if not path.is_file():
+        raise FileNotFoundError(f"missing OpenVPN profile for {name}")
+    if path.resolve().parent != OVPN_CLIENT_DIR.resolve():
+        raise ValueError("invalid OpenVPN profile path")
+    filename = "GL-MT6000.ovpn" if name.lower() == "flint" else f"{name}.ovpn"
+    return filename, path.read_bytes()
 
 
 def load_openvpn_client_conf(filename: str) -> bytes:
@@ -1237,6 +1393,185 @@ BUFFALO_FIT_SNIPPET = (
     "setTimeout(fit,300);setTimeout(fit,1200);setTimeout(fit,2500);setInterval(fit,2000);"
     "})();</script>"
 )
+
+# ServerManager theme for wg-easy (injected into /wg-ui HTML).
+WG_UI_THEME_CSS = """
+:root{
+  --sm-bg0:#07110e;
+  --sm-bg1:#0e1a15;
+  --sm-bg2:#15241d;
+  --sm-bg3:#1a2c24;
+  --sm-line:rgba(170,210,185,.14);
+  --sm-text:#e8f2ec;
+  --sm-muted:#84998c;
+  --sm-accent:#3ddea0;
+  --sm-accent-dim:rgba(61,222,160,.14);
+  --sm-accent-strong:rgba(61,222,160,.35);
+  --sm-danger:#ff6b6b;
+}
+html,body{
+  font-family:"Sora",system-ui,sans-serif!important;
+  color:var(--sm-text)!important;
+  background:
+    radial-gradient(900px 420px at 10% -10%,rgba(61,222,160,.16),transparent 55%),
+    radial-gradient(700px 380px at 100% 0%,rgba(45,120,95,.18),transparent 50%),
+    linear-gradient(180deg,#0a1511 0%,var(--sm-bg0) 45%,#050a08 100%)!important;
+  min-height:100%!important;
+}
+body.bg-gray-50,body.dark\\:bg-neutral-800,.bg-gray-50,.dark\\:bg-neutral-800:where(.dark,.dark *){
+  background:transparent!important;
+}
+#__nuxt,main,header,[class*="max-w-"]{
+  color:var(--sm-text);
+}
+/* Force dark panels */
+.bg-white,.bg-gray-50,.bg-gray-100,.bg-gray-200,
+.dark\\:bg-black:where(.dark,.dark *),
+.dark\\:bg-neutral-800:where(.dark,.dark *),
+.dark\\:bg-neutral-700:where(.dark,.dark *),
+.dark\\:bg-neutral-600:where(.dark,.dark *),
+.dark\\:bg-neutral-500:where(.dark,.dark *),
+.dark\\:bg-neutral-400:where(.dark,.dark *){
+  background-color:var(--sm-bg1)!important;
+}
+.dark\\:bg-neutral-700:where(.dark,.dark *),
+.bg-neutral-700,[class*="bg-neutral-700"]{
+  background-color:var(--sm-bg2)!important;
+}
+.dark\\:bg-neutral-800:where(.dark,.dark *),
+.bg-neutral-800,[class*="bg-neutral-800"]{
+  background-color:var(--sm-bg1)!important;
+}
+.border-gray-100,.border-gray-200,.border-neutral-800,
+.dark\\:border-neutral-800:where(.dark,.dark *),
+.dark\\:border-neutral-600:where(.dark,.dark *),
+.dark\\:divide-neutral-800:where(.dark,.dark *)>:not([hidden])~:not([hidden]){
+  border-color:var(--sm-line)!important;
+}
+.text-gray-500,.text-gray-400,.text-neutral-400,.text-neutral-500,
+.dark\\:text-neutral-400:where(.dark,.dark *),
+.dark\\:text-neutral-500:where(.dark,.dark *),
+.dark\\:text-gray-400:where(.dark,.dark *){
+  color:var(--sm-muted)!important;
+}
+.text-gray-200,.text-neutral-200,.text-neutral-300,.dark\\:text-neutral-200:where(.dark,.dark *),
+.dark\\:text-neutral-300:where(.dark,.dark *),
+.dark\\:text-gray-200:where(.dark,.dark *),
+.dark\\:text-white:where(.dark,.dark *),
+.text-white{
+  color:var(--sm-text)!important;
+}
+/* Accent: map wg-easy reds → ServerManager green */
+.bg-red-800,.bg-red-700,.bg-red-600,
+.dark\\:bg-red-800:where(.dark,.dark *),
+.dark\\:bg-red-600:where(.dark,.dark *),
+[class*="bg-red-8"],[class*="bg-red-7"],[class*="bg-red-6"],
+.data-\\[state\\=checked\\]\\:bg-red-800[data-state=checked]{
+  background-color:var(--sm-accent)!important;
+  color:#07110e!important;
+  border-color:var(--sm-accent-strong)!important;
+}
+.hover\\:bg-red-700:hover,.dark\\:hover\\:bg-red-700:hover:where(.dark,.dark *),
+.dark\\:hover\\:bg-red-600:hover:where(.dark,.dark *),
+.dark\\:hover\\:bg-red-800:hover:where(.dark,.dark *),
+[class*="hover:bg-red-"]:hover{
+  background-color:#2fc48c!important;
+  color:#07110e!important;
+}
+.text-red-600,.text-red-300,.text-red-800,
+.dark\\:text-red-600:where(.dark,.dark *),
+.dark\\:text-red-300:where(.dark,.dark *),
+[class*="text-red-"]{
+  color:var(--sm-accent)!important;
+}
+.border-red-600,.border-red-800,.focus\\:border-red-800:focus,
+.dark\\:border-red-600:where(.dark,.dark *),
+.dark\\:hover\\:border-red-600:hover:where(.dark,.dark *),
+[class*="border-red-"],[class*="focus:border-red-"]:focus{
+  border-color:var(--sm-accent-strong)!important;
+}
+.ring-red-600,.focus\\:ring-red-600:focus,.focus\\:ring-red-700:focus,
+.dark\\:focus\\:ring-red-700:focus:where(.dark,.dark *),
+[class*="ring-red-"]{
+  --tw-ring-color:rgba(61,222,160,.45)!important;
+}
+.bg-red-100,.dark\\:bg-red-100:where(.dark,.dark *),
+[class*="bg-red-1"]{
+  background-color:var(--sm-accent-dim)!important;
+  color:var(--sm-accent)!important;
+}
+input,textarea,select,
+input:where(:not([type])),input:where([type=text]),input:where([type=password]),
+input:where([type=email]),input:where([type=search]),input:where([type=number]),
+textarea,select{
+  background-color:var(--sm-bg0)!important;
+  color:var(--sm-text)!important;
+  border-color:var(--sm-line)!important;
+  border-radius:10px!important;
+}
+input:focus,textarea:focus,select:focus{
+  border-color:var(--sm-accent-strong)!important;
+  --tw-ring-color:rgba(61,222,160,.35)!important;
+  outline:none!important;
+}
+button,a,[role=button]{
+  border-radius:10px!important;
+}
+button.rounded-full,[class*="rounded-full"]{
+  border-radius:999px!important;
+}
+/* Keep destructive actions readable */
+button[class*="danger"],.text-red-600.font-bold{
+  color:var(--sm-danger)!important;
+}
+""".strip()
+
+WG_UI_THEME_SNIPPET = (
+    f'<base href="{WG_UI_PREFIX}/" />'
+    '<link rel="preconnect" href="https://fonts.googleapis.com" />'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
+    '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />'
+    '<style id="sm-wg-theme">'
+    + WG_UI_THEME_CSS.replace("\n", " ")
+    + "</style>"
+    '<script id="sm-wg-theme-js">(function(){'
+    f"var P='{WG_UI_PREFIX}';"
+    "try{"
+    "document.cookie='theme=dark; Path='+P+'/; Max-Age=31536000; SameSite=Lax';"
+    "document.documentElement.classList.add('dark');"
+    "document.documentElement.classList.remove('light');"
+    "document.documentElement.setAttribute('data-color-mode-forced','dark');"
+    "}catch(e){}"
+    "function fix(u){if(typeof u!=='string')return u;"
+    "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0||u.indexOf('mailto:')===0)return u;"
+    "if(u.indexOf(P+'/')===0||u===P)return u;"
+    "if(u.indexOf('https://vpn.vpstruelord.com')===0){var r=u.slice(29);return r?P+r:P+'/';}"
+    "if(u.indexOf('http://vpn.vpstruelord.com')===0){var r2=u.slice(28);return r2?P+r2:P+'/';}"
+    "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
+    "return u;}"
+    "var xo=XMLHttpRequest.prototype.open;"
+    "XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=fix(u);}catch(e){}"
+    "return xo.apply(this,arguments);};"
+    "if(window.fetch){var _f=window.fetch;window.fetch=function(i,n){"
+    "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
+    "return _f.call(this,i,n);};}"
+    "var _ps=history.pushState;history.pushState=function(s,t,u){"
+    "if(u!=null)try{arguments[2]=fix(String(u));}catch(e){}"
+    "return _ps.apply(this,arguments);};"
+    "var _rs=history.replaceState;history.replaceState=function(s,t,u){"
+    "if(u!=null)try{arguments[2]=fix(String(u));}catch(e){}"
+    "return _rs.apply(this,arguments);};"
+    "document.addEventListener('click',function(ev){"
+    "var a=ev.target&&ev.target.closest&&ev.target.closest('a[href]');"
+    "if(!a)return;"
+    "var href=a.getAttribute('href');"
+    "if(!href||href.charAt(0)!=='/'||href.charAt(1)==='/'||href.indexOf(P+'/')===0||href===P)return;"
+    "if(a.target&&a.target!=='_self')return;"
+    "ev.preventDefault();try{location.assign(P+href);}catch(e){location.href=P+href;}"
+    "},true);"
+    "})();</script>"
+)
+
 PANEL_TAGLINE = os.environ.get("PANEL_TAGLINE", "")
 SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))
 COOKIE_NAME = "sm_session"
@@ -1272,27 +1607,121 @@ OVPN_STATUS_LOG = Path(
     os.environ.get("OVPN_STATUS_LOG", "/var/log/openvpn-status.log")
 )
 OVPN_FLINT_VPN_IP = os.environ.get("OVPN_FLINT_VPN_IP", "10.9.0.2").strip() or "10.9.0.2"
+OVPN_SERVICE = os.environ.get("OVPN_SERVICE", "openvpn-server-sm").strip() or "openvpn-server-sm"
+OVPN_LISTEN = os.environ.get("OVPN_LISTEN", "74.208.76.213:443").strip() or "74.208.76.213:443"
+
+
+def parse_openvpn_status(text: str) -> dict:
+    """Parse OpenVPN management status log into clients + routes."""
+    clients: list[dict] = []
+    routes: list[dict] = []
+    updated = ""
+    section = ""
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("OpenVPN CLIENT LIST"):
+            section = "clients"
+            continue
+        if line.startswith("ROUTING TABLE"):
+            section = "routes"
+            continue
+        if line.startswith("GLOBAL STATS") or line == "END":
+            section = ""
+            continue
+        if line.startswith("Updated,"):
+            updated = line.split(",", 1)[-1].strip()
+            continue
+        if section == "clients":
+            if line.startswith("Common Name"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            clients.append(
+                {
+                    "name": parts[0].strip(),
+                    "real_address": parts[1].strip(),
+                    "bytes_received": int(parts[2]) if parts[2].isdigit() else 0,
+                    "bytes_sent": int(parts[3]) if parts[3].isdigit() else 0,
+                    "connected_since": parts[4].strip(),
+                }
+            )
+        elif section == "routes":
+            if line.startswith("Virtual Address"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 4:
+                continue
+            routes.append(
+                {
+                    "virtual": parts[0].strip(),
+                    "name": parts[1].strip(),
+                    "real_address": parts[2].strip(),
+                    "last_ref": parts[3].strip(),
+                }
+            )
+    return {"updated": updated, "clients": clients, "routes": routes}
+
+
+def build_openvpn_status() -> dict:
+    """Live OpenVPN server status for the OpenVPN admin website."""
+    active = False
+    detail = ""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "is-active", OVPN_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        active = (proc.stdout or "").strip() == "active"
+        detail = (proc.stdout or proc.stderr or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+
+    parsed = {"updated": "", "clients": [], "routes": []}
+    status_error = ""
+    try:
+        text = OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_openvpn_status(text)
+    except OSError as exc:
+        status_error = str(exc)
+
+    profiles = []  # legacy field; UI uses /api/openvpn/clients
+    clients = list_openvpn_clients()
+
+    return {
+        "ok": True,
+        "service": OVPN_SERVICE,
+        "active": active,
+        "detail": detail,
+        "listen": OVPN_LISTEN,
+        "proto": "tcp",
+        "network": "10.9.0.0/24",
+        "crypto": "tls-auth + AES-256-CBC",
+        "updated": parsed.get("updated") or "",
+        "clients": parsed.get("clients") or [],
+        "routes": parsed.get("routes") or [],
+        "client_count": len(parsed.get("clients") or []),
+        "managed_clients": clients,
+        "profiles": profiles,
+        "allow_ssh_script": "/api/openvpn/allow-ssh",
+        "status_error": status_error,
+        "flint_connected": any(
+            str(c.get("name") or "").lower() == "flint" for c in (parsed.get("clients") or [])
+        ),
+    }
 
 
 def _ovpn_flint_connected() -> bool:
     """True when OpenVPN status shows the Flint client is online."""
     try:
-        text = OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        return bool(build_openvpn_status().get("flint_connected"))
+    except Exception:
         return False
-    in_clients = False
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("OpenVPN CLIENT LIST"):
-            in_clients = True
-            continue
-        if s.startswith("ROUTING TABLE") or s.startswith("GLOBAL STATS"):
-            break
-        if not in_clients or not s or s.startswith("Common Name") or s.startswith("Updated"):
-            continue
-        if s.lower().startswith("flint,"):
-            return True
-    return False
 
 
 def _router_hosts_for_ssh() -> list[str]:
@@ -4826,6 +5255,8 @@ def build_portal_settings() -> dict:
     host = PORTAL_HOST or "portal.vpstruelord.com"
     links = [
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
+        {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
+        {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
@@ -8531,6 +8962,255 @@ def proxy_buffalo_request(handler: "Handler", method: str) -> None:
     handler.wfile.write(body)
 
 
+def _wg_ui_rewrite_location(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    lower = raw.lower()
+    for host in WG_UI_PUBLIC_HOSTS:
+        host_l = host.lower()
+        if host_l.startswith("http://") or host_l.startswith("https://"):
+            prefix = host_l
+        else:
+            # bare host — try both schemes against the Location value
+            for scheme in ("https://", "http://"):
+                p = scheme + host_l
+                if lower.startswith(p):
+                    rest = raw[len(p) :]
+                    if not rest.startswith("/"):
+                        rest = "/" + rest
+                    return WG_UI_PREFIX + rest
+            continue
+        if lower.startswith(prefix):
+            rest = raw[len(prefix) :]
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            return WG_UI_PREFIX + rest
+    if raw.startswith("/") and not raw.startswith("//"):
+        if raw == WG_UI_PREFIX or raw.startswith(WG_UI_PREFIX + "/"):
+            return raw
+        return WG_UI_PREFIX + raw
+    return raw
+
+
+def _wg_ui_rewrite_set_cookie(cookie: str) -> str:
+    parts = [p.strip() for p in (cookie or "").split(";") if p.strip()]
+    if not parts:
+        return cookie
+    out = [parts[0]]
+    saw_path = False
+    for part in parts[1:]:
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={WG_UI_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            continue
+        elif low.startswith("samesite="):
+            out.append("SameSite=Lax")
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={WG_UI_PREFIX}/")
+    # Force dark theme preference for nuxt-color-mode (cookie name: theme).
+    return "; ".join(out)
+
+
+def _wg_ui_rewrite_html(text: str) -> str:
+    def repl_attr(match: re.Match[str]) -> str:
+        attr, quote, path = match.group(1), match.group(2), match.group(3)
+        if path.startswith(WG_UI_PREFIX + "/") or path == WG_UI_PREFIX:
+            return match.group(0)
+        return f"{attr}={quote}{WG_UI_PREFIX}{path}{quote}"
+
+    text = re.sub(
+        r"\b(href|src|action)=(['\"])(/(?!/|"
+        + re.escape(WG_UI_PREFIX.lstrip("/"))
+        + r"/)[^'\"]*)\2",
+        repl_attr,
+        text,
+        flags=re.I,
+    )
+
+    def repl_abs(match: re.Match[str]) -> str:
+        quote, path = match.group(1), match.group(2)
+        if path.startswith(WG_UI_PREFIX + "/") or path == WG_UI_PREFIX:
+            return match.group(0)
+        return f"{quote}{WG_UI_PREFIX}{path}{quote}"
+
+    # importmap / JSON absolute paths: "/_nuxt/...", "/manifest.json", etc.
+    text = re.sub(
+        r"(['\"])(/(?:_nuxt|api|login|logout|clients|admin|manifest\.json|favicon\.png|apple-touch-icon\.png)[^'\"]*)\1",
+        repl_abs,
+        text,
+        flags=re.I,
+    )
+    # Force dark on <html>
+    def force_dark_html(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        if "data-color-mode-forced" not in attrs.lower():
+            attrs = ' data-color-mode-forced="dark"' + attrs
+        if re.search(r"\bclass\s*=", attrs, flags=re.I):
+            attrs = re.sub(
+                r'class=(["\'])(.*?)\1',
+                lambda c: (
+                    f'class={c.group(1)}{c.group(2)}{c.group(1)}'
+                    if re.search(r"(^|\s)dark(\s|$)", c.group(2))
+                    else f'class={c.group(1)}{(c.group(2) + " dark").strip()}{c.group(1)}'
+                ),
+                attrs,
+                count=1,
+                flags=re.I,
+            )
+        else:
+            attrs = ' class="dark"' + attrs
+        return f"<html{attrs}>"
+
+    text = re.sub(r"<html\b([^>]*)>", force_dark_html, text, count=1, flags=re.I)
+    return text
+
+
+def _wg_ui_inject_theme(body: bytes, content_type: str) -> bytes:
+    ctype = (content_type or "").lower()
+    if "text/html" not in ctype:
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = body.decode("latin-1")
+        except Exception:
+            return body
+    if "sm-wg-theme" in text:
+        return body
+    text = _wg_ui_rewrite_html(text)
+    # Help Nuxt router resolve under the portal prefix.
+    text = text.replace('baseURL:"/"', f'baseURL:"{WG_UI_PREFIX}/"')
+    text = text.replace("baseURL:'/'", f"baseURL:'{WG_UI_PREFIX}/'")
+    snippet = WG_UI_THEME_SNIPPET
+    lower = text.lower()
+    head_idx = lower.find("<head>")
+    if head_idx != -1:
+        insert_at = head_idx + len("<head>")
+        text = text[:insert_at] + snippet + text[insert_at:]
+    else:
+        idx = lower.find("</head>")
+        if idx != -1:
+            text = text[:idx] + snippet + text[idx:]
+        else:
+            text = snippet + text
+    return text.encode("utf-8")
+
+
+def proxy_wg_ui_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to wg-easy with ServerManager theme injection."""
+    parsed = urlparse(handler.path)
+    rel = parsed.path[len(WG_UI_PREFIX) :] or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    upstream = urljoin(WG_UI_UPSTREAM + "/", rel.lstrip("/"))
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers = {}
+    for key in (
+        "Accept",
+        "Accept-Language",
+        "Content-Type",
+        "X-Requested-With",
+        "Referer",
+        "Origin",
+    ):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        # Ensure dark theme preference reaches nuxt-color-mode.
+        if not any(p.lower().startswith("theme=") for p in kept):
+            kept.append("theme=dark")
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    else:
+        headers["Cookie"] = "theme=dark"
+    headers["Host"] = urlparse(WG_UI_UPSTREAM).netloc
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-WgUiProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+    headers["X-Forwarded-Proto"] = "https"
+    headers["X-Forwarded-Host"] = handler.headers.get("Host") or PORTAL_HOST
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        handler._json(502, {"error": f"wg-ui proxy failed: {exc}"})
+        return
+
+    content_type = (
+        upstream_headers.get("Content-Type")
+        or upstream_headers.get("content-type")
+        or "application/octet-stream"
+    )
+    body = _wg_ui_inject_theme(body, content_type)
+
+    # Always advertise dark theme cookie for this prefix.
+    set_cookies = list(set_cookies or [])
+    set_cookies.append(f"theme=dark; Path={WG_UI_PREFIX}/; Max-Age=31536000; SameSite=Lax")
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _wg_ui_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie in set_cookies:
+        if cookie:
+            handler.send_header("Set-Cookie", _wg_ui_rewrite_set_cookie(cookie))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+    handler.end_headers()
+    if method.upper() != "HEAD":
+        handler.wfile.write(body)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ServerManager/1.2"
 
@@ -8652,6 +9332,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/", "/index.html"):
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        if path == "/openvpn.html":
+            return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path == "/login.html":
             # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
@@ -8795,6 +9477,44 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/openvpn/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_openvpn_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/openvpn/clients":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, "clients": list_openvpn_clients()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "clients": []})
+            return
+        if path.startswith("/api/openvpn/clients/"):
+            if not self._require_auth(api=True):
+                return
+            name = path[len("/api/openvpn/clients/") :].strip("/")
+            try:
+                from urllib.parse import quote
+
+                filename, body = load_openvpn_client_by_name(name)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/openvpn/config",
             "/api/openvpn/flint",
@@ -8916,6 +9636,8 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_buffalo_request(self, "GET")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "GET")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "GET")
         self._json(404, {"error": "not found"})
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -8933,6 +9655,8 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_nas_files_request(self, "HEAD")
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "HEAD")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "HEAD")
         self.send_response(404)
         self.end_headers()
 
@@ -8959,6 +9683,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True}, clear_cookie=True)
             return
         if not self._require_auth(api=True):
+            return
+        if path == "/api/openvpn/clients":
+            try:
+                payload = self._read_json()
+                name = str((payload or {}).get("name") or "").strip()
+                redirect = bool((payload or {}).get("redirect_gateway", True))
+                result = create_openvpn_client(name, redirect_gateway=redirect)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/settings":
             try:
@@ -9068,12 +9804,18 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_buffalo_request(self, "POST")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "POST")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "POST")
         self._json(404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "PUT")
         if not self._require_auth(api=True):
             return
-        path = urlparse(self.path).path
         if path == "/api/lan-aliases":
             try:
                 payload = self._read_json()
@@ -9116,6 +9858,33 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(exc)})
         except Exception as exc:
             self._json(500, {"error": str(exc)})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "DELETE")
+        if not self._require_auth(api=True):
+            return
+        if path.startswith("/api/openvpn/clients/"):
+            name = path[len("/api/openvpn/clients/") :].strip("/")
+            try:
+                self._json(200, revoke_openvpn_client(name))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "PATCH")
+        self._json(404, {"error": "not found"})
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         if not path.is_file():
