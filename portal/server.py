@@ -68,6 +68,151 @@ OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
 )
+OVPN_CREATE_SCRIPT = Path(
+    os.environ.get("OVPN_CREATE_SCRIPT", "/opt/openvpn/scripts/create-client.sh")
+)
+OVPN_BUILD_SCRIPT = Path(
+    os.environ.get("OVPN_BUILD_SCRIPT", "/opt/openvpn/scripts/build-client.sh")
+)
+OVPN_REVOKE_SCRIPT = Path(
+    os.environ.get("OVPN_REVOKE_SCRIPT", "/opt/openvpn/scripts/revoke-client.sh")
+)
+OVPN_PROTECTED_CLIENTS = {
+    x.strip().lower()
+    for x in os.environ.get("OVPN_PROTECTED_CLIENTS", "flint,server,ca").split(",")
+    if x.strip()
+}
+_OVPN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+
+
+def _ovpn_validate_name(name: str) -> str:
+    name = str(name or "").strip()
+    if not _OVPN_NAME_RE.match(name):
+        raise ValueError("invalid client name (use letters, numbers, . _ -)")
+    if name.lower() in {"server", "ca"}:
+        raise ValueError("reserved client name")
+    return name
+
+
+def list_openvpn_clients() -> list[dict]:
+    """List issued OpenVPN clients with online + download state."""
+    status = parse_openvpn_status(
+        OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+        if OVPN_STATUS_LOG.is_file()
+        else ""
+    )
+    online = {
+        str(c.get("name") or "").strip().lower(): c for c in (status.get("clients") or [])
+    }
+    issued_dir = Path(os.environ.get("OVPN_PKI", "/opt/openvpn/easy-rsa/pki")) / "issued"
+    clients: list[dict] = []
+    names: set[str] = set()
+    if issued_dir.is_dir():
+        for crt in sorted(issued_dir.glob("*.crt")):
+            name = crt.stem
+            if name.lower() == "server":
+                continue
+            names.add(name)
+    # Also include any leftover .ovpn without crt (unlikely)
+    if OVPN_CLIENT_DIR.is_dir():
+        for ovpn in OVPN_CLIENT_DIR.glob("*.ovpn"):
+            if ovpn.stem in {"GL-MT6000"}:
+                continue
+            names.add(ovpn.stem)
+    for name in sorted(names, key=str.lower):
+        ovpn_path = OVPN_CLIENT_DIR / f"{name}.ovpn"
+        live = online.get(name.lower())
+        clients.append(
+            {
+                "name": name,
+                "protected": name.lower() in OVPN_PROTECTED_CLIENTS,
+                "has_profile": ovpn_path.is_file(),
+                "download": f"/api/openvpn/clients/{name}",
+                "online": bool(live),
+                "real_address": (live or {}).get("real_address") or "",
+                "bytes_received": (live or {}).get("bytes_received") or 0,
+                "bytes_sent": (live or {}).get("bytes_sent") or 0,
+                "connected_since": (live or {}).get("connected_since") or "",
+            }
+        )
+    return clients
+
+
+def create_openvpn_client(name: str, redirect_gateway: bool = True) -> dict:
+    """Create (or rebuild) an OpenVPN client profile via easy-rsa."""
+    name = _ovpn_validate_name(name)
+    if not OVPN_CREATE_SCRIPT.is_file():
+        raise RuntimeError(f"missing create script {OVPN_CREATE_SCRIPT}")
+    redirect = "1" if redirect_gateway and name.lower() != "flint" else "0"
+    proc = subprocess.run(
+        ["bash", str(OVPN_CREATE_SCRIPT), name, redirect],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "OVPN_REDIRECT_GATEWAY": redirect},
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "create failed").strip()
+        raise RuntimeError(err[-500:])
+    ovpn = OVPN_CLIENT_DIR / f"{name}.ovpn"
+    if not ovpn.is_file():
+        raise RuntimeError("client created but profile missing")
+    return {
+        "ok": True,
+        "name": name,
+        "download": f"/api/openvpn/clients/{name}",
+        "stdout": (proc.stdout or "").strip()[-500:],
+        "clients": list_openvpn_clients(),
+    }
+
+
+def revoke_openvpn_client(name: str) -> dict:
+    """Revoke a client cert and remove its .ovpn."""
+    name = _ovpn_validate_name(name)
+    if name.lower() in OVPN_PROTECTED_CLIENTS:
+        raise ValueError(f"refusing to revoke protected client {name}")
+    if not OVPN_REVOKE_SCRIPT.is_file():
+        raise RuntimeError(f"missing revoke script {OVPN_REVOKE_SCRIPT}")
+    proc = subprocess.run(
+        ["bash", str(OVPN_REVOKE_SCRIPT), name],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "revoke failed").strip()
+        raise RuntimeError(err[-500:])
+    return {
+        "ok": True,
+        "name": name,
+        "stdout": (proc.stdout or "").strip()[-500:],
+        "clients": list_openvpn_clients(),
+    }
+
+
+def load_openvpn_client_by_name(name: str) -> tuple[str, bytes]:
+    name = _ovpn_validate_name(name)
+    path = OVPN_CLIENT_DIR / f"{name}.ovpn"
+    if not path.is_file():
+        # Rebuild from cert if present
+        if OVPN_BUILD_SCRIPT.is_file() and (
+            Path("/opt/openvpn/easy-rsa/pki/issued") / f"{name}.crt"
+        ).is_file():
+            subprocess.run(
+                ["bash", str(OVPN_BUILD_SCRIPT), name],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+    if not path.is_file():
+        raise FileNotFoundError(f"missing OpenVPN profile for {name}")
+    if path.resolve().parent != OVPN_CLIENT_DIR.resolve():
+        raise ValueError("invalid OpenVPN profile path")
+    filename = "GL-MT6000.ovpn" if name.lower() == "flint" else f"{name}.ovpn"
+    return filename, path.read_bytes()
 
 
 def load_openvpn_client_conf(filename: str) -> bytes:
@@ -1355,22 +1500,8 @@ def build_openvpn_status() -> dict:
     except OSError as exc:
         status_error = str(exc)
 
-    profiles = [
-        {
-            "id": "flint",
-            "label": "Flint / GL-MT6000",
-            "filename": "GL-MT6000.ovpn",
-            "exists": (OVPN_CLIENT_DIR / OVPN_FLINT_NAME).is_file(),
-            "download": "/api/openvpn/flint",
-        },
-        {
-            "id": "phone",
-            "label": "iPhone",
-            "filename": "james-iphone.ovpn",
-            "exists": (OVPN_CLIENT_DIR / OVPN_PHONE_NAME).is_file(),
-            "download": "/api/openvpn/phone",
-        },
-    ]
+    profiles = []  # legacy field; UI uses /api/openvpn/clients
+    clients = list_openvpn_clients()
 
     return {
         "ok": True,
@@ -1385,6 +1516,7 @@ def build_openvpn_status() -> dict:
         "clients": parsed.get("clients") or [],
         "routes": parsed.get("routes") or [],
         "client_count": len(parsed.get("clients") or []),
+        "managed_clients": clients,
         "profiles": profiles,
         "allow_ssh_script": "/api/openvpn/allow-ssh",
         "status_error": status_error,
@@ -8914,6 +9046,36 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/openvpn/clients":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, "clients": list_openvpn_clients()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "clients": []})
+            return
+        if path.startswith("/api/openvpn/clients/"):
+            if not self._require_auth(api=True):
+                return
+            name = path[len("/api/openvpn/clients/") :].strip("/")
+            try:
+                from urllib.parse import quote
+
+                filename, body = load_openvpn_client_by_name(name)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/openvpn/config",
             "/api/openvpn/flint",
@@ -9079,6 +9241,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._require_auth(api=True):
             return
+        if path == "/api/openvpn/clients":
+            try:
+                payload = self._read_json()
+                name = str((payload or {}).get("name") or "").strip()
+                redirect = bool((payload or {}).get("redirect_gateway", True))
+                result = create_openvpn_client(name, redirect_gateway=redirect)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/settings":
             try:
                 payload = self._read_json()
@@ -9235,6 +9409,21 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(exc)})
         except Exception as exc:
             self._json(500, {"error": str(exc)})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if not self._require_auth(api=True):
+            return
+        if path.startswith("/api/openvpn/clients/"):
+            name = path[len("/api/openvpn/clients/") :].strip("/")
+            try:
+                self._json(200, revoke_openvpn_client(name))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        self._json(404, {"error": "not found"})
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         if not path.is_file():
