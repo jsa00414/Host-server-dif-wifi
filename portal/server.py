@@ -6803,9 +6803,9 @@ select,.x-combo-list{
 /* Icon/thumbnail view — CSS grid instead of broken Ext absolute positions in iframe */
 #main-panel .x-panel-body > .x-view{
   display:grid!important;
-  grid-template-columns:repeat(auto-fill,minmax(200px,1fr))!important;
+  grid-template-columns:repeat(auto-fill,minmax(220px,1fr))!important;
   grid-auto-flow:row!important;
-  gap:10px 14px!important;
+  gap:8px 12px!important;
   align-content:start!important;
   position:relative!important;
   left:0!important;top:0!important;
@@ -6815,6 +6815,13 @@ select,.x-combo-list{
   padding:10px 12px!important;
   box-sizing:border-box!important;
 }
+#main-panel .x-panel-body > .x-view > .x-clear{
+  display:none!important;
+  height:0!important;
+  margin:0!important;
+  padding:0!important;
+}
+#main-panel .x-panel-body > .x-view > .icon-thumbnail,
 #main-panel .x-panel-body > .x-view .thumb-wrap,
 #main-panel .x-panel-body > .x-view .icon-side,
 #main-panel .x-panel-body > .x-view .icon-small,
@@ -6828,13 +6835,72 @@ select,.x-combo-list{
   margin:0!important;
   box-sizing:border-box!important;
 }
+#main-panel .x-panel-body > .x-view > .icon-thumbnail{
+  display:block!important;
+  min-width:0!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-side,
 #main-panel .x-panel-body > .x-view .thumb-wrap.icon-side,
 #main-panel .x-panel-body > .x-view .icon-side{
   display:flex!important;
   align-items:flex-start!important;
   gap:10px!important;
   padding:8px 10px!important;
-  min-height:64px!important;
+  min-height:72px!important;
+  width:100%!important;
+  height:auto!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-side[style],
+#main-panel .x-panel-body > .x-view .icon-side[style]{
+  width:100%!important;
+  height:auto!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail .dd-img,
+#main-panel .x-panel-body > .x-view .icon-side .dd-img,
+#main-panel .x-panel-body > .x-view .icon-side img{
+  flex:0 0 48px!important;
+  width:48px!important;
+  height:48px!important;
+  object-fit:contain!important;
+  margin:0!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-info,
+#main-panel .x-panel-body > .x-view .icon-side .icon-info{
+  float:none!important;
+  flex:1 1 auto!important;
+  width:auto!important;
+  min-width:0!important;
+  display:flex!important;
+  flex-direction:column!important;
+  gap:2px!important;
+  overflow:hidden!important;
+}
+#main-panel .x-panel-body > .x-view .icon-info > span{
+  display:block!important;
+  text-align:left!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+}
+#main-panel .x-panel-body > .x-view .icon-info > span.sm-nas-size-empty{
+  display:none!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-over,
+#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-selected{
+  background:rgba(255,255,255,.05)!important;
+  border:1px solid var(--sm-line)!important;
+  border-radius:12px!important;
+}
+#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-selected{
+  background:var(--sm-accent-dim)!important;
+  border-color:var(--sm-accent-strong)!important;
+}
+#main-panel .x-panel-body > .x-view .x-dv-focus{
+  display:none!important;
+  width:0!important;height:0!important;
+  overflow:hidden!important;
+  position:absolute!important;
+  pointer-events:none!important;
 }
 .x-view-empty,.x-grid-empty,.empty-text{
   color:var(--sm-muted)!important;font-size:14px!important;padding:24px!important;text-align:center!important}
@@ -7565,6 +7631,21 @@ NAS_FILES_SNIPPET = (
     "});}"
     "}catch(e){}"
     "return vp;}"
+    "function smFixIconGridLabels(){"
+    "try{"
+    "document.querySelectorAll('#main-panel .icon-info > span').forEach(function(sp){"
+    "var t=(sp.textContent||'').trim();"
+    "if(t==='--'||t==='-'||t==='')sp.classList.add('sm-nas-size-empty');"
+    "else sp.classList.remove('sm-nas-size-empty');"
+    "});"
+    "document.querySelectorAll('#main-panel .x-view > .icon-thumbnail').forEach(function(el){"
+    "try{el.style.setProperty('position','static','important');"
+    "el.style.setProperty('left','auto','important');"
+    "el.style.setProperty('top','auto','important');"
+    "el.style.removeProperty('width');"
+    "el.style.removeProperty('height');}catch(e){}"
+    "});"
+    "}catch(e){}}"
     "function smRefreshFileIconView(){"
     "try{"
     "if(!window.Ext||!Ext.getCmp)return false;"
@@ -7573,7 +7654,8 @@ NAS_FILES_SNIPPET = (
     "var cv=main.getComponent(0);"
     "if(!cv)return false;"
     "var dv=(cv.getDataView&&cv.getDataView())||(cv.view&&cv.view.getView&&cv.view.getView())||null;"
-    "if(dv&&dv.refresh){dv.refresh();return true;}"
+    "if(dv&&dv.refresh){dv.refresh();try{smFixIconGridLabels();}catch(e){}return true;}"
+    "try{smFixIconGridLabels();}catch(e){}"
     "}catch(e){}"
     "return false;}"
     "function smNasFit(force){"
@@ -7606,6 +7688,7 @@ NAS_FILES_SNIPPET = (
     "try{if(vp.doLayout)vp.doLayout(true,true);}catch(e){}"
     "}"
     "try{if(typeof smRefreshFileIconView==='function')smRefreshFileIconView();}catch(e){}"
+    "try{if(typeof smFixIconGridLabels==='function')smFixIconGridLabels();}catch(e){}"
     "try{"
     "var main=Ext.getCmp&&Ext.getCmp('main-panel');"
     "var left=Ext.getCmp&&Ext.getCmp('left-panel');"
@@ -7649,7 +7732,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smFixIconGridLabels=smFixIconGridLabels;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
