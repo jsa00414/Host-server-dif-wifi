@@ -5980,7 +5980,7 @@ a{color:var(--sm-accent)!important}
 .main-wrap.x-app-row-pressed,.main-wrap.selected-wrap,.main-wrap.selected-wrap-icon{
   touch-action:manipulation!important}
 
-/* MsgBox / ActionSheet — hide only when Sencha marks them hidden (no style-attr traps) */
+/* MsgBox / ActionSheet — hide only via Sencha's hidden classes (never sticky inline styles) */
 .x-msgbox.x-hidden,.x-msgbox.x-item-hidden,
 .x-sheet.x-hidden,.x-sheet.x-item-hidden,
 .x-msgbox.x-hidden .x-docked-bottom,.x-msgbox.x-item-hidden .x-docked-bottom,
@@ -5988,15 +5988,26 @@ a{color:var(--sm-accent)!important}
 .x-msgbox.x-hidden .x-button,.x-msgbox.x-item-hidden .x-button,
 .x-sheet.x-hidden .x-button,.x-sheet.x-item-hidden .x-button{
   display:none!important;visibility:hidden!important;opacity:0!important;
-  pointer-events:none!important;height:0!important;min-height:0!important;
-  overflow:hidden!important}
-.x-msgbox,.x-sheet,#tapactionsheet{
-  z-index:10000!important}
-#tapactionsheet:not(.x-hidden):not(.x-item-hidden),
+  pointer-events:none!important}
+.x-msgbox:not(.x-hidden):not(.x-item-hidden),
+.x-sheet:not(.x-hidden):not(.x-item-hidden),
+#tapactionsheet:not(.x-hidden):not(.x-item-hidden){
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;z-index:10000!important}
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-docked-bottom,
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-toolbar,
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-button,
+.x-sheet:not(.x-hidden):not(.x-item-hidden) .x-button,
 #tapactionsheet:not(.x-hidden):not(.x-item-hidden) .x-button{
   display:block!important;visibility:visible!important;opacity:1!important;
   pointer-events:auto!important;height:auto!important;min-height:0!important;
   overflow:visible!important}
+.x-msgbox .x-input-el,.x-msgbox input,.x-msgbox textarea,.x-msgbox .x-field-input,
+.x-msgbox .x-form-field,.x-msgbox .x-input-field{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;width:100%!important;min-height:36px!important;
+  font-size:16px!important;color:#111!important;background:#fff!important;
+  -webkit-user-select:text!important;user-select:text!important}
 #uploadbtn,#uploadbtn .x-button-label{position:relative!important}
 #sm-st-upload-input-btn{
   position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
@@ -6389,34 +6400,54 @@ NAS_FILES_SNIPPET = (
     "var el=boxes[i];"
     "var cls=String(el.className||'');"
     "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)continue;"
-    "var st=window.getComputedStyle?getComputedStyle(el):null;"
-    "if(st&&(st.display==='none'||st.visibility==='hidden'))continue;"
     "return true;"
     "}"
     "}catch(e){}"
     "return false;}"
-    "function smHideOrphanDialogs(){"
+    "function smClearDialogInlineStyles(root){"
+    "try{"
+    "var nodes=root?[root]:[];"
+    "if(root&&root.querySelectorAll){"
+    "var kids=root.querySelectorAll('.x-docked-bottom,.x-toolbar,.x-button,.x-input-el,input,textarea,.x-field-input,.x-msgbox-body,.x-body');"
+    "for(var i=0;i<kids.length;i++)nodes.push(kids[i]);"
+    "}"
+    "for(var n=0;n<nodes.length;n++){"
+    "var el=nodes[n];if(!el||!el.style)continue;"
+    "el.style.removeProperty('display');"
+    "el.style.removeProperty('visibility');"
+    "el.style.removeProperty('opacity');"
+    "el.style.removeProperty('pointer-events');"
+    "el.style.removeProperty('height');"
+    "el.style.removeProperty('min-height');"
+    "el.style.removeProperty('overflow');"
+    "}"
+    "}catch(e){}}"
+    "function smRestoreDialogs(){"
     "try{"
     "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
     "for(var i=0;i<boxes.length;i++){"
     "var el=boxes[i];"
     "var cls=String(el.className||'');"
-    "if(cls.indexOf('x-hidden')<0&&cls.indexOf('x-item-hidden')<0)continue;"
-    "el.style.setProperty('display','none','important');"
-    "el.style.setProperty('visibility','hidden','important');"
-    "el.style.setProperty('pointer-events','none','important');"
-    "var kids=el.querySelectorAll('.x-docked-bottom,.x-toolbar,.x-button');"
-    "for(var k=0;k<kids.length;k++){"
-    "kids[k].style.setProperty('display','none','important');"
-    "kids[k].style.setProperty('visibility','hidden','important');"
-    "kids[k].style.setProperty('pointer-events','none','important');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)continue;"
+    "smClearDialogInlineStyles(el);"
+    "}"
+    "}catch(e){}}"
+    "function smHideOrphanDialogs(){"
+    "try{"
+    "/* Class-based hide only — never sticky inline !important (breaks Ext.Msg reuse / rename). */"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')<0&&cls.indexOf('x-item-hidden')<0){"
+    "smClearDialogInlineStyles(el);"
     "}"
     "}"
     "}catch(e){}}"
     "function smClearStuckMask(){"
     "try{"
     "smHideOrphanDialogs();"
-    "if(smMsgVisible())return;"
+    "if(smMsgVisible()){smRestoreDialogs();return;}"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(window.Ext&&Ext.getBody)Ext.getBody().unmask();}catch(e){}"
     "var lm=document.getElementById('loading-main');"
@@ -6441,9 +6472,26 @@ NAS_FILES_SNIPPET = (
     "setTimeout(smClearStuckMask,2500);"
     "setTimeout(smClearStuckMask,5000);"
     "setTimeout(smClearStuckMask,9000);"
-    "document.addEventListener('touchstart',function(){smClearStuckMask();},true);"
-    "document.addEventListener('click',function(){smClearStuckMask();},true);"
+    "document.addEventListener('touchstart',function(ev){"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "smClearStuckMask();"
+    "},true);"
+    "document.addEventListener('click',function(ev){"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "smClearStuckMask();"
+    "},true);"
+    "function smHookMsgShow(){"
+    "try{"
+    "if(!window.Ext||!Ext.Msg||Ext.Msg.__smShowHooked)return;"
+    "Ext.Msg.__smShowHooked=true;"
+    "Ext.Msg.on('show',function(){setTimeout(smRestoreDialogs,0);setTimeout(smRestoreDialogs,50);setTimeout(smRestoreDialogs,200);});"
+    "Ext.Msg.on('hide',function(){setTimeout(smHideOrphanDialogs,0);});"
+    "}catch(e){}}"
+    "smHookMsgShow();"
+    "setTimeout(smHookMsgShow,500);"
+    "setTimeout(smHookMsgShow,1500);"
     "}catch(e){}"
+    "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;}catch(e){}"
     # Keep Ext.Viewport sized to the iframe — parent layout changes often skip window.resize.
     "function smNasViewSize(){"
     "var w=Math.max(document.documentElement.clientWidth||0,window.innerWidth||0);"
@@ -6546,7 +6594,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -7312,6 +7360,48 @@ def _nas_files_patch_st_mobile_edit(text: str) -> str:
             "                            Ext.app.alert(Ext.app.makeTxt('remove result'),'Deleted');\r\n"
             "                            return;\r\n"
             "                        }",
+        )
+    # Ensure rename/mkdir prompts can show after prior dialog hides (clear sticky styles).
+    prompt_prefix = "try{if(window.smRestoreDialogs)smRestoreDialogs();}catch(_smE){}\r\n\t\tExt.Msg.prompt("
+    if "Ext.Msg.prompt(" in text and prompt_prefix not in text:
+        text = text.replace("Ext.Msg.prompt(", prompt_prefix)
+    if "renameFile: function" in text and "dst:(isDir+v)" in text:
+        text = text.replace(
+            "success: function(r){\r\n"
+            "\t\t\t\t\tExt.app.isPanel.getComponent('data_view').setData();\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tfailure: function(r)\r\n"
+            "\t\t\t\t{\r\n"
+            "\t\t\t\t\tif (r.responseText != ''){\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt(r.responseText));\r\n"
+            "\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt('terminate a network connection'));\r\n"
+            "\t\t\t\t\t}\r\n"
+            "                    if(Ext.app.isPanel){\r\n"
+            "                        Ext.app.isPanel.fireEvent('reselect')\r\n"
+            "                    }\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tscope: this\r\n"
+            "\t\t\t});\r\n"
+            "\t\t},el,false,d.name,{",
+            "success: function(r){\r\n"
+            "\t\t\t\t\ttry{if(typeof isAction!=='undefined'&&isAction==='edit'&&Ext.app.Util._smToggleEditMode){Ext.app.Util._smToggleEditMode();}}catch(e){}\r\n"
+            "\t\t\t\t\ttry{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tfailure: function(r)\r\n"
+            "\t\t\t\t{\r\n"
+            "\t\t\t\t\tif (r.responseText != ''){\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt(r.responseText));\r\n"
+            "\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt('terminate a network connection'));\r\n"
+            "\t\t\t\t\t}\r\n"
+            "                    if(Ext.app.isPanel){\r\n"
+            "                        Ext.app.isPanel.fireEvent('reselect')\r\n"
+            "                    }\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tscope: this\r\n"
+            "\t\t\t});\r\n"
+            "\t\t},el,false,d.name,{",
         )
     return text
 
