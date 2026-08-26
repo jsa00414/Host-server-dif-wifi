@@ -1272,27 +1272,134 @@ OVPN_STATUS_LOG = Path(
     os.environ.get("OVPN_STATUS_LOG", "/var/log/openvpn-status.log")
 )
 OVPN_FLINT_VPN_IP = os.environ.get("OVPN_FLINT_VPN_IP", "10.9.0.2").strip() or "10.9.0.2"
+OVPN_SERVICE = os.environ.get("OVPN_SERVICE", "openvpn-server-sm").strip() or "openvpn-server-sm"
+OVPN_LISTEN = os.environ.get("OVPN_LISTEN", "74.208.76.213:443").strip() or "74.208.76.213:443"
+
+
+def parse_openvpn_status(text: str) -> dict:
+    """Parse OpenVPN management status log into clients + routes."""
+    clients: list[dict] = []
+    routes: list[dict] = []
+    updated = ""
+    section = ""
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("OpenVPN CLIENT LIST"):
+            section = "clients"
+            continue
+        if line.startswith("ROUTING TABLE"):
+            section = "routes"
+            continue
+        if line.startswith("GLOBAL STATS") or line == "END":
+            section = ""
+            continue
+        if line.startswith("Updated,"):
+            updated = line.split(",", 1)[-1].strip()
+            continue
+        if section == "clients":
+            if line.startswith("Common Name"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            clients.append(
+                {
+                    "name": parts[0].strip(),
+                    "real_address": parts[1].strip(),
+                    "bytes_received": int(parts[2]) if parts[2].isdigit() else 0,
+                    "bytes_sent": int(parts[3]) if parts[3].isdigit() else 0,
+                    "connected_since": parts[4].strip(),
+                }
+            )
+        elif section == "routes":
+            if line.startswith("Virtual Address"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 4:
+                continue
+            routes.append(
+                {
+                    "virtual": parts[0].strip(),
+                    "name": parts[1].strip(),
+                    "real_address": parts[2].strip(),
+                    "last_ref": parts[3].strip(),
+                }
+            )
+    return {"updated": updated, "clients": clients, "routes": routes}
+
+
+def build_openvpn_status() -> dict:
+    """Live OpenVPN server status for the OpenVPN admin website."""
+    active = False
+    detail = ""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "is-active", OVPN_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        active = (proc.stdout or "").strip() == "active"
+        detail = (proc.stdout or proc.stderr or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+
+    parsed = {"updated": "", "clients": [], "routes": []}
+    status_error = ""
+    try:
+        text = OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_openvpn_status(text)
+    except OSError as exc:
+        status_error = str(exc)
+
+    profiles = [
+        {
+            "id": "flint",
+            "label": "Flint / GL-MT6000",
+            "filename": "GL-MT6000.ovpn",
+            "exists": (OVPN_CLIENT_DIR / OVPN_FLINT_NAME).is_file(),
+            "download": "/api/openvpn/flint",
+        },
+        {
+            "id": "phone",
+            "label": "iPhone",
+            "filename": "james-iphone.ovpn",
+            "exists": (OVPN_CLIENT_DIR / OVPN_PHONE_NAME).is_file(),
+            "download": "/api/openvpn/phone",
+        },
+    ]
+
+    return {
+        "ok": True,
+        "service": OVPN_SERVICE,
+        "active": active,
+        "detail": detail,
+        "listen": OVPN_LISTEN,
+        "proto": "tcp",
+        "network": "10.9.0.0/24",
+        "crypto": "tls-auth + AES-256-CBC",
+        "updated": parsed.get("updated") or "",
+        "clients": parsed.get("clients") or [],
+        "routes": parsed.get("routes") or [],
+        "client_count": len(parsed.get("clients") or []),
+        "profiles": profiles,
+        "allow_ssh_script": "/api/openvpn/allow-ssh",
+        "status_error": status_error,
+        "flint_connected": any(
+            str(c.get("name") or "").lower() == "flint" for c in (parsed.get("clients") or [])
+        ),
+    }
 
 
 def _ovpn_flint_connected() -> bool:
     """True when OpenVPN status shows the Flint client is online."""
     try:
-        text = OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        return bool(build_openvpn_status().get("flint_connected"))
+    except Exception:
         return False
-    in_clients = False
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("OpenVPN CLIENT LIST"):
-            in_clients = True
-            continue
-        if s.startswith("ROUTING TABLE") or s.startswith("GLOBAL STATS"):
-            break
-        if not in_clients or not s or s.startswith("Common Name") or s.startswith("Updated"):
-            continue
-        if s.lower().startswith("flint,"):
-            return True
-    return False
 
 
 def _router_hosts_for_ssh() -> list[str]:
@@ -4827,6 +4934,7 @@ def build_portal_settings() -> dict:
     links = [
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "https://vpn.vpstruelord.com/"},
+        {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
@@ -8653,6 +8761,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/", "/index.html"):
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        if path == "/openvpn.html":
+            return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path == "/login.html":
             # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
@@ -8795,6 +8905,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/openvpn/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_openvpn_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path in (
             "/api/openvpn/config",

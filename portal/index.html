@@ -184,7 +184,8 @@
     #view-files.active,
     #view-buffalo.active,
     #view-pihole.active,
-    #view-wireguard.active {
+    #view-wireguard.active,
+    #view-openvpn.active {
       position: absolute !important;
       inset: 0 !important;
       min-height: 0 !important;
@@ -196,7 +197,8 @@
     #frameFiles,
     #frameAdguard,
     #framePihole,
-    #frameWireguard {
+    #frameWireguard,
+    #frameOpenvpn {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
@@ -811,7 +813,8 @@
       body.embed-mode #view-files.active,
       body.embed-mode #view-adguard.active,
       body.embed-mode #view-pihole.active,
-      body.embed-mode #view-wireguard.active {
+      body.embed-mode #view-wireguard.active,
+      body.embed-mode #view-openvpn.active {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
@@ -825,7 +828,8 @@
       body.embed-mode #frameFiles,
       body.embed-mode #frameAdguard,
       body.embed-mode #framePihole,
-      body.embed-mode #frameWireguard {
+      body.embed-mode #frameWireguard,
+      body.embed-mode #frameOpenvpn {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
@@ -973,8 +977,8 @@
           </button>
           <button type="button" class="stat" data-go="openvpn">
             <div class="k">OpenVPN</div>
-            <div class="v">School</div>
-            <div class="s">TCP 443</div>
+            <div class="v">Admin</div>
+            <div class="s">openvpn.html</div>
           </button>
           <button type="button" class="stat" data-go="adguard">
             <div class="k">AdGuard</div>
@@ -1322,24 +1326,8 @@
         <iframe class="embed-frame" id="frameWireguard" title="WireGuard (wg-easy)" src="about:blank" data-src="https://vpn.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
-      <section class="view" id="view-openvpn">
-        <div class="page-head">
-          <h2>OpenVPN</h2>
-          <p class="hint" style="margin:6px 0 0">School tunnel over TCP 443 — preferred on campus Wi‑Fi.</p>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><h3>Client profiles</h3></div>
-          <div class="panel-body">
-            <p class="hint" style="margin:0 0 10px">TCP <code>74.208.76.213:443</code> (shares HTTPS), <code>tls-auth</code> + <code>AES-256-CBC</code>. On the Flint: disable WireGuard, <strong>delete any old OpenVPN client</strong>, import this profile, then enable it.</p>
-            <div class="settings-actions">
-              <a class="primary" id="ovpnFlintDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/flint" download="GL-MT6000.ovpn">Download Flint .ovpn</a>
-              <a class="ghost" id="ovpnPhoneDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/phone" download="james-iphone.ovpn">Download iPhone .ovpn</a>
-              <a class="ghost" id="ovpnAllowSshDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/allow-ssh" download="flint-allow-vpn-ssh.sh">Allow VPN SSH script</a>
-            </div>
-            <p class="hint" style="margin:10px 0 0">Portal SSH needs one Flint step: join Flint Wi‑Fi → <code>192.168.8.1</code> → Terminal → run the Allow VPN SSH script.</p>
-            <p class="hint" style="margin:10px 0 0">Direct links: <code>https://portal.vpstruelord.com/api/openvpn/flint</code> · <code>https://portal.vpstruelord.com/api/openvpn/phone</code></p>
-          </div>
-        </div>
+      <section class="view embed-view" id="view-openvpn">
+        <iframe class="embed-frame" id="frameOpenvpn" title="OpenVPN" src="about:blank" data-src="/openvpn.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view" id="view-settings">
@@ -1424,11 +1412,12 @@
           <div class="panel">
             <div class="panel-head"><h3>VPN</h3></div>
             <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens <code>vpn.vpstruelord.com</code> (wg-easy). <strong>OpenVPN</strong> has school client downloads.</p>
+              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens <code>vpn.vpstruelord.com</code>. <strong>OpenVPN</strong> opens the OpenVPN admin site (status, clients, downloads).</p>
               <div class="settings-actions">
                 <button type="button" class="primary" data-go="wireguard">Open WireGuard</button>
                 <button type="button" class="ghost" data-go="openvpn">Open OpenVPN</button>
                 <a class="ghost" href="https://vpn.vpstruelord.com/" target="_blank" rel="noopener">vpn.vpstruelord.com</a>
+                <a class="ghost" href="/openvpn.html" target="_blank" rel="noopener">openvpn.html</a>
               </div>
             </div>
           </div>
@@ -1788,7 +1777,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -1802,6 +1791,10 @@
       }
       if (name === "wireguard") {
         const f = document.getElementById("frameWireguard");
+        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+      }
+      if (name === "openvpn") {
+        const f = document.getElementById("frameOpenvpn");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "buffalo") {
