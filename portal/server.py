@@ -1724,6 +1724,81 @@ def _ovpn_flint_connected() -> bool:
         return False
 
 
+def ensure_ovpn_home_lan_routes() -> dict:
+    """Prefer tun0→Flint for 192.168.8.0/24 while school OpenVPN is up.
+
+    wg-easy / docker often installs an *unmetered* via-10.42.42.42 route that
+    beats OpenVPN's metric-5 path, so Buffalo admin/files time out from the VPS.
+    """
+    wg_gw = os.environ.get("WG_LAN_GW", "10.42.42.42").strip() or "10.42.42.42"
+    ovpn_gw = OVPN_FLINT_VPN_IP
+    actions: list[str] = []
+    if not _ovpn_flint_connected():
+        return {"ok": True, "skipped": "flint not on openvpn", "actions": actions}
+
+    def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+
+    for cidr in ("192.168.8.0/24", "10.0.0.0/24", "10.8.0.0/24"):
+        for _ in range(8):
+            proc = _run(["ip", "route", "del", cidr, "via", wg_gw])
+            if proc.returncode != 0:
+                break
+            actions.append(f"del {cidr} via {wg_gw}")
+    for cidr in ("192.168.8.0/24", "10.0.0.0/24"):
+        proc = _run(
+            ["ip", "route", "replace", cidr, "via", ovpn_gw, "dev", "tun0", "metric", "5"]
+        )
+        if proc.returncode == 0:
+            actions.append(f"ovpn {cidr} via {ovpn_gw} metric 5")
+        else:
+            actions.append(
+                f"ovpn {cidr} failed: {(proc.stderr or proc.stdout or '').strip()}"
+            )
+    for cidr in ("192.168.8.0/24", "10.0.0.0/24", "10.8.0.0/24"):
+        _run(["ip", "route", "replace", cidr, "via", wg_gw, "metric", "100"])
+        actions.append(f"wg-backup {cidr} via {wg_gw} metric 100")
+    return {"ok": True, "actions": actions}
+
+
+_flint_lan_ensure_ts = 0.0
+_flint_lan_ensure_lock = threading.Lock()
+
+
+def ensure_flint_ovpn_lan_access(*, force: bool = False) -> dict:
+    """SSH to Flint and allow OVPN→LAN (Buffalo) + SSH. Rate-limited."""
+    global _flint_lan_ensure_ts
+    if not _ovpn_flint_connected():
+        return {"ok": True, "skipped": "flint not on openvpn"}
+    now = time.time()
+    with _flint_lan_ensure_lock:
+        if not force and (now - _flint_lan_ensure_ts) < 60:
+            return {"ok": True, "skipped": "recently applied"}
+        _flint_lan_ensure_ts = now
+
+    ensure_ovpn_home_lan_routes()
+    script_name = OVPN_ALLOW_SSH_SCRIPT
+    try:
+        body = load_openvpn_script(script_name)
+    except Exception as exc:
+        return {"ok": False, "error": f"script missing: {exc}"}
+
+    remote = "/tmp/flint-allow-vpn-ssh.sh"
+    upload = router_ssh(f"cat > {remote}", input_text=body.decode("utf-8", errors="replace"), timeout=20)
+    if upload.returncode != 0:
+        return {
+            "ok": False,
+            "error": (upload.stderr or upload.stdout or "upload failed").strip(),
+        }
+    run = router_ssh(f"chmod +x {remote} && sh {remote}", timeout=40)
+    ok = run.returncode == 0
+    return {
+        "ok": ok,
+        "stdout": (run.stdout or "")[-1500:],
+        "stderr": (run.stderr or "")[-800:],
+    }
+
+
 def _router_hosts_for_ssh() -> list[str]:
     """Prefer OpenVPN Flint IP when the school tunnel is up."""
     hosts: list[str] = []
@@ -5029,6 +5104,15 @@ def buffalo_sso_login() -> dict:
     """Log into Buffalo admin (:80) and WebAccess (:9000); return session tokens."""
     if not BUFFALO_SSO_PASS:
         raise RuntimeError("BUFFALO_PASS / BUFFALO_PASS_B64 not configured")
+
+    # School OpenVPN: fix VPS routes + Flint OVPN→LAN so Buffalo is reachable.
+    try:
+        ensure_flint_ovpn_lan_access(force=False)
+    except Exception:
+        try:
+            ensure_ovpn_home_lan_routes()
+        except Exception:
+            pass
 
     admin_url = f"{BUFFALO_UPSTREAM}/nasapi/"
     admin_payload = {
@@ -8662,7 +8746,15 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
             else:
                 body = http_exc.read() if hasattr(http_exc, "read") else b""
                 resp = None
-        except (URLError, TimeoutError, OSError):
+        except (URLError, TimeoutError, OSError) as exc:
+            try:
+                threading.Thread(
+                    target=lambda: ensure_flint_ovpn_lan_access(force=True),
+                    name="flint-ovpn-lan-files",
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
             handler._json(502, {"error": f"nas files proxy failed: {exc}"})
             return
 
@@ -8929,6 +9021,14 @@ def proxy_buffalo_request(handler: "Handler", method: str) -> None:
         elif exc.headers and exc.headers.get("Set-Cookie"):
             set_cookies = [exc.headers.get("Set-Cookie")]
     except (URLError, TimeoutError, OSError) as exc:
+        try:
+            threading.Thread(
+                target=lambda: ensure_flint_ovpn_lan_access(force=True),
+                name="flint-ovpn-lan-buffalo",
+                daemon=True,
+            ).start()
+        except Exception:
+            pass
         handler._json(502, {"error": f"buffalo proxy failed: {exc}"})
         return
 
@@ -9913,6 +10013,16 @@ def main() -> None:
                 set_ts_host_protect(True)
         except Exception:
             pass
+    # School OpenVPN: prefer tun0 for home LAN + allow Flint OVPN→LAN (Buffalo).
+    try:
+        if _ovpn_flint_connected():
+            threading.Thread(
+                target=lambda: ensure_flint_ovpn_lan_access(force=True),
+                name="flint-ovpn-lan",
+                daemon=True,
+            ).start()
+    except Exception:
+        pass
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"ServerManager panel on http://{HOST}:{PORT}")
     print(f"  title:    {PANEL_TITLE}")
