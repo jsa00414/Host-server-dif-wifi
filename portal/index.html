@@ -1412,7 +1412,7 @@
           <div class="panel">
             <div class="panel-head"><h3>VPN</h3></div>
             <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens the themed wg-easy UI (<code>/wg-ui/</code>). <strong>OpenVPN</strong> opens the OpenVPN admin site (status, clients, downloads).</p>
+              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens the themed wg-easy UI with portal SSO (<code>/wg-ui/</code>). <strong>OpenVPN</strong> opens the OpenVPN admin site (status, clients, downloads).</p>
               <div class="settings-actions">
                 <button type="button" class="primary" data-go="wireguard">Open WireGuard</button>
                 <button type="button" class="ghost" data-go="openvpn">Open OpenVPN</button>
@@ -1645,6 +1645,24 @@
         showLog(String(e.message || e), true);
       }
     }
+    async function loadWireguardFrame(force) {
+      const frame = document.getElementById("frameWireguard");
+      if (!frame) return;
+      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      const fallback = frame.dataset.src || "/wg-ui/";
+      try {
+        frame.dataset.authed = "0";
+        if (force) frame.src = "about:blank";
+        const data = await api("/api/wireguard-sso");
+        const url = (data && data.url) || fallback;
+        frame.src = url + (String(url).includes("?") ? "&" : "?") + "_sm=" + Date.now();
+        frame.dataset.authed = "1";
+      } catch (e) {
+        frame.src = fallback;
+        frame.dataset.authed = "0";
+        showLog(String(e.message || e), true);
+      }
+    }
     async function loadNasFilesFrame(force) {
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
@@ -1791,8 +1809,7 @@
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "wireguard") {
-        const f = document.getElementById("frameWireguard");
-        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+        loadWireguardFrame();
       }
       if (name === "openvpn") {
         const f = document.getElementById("frameOpenvpn");

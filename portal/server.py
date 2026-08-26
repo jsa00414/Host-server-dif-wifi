@@ -62,6 +62,9 @@ WG_UI_PUBLIC_HOSTS = tuple(
     ).split(",")
     if h.strip()
 )
+WG_EASY_COOKIE = "wg-easy"
+WG_EASY_SSO_USER = os.environ.get("WG_EASY_USER", "").strip()
+WG_EASY_SSO_PASS = ""  # filled after helpers below / docker fallback
 # Flint / school WireGuard client profile (Endpoint :443, MTU 1280).
 WG_CLIENT_CONF = Path(
     os.environ.get("WG_CLIENT_CONF", "/opt/wireguard/GL-MT6000.conf")
@@ -72,6 +75,53 @@ WG_CLIENT_DOWNLOAD_NAME = os.environ.get(
 WG_CLIENT_NAME = os.environ.get("WG_CLIENT_NAME", "GL-MT6000")
 WG_EASY_DB_CONTAINER = os.environ.get("WG_EASY_DB_CONTAINER", "wg-easy")
 WG_EASY_DB_PATH = os.environ.get("WG_EASY_DB_PATH", "/etc/wireguard/wg-easy.db")
+
+
+def _load_wg_easy_pass() -> str:
+    b64 = os.environ.get("WG_EASY_PASS_B64", "").strip()
+    raw = os.environ.get("WG_EASY_PASS", "")
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    return raw
+
+
+def _wg_easy_docker_init_creds() -> tuple[str, str]:
+    """Fall back to wg-easy container INIT_USERNAME / INIT_PASSWORD when unset."""
+    user = ""
+    password = ""
+    try:
+        proc = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{range .Config.Env}}{{println .}}{{end}}",
+                WG_EASY_DB_CONTAINER,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("INIT_USERNAME="):
+                user = line.split("=", 1)[1].strip()
+            elif line.startswith("INIT_PASSWORD="):
+                password = line.split("=", 1)[1]
+    except Exception:
+        pass
+    return user, password
+
+
+WG_EASY_SSO_PASS = _load_wg_easy_pass()
+if not WG_EASY_SSO_USER or not WG_EASY_SSO_PASS:
+    _du, _dp = _wg_easy_docker_init_creds()
+    if not WG_EASY_SSO_USER:
+        WG_EASY_SSO_USER = (_du or "admin").strip() or "admin"
+    if not WG_EASY_SSO_PASS:
+        WG_EASY_SSO_PASS = _dp
 OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients"))
 OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
 OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
@@ -5205,6 +5255,88 @@ def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
     return out
 
 
+def wg_easy_sso_login() -> dict:
+    """Log into wg-easy and return the session cookie for /wg-ui/ SSO."""
+    user = (WG_EASY_SSO_USER or "admin").strip() or "admin"
+    password = WG_EASY_SSO_PASS
+    if not password:
+        raise RuntimeError("WG_EASY_PASS / WG_EASY_PASS_B64 (or container INIT_PASSWORD) not configured")
+
+    url = f"{WG_UI_UPSTREAM}/api/auth/password"
+    payload = {"username": user, "password": password, "remember": True}
+    headers = {
+        "User-Agent": "ServerManager-WgSso/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+            set_cookies: list[str] = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        raw = exc.read() if hasattr(exc, "read") else b""
+        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+        raise RuntimeError(f"wg-easy login failed ({getattr(exc, 'code', '?')}): {text[:300]}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"wg-easy login failed: {exc}") from exc
+
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    try:
+        body = json.loads(text) if text else {}
+    except Exception:
+        body = {}
+    if status >= 400 or (isinstance(body, dict) and body.get("status") not in (None, "success") and body.get("error")):
+        raise RuntimeError(f"wg-easy login failed ({status}): {text[:300]}")
+    if isinstance(body, dict) and body.get("status") and body.get("status") != "success":
+        raise RuntimeError(f"wg-easy login failed: {body}")
+
+    cookie_val = ""
+    max_age = "604800"
+    for raw_c in set_cookies:
+        if not raw_c:
+            continue
+        # First segment is name=value
+        first = raw_c.split(";", 1)[0].strip()
+        if first.lower().startswith(WG_EASY_COOKIE.lower() + "="):
+            cookie_val = first.split("=", 1)[1]
+            for part in raw_c.split(";")[1:]:
+                low = part.strip().lower()
+                if low.startswith("max-age="):
+                    max_age = part.strip().split("=", 1)[1].strip() or max_age
+            break
+    if not cookie_val:
+        raise RuntimeError("wg-easy login succeeded but no session cookie returned")
+
+    return {
+        "ok": True,
+        "user": user,
+        "cookie": cookie_val,
+        "max_age": max_age,
+        "url": f"{WG_UI_PREFIX}/",
+    }
+
+
+def _wg_easy_sso_cookie_headers(data: dict) -> list[str]:
+    """Set wg-easy session cookie under /wg-ui/ for the portal embed."""
+    val = str(data.get("cookie") or "").strip()
+    if not val:
+        return []
+    max_age = str(data.get("max_age") or "604800").strip() or "604800"
+    # Clear any stale Path=/ copy first, then set the prefix-scoped session.
+    return [
+        f"{WG_EASY_COOKIE}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
+        f"{WG_EASY_COOKIE}=; Path={WG_UI_PREFIX}/; SameSite=Lax; Secure; Max-Age=0",
+        f"{WG_EASY_COOKIE}={val}; Path={WG_UI_PREFIX}/; Max-Age={max_age}; HttpOnly; SameSite=Lax; Secure",
+    ]
+
+
 def _read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -5378,6 +5510,9 @@ def build_portal_settings() -> dict:
         "uptime_sec": uptime_sec,
         "buffalo_user": BUFFALO_SSO_USER,
         "buffalo_sso_configured": bool(BUFFALO_SSO_PASS),
+        "wg_easy_user": WG_EASY_SSO_USER,
+        "wg_easy_sso_configured": bool(WG_EASY_SSO_PASS),
+        "wg_ui_prefix": WG_UI_PREFIX,
         "nas_files_prefix": NAS_FILES_PREFIX,
         "buffalo_prefix": BUFFALO_PREFIX,
         "env_file": str(PORTAL_ENV_PATH),
@@ -9744,6 +9879,20 @@ class Handler(BaseHTTPRequestHandler):
                     "files": {"url": (data.get("files") or {}).get("url")},
                 }
                 self._json(200, safe, extra_cookies=_buffalo_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/wireguard-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = wg_easy_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"{WG_UI_PREFIX}/",
+                }
+                self._json(200, safe, extra_cookies=_wg_easy_sso_cookie_headers(data))
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
