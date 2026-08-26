@@ -510,6 +510,19 @@
     button:hover { border-color: rgba(61,222,160,.35); }
     button:disabled { opacity: .55; cursor: not-allowed; }
     button.primary { background: var(--accent); color: #062016; border-color: transparent; }
+    a.primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent);
+      color: #062016;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 700;
+      text-decoration: none;
+    }
     button.ghost { background: transparent; color: var(--muted); }
     button.ghost:hover { color: var(--text); }
     button.ghost.danger { color: var(--danger); padding: 6px 9px; }
@@ -1332,6 +1345,17 @@
           </div>
 
           <div class="panel">
+            <div class="panel-head"><h3>WireGuard (Flint)</h3></div>
+            <div class="panel-body">
+              <p class="hint" style="margin:0 0 10px">School / campus profile — endpoint <code>74.208.76.213:443</code>, MTU <code>1280</code>. Import on the Flint, then enable the tunnel.</p>
+              <div class="settings-actions">
+                <a class="primary" id="wgConfigDownloadLink" href="/api/wireguard/config" download="GL-MT6000-school.conf">Download config</a>
+              </div>
+              <p class="hint" style="margin:10px 0 0">Direct link (while logged in): <code>https://portal.vpstruelord.com/api/wireguard/config</code></p>
+            </div>
+          </div>
+
+          <div class="panel">
             <div class="panel-head"><h3>Quick links</h3></div>
             <div class="panel-body">
               <div class="settings-links" id="settingsLinks"><div class="empty">Loading…</div></div>
@@ -2140,7 +2164,7 @@
         setStatus("Ready", "ok");
       }
       showLog(data.router && data.router.ok === false
-        ? `Router unreachable at ${data.router.host || "10.8.0.3"}. After factory reset: connect to Flint Wi‑Fi, re-import the GL-MT6000 profile from https://vpn.vpstruelord.com, enable SSH, then run /opt/wireguard/scripts/flint-post-reset.sh on the router.\n\n${data.router.error || ""}`
+        ? `Router unreachable at ${data.router.host || "10.8.0.3"}. After factory reset: connect to Flint Wi‑Fi, re-import GL-MT6000 from Portal → Settings → Download config (https://portal.vpstruelord.com/api/wireguard/config), enable SSH, then run /opt/wireguard/scripts/flint-post-reset.sh on the router.\n\n${data.router.error || ""}`
         : (lanDevices.length
         ? `Loaded. LAN: ${lanDevices.map((d) => d.hostname ? `${d.ip} (${d.hostname})` : d.ip).join(", ")}`
         : "Configuration loaded."));

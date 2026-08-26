@@ -50,6 +50,13 @@ BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
 NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
 NAS_FILES_PREFIX = "/nas-files"
+# Flint / school WireGuard client profile (Endpoint :443, MTU 1280).
+WG_CLIENT_CONF = Path(
+    os.environ.get("WG_CLIENT_CONF", "/opt/wireguard/GL-MT6000.conf")
+)
+WG_CLIENT_DOWNLOAD_NAME = os.environ.get(
+    "WG_CLIENT_DOWNLOAD_NAME", "GL-MT6000-school.conf"
+)
 # Dark admin theme (ServerManager / AdGuard / Pi-hole style) + full-bleed layout.
 BUFFALO_FIT_CSS = """
 :root {
@@ -8551,6 +8558,35 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(500, {"ok": False, "error": str(exc)})
                 except Exception:
                     pass
+            return
+        if path in (
+            "/api/wireguard/config",
+            "/download/GL-MT6000-school.conf",
+            "/download/wireguard.conf",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                conf_path = WG_CLIENT_CONF
+                if not conf_path.is_file():
+                    raise FileNotFoundError(f"missing {conf_path}")
+                body = conf_path.read_bytes()
+                name = WG_CLIENT_DOWNLOAD_NAME
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-wireguard-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
             return
         if path == "/api/buffalo-sso":
             if not self._require_auth(api=True):
