@@ -4082,16 +4082,28 @@ def write_firewall_state(rules: list[dict]) -> dict:
         vpn_only = _is_vpn_ufw_from(frm)
         rows.append((int(m.group("num")), port, proto, ipv6, vpn_only))
 
-    # Delete from highest number so indices stay stable
-    for num, port, proto, _ipv6, cur_vpn in sorted(rows, key=lambda x: x[0], reverse=True):
+    # Candidates to delete (unmanaged / vpn_only flip). Skip protected.
+    delete_nums: list[tuple[int, int, str]] = []
+    for num, port, proto, _ipv6, cur_vpn in rows:
         if (port, proto) in UFW_PROTECTED:
             continue
         want = desired_keys.get((port, proto))
-        if want is None:
-            pass  # delete
-        elif bool(want.get("vpn_only")) == bool(cur_vpn):
-            continue  # keep matching rule
-        # else recreate (vpn_only flipped)
+        if want is None or bool(want.get("vpn_only")) != bool(cur_vpn):
+            delete_nums.append((num, port, proto))
+
+    # Guard: never mass-delete when the portal only knows a tiny rule set
+    # (e.g. after a partial load). That previously wiped HTTP/HTTPS/forwards.
+    unique_current = {(p, pr) for _n, p, pr, _i, _v in rows}
+    if len(delete_nums) >= 4 and len(desired_keys) < max(4, len(unique_current) // 2):
+        logs.append(
+            f"refusing mass firewall delete ({len(delete_nums)} rules); "
+            f"desired={len(desired_keys)} current={len(unique_current)}. "
+            "Only adding missing rules."
+        )
+        delete_nums = []
+
+    # Delete from highest number so indices stay stable
+    for num, port, proto in sorted(delete_nums, key=lambda x: x[0], reverse=True):
         proc = _run_ufw(["--force", "delete", str(num)])
         logs.append(
             f"delete {num} {port}/{proto}: rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
