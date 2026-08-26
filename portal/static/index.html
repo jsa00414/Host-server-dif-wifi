@@ -64,20 +64,26 @@
       font-family: "Sora", system-ui, sans-serif;
       color: var(--text);
       background: var(--bg0);
-      display: grid;
-      grid-template-columns: var(--sidebar-w) 1fr;
-      grid-template-rows: var(--top-h) auto;
+      display: block;
+      padding-top: var(--top-h);
+      padding-left: var(--sidebar-w);
       min-height: 100vh;
       min-height: 100dvh;
       height: auto;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: auto;
       touch-action: manipulation;
       -webkit-text-size-adjust: 100%;
       text-size-adjust: 100%;
     }
 
     .topbar {
-      grid-column: 1 / -1;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: var(--top-h);
+      z-index: 120;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -99,13 +105,21 @@
     .status.err { color: var(--danger); border-color: rgba(255,107,107,.35); }
 
     .sidebar {
+      position: fixed;
+      top: var(--top-h);
+      left: 0;
+      bottom: 0;
+      width: var(--sidebar-w);
+      z-index: 110;
       border-right: 1px solid var(--line);
       background: var(--bg1);
       padding: 14px 10px;
       display: flex;
       flex-direction: column;
       gap: 4px;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .nav-label {
       color: var(--muted); font-size: .65rem; letter-spacing: .12em; text-transform: uppercase;
@@ -137,9 +151,9 @@
     }
 
     .main {
-      display: grid;
-      grid-template-rows: auto auto;
+      display: block;
       min-width: 0;
+      min-height: calc(100dvh - var(--top-h));
       background:
         radial-gradient(640px 240px at 100% 0%, rgba(61,222,160,.07), transparent 55%),
         var(--bg0);
@@ -215,16 +229,16 @@
       height: 100dvh;
       max-height: 100dvh;
       overflow: hidden !important;
-      grid-template-rows: var(--top-h) 1fr;
+      padding-top: var(--top-h);
+      padding-left: var(--sidebar-w);
       touch-action: manipulation;
       overscroll-behavior: none;
       overscroll-behavior-y: none;
     }
     body.embed-mode .main {
       min-height: 0;
-      height: 100%;
+      height: calc(100dvh - var(--top-h));
       overflow: hidden !important;
-      grid-template-rows: 1fr;
     }
     body.embed-mode .content {
       padding: 0 !important;
@@ -688,6 +702,7 @@
         min-height: 100vh;
         min-height: 100dvh;
         padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
+        padding-left: 0;
         padding-bottom: env(safe-area-inset-bottom);
       }
       .topbar {
@@ -700,6 +715,7 @@
         align-items: center;
         height: var(--top-h);
         min-height: var(--top-h);
+        width: auto;
         padding: env(safe-area-inset-top, 0px) 10px 0;
         gap: 8px;
       }
@@ -738,6 +754,8 @@
         top: calc(var(--top-h) + env(safe-area-inset-top, 0px));
         left: 0;
         right: 0;
+        bottom: auto;
+        width: auto;
         z-index: 110;
         height: var(--mobile-nav-h);
         min-height: var(--mobile-nav-h);
@@ -769,6 +787,7 @@
       body.embed-mode {
         display: block;
         padding-top: calc(var(--top-h) + var(--mobile-nav-h) + env(safe-area-inset-top, 0px));
+        padding-left: 0;
         padding-bottom: 0;
         height: var(--app-height, 100dvh);
         max-height: var(--app-height, 100dvh);
