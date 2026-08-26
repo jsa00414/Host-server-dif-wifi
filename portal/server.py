@@ -63,6 +63,10 @@ WG_EASY_DB_PATH = os.environ.get("WG_EASY_DB_PATH", "/etc/wireguard/wg-easy.db")
 OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients"))
 OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
 OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
+OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
+OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
+    "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
+)
 
 
 def load_openvpn_client_conf(filename: str) -> bytes:
@@ -72,6 +76,20 @@ def load_openvpn_client_conf(filename: str) -> bytes:
     # Refuse path escape
     if path.resolve().parent != OVPN_CLIENT_DIR.resolve():
         raise ValueError("invalid OpenVPN profile path")
+    return path.read_bytes()
+
+
+def load_openvpn_script(filename: str) -> bytes:
+    path = OVPN_SCRIPTS_DIR / filename
+    if not path.is_file():
+        # Fall back to repo-relative scripts next to this file (dev / deploy sync).
+        alt = Path(__file__).resolve().parent / "scripts" / "openvpn" / filename
+        if alt.is_file():
+            path = alt
+        else:
+            raise FileNotFoundError(f"missing OpenVPN script {filename}")
+    if ".." in Path(filename).parts:
+        raise ValueError("invalid OpenVPN script path")
     return path.read_bytes()
 
 
@@ -1242,13 +1260,52 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
 ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.8.1")
 ROUTER_HOSTS = [
     h.strip()
-    for h in os.environ.get("ROUTER_HOSTS", "10.8.0.3,192.168.8.1").split(",")
+    for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
     if h.strip()
 ]
 if ROUTER_HOST not in ROUTER_HOSTS:
     ROUTER_HOSTS.insert(0, ROUTER_HOST)
 ROUTER_USER = os.environ.get("ROUTER_USER", "root")
 ROUTER_CONF = os.environ.get("ROUTER_CONF", "/etc/config/port_forward")
+OVPN_STATUS_LOG = Path(
+    os.environ.get("OVPN_STATUS_LOG", "/var/log/openvpn-status.log")
+)
+OVPN_FLINT_VPN_IP = os.environ.get("OVPN_FLINT_VPN_IP", "10.9.0.2").strip() or "10.9.0.2"
+
+
+def _ovpn_flint_connected() -> bool:
+    """True when OpenVPN status shows the Flint client is online."""
+    try:
+        text = OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    in_clients = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("OpenVPN CLIENT LIST"):
+            in_clients = True
+            continue
+        if s.startswith("ROUTING TABLE") or s.startswith("GLOBAL STATS"):
+            break
+        if not in_clients or not s or s.startswith("Common Name") or s.startswith("Updated"):
+            continue
+        if s.lower().startswith("flint,"):
+            return True
+    return False
+
+
+def _router_hosts_for_ssh() -> list[str]:
+    """Prefer OpenVPN Flint IP when the school tunnel is up."""
+    hosts: list[str] = []
+    if _ovpn_flint_connected() and OVPN_FLINT_VPN_IP:
+        hosts.append(OVPN_FLINT_VPN_IP)
+    for h in ROUTER_HOSTS:
+        if h not in hosts:
+            hosts.append(h)
+    for h in ("192.168.8.1", "10.8.0.3"):
+        if h not in hosts:
+            hosts.append(h)
+    return hosts
 
 
 def _load_router_pass() -> str:
@@ -2222,7 +2279,8 @@ def router_ssh(
     ROUTER_KNOWN_HOSTS.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["SSHPASS"] = ROUTER_PASS
-    per_host = max(3, min(6, timeout // max(1, len(ROUTER_HOSTS))))
+    hosts = _router_hosts_for_ssh()
+    per_host = max(3, min(6, timeout // max(1, len(hosts))))
     last: subprocess.CompletedProcess | None = None
     netns_pid = _wg_easy_pid()
     if ROUTER_SSH_VIA == "host":
@@ -2235,7 +2293,7 @@ def router_ssh(
     for path_name, pid in paths:
         if path_name == "wg-easy" and not pid:
             continue
-        for host in ROUTER_HOSTS:
+        for host in hosts:
             cmd = _router_ssh_cmd(
                 host,
                 remote_cmd,
@@ -2270,6 +2328,13 @@ def router_ssh(
         err = (last.stderr or last.stdout or "router ssh failed").strip()
         if not err.lower().startswith(prefix):
             err = f"{prefix} {err}"
+        if _ovpn_flint_connected() and "timed out" in err.lower():
+            err += (
+                " — OpenVPN is up but Flint is blocking SSH from the tunnel. "
+                "On Flint Wi‑Fi open 192.168.8.1 → Terminal and run: "
+                "sh /tmp/flint-allow-vpn-ssh.sh "
+                "(download from Portal → Settings → OpenVPN)"
+            )
         return subprocess.CompletedProcess(
             args=last.args,
             returncode=last.returncode,
@@ -8749,6 +8814,31 @@ class Handler(BaseHTTPRequestHandler):
                 name = "james-iphone.ovpn"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/openvpn/allow-ssh",
+            "/download/flint-allow-vpn-ssh.sh",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_openvpn_script(OVPN_ALLOW_SSH_SCRIPT)
+                name = "flint-allow-vpn-ssh.sh"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/x-shellscript; charset=utf-8")
                 self.send_header(
                     "Content-Disposition",
                     f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
