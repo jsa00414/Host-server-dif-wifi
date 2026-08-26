@@ -1,0 +1,12 @@
+[Unit]
+Description=Redirect UDP 443 to WireGuard 5000
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wireguard/scripts/wg-udp443-redirect.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
