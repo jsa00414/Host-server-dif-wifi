@@ -6758,6 +6758,42 @@ select,.x-combo-list{
   text-shadow:none!important}
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
+/* Icon/thumbnail view — CSS grid instead of broken Ext absolute positions in iframe */
+#main-panel .x-panel-body > .x-view{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fill,minmax(200px,1fr))!important;
+  grid-auto-flow:row!important;
+  gap:10px 14px!important;
+  align-content:start!important;
+  position:relative!important;
+  left:0!important;top:0!important;
+  width:100%!important;
+  height:auto!important;
+  min-height:100%!important;
+  padding:10px 12px!important;
+  box-sizing:border-box!important;
+}
+#main-panel .x-panel-body > .x-view .thumb-wrap,
+#main-panel .x-panel-body > .x-view .icon-side,
+#main-panel .x-panel-body > .x-view .icon-small,
+#main-panel .x-panel-body > .x-view .icon-medium,
+#main-panel .x-panel-body > .x-view .icon-large{
+  position:static!important;
+  left:auto!important;top:auto!important;
+  right:auto!important;bottom:auto!important;
+  float:none!important;
+  width:auto!important;height:auto!important;
+  margin:0!important;
+  box-sizing:border-box!important;
+}
+#main-panel .x-panel-body > .x-view .thumb-wrap.icon-side,
+#main-panel .x-panel-body > .x-view .icon-side{
+  display:flex!important;
+  align-items:flex-start!important;
+  gap:10px!important;
+  padding:8px 10px!important;
+  min-height:64px!important;
+}
 .x-view-empty,.x-grid-empty,.empty-text{
   color:var(--sm-muted)!important;font-size:14px!important;padding:24px!important;text-align:center!important}
 
@@ -7487,6 +7523,17 @@ NAS_FILES_SNIPPET = (
     "});}"
     "}catch(e){}"
     "return vp;}"
+    "function smRefreshFileIconView(){"
+    "try{"
+    "if(!window.Ext||!Ext.getCmp)return false;"
+    "var main=Ext.getCmp('main-panel');"
+    "if(!main||typeof main.getComponent!=='function')return false;"
+    "var cv=main.getComponent(0);"
+    "if(!cv)return false;"
+    "var dv=(cv.getDataView&&cv.getDataView())||(cv.view&&cv.view.getView&&cv.view.getView())||null;"
+    "if(dv&&dv.refresh){dv.refresh();return true;}"
+    "}catch(e){}"
+    "return false;}"
     "function smNasFit(force){"
     "try{"
     "smPatchExtDom();"
@@ -7516,6 +7563,7 @@ NAS_FILES_SNIPPET = (
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
     "try{if(vp.doLayout)vp.doLayout(true,true);}catch(e){}"
     "}"
+    "try{if(typeof smRefreshFileIconView==='function')smRefreshFileIconView();}catch(e){}"
     "try{"
     "var main=Ext.getCmp&&Ext.getCmp('main-panel');"
     "var left=Ext.getCmp&&Ext.getCmp('left-panel');"
@@ -7559,7 +7607,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
