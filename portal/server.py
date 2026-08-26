@@ -9084,6 +9084,9 @@ def _wg_ui_inject_theme(body: bytes, content_type: str) -> bytes:
     if "sm-wg-theme" in text:
         return body
     text = _wg_ui_rewrite_html(text)
+    # Help Nuxt router resolve under the portal prefix.
+    text = text.replace('baseURL:"/"', f'baseURL:"{WG_UI_PREFIX}/"')
+    text = text.replace("baseURL:'/'", f"baseURL:'{WG_UI_PREFIX}/'")
     snippet = WG_UI_THEME_SNIPPET
     lower = text.lower()
     head_idx = lower.find("<head>")
