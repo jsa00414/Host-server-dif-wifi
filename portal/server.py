@@ -1524,6 +1524,18 @@ button.rounded-full,[class*="rounded-full"]{
 button[class*="danger"],.text-red-600.font-bold{
   color:var(--sm-danger)!important;
 }
+/* Hide wg-easy license / donate footer */
+footer,
+footer p,
+footer a{
+  display:none!important;
+  visibility:hidden!important;
+  height:0!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:hidden!important;
+  pointer-events:none!important;
+}
 """.strip()
 
 WG_UI_THEME_SNIPPET = (
