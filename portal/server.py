@@ -5603,6 +5603,121 @@ body *,body *::before,body *::after{text-shadow:none!important;box-shadow:none!i
 #login_button,#logout_button,.x-btn-text-icon .x-btn-text{color:var(--sm-accent)!important}
 .x-toolbar-separator,.xtb-sep{border-left-color:var(--sm-line)!important;background:var(--sm-line)!important}
 
+/* Hide WebAccess action icon toolbar (Open/Download/…) — File menu has equivalents */
+#icon-panel,
+#icon-panel .x-toolbar,
+#icon-panel .x-panel-body,
+#icon-panel .x-panel-bwrap,
+#btn_open,#btn_download,#btn_newfolder,#btn_remove,#btn_rename,#btn_copy,#btn_move,#btn_upload,#btn_clearthumb,#btn_mailurl,#btn_onetimeurl{
+  display:none!important;visibility:hidden!important;
+  height:0!important;min-height:0!important;max-height:0!important;
+  overflow:hidden!important;padding:0!important;margin:0!important;
+  border:0!important;line-height:0!important}
+html.sm-auth-top #menu-bar{
+  display:flex!important;align-items:center!important;
+  justify-content:flex-start!important;gap:4px!important;
+  position:relative!important;padding-right:8px!important}
+html.sm-auth-top #menu-bar .x-toolbar-ct{flex:1 1 auto!important;width:auto!important}
+html.sm-auth-top #sm-auth-slot{
+  display:flex!important;align-items:center!important;justify-content:flex-end!important;
+  gap:8px!important;margin-left:auto!important;flex:0 0 auto!important;
+  padding:0 4px 0 12px!important;min-height:var(--sm-tap)!important;
+  white-space:nowrap!important;z-index:5}
+html.sm-auth-top #sm-auth-slot #userName,
+html.sm-auth-top #sm-auth-slot .user,
+html.sm-auth-top #sm-auth-slot .x-form-item,
+html.sm-auth-top #sm-auth-slot .x-toolbar-cell,
+html.sm-auth-top #menu-bar #userName,
+html.sm-auth-top #menu-bar .user{
+  display:inline-flex!important;align-items:center!important;gap:6px!important;
+  color:var(--sm-muted)!important;font:500 12px/1.2 "Sora",system-ui,sans-serif!important;
+  margin:0!important;padding:0!important;border:0!important;background:transparent!important}
+html.sm-auth-top #sm-auth-slot #login_button,
+html.sm-auth-top #sm-auth-slot #logout_button,
+html.sm-auth-top #menu-bar #login_button,
+html.sm-auth-top #menu-bar #logout_button{
+  display:inline-flex!important;align-items:center!important;
+  min-height:32px!important;margin:0!important}
+html.sm-auth-top #sm-auth-slot #logout_button .x-btn-mc,
+html.sm-auth-top #sm-auth-slot #login_button .x-btn-mc,
+html.sm-auth-top #menu-bar #logout_button .x-btn-mc,
+html.sm-auth-top #menu-bar #login_button .x-btn-mc{
+  background:var(--sm-bg3)!important;border-radius:8px!important;padding:0 10px!important}
+html.sm-auth-top #sm-auth-slot #logout_button .x-btn-text,
+html.sm-auth-top #sm-auth-slot #login_button .x-btn-text,
+html.sm-auth-top #menu-bar #logout_button .x-btn-text,
+html.sm-auth-top #menu-bar #login_button .x-btn-text{
+  color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
+html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
+
+/* Compact nav row — hide back/forward/up/history buttons, keep location + search */
+html.sm-merged-chrome #control-panel .navi-button,
+html.sm-merged-chrome #control-panel #navi-button-up,
+html.sm-merged-chrome #control-panel #alertButton{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  overflow:hidden!important;margin:0!important;padding:0!important}
+html.sm-merged-chrome #control-panel{
+  display:block!important;visibility:visible!important;
+  height:auto!important;min-height:36px!important;max-height:none!important;
+  overflow:visible!important;padding:2px 8px!important;margin:0!important;
+  border:0!important;border-bottom:1px solid var(--sm-line)!important}
+html.sm-merged-chrome #control-panel .x-toolbar-ct{
+  display:flex!important;align-items:center!important;gap:8px!important;width:100%!important}
+html.sm-merged-chrome #control-panel #location-bar{
+  flex:1 1 auto!important;min-width:120px!important;width:auto!important;
+  max-width:none!important;height:32px!important;margin:0!important}
+html.sm-merged-chrome #control-panel #search-textbox{
+  flex:0 1 220px!important;min-width:120px!important;width:auto!important;margin:0!important}
+/* Full path text in location bar (e.g. /Movies_And_Shows/Movies) */
+html.sm-path-text #location-buttons,
+html.sm-path-text #location-buttons-ie,
+html.sm-path-text #location-bar .x-box-item img[src*="location_spacer"]{
+  display:none!important;visibility:hidden!important}
+html.sm-path-text #control-panel #location-bar,
+html.sm-merged-chrome #control-panel #location-bar{
+  flex:1 1 auto!important;min-width:0!important;max-width:none!important}
+html.sm-path-text #location-bar .x-panel-body,
+html.sm-path-text #location-bar .x-form-field-wrap,
+html.sm-path-text #location-textfield{
+  width:100%!important;max-width:none!important;box-sizing:border-box!important}
+html.sm-path-text #location-textfield{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important;
+  font-size:13px!important;letter-spacing:.01em!important;
+  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+#control-panel.sm-nas-gone{
+  display:none!important;visibility:hidden!important;
+  height:0!important;min-height:0!important;max-height:0!important;
+  overflow:hidden!important;padding:0!important;margin:0!important;
+  border:0!important}
+html.sm-merged-chrome #menu-bar{
+  display:flex!important;align-items:center!important;flex-wrap:nowrap!important;
+  gap:6px!important;padding:4px 8px!important;
+  border-bottom:1px solid var(--sm-line)!important}
+html.sm-merged-chrome #menu-bar .x-toolbar-ct{
+  display:flex!important;align-items:center!important;flex:1 1 auto!important;
+  width:100%!important;gap:6px!important}
+html.sm-merged-chrome #menu-bar #location-bar{
+  flex:1 1 auto!important;min-width:100px!important;width:auto!important;
+  max-width:none!important;height:32px!important;margin:0!important;
+  border:0!important;border-bottom:0!important;background:transparent!important}
+html.sm-merged-chrome #menu-bar #location-buttons,
+html.sm-merged-chrome #menu-bar #location-buttons-ie{
+  height:30px!important;border:0!important;background:transparent!important}
+html.sm-merged-chrome #menu-bar #search-textbox,
+html.sm-merged-chrome #menu-bar #location-textfield{
+  flex:0 1 160px!important;width:160px!important;min-width:96px!important;
+  max-width:220px!important;min-height:32px!important;margin:0!important}
+html.sm-merged-chrome #menu-bar .location_item,
+html.sm-merged-chrome #menu-bar .location_item2{
+  min-height:28px!important;line-height:28px!important;font-size:12px!important}
+@media (max-width:900px){
+  html.sm-merged-chrome #menu-bar{flex-wrap:wrap!important}
+  html.sm-merged-chrome #menu-bar #location-bar{
+    flex:1 1 100%!important;order:10!important}
+  html.sm-merged-chrome #menu-bar #search-textbox{
+    flex:1 1 120px!important;order:11!important}
+}
+
 /* Location / search */
 #control-panel,#location-bar,.navi-button,#location-buttons,#location-buttons-ie,#search-panel{
   background:var(--sm-bg2)!important;background-image:none!important;
@@ -5720,6 +5835,13 @@ td.x-grid3-hd-over,td.sort-desc,td.sort-asc,td.x-grid3-hd-menu-open{
 .x-grid3-cell-inner,.x-grid3-hd-inner{color:var(--sm-text)!important;font-size:13px!important;
   line-height:40px!important;min-height:40px!important}
 .x-grid3-cell-selected{background:var(--sm-accent-dim)!important;color:var(--sm-text)!important}
+/* Detail/list grid — Ext sets inline white backgrounds; keep dark theme readable */
+#main-panel .x-grid-panel,#main-panel .x-grid-panel .x-panel-body,
+#main-panel .x-grid-panel .x-panel-bwrap,#main-panel .x-grid3,
+#main-panel .x-grid3-viewport,#main-panel .x-grid3-scroller,#main-panel .x-grid3-body{
+  background:var(--sm-bg0)!important;background-color:var(--sm-bg0)!important}
+#main-panel .x-grid3-row td,#main-panel .x-grid3-cell-inner{
+  color:var(--sm-text)!important;background:transparent!important}
 .x-grid3-hd-btn{filter:invert(1) brightness(1.2)}
 .x-grid3-resize-marker,.x-grid3-resize-proxy{background:var(--sm-accent)!important}
 
@@ -5840,6 +5962,63 @@ a{color:var(--sm-accent)!important}
   .x-layout-collapsed,.x-layout-cmini-west,.x-layout-cmini-east{width:36px!important}
   ::-webkit-scrollbar{width:0!important;height:0!important}
 }
+
+/* Sencha Touch (/st/) edit mode — only the edit menu, not Ext.Msg docked OK bars */
+#maindataview .edit-menu-box,
+#maindataview .x-docked-bottom.edit-menu-box,
+#maindataview .x-dock-item.x-docked-bottom:has(.edit-menu-box),
+#maindataview .x-dock-item.x-docked-bottom:has(.edit-button){
+  display:block!important;visibility:visible!important;opacity:1!important;
+  z-index:40!important;pointer-events:auto!important;
+  padding-bottom:max(8px,env(safe-area-inset-bottom,0px))!important;
+  max-height:42vh!important;overflow:visible!important}
+.edit-button .x-button-label,.slc-numBtn,.slc-numBtn .x-button-label{
+  color:var(--sm-text)!important;font-size:13px!important}
+.x-button-confirm .x-button-label{color:var(--sm-accent)!important;font-weight:700!important}
+.selected-wrap,.selected-wrap-icon{
+  outline:2px solid var(--sm-accent)!important;background:var(--sm-accent-dim)!important}
+.main-wrap.x-app-row-pressed,.main-wrap.selected-wrap,.main-wrap.selected-wrap-icon{
+  touch-action:manipulation!important}
+
+/* MsgBox / ActionSheet — hide only via Sencha's hidden classes (never sticky inline styles) */
+.x-msgbox.x-hidden,.x-msgbox.x-item-hidden,
+.x-sheet.x-hidden,.x-sheet.x-item-hidden,
+.x-msgbox.x-hidden .x-docked-bottom,.x-msgbox.x-item-hidden .x-docked-bottom,
+.x-sheet.x-hidden .x-docked-bottom,.x-sheet.x-item-hidden .x-docked-bottom,
+.x-msgbox.x-hidden .x-button,.x-msgbox.x-item-hidden .x-button,
+.x-sheet.x-hidden .x-button,.x-sheet.x-item-hidden .x-button{
+  display:none!important;visibility:hidden!important;opacity:0!important;
+  pointer-events:none!important}
+.x-msgbox:not(.x-hidden):not(.x-item-hidden),
+.x-sheet:not(.x-hidden):not(.x-item-hidden),
+#tapactionsheet:not(.x-hidden):not(.x-item-hidden){
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;z-index:10000!important}
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-docked-bottom,
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-toolbar,
+.x-msgbox:not(.x-hidden):not(.x-item-hidden) .x-button,
+.x-sheet:not(.x-hidden):not(.x-item-hidden) .x-button,
+#tapactionsheet:not(.x-hidden):not(.x-item-hidden) .x-button{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;height:auto!important;min-height:0!important;
+  overflow:visible!important}
+.x-msgbox .x-input-el,.x-msgbox input,.x-msgbox textarea,.x-msgbox .x-field-input,
+.x-msgbox .x-form-field,.x-msgbox .x-input-field{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  pointer-events:auto!important;width:100%!important;min-height:36px!important;
+  font-size:16px!important;color:#111!important;background:#fff!important;
+  -webkit-user-select:text!important;user-select:text!important}
+#uploadbtn,#uploadbtn .x-button-label{position:relative!important}
+#sm-st-upload-input-btn{
+  position:absolute!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
+  width:100%!important;height:100%!important;opacity:0.01!important;z-index:20!important;
+  border:0!important;margin:0!important;padding:0!important;cursor:pointer!important;
+  -webkit-appearance:none!important;appearance:none!important}
+.x-msgbox .x-toolbar,.x-msgbox .x-docked-bottom{
+  background:var(--sm-bg1)!important;border-top:1px solid var(--sm-line)!important}
+.x-msgbox .x-button-label{color:#062016!important;font-weight:700!important}
+.x-msgbox .x-button-confirm,.x-msgbox .x-button-action{
+  background:var(--sm-accent)!important}
 
 
 /* Custom ServerManager toolbar / menu / navi icons (SVG backgrounds) */
@@ -6012,6 +6191,7 @@ NAS_FILES_SNIPPET = (
     + "</style>"
     "<script id=\"sm-nas-files-js\">(function(){"
     f"var P='{NAS_FILES_PREFIX}';"
+    "try{document.documentElement.classList.add('sm-auth-top');}catch(e){}"
     "try{document.documentElement.style.setProperty('zoom','1','important');"
     "document.body&&document.body.style.setProperty('zoom','1','important');}catch(e){}"
     "function smPinCss(){try{var s=document.getElementById('sm-nas-mobile');"
@@ -6020,27 +6200,298 @@ NAS_FILES_SNIPPET = (
     "smPinCss();"
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',smPinCss,false);"
     "window.addEventListener('load',smPinCss,false);"
+    "function smEnsureStUploadInput(){"
+    "try{"
+    "if(document.getElementById('sm-st-upload-input'))return;"
+    "var wrap=document.createElement('label');"
+    "wrap.id='sm-st-upload-wrap';"
+    "wrap.setAttribute('for','sm-st-upload-input');"
+    "wrap.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden;opacity:0.01;z-index:2147483647;';"
+    "var input=document.createElement('input');"
+    "input.type='file';input.id='sm-st-upload-input';input.multiple=true;"
+    "input.setAttribute('accept','*/*');"
+    "wrap.appendChild(input);document.body.appendChild(wrap);"
+    "input.onchange=function(){try{if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util._smDoUpload)Ext.app.Util._smDoUpload(input);}catch(e){}};"
+    "}catch(e){}}"
+    "smEnsureStUploadInput();"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',smEnsureStUploadInput,false);"
+    "window.addEventListener('load',smEnsureStUploadInput,false);"
+    # Move admin/Logout into #menu-bar and collapse the second toolbar (#icon-panel).
+    "function smAuthSlot(){"
+    "var slot=document.getElementById('sm-auth-slot');"
+    "if(slot)return slot;"
+    "var menu=document.getElementById('menu-bar');"
+    "if(!menu)return null;"
+    "slot=document.createElement('div');"
+    "slot.id='sm-auth-slot';"
+    "menu.appendChild(slot);"
+    "return slot;}"
+    "function smAuthCell(el){"
+    "if(!el)return null;"
+    "var n=el;"
+    "while(n&&n.parentElement){"
+    "var p=n.parentElement;"
+    "if(p.id==='icon-panel'||p.id==='sm-auth-slot'||p.id==='menu-bar')return n;"
+    "if(n.tagName==='TD'&&String(n.className||'').indexOf('x-toolbar-cell')>=0)return n;"
+    "n=p;"
+    "}"
+    "return el;}"
+    "function smHideIconBar(){"
+    "try{document.documentElement.classList.add('sm-auth-top');}catch(e){}"
+    "var actionIds=['btn_open','btn_download','btn_newfolder','btn_remove','btn_rename','btn_copy','btn_move','btn_upload','btn_clearthumb','btn_mailurl','btn_onetimeurl'];"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var icon=Ext.getCmp('icon-panel');"
+    "if(icon){"
+    "for(var ai=0;ai<actionIds.length;ai++){"
+    "var act=Ext.getCmp(actionIds[ai]);"
+    "if(act){try{act.hide();}catch(e){}}"
+    "}"
+    "try{icon.hide();}catch(e){}"
+    "try{icon.setHeight(0);}catch(e){}"
+    "try{icon.setVisible(false);}catch(e){}"
+    "try{if(icon.ownerCt&&icon.ownerCt.doLayout)icon.ownerCt.doLayout(true,true);}catch(e){}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var el=document.getElementById('icon-panel');"
+    "if(el){"
+    "el.style.display='none';"
+    "el.style.height='0';"
+    "el.style.minHeight='0';"
+    "el.style.overflow='hidden';"
+    "el.style.border='0';"
+    "el.style.padding='0';"
+    "el.style.margin='0';"
+    "}"
+    "}"
+    "function smMergeNaviBar(){"
+    "try{"
+    "document.documentElement.classList.add('sm-merged-chrome');"
+    "if(window.__smNaviMerged)return true;"
+    "if(!window.Ext||!Ext.getCmp)return false;"
+    "var nav=Ext.getCmp('control-panel');"
+    "if(nav){"
+    "try{"
+    "nav.items.each(function(it,idx){"
+    "if(!it||idx>=5)return;"
+    "try{if(it.hide)it.hide();}catch(e){}"
+    "});"
+    "}catch(e){}"
+    "try{nav.doLayout();}catch(e){}"
+    "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
+    "}"
+    "window.__smNaviMerged=true;"
+    "try{document.documentElement.classList.add('sm-path-text');}catch(e){}"
+    "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
+    "var _smTree=Ext.getCmp('tree-panel');"
+    "var _smNode=_smTree&&_smTree.getSelectionModel().getSelectedNode();"
+    "if(_smNode&&_smNode.path)update_location_bar(_smNode.path);"
+    "else update_location_bar('/');"
+    "}}catch(e){}"
+    "return true;"
+    "}catch(e){return false;}}"
+    "function smMoveAuthToTop(){"
+    "try{"
+    "var user=document.getElementById('userName');"
+    "var login=document.getElementById('login_button');"
+    "var logout=document.getElementById('logout_button');"
+    "var menu=document.getElementById('menu-bar');"
+    "if(!menu||(!user&&!login&&!logout))return false;"
+    # Prefer Ext component relocate when toolbars are ready.
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var menuCmp=Ext.getCmp('menu-bar');"
+    "var iconCmp=Ext.getCmp('icon-panel');"
+    "function take(id){"
+    "var c=Ext.getCmp(id);if(!c)return null;"
+    "try{if(c.ownerCt&&c.ownerCt!==menuCmp&&c.ownerCt.remove)c.ownerCt.remove(c,false);}catch(e){}"
+    "return c;}"
+    "if(menuCmp&&!window.__smAuthExt){"
+    "var u=take('userName'),li=take('login_button'),lo=take('logout_button');"
+    "if(u||li||lo){"
+    "try{if(!Ext.getCmp('sm-auth-fill'))menuCmp.add({xtype:'tbfill',id:'sm-auth-fill'});}catch(e){}"
+    "try{if(u)menuCmp.add(u);}catch(e){}"
+    "try{if(li)menuCmp.add(li);}catch(e){}"
+    "try{if(lo)menuCmp.add(lo);}catch(e){}"
+    "try{menuCmp.doLayout();}catch(e){}"
+    "window.__smAuthExt=true;"
+    "}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var slot=smAuthSlot();"
+    "if(!slot){smHideIconBar();return !!window.__smAuthExt;}"
+    "var moved=false;"
+    "function park(id){"
+    "var el=document.getElementById(id);"
+    "if(!el)return;"
+    "if(slot.contains(el))return;"
+    "var cell=smAuthCell(el);"
+    "if(!cell)return;"
+    "if(cell.parentNode===slot)return;"
+    "slot.appendChild(cell);"
+    "moved=true;"
+    "}"
+    "park('userName');park('login_button');park('logout_button');"
+    "smHideIconBar();"
+    "if(moved||window.__smAuthExt){"
+    "window.__smAuthMoved=true;"
+    "}"
+    "return true;"
+    "}catch(e){return false;}}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;}catch(e){}"
+    "function smKickFilesLoad(){"
+    "try{"
+    "if(window.__smKickFilesDone)return true;"
+    "if(window.__smKickFilesPending)return false;"
+    "if(!window.Ext||!Ext.getCmp)return false;"
+    "var tree=Ext.getCmp('tree-panel');"
+    "if(!tree)return false;"
+    "var node=tree.getSelectionModel().getSelectedNode();"
+    "if(!node){node=tree.getNodeById('/');if(node)try{tree.getSelectionModel().select(node);}catch(e){}}"
+    "if(!node)return false;"
+    "var dir=node;"
+    "try{if(dir.isLeaf&&dir.isLeaf())dir=dir.parentNode;}catch(e){}"
+    "if(!dir)return false;"
+    "window.__smKickFilesPending=true;"
+    "function smKickDone(){"
+    "window.__smKickFilesDone=true;"
+    "window.__smKickFilesPending=false;"
+    "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
+    "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
+    "try{if(typeof smNasFit==='function')smNasFit(true);}catch(e){}"
+    "}"
+    "if(typeof addRecordWithPath==='function'){"
+    "addRecordWithPath(dir,smKickDone);"
+    "}else{"
+    "var main=Ext.getCmp('main-panel');"
+    "if(!main||typeof main.getComponent!=='function'){window.__smKickFilesPending=false;return false;}"
+    "var view=main.getComponent(0);"
+    "if(!view||typeof view.updateView!=='function'){window.__smKickFilesPending=false;return false;}"
+    "view.updateView(node,smKickDone);"
+    "}"
+    "setTimeout(function(){"
+    "if(!window.__smKickFilesDone){"
+    "window.__smKickFilesPending=false;"
+    "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
+    "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
+    "try{if(typeof smKickFilesLoad==='function')smKickFilesLoad();}catch(e){}"
+    "}"
+    "},10000);"
+    "return true;"
+    "}catch(e){window.__smKickFilesPending=false;return false;}}"
+    "try{window.smKickFilesLoad=smKickFilesLoad;}catch(e){}"
+    "try{smHideIconBar();}catch(e){}"
+    "try{"
+    "var _smAuthN=0;"
+    "var _smAuthT=setInterval(function(){"
+    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();"
+    "if(!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();"
+    "if(++_smAuthN>=40||window.__smKickFilesDone)clearInterval(_smAuthT);"
+    "},250);"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();smKickFilesLoad();},false);"
+    "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smKickFilesLoad();},false);"
+    "}catch(e){}"
+    "function smMsgVisible(){"
+    "try{"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)continue;"
+    "return true;"
+    "}"
+    "}catch(e){}"
+    "return false;}"
+    "function smClearDialogInlineStyles(root){"
+    "try{"
+    "var nodes=root?[root]:[];"
+    "if(root&&root.querySelectorAll){"
+    "var kids=root.querySelectorAll('.x-docked-bottom,.x-toolbar,.x-button,.x-input-el,input,textarea,.x-field-input,.x-msgbox-body,.x-body');"
+    "for(var i=0;i<kids.length;i++)nodes.push(kids[i]);"
+    "}"
+    "for(var n=0;n<nodes.length;n++){"
+    "var el=nodes[n];if(!el||!el.style)continue;"
+    "el.style.removeProperty('display');"
+    "el.style.removeProperty('visibility');"
+    "el.style.removeProperty('opacity');"
+    "el.style.removeProperty('pointer-events');"
+    "el.style.removeProperty('height');"
+    "el.style.removeProperty('min-height');"
+    "el.style.removeProperty('overflow');"
+    "}"
+    "}catch(e){}}"
+    "function smRestoreDialogs(){"
+    "try{"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)continue;"
+    "smClearDialogInlineStyles(el);"
+    "}"
+    "}catch(e){}}"
+    "function smHideOrphanDialogs(){"
+    "try{"
+    "/* Class-based hide only — never sticky inline !important (breaks Ext.Msg reuse / rename). */"
+    "var boxes=document.querySelectorAll('.x-msgbox,.x-sheet');"
+    "for(var i=0;i<boxes.length;i++){"
+    "var el=boxes[i];"
+    "var cls=String(el.className||'');"
+    "if(cls.indexOf('x-hidden')<0&&cls.indexOf('x-item-hidden')<0){"
+    "smClearDialogInlineStyles(el);"
+    "}"
+    "}"
+    "}catch(e){}}"
     "function smClearStuckMask(){"
     "try{"
+    "smHideOrphanDialogs();"
+    "if(smMsgVisible()){smRestoreDialogs();return;}"
+    "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
+    "try{if(window.Ext&&Ext.getBody)Ext.getBody().unmask();}catch(e){}"
+    "var lm=document.getElementById('loading-main');"
+    "var lmk=document.getElementById('loading-mask');"
+    "if(lm){lm.style.display='none';lm.style.visibility='hidden';}"
+    "if(lmk){lmk.style.display='none';lmk.style.visibility='hidden';}"
     "if(window.Ext&&Ext.app){"
     "try{if(Ext.app.Util&&Ext.app.Util.hideMask)Ext.app.Util.hideMask();}catch(e){}"
     "try{if(Ext.app.loadMask&&Ext.app.loadMask.hide)Ext.app.loadMask.hide();}catch(e){}"
     "}"
     "var nodes=document.querySelectorAll('.x-mask,.x-mask-msg,.x-loading-spinner,.x-loading-spinner-outer');"
     "for(var i=0;i<nodes.length;i++){"
-    "nodes[i].classList.add('sm-nas-mask-clear');"
-    "nodes[i].style.display='none';"
-    "nodes[i].style.pointerEvents='none';"
-    "nodes[i].style.visibility='hidden';"
+    "var n=nodes[i];"
+    "try{if(n.closest&&(n.closest('.x-msgbox')||n.closest('.x-sheet')))continue;}catch(e){}"
+    "n.classList.add('sm-nas-mask-clear');"
+    "n.style.display='none';"
+    "n.style.pointerEvents='none';"
+    "n.style.visibility='hidden';"
     "}"
     "}catch(e){}}"
     "try{"
     "setTimeout(smClearStuckMask,2500);"
     "setTimeout(smClearStuckMask,5000);"
     "setTimeout(smClearStuckMask,9000);"
-    "document.addEventListener('touchstart',function(){smClearStuckMask();},true);"
-    "document.addEventListener('click',function(){smClearStuckMask();},true);"
+    "document.addEventListener('touchstart',function(ev){"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "smClearStuckMask();"
+    "},true);"
+    "document.addEventListener('click',function(ev){"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "smClearStuckMask();"
+    "},true);"
+    "function smHookMsgShow(){"
+    "try{"
+    "if(!window.Ext||!Ext.Msg||Ext.Msg.__smShowHooked)return;"
+    "Ext.Msg.__smShowHooked=true;"
+    "Ext.Msg.on('show',function(){setTimeout(smRestoreDialogs,0);setTimeout(smRestoreDialogs,50);setTimeout(smRestoreDialogs,200);});"
+    "Ext.Msg.on('hide',function(){setTimeout(smHideOrphanDialogs,0);});"
+    "}catch(e){}}"
+    "smHookMsgShow();"
+    "setTimeout(smHookMsgShow,500);"
+    "setTimeout(smHookMsgShow,1500);"
     "}catch(e){}"
+    "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;}catch(e){}"
     # Keep Ext.Viewport sized to the iframe — parent layout changes often skip window.resize.
     "function smNasViewSize(){"
     "var w=Math.max(document.documentElement.clientWidth||0,window.innerWidth||0);"
@@ -6091,6 +6542,10 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){}"
     "try{if(Ext.EventManager&&Ext.EventManager.fireResize)Ext.EventManager.fireResize(w,h);}catch(e){}"
+    "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
+    "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
+    "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
+    "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
@@ -6139,7 +6594,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -6302,11 +6757,12 @@ NAS_FILES_SNIPPET = (
     "if(window.Ext&&(Ext.onReady||Ext.app)){"
     "clearInterval(_smExtWait);"
     "try{if(Ext.onReady){Ext.onReady(function(){"
-    "setTimeout(function(){smNasFit(true);},0);"
-    "setTimeout(function(){smNasFit(true);smClearStuckMask();},500);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();},1200);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
-    "setTimeout(function(){smNasFit(true);smClearStuckMask();},800);"
+    "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
     "}"
     "}catch(e){}"
     "}"
@@ -6506,6 +6962,33 @@ NAS_FILES_SNIPPET = (
     "get:function(){return desc.get.call(this);},"
     "set:function(v){desc.set.call(this,fix(String(v)));}});}"
     "}catch(e){}"
+    "window.addEventListener('message',function(ev){"
+    "var d=ev&&ev.data;if(!d)return;"
+    "if(d.type==='sm-nas-files-upload-start'){"
+    "try{if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util.setMask)Ext.app.Util.setMask();}catch(e){}"
+    "return;}"
+    "if(d.type!=='sm-nas-files-upload-done')return;"
+    "try{"
+    "if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util.hideMask)Ext.app.Util.hideMask();"
+    "var el=window.__smUploadActionsEl;"
+    "try{if(el&&el.actions)el.actions.hide();}catch(e){}"
+    "window.__smUploadActionsEl=null;"
+    "var response=d.response;"
+    "if((!response||typeof response!=='object')&&d.raw&&window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util._smParseRpc){"
+    "response=Ext.app.Util._smParseRpc(d.raw);"
+    "}"
+    "var ok=d.success;"
+    "if(!ok&&response&&(response.success===true||response.success==='true'||response.success===1))ok=true;"
+    "if(window.Ext&&Ext.app&&Ext.app.Util&&Ext.app.Util._smUploadFinish){"
+    "Ext.app.Util._smUploadFinish(response,d.raw,ok);"
+    "}else if(ok){"
+    "try{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}"
+    "Ext.app.alert('Done','Upload complete');"
+    "}else{"
+    "Ext.app.alert('Error',(response&&response.msg)?String(response.msg):(d.raw||d.error||'upload failed'));"
+    "}"
+    "}catch(e){}"
+    "},false);"
     "})();</script>"
 )
 
@@ -6643,6 +7126,514 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "\t    });\n"
         "\n"
         "}",
+    )
+    # HTTP/2 and some reverse proxies leave statusText empty on 200; WebAccess
+    # treats that as failure and shows the JSON body in an error dialog.
+    text = text.replace(
+        "response.status != 200 || response.statusText != \"OK\"",
+        "response.status != 200 || (response.statusText && response.statusText != \"OK\")",
+    )
+    text = text.replace(
+        "_response.status != 200 || _response.statusText != \"OK\"",
+        "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
+    )
+    text = _nas_files_patch_removed_toolbar_buttons(text)
+    # Show full directory path as text in the location bar.
+    text = re.sub(
+        r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
+        "    locations.doLayout();\r\n"
+        "    try {\r\n"
+        "        var _smTf = Ext.getCmp('location-textfield');\r\n"
+        "        var _smBar = Ext.getCmp('location-bar');\r\n"
+        "        if (_smTf && _smBar) {\r\n"
+        "            _smTf.setValue(path || '/');\r\n"
+        "            _smBar.layout.setActiveItem(1);\r\n"
+        "            try { document.documentElement.classList.add('sm-path-text'); } catch(e) {}\r\n"
+        "        }\r\n"
+        "    } catch(e) {}\r\n"
+        "}\r\n\r\nfunction update_location_bar_search",
+        text,
+        count=1,
+    )
+    text = re.sub(
+        r"function update_location_bar_search\(path, words\) \{[\s\S]*?\r?\n\}\r?\n\r?\n/\*\*\*\*\*\*\* search box",
+        "function update_location_bar_search(path, words) {\r\n"
+        "    update_location_bar(path);\r\n"
+        "    try {\r\n"
+        "        var _smTf = Ext.getCmp('location-textfield');\r\n"
+        "        var _smBar = Ext.getCmp('location-bar');\r\n"
+        "        if (_smTf && _smBar) {\r\n"
+        "            _smTf.setValue((path || '/') + ' : \"' + words + '\"');\r\n"
+        "            _smBar.layout.setActiveItem(1);\r\n"
+        "        }\r\n"
+        "    } catch(e) {}\r\n"
+        "}\r\n\r\n/******* search box",
+        text,
+        count=1,
+    )
+    # Guard file-pane update when mainPanel view is mid-layout rebuild.
+    text = text.replace(
+        "\t\tmainPanel.getComponent(0).updateView(node,",
+        "\t\ttry { update_location_bar(node.path); } catch(e) {}\n\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+    )
+    text = re.sub(
+        r"addHistory\(node\);\s+mainPanel\.getComponent\(0\)\.updateView\(node,",
+        "addHistory(node);\n\t\ttry { update_location_bar(node.path); } catch(e) {}\n\t\tvar _smMainView=mainPanel.getComponent(0);if(_smMainView&&_smMainView.updateView)_smMainView.updateView(node,",
+        text,
+        count=1,
+    )
+    # Ensure loading spinner clears on rpc_ls failure.
+    text = text.replace(
+        "\t   },\n"
+        "\t   error_on_rpc_ls\n"
+        "\t  );",
+        "\t   },\n"
+        "\t   function(response, request) {\n"
+        "\t       try { loadingAnimation.hideAll(); } catch(e) {}\n"
+        "\t       error_on_rpc_ls(response, request);\n"
+        "\t   }\n"
+        "\t  );",
+        1,
+    )
+    # After toolbar chrome merges, mainPanel.afterlayout may never fire so the
+    # "Displaying..." spinner (loadingAnimation) stays up; add a callback fallback.
+    text = text.replace(
+        "function changeMainView(mode, callback) {\n"
+        "\n"
+        "    mainPanel.removeAll(true);\n"
+        "    mainPanel.purgeListeners();\n"
+        "    mainPanel.addListener('afterlayout',\n"
+        "\t\t\t  function(_this) {\n"
+        "\t\t\t      if (callback) {\n"
+        "\t\t\t\t  callback();\n"
+        "\t\t\t      }\n"
+        "\t\t\t  },\n"
+        "\t\t\t  this,\n"
+        "\t\t\t  {\n"
+        "\t\t\t      single : true\n"
+        "\t\t\t  }\n"
+        "\t\t\t );",
+        "function changeMainView(mode, callback) {\n"
+        "\n"
+        "    mainPanel.removeAll(true);\n"
+        "    mainPanel.purgeListeners();\n"
+        "    var _smMainViewCbDone = false;\n"
+        "    function _smMainViewFinish() {\n"
+        "\tif (_smMainViewCbDone) return;\n"
+        "\t_smMainViewCbDone = true;\n"
+        "\ttry {\n"
+        "\t    mainPanel.doLayout(true, true);\n"
+        "\t    var _smCv = mainPanel.getComponent(0);\n"
+        "\t    if (_smCv && _smCv.getDataView) {\n"
+        "\t\tvar _smDv = _smCv.getDataView();\n"
+        "\t\tif (_smDv && _smDv.refresh) _smDv.refresh();\n"
+        "\t    } else if (_smCv && _smCv.view && _smCv.view.getView) {\n"
+        "\t\tvar _smGv = _smCv.view.getView();\n"
+        "\t\tif (_smGv && _smGv.refresh) _smGv.refresh();\n"
+        "\t    }\n"
+        "\t} catch(e) {}\n"
+        "\tif (callback) {\n"
+        "\t    callback();\n"
+        "\t}\n"
+        "    }\n"
+        "    mainPanel.addListener('afterlayout',\n"
+        "\t\t\t  function(_this) {\n"
+        "\t\t\t      _smMainViewFinish();\n"
+        "\t\t\t  },\n"
+        "\t\t\t  this,\n"
+        "\t\t\t  {\n"
+        "\t\t\t      single : true\n"
+        "\t\t\t  }\n"
+        "\t\t\t );\n"
+        "    setTimeout(function() {\n"
+        "\ttry { mainPanel.doLayout(true, true); } catch(e) {}\n"
+        "\t_smMainViewFinish();\n"
+        "    }, 2500);",
+    )
+    # Thumbnail HEAD requests — same empty statusText issue as rpc/ls.
+    text = text.replace(
+        "response.status == 200 && response.statusText == \"OK\"",
+        "response.status == 200 && (!response.statusText || response.statusText == \"OK\")",
+    )
+    text = text.replace(
+        "response.status == 204 && response.statusText == \"No Content\"",
+        "response.status == 204 && (!response.statusText || response.statusText == \"No Content\")",
+    )
+    text = _nas_files_patch_st_mobile_upload(text)
+    text = _nas_files_patch_st_mobile_edit(text)
+    return text
+
+
+def _nas_files_patch_st_mobile_edit(text: str) -> str:
+    """Fix Sencha Touch mobile Edit (selection mode) on phones."""
+    if "Ext.app.Base.DataViewPanel" in text:
+        old_handler = (
+            "\t\tthis.editBtn.handler = function()\r\n"
+            "\t\t{\r\n"
+            "\t\t\tExt.app.Stage.getDockedComponent('maintool').tapFileAction()\r\n"
+            "\t\t}"
+        )
+        new_handler = (
+            "\t\tthis.editBtn.handler = function()\r\n"
+            "\t\t{\r\n"
+            "\t\t\tif(Ext.app.Util && Ext.app.Util._smToggleEditMode){\r\n"
+            "\t\t\t\tExt.app.Util._smToggleEditMode();\r\n"
+            "\t\t\t}else{\r\n"
+            "\t\t\t\ttry{\r\n"
+            "\t\t\t\t\tvar mt=Ext.app.Stage&&Ext.app.Stage.getDockedComponent('maintool');\r\n"
+            "\t\t\t\t\tif(mt&&mt.tapFileAction)mt.tapFileAction.call(mt);\r\n"
+            "\t\t\t\t}catch(e){}\r\n"
+            "\t\t\t}\r\n"
+            "\t\t}"
+        )
+        if old_handler in text:
+            text = text.replace(old_handler, new_handler)
+    toggle_block = (
+        "\t_smToggleEditMode: function()\r\n"
+        "\t{\r\n"
+        "\t\tvar panel = Ext.app.isPanel;\r\n"
+        "\t\tif(!panel && Ext.app.Stage){panel = Ext.app.isPanel = Ext.app.Stage.getActiveItem();}\r\n"
+        "\t\tif(!panel || !panel.editBtn){return;}\r\n"
+        "\t\tvar dv = (panel.getComponent && (panel.getComponent('data_view') || panel.getComponent(0))) || null;\r\n"
+        "\t\tvar dom = dv && dv.el && dv.el.dom;\r\n"
+        "\t\tvar mt = Ext.app.Stage && Ext.app.Stage.getDockedComponent && Ext.app.Stage.getDockedComponent('maintool');\r\n"
+        "\t\tif(typeof isAction !== 'undefined' && isAction === 'edit'){\r\n"
+        "\t\t\tpanel.editBtn.setText(Ext.app.makeTxt('edit btn'));\r\n"
+        "\t\t\tpanel.editBtn.removeCls('x-button-confirm');\r\n"
+        "\t\t\tif(typeof isDir !== 'undefined' && isDir != '/' && panel.backBtn){panel.backBtn.show();}\r\n"
+        "\t\t\tisAction = 'select';\r\n"
+        "\t\t\tif(panel.edittool && panel.edittool.hide){panel.edittool.hide();}\r\n"
+        "\t\t\tif(mt && mt.show){mt.show();}\r\n"
+        "\t\t\tif(dom){\r\n"
+        "\t\t\t\tExt.select('.main-wrap', dom).removeCls(['selected-wrap','selected-wrap-icon']);\r\n"
+        "\t\t\t\tif(typeof isViewMode !== 'undefined' && isViewMode == 'list'){Ext.select('.arrowimg', dom).show();}\r\n"
+        "\t\t\t}\r\n"
+        "\t\t\tpanel.selectedItem = [];\r\n"
+        "\t\t\ttry{panel.doComponentLayout();if(Ext.app.Stage&&Ext.app.Stage.doComponentLayout)Ext.app.Stage.doComponentLayout();}catch(e){}\r\n"
+        "\t\t\treturn;\r\n"
+        "\t\t}\r\n"
+        "\t\tisAction = 'edit';\r\n"
+        "\t\tif(dom && typeof isViewMode !== 'undefined' && isViewMode == 'list'){Ext.select('.arrowimg', dom).hide();}\r\n"
+        "\t\tpanel.editBtn.addCls('x-button-confirm');\r\n"
+        "\t\tpanel.editBtn.setText(Ext.app.makeTxt('fin btn'));\r\n"
+        "\t\tif(panel.backBtn){panel.backBtn.hide();}\r\n"
+        "\t\tif(mt && mt.hide){mt.hide();}\r\n"
+        "\t\tif(panel.edittool){\r\n"
+        "\t\t\tpanel.edittool.noselect(true);\r\n"
+        "\t\t\tpanel.edittool.show();\r\n"
+        "\t\t}else{\r\n"
+        "\t\t\tvar edit = new Ext.app.editMenu();\r\n"
+        "\t\t\tpanel.addDocked(edit);\r\n"
+        "\t\t\tpanel.edittool = edit;\r\n"
+        "\t\t}\r\n"
+        "\t\ttry{panel.doComponentLayout();if(Ext.app.Stage&&Ext.app.Stage.doComponentLayout)Ext.app.Stage.doComponentLayout();}catch(e){}\r\n"
+        "\t},\r\n\r\n"
+    )
+    if "_smToggleEditMode" not in text and (
+        "_smUploadFinish: function" in text or "deleteFile: function" in text
+    ):
+        if "_smUploadFinish: function" in text and "\tupload: function(el)" in text:
+            text = text.replace(
+                "\t},\r\n\r\n\tupload: function(el)",
+                "\t},\r\n\r\n" + toggle_block + "\tupload: function(el)",
+                1,
+            )
+        elif "deleteFile: function" in text:
+            text = text.replace(
+                "\t},\r\n\t\r\n\tdeleteFile: function(datas, el)",
+                "\t},\r\n\r\n" + toggle_block + "\r\n\tdeleteFile: function(datas, el)",
+                1,
+            )
+    # Clean delete success: exit edit mode, hide mask, no raw JSON leak / stuck OK bar.
+    if "deleteFile: function" in text and "Ext.app.alert(Ext.app.makeTxt('remove result'),r.responseText);" in text:
+        text = text.replace(
+            "if(count == datalength){\r\n"
+            "                            Ext.app.alert(Ext.app.makeTxt('remove result'),r.responseText);\r\n"
+            "                            Ext.app.isPanel.getComponent('data_view').setData();\r\n"
+            "                            return;\r\n"
+            "                        }",
+            "if(count == datalength){\r\n"
+            "                            try{Ext.app.Util.hideMask();}catch(e){}\r\n"
+            "                            try{if(typeof isAction!=='undefined'&&isAction==='edit'&&Ext.app.Util._smToggleEditMode){Ext.app.Util._smToggleEditMode();}}catch(e){}\r\n"
+            "                            try{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}\r\n"
+            "                            try{if(window.smHideOrphanDialogs)smHideOrphanDialogs();if(window.Ext&&Ext.Msg&&Ext.Msg.hide)Ext.Msg.hide();}catch(e){}\r\n"
+            "                            Ext.app.alert(Ext.app.makeTxt('remove result'),'Deleted');\r\n"
+            "                            return;\r\n"
+            "                        }",
+        )
+    # Ensure rename/mkdir prompts can show after prior dialog hides (clear sticky styles).
+    prompt_prefix = "try{if(window.smRestoreDialogs)smRestoreDialogs();}catch(_smE){}\r\n\t\tExt.Msg.prompt("
+    if "Ext.Msg.prompt(" in text and prompt_prefix not in text:
+        text = text.replace("Ext.Msg.prompt(", prompt_prefix)
+    if "renameFile: function" in text and "dst:(isDir+v)" in text:
+        text = text.replace(
+            "success: function(r){\r\n"
+            "\t\t\t\t\tExt.app.isPanel.getComponent('data_view').setData();\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tfailure: function(r)\r\n"
+            "\t\t\t\t{\r\n"
+            "\t\t\t\t\tif (r.responseText != ''){\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt(r.responseText));\r\n"
+            "\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt('terminate a network connection'));\r\n"
+            "\t\t\t\t\t}\r\n"
+            "                    if(Ext.app.isPanel){\r\n"
+            "                        Ext.app.isPanel.fireEvent('reselect')\r\n"
+            "                    }\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tscope: this\r\n"
+            "\t\t\t});\r\n"
+            "\t\t},el,false,d.name,{",
+            "success: function(r){\r\n"
+            "\t\t\t\t\ttry{if(typeof isAction!=='undefined'&&isAction==='edit'&&Ext.app.Util._smToggleEditMode){Ext.app.Util._smToggleEditMode();}}catch(e){}\r\n"
+            "\t\t\t\t\ttry{if(Ext.app.isPanel&&Ext.app.isPanel.getComponent('data_view'))Ext.app.isPanel.getComponent('data_view').setData();}catch(e){}\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tfailure: function(r)\r\n"
+            "\t\t\t\t{\r\n"
+            "\t\t\t\t\tif (r.responseText != ''){\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt(r.responseText));\r\n"
+            "\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\tExt.app.alert(Ext.app.makeTxt('error'),Ext.app.makeTxt('terminate a network connection'));\r\n"
+            "\t\t\t\t\t}\r\n"
+            "                    if(Ext.app.isPanel){\r\n"
+            "                        Ext.app.isPanel.fireEvent('reselect')\r\n"
+            "                    }\r\n"
+            "\t\t\t\t},\r\n"
+            "\t\t\t\tscope: this\r\n"
+            "\t\t\t});\r\n"
+            "\t\t},el,false,d.name,{",
+        )
+    return text
+
+
+def _nas_files_patch_st_mobile_upload(text: str) -> str:
+    """Add Upload to the Sencha Touch (/st/) mobile action sheet."""
+    if (
+        "Ext.app.Base.Toolbar" not in text
+        and "deleteFile: function" not in text
+        and '"makedir"' not in text
+    ):
+        return text
+    if "id: 'uploadbtn'" not in text and "id: 'mkdirbtn'" in text:
+        text = text.replace(
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('makedir'),\r\n"
+            "\t\t\t\t\t\tid: 'mkdirbtn',\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('slideshow'),",
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('makedir'),\r\n"
+            "\t\t\t\t\t\tid: 'mkdirbtn',\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('menu_file_upload'),\r\n"
+            "\t\t\t\t\t\tid: 'uploadbtn',\r\n"
+            "\t\t\t\t\t\thandler: function()\r\n"
+            "\t\t\t\t\t\t{\r\n"
+            "\t\t\t\t\t\t\tExt.app.Util.upload(this);\r\n"
+            "\t\t\t\t\t\t},\r\n"
+            "\t\t\t\t\t},{\r\n"
+            "\t\t\t\t\t\ttext: Ext.app.makeTxt('slideshow'),",
+        )
+    # Wire a native file input over the Upload button (iOS-safe; no programmatic click).
+    old_beforeshow = (
+        "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+        "\t\t\t\t\t\t{\r\n"
+        "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
+        "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
+        "\t\t\t\t\t\t\tif(isLogin){\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
+        "\t\t\t\t\t\t\t}else{\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t}\r\n"
+        "\t\t\t\t\t\t}"
+    )
+    new_beforeshow = (
+        "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+        "\t\t\t\t\t\t{\r\n"
+        "\t\t\t\t\t\t\tvar mkdirBtn = cmp.getComponent('mkdirbtn');\r\n"
+        "\t\t\t\t\t\t\tvar uploadBtn = cmp.getComponent('uploadbtn');\r\n"
+        "\t\t\t\t\t\t\tif(isLogin){\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.show();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.show();\r\n"
+        "\t\t\t\t\t\t\t}else{\r\n"
+        "\t\t\t\t\t\t\t\tif(mkdirBtn) mkdirBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t\tif(uploadBtn) uploadBtn.hide();\r\n"
+        "\t\t\t\t\t\t\t}\r\n"
+        "\t\t\t\t\t\t\ttry{if(uploadBtn&&Ext.app.Util&&Ext.app.Util._smWireUploadButton){Ext.defer(function(){try{Ext.app.Util._smWireUploadButton(uploadBtn,this);}catch(e){}},30,this);}}catch(e){}\r\n"
+        "\t\t\t\t\t\t}"
+    )
+    if old_beforeshow in text:
+        text = text.replace(old_beforeshow, new_beforeshow)
+    elif (
+        "id: 'uploadbtn'" in text
+        and "beforeshow:function(cmp)" in text
+        and "_smWireUploadButton" not in text
+    ):
+        text = text.replace(
+            "\t\t\t\t\t\tbeforeshow:function(cmp)\r\n"
+            "\t\t\t\t\t\t{\r\n"
+            "\t\t\t\t\t\t\tif(isLogin){\r\n"
+            "\t\t\t\t\t\t\t\tcmp.getComponent(0).show();\r\n"
+            "\t\t\t\t\t\t\t}else{\r\n"
+            "\t\t\t\t\t\t\t\tcmp.getComponent(0).hide();\r\n"
+            "\t\t\t\t\t\t\t}\r\n"
+            "\t\t\t\t\t\t}",
+            new_beforeshow,
+        )
+    upload_block = (
+        "\t_smParseRpc: function(text)\r\n"
+        "\t{\r\n"
+        "\t\tvar raw = String(text || '').trim();\r\n"
+        "\t\tif(!raw){return null;}\r\n"
+        "\t\ttry{if(typeof JSON !== 'undefined' && JSON.parse){return JSON.parse(raw);}}catch(e){}\r\n"
+        "\t\ttry{return Ext.decode(raw);}catch(e){}\r\n"
+        "\t\treturn null;\r\n"
+        "\t},\r\n\r\n\t_smUploadFinish: function(response, raw, forceOk)\r\n"
+        "\t{\r\n"
+        "\t\tif(!response && raw){response = Ext.app.Util._smParseRpc(raw);}\r\n"
+        "\t\tvar ok = forceOk || (response && (response.success === true || response.success === 'true' || response.success === 1));\r\n"
+        "\t\tif(ok){\r\n"
+        "\t\t\ttry{if(Ext.app.isPanel && Ext.app.isPanel.getComponent('data_view')){Ext.app.isPanel.getComponent('data_view').setData();}}catch(e){}\r\n"
+        "\t\t\tvar names = '';\r\n"
+        "\t\t\tif(response && response.result){for(var k in response.result){if(response.result.hasOwnProperty(k)){names += k + '<br/>';}}}\r\n"
+        "\t\t\tvar body = names ? ('Uploaded:<br/>' + names) : 'Upload complete';\r\n"
+        "\t\t\ttry{Ext.app.alert(Ext.app.makeTxt('confirm'), body);}catch(e){Ext.app.alert('Done', body);}\r\n"
+        "\t\t}else{\r\n"
+        "\t\t\tvar err = (response && response.msg) ? String(response.msg) : (raw || 'upload failed');\r\n"
+        "\t\t\ttry{Ext.app.alert(Ext.app.makeTxt('error'), err);}catch(e){Ext.app.alert('Error', err);}\r\n"
+        "\t\t}\r\n"
+        "\t},\r\n\r\n\t_smWireUploadButton: function(btn, toolbar)\r\n"
+        "\t{\r\n"
+        "\t\tif(!btn){return;}\r\n"
+        "\t\tvar el = (btn.el && btn.el.dom) || (btn.getEl && btn.getEl() && btn.getEl().dom) || document.getElementById('uploadbtn');\r\n"
+        "\t\tif(!el){return;}\r\n"
+        "\t\ttry{el.style.position = 'relative';}catch(e){}\r\n"
+        "\t\tvar input = el.querySelector('#sm-st-upload-input-btn');\r\n"
+        "\t\tif(!input){\r\n"
+        "\t\t\tinput = document.createElement('input');\r\n"
+        "\t\t\tinput.type = 'file';\r\n"
+        "\t\t\tinput.id = 'sm-st-upload-input-btn';\r\n"
+        "\t\t\tinput.multiple = true;\r\n"
+        "\t\t\tinput.setAttribute('accept', '*/*');\r\n"
+        "\t\t\tinput.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;opacity:0.01;z-index:20;border:0;margin:0;padding:0;';\r\n"
+        "\t\t\tel.appendChild(input);\r\n"
+        "\t\t\tinput.addEventListener('click', function(ev){try{ev.stopPropagation();}catch(e){}});\r\n"
+        "\t\t\tinput.addEventListener('change', function(){\r\n"
+        "\t\t\t\ttry{if(toolbar && toolbar.actions){toolbar.actions.hide();}}catch(e){}\r\n"
+        "\t\t\t\tExt.app.Util._smDoUpload(input);\r\n"
+        "\t\t\t});\r\n"
+        "\t\t}\r\n"
+        "\t\tinput._smActionsEl = toolbar;\r\n"
+        "\t\ttry{input.value = '';}catch(e){}\r\n"
+        "\t},\r\n\r\n\t_smDoUpload: function(input)\r\n"
+        "\t{\r\n"
+        "\t\tvar files = input && input.files;\r\n"
+        "\t\tif(!files || !files.length){return;}\r\n"
+        "\t\ttry{if(input._smActionsEl && input._smActionsEl.actions){input._smActionsEl.actions.hide();}}catch(e){}\r\n"
+        "\t\ttry{if(window.Ext && Ext.Msg && Ext.Msg.hide){Ext.Msg.hide();}}catch(e){}\r\n"
+        "\t\tExt.app.Util.setMask();\r\n"
+        "\t\tvar dir = isDir || '/';\r\n"
+        f"\t\tvar url = ('{NAS_FILES_PREFIX}/rpc/upload' + dir).split('/').map(encodeURIComponent).join('/');\r\n"
+        "\t\tvar fd = new FormData();\r\n"
+        "\t\tfor(var i = 0; i < files.length; i++){fd.append('filename[]', files[i]);}\r\n"
+        "\t\tvar xhr = new XMLHttpRequest();\r\n"
+        "\t\txhr.open('POST', url, true);\r\n"
+        "\t\txhr.onload = function(){\r\n"
+        "\t\t\tExt.app.Util.hideMask();\r\n"
+        "\t\t\ttry{input.value = '';}catch(e){}\r\n"
+        "\t\t\tExt.app.Util._smUploadFinish(Ext.app.Util._smParseRpc(xhr.responseText), xhr.responseText);\r\n"
+        "\t\t};\r\n"
+        "\t\txhr.onerror = function(){\r\n"
+        "\t\t\tExt.app.Util.hideMask();\r\n"
+        "\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('terminate a network connection'));\r\n"
+        "\t\t};\r\n"
+        "\t\txhr.send(fd);\r\n"
+        "\t},\r\n\r\n\tupload: function(el)\r\n"
+        "\t{\r\n"
+        "\t\tif(!isLogin){\r\n"
+        "\t\t\tExt.app.alert(Ext.app.makeTxt('error'), Ext.app.makeTxt('select tree to upload'));\r\n"
+        "\t\t\treturn;\r\n"
+        "\t\t}\r\n"
+        "\t\ttry{\r\n"
+        "\t\t\tvar btn = (el && el.actions && el.actions.getComponent) ? el.actions.getComponent('uploadbtn') : null;\r\n"
+        "\t\t\tif(btn && Ext.app.Util._smWireUploadButton){Ext.app.Util._smWireUploadButton(btn, el);}\r\n"
+        "\t\t\tvar input = document.getElementById('sm-st-upload-input-btn');\r\n"
+        "\t\t\tif(input){try{input.value='';}catch(e){} try{input.click();return;}catch(e){}}\r\n"
+        "\t\t}catch(e){}\r\n"
+        "\t\ttry{\r\n"
+        "\t\t\tvar topWin = window.top || window.parent;\r\n"
+        "\t\t\tif(topWin && topWin !== window && typeof topWin.smNasUploadPick === 'function'){\r\n"
+        "\t\t\t\twindow.__smUploadActionsEl = el;\r\n"
+        "\t\t\t\ttopWin.smNasUploadPick(isDir || '/', window);\r\n"
+        "\t\t\t\treturn;\r\n"
+        "\t\t\t}\r\n"
+        "\t\t}catch(e){}\r\n"
+        "\t\tvar wrap = document.getElementById('sm-st-upload-wrap');\r\n"
+        "\t\tvar input = document.getElementById('sm-st-upload-input');\r\n"
+        "\t\tif(!wrap || !input){\r\n"
+        "\t\t\twrap = document.createElement('label');\r\n"
+        "\t\t\twrap.id = 'sm-st-upload-wrap';\r\n"
+        "\t\t\twrap.setAttribute('for', 'sm-st-upload-input');\r\n"
+        "\t\t\twrap.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden;opacity:0.01;z-index:2147483647;';\r\n"
+        "\t\t\tinput = document.createElement('input');\r\n"
+        "\t\t\tinput.type = 'file';\r\n"
+        "\t\t\tinput.id = 'sm-st-upload-input';\r\n"
+        "\t\t\tinput.multiple = true;\r\n"
+        "\t\t\tinput.setAttribute('accept', '*/*');\r\n"
+        "\t\t\twrap.appendChild(input);\r\n"
+        "\t\t\tdocument.body.appendChild(wrap);\r\n"
+        "\t\t\tinput.onchange = function(){Ext.app.Util._smDoUpload(input);};\r\n"
+        "\t\t}\r\n"
+        "\t\tinput._smActionsEl = el;\r\n"
+        "\t\ttry{input.value = '';}catch(e){}\r\n"
+        "\t\ttry{wrap.click();}catch(e){try{input.click();}catch(e2){Ext.app.alert(Ext.app.makeTxt('error'), 'Upload is not supported in this browser.');}}\r\n"
+        "\t},\r\n\r\n\tdeleteFile: function(datas, el)"
+    )
+    if "upload: function" not in text and "deleteFile: function" in text:
+        text = text.replace("\t},\r\n\t\r\n\tdeleteFile: function(datas, el)", "\t},\r\n\r\n" + upload_block)
+    elif (
+        "setTimeout(function(){try{input.click()" in text
+        or "sm-st-upload-input" in text
+        or "smNasUploadPick" in text
+        or "_smUploadFinish" in text
+        or "_smWireUploadButton" in text
+    ):
+        text = re.sub(
+            r"\t(?:_smParseRpc: function\(text\)\r\n[\s\S]*?)?(?:_smUploadFinish: function\(response, raw, forceOk\)\r\n[\s\S]*?)?(?:_smWireUploadButton: function\(btn, toolbar\)\r\n[\s\S]*?)?(?:_smDoUpload: function\(input\)\r\n[\s\S]*?)?upload: function\(el\)\r\n[\s\S]*?\t\},\r\n\r\n\tdeleteFile: function",
+            upload_block,
+            text,
+            count=1,
+        )
+    if "this.actions.hide();\r\n\t\t\t\t\t\t\tExt.app.Util.upload(this);" in text:
+        text = text.replace(
+            "this.actions.hide();\r\n\t\t\t\t\t\t\tExt.app.Util.upload(this);",
+            "Ext.app.Util.upload(this);",
+        )
+    if "Ext.app.Util.upload(this);\r\n\t\t\t\t\t\t\tthis.actions.hide();" in text:
+        text = text.replace(
+            "Ext.app.Util.upload(this);\r\n\t\t\t\t\t\t\tthis.actions.hide();",
+            "Ext.app.Util.upload(this);",
+        )
+    if '"menu_file_upload"' not in text and '"makedir"' in text:
+        text = text.replace(
+            '\t\t\t"makedir" : "Create a new folder",',
+            '\t\t\t"makedir" : "Create a new folder",\n\t\t\t"menu_file_upload" : "Upload",',
+        )
+    return text
+
+
+def _nas_files_patch_removed_toolbar_buttons(text: str) -> str:
+    """Guard Ext.getCmp().enable/disable calls for UI parts removed from the chrome."""
+    text = re.sub(
+        r"Ext\.getCmp\((['\"])([^'\"]+)\1\)\.(enable|disable|show|hide)\(\)",
+        r"(function(_smB){if(_smB&&_smB.\3)_smB.\3();})(Ext.getCmp(\1\2\1))",
+        text,
+    )
+    text = re.sub(
+        r"iconPanel\.items\.each\(function\s*\(\s*item\s*\)\s*\{[\s\S]*?\}\s*\)\s*;",
+        "try{if(window.iconPanel&&iconPanel.items&&iconPanel.items.each){iconPanel.items.each(function(item){if(item&&item.enable)try{item.enable();}catch(e){}});}}catch(e){}",
+        text,
+        count=1,
     )
     return text
 

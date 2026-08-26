@@ -1580,9 +1580,67 @@
 
     window.addEventListener("message", (ev) => {
       const data = ev && ev.data;
-      if (!data || data.type !== "sm-nas-files-reauth") return;
-      loadNasFilesFrame(true);
+      if (!data) return;
+      if (data.type === "sm-nas-files-reauth") {
+        loadNasFilesFrame(true);
+        return;
+      }
+      // Upload completion from parent picker is handled inside the NAS iframe snippet.
     });
+
+    function smNasEnsureUploadInput() {
+      let input = document.getElementById("sm-parent-upload-input");
+      if (!input) {
+        input = document.createElement("input");
+        input.type = "file";
+        input.id = "sm-parent-upload-input";
+        input.multiple = true;
+        input.accept = "*/*";
+        input.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:2147483647;";
+        document.body.appendChild(input);
+        input.addEventListener("change", smNasUploadSend);
+      }
+      return input;
+    }
+
+    async function smNasUploadSend(ev) {
+      const input = ev.target;
+      const files = input && input.files;
+      if (!files || !files.length) return;
+      const dir = input._smUploadDir || "/";
+      const url = ("/nas-files/rpc/upload" + dir).split("/").map(encodeURIComponent).join("/");
+      const fd = new FormData();
+      for (let i = 0; i < files.length; i++) fd.append("filename[]", files[i]);
+      const source = input._smUploadSource;
+      try {
+        if (source) source.postMessage({ type: "sm-nas-files-upload-start" }, "*");
+        const resp = await fetch(url, { method: "POST", body: fd, credentials: "include" });
+        const text = await resp.text();
+        let response = null;
+        try { response = JSON.parse(String(text || "").trim()); } catch (e) {}
+        const ok = !!(response && (response.success === true || response.success === "true" || response.success === 1));
+        if (source) {
+          source.postMessage({ type: "sm-nas-files-upload-done", success: ok, response, raw: text }, "*");
+        } else if (!ok) {
+          showLog("Upload failed: " + (text || resp.status), true);
+        }
+      } catch (e) {
+        if (source) {
+          source.postMessage({ type: "sm-nas-files-upload-done", success: false, error: String(e.message || e) }, "*");
+        } else {
+          showLog(String(e.message || e), true);
+        }
+      }
+      try { input.value = ""; } catch (e) {}
+    }
+
+    window.smNasUploadPick = function(dir, sourceWin) {
+      const input = smNasEnsureUploadInput();
+      input._smUploadDir = dir || "/";
+      input._smUploadSource = sourceWin || null;
+      try { input.value = ""; } catch (e) {}
+      input.click();
+    };
 
     function syncAppHeight() {
       try {
