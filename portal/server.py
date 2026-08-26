@@ -1574,9 +1574,53 @@ button.rounded-full,[class*="rounded-full"]{
 button[class*="danger"],.text-red-600.font-bold{
   color:var(--sm-danger)!important;
 }
-/* Hide wg-easy top header chrome (language, theme, charts, user menu) */
-header,
-header > *{
+/* wg-easy header: centered logo only (hide language/theme/charts/user menu) */
+header{
+  display:flex!important;
+  visibility:visible!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:1rem auto 0.5rem!important;
+  padding:0!important;
+  overflow:visible!important;
+  pointer-events:auto!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+  text-align:center!important;
+  border:none!important;
+}
+header > .mb-5{
+  display:flex!important;
+  visibility:visible!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:0 0 0.75rem!important;
+  padding:0!important;
+  overflow:visible!important;
+  pointer-events:auto!important;
+  width:100%!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+}
+header > .mb-5 > a,
+header > .mb-5 > a h1,
+header > .mb-5 > a img,
+header > .mb-5 > a span{
+  display:inline-flex!important;
+  visibility:visible!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:visible!important;
+  pointer-events:auto!important;
+  align-items:center!important;
+  justify-content:center!important;
+}
+header .flex.flex-row.gap-3,
+header > .my-4{
   display:none!important;
   visibility:hidden!important;
   height:0!important;
