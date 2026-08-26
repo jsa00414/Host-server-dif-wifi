@@ -973,7 +973,7 @@
           <button type="button" class="stat" data-go="wireguard">
             <div class="k">WireGuard</div>
             <div class="v">wg-easy</div>
-            <div class="s">vpn.vpstruelord.com</div>
+            <div class="s">themed portal embed</div>
           </button>
           <button type="button" class="stat" data-go="openvpn">
             <div class="k">OpenVPN</div>
@@ -1323,7 +1323,7 @@
       </section>
 
       <section class="view embed-view" id="view-wireguard">
-        <iframe class="embed-frame" id="frameWireguard" title="WireGuard (wg-easy)" src="about:blank" data-src="https://vpn.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
+        <iframe class="embed-frame" id="frameWireguard" title="WireGuard (wg-easy)" src="about:blank" data-src="/wg-ui/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view embed-view" id="view-openvpn">
@@ -1412,10 +1412,11 @@
           <div class="panel">
             <div class="panel-head"><h3>VPN</h3></div>
             <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens <code>vpn.vpstruelord.com</code>. <strong>OpenVPN</strong> opens the OpenVPN admin site (status, clients, downloads).</p>
+              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens the themed wg-easy UI (<code>/wg-ui/</code>). <strong>OpenVPN</strong> opens the OpenVPN admin site (status, clients, downloads).</p>
               <div class="settings-actions">
                 <button type="button" class="primary" data-go="wireguard">Open WireGuard</button>
                 <button type="button" class="ghost" data-go="openvpn">Open OpenVPN</button>
+                <a class="ghost" href="/wg-ui/" target="_blank" rel="noopener">/wg-ui/</a>
                 <a class="ghost" href="https://vpn.vpstruelord.com/" target="_blank" rel="noopener">vpn.vpstruelord.com</a>
                 <a class="ghost" href="/openvpn.html" target="_blank" rel="noopener">openvpn.html</a>
               </div>

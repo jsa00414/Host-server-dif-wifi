@@ -51,6 +51,17 @@ BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
 NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
 NAS_FILES_PREFIX = "/nas-files"
+# wg-easy UI (themed same-origin embed under /wg-ui/)
+WG_UI_UPSTREAM = os.environ.get("WG_UI_UPSTREAM", "http://127.0.0.1:5001").rstrip("/")
+WG_UI_PREFIX = os.environ.get("WG_UI_PREFIX", "/wg-ui").rstrip("/") or "/wg-ui"
+WG_UI_PUBLIC_HOSTS = tuple(
+    h.strip().lower()
+    for h in os.environ.get(
+        "WG_UI_PUBLIC_HOSTS",
+        "vpn.vpstruelord.com,https://vpn.vpstruelord.com,http://vpn.vpstruelord.com",
+    ).split(",")
+    if h.strip()
+)
 # Flint / school WireGuard client profile (Endpoint :443, MTU 1280).
 WG_CLIENT_CONF = Path(
     os.environ.get("WG_CLIENT_CONF", "/opt/wireguard/GL-MT6000.conf")
@@ -1382,6 +1393,185 @@ BUFFALO_FIT_SNIPPET = (
     "setTimeout(fit,300);setTimeout(fit,1200);setTimeout(fit,2500);setInterval(fit,2000);"
     "})();</script>"
 )
+
+# ServerManager theme for wg-easy (injected into /wg-ui HTML).
+WG_UI_THEME_CSS = """
+:root{
+  --sm-bg0:#07110e;
+  --sm-bg1:#0e1a15;
+  --sm-bg2:#15241d;
+  --sm-bg3:#1a2c24;
+  --sm-line:rgba(170,210,185,.14);
+  --sm-text:#e8f2ec;
+  --sm-muted:#84998c;
+  --sm-accent:#3ddea0;
+  --sm-accent-dim:rgba(61,222,160,.14);
+  --sm-accent-strong:rgba(61,222,160,.35);
+  --sm-danger:#ff6b6b;
+}
+html,body{
+  font-family:"Sora",system-ui,sans-serif!important;
+  color:var(--sm-text)!important;
+  background:
+    radial-gradient(900px 420px at 10% -10%,rgba(61,222,160,.16),transparent 55%),
+    radial-gradient(700px 380px at 100% 0%,rgba(45,120,95,.18),transparent 50%),
+    linear-gradient(180deg,#0a1511 0%,var(--sm-bg0) 45%,#050a08 100%)!important;
+  min-height:100%!important;
+}
+body.bg-gray-50,body.dark\\:bg-neutral-800,.bg-gray-50,.dark\\:bg-neutral-800:where(.dark,.dark *){
+  background:transparent!important;
+}
+#__nuxt,main,header,[class*="max-w-"]{
+  color:var(--sm-text);
+}
+/* Force dark panels */
+.bg-white,.bg-gray-50,.bg-gray-100,.bg-gray-200,
+.dark\\:bg-black:where(.dark,.dark *),
+.dark\\:bg-neutral-800:where(.dark,.dark *),
+.dark\\:bg-neutral-700:where(.dark,.dark *),
+.dark\\:bg-neutral-600:where(.dark,.dark *),
+.dark\\:bg-neutral-500:where(.dark,.dark *),
+.dark\\:bg-neutral-400:where(.dark,.dark *){
+  background-color:var(--sm-bg1)!important;
+}
+.dark\\:bg-neutral-700:where(.dark,.dark *),
+.bg-neutral-700,[class*="bg-neutral-700"]{
+  background-color:var(--sm-bg2)!important;
+}
+.dark\\:bg-neutral-800:where(.dark,.dark *),
+.bg-neutral-800,[class*="bg-neutral-800"]{
+  background-color:var(--sm-bg1)!important;
+}
+.border-gray-100,.border-gray-200,.border-neutral-800,
+.dark\\:border-neutral-800:where(.dark,.dark *),
+.dark\\:border-neutral-600:where(.dark,.dark *),
+.dark\\:divide-neutral-800:where(.dark,.dark *)>:not([hidden])~:not([hidden]){
+  border-color:var(--sm-line)!important;
+}
+.text-gray-500,.text-gray-400,.text-neutral-400,.text-neutral-500,
+.dark\\:text-neutral-400:where(.dark,.dark *),
+.dark\\:text-neutral-500:where(.dark,.dark *),
+.dark\\:text-gray-400:where(.dark,.dark *){
+  color:var(--sm-muted)!important;
+}
+.text-gray-200,.text-neutral-200,.text-neutral-300,.dark\\:text-neutral-200:where(.dark,.dark *),
+.dark\\:text-neutral-300:where(.dark,.dark *),
+.dark\\:text-gray-200:where(.dark,.dark *),
+.dark\\:text-white:where(.dark,.dark *),
+.text-white{
+  color:var(--sm-text)!important;
+}
+/* Accent: map wg-easy reds → ServerManager green */
+.bg-red-800,.bg-red-700,.bg-red-600,
+.dark\\:bg-red-800:where(.dark,.dark *),
+.dark\\:bg-red-600:where(.dark,.dark *),
+[class*="bg-red-8"],[class*="bg-red-7"],[class*="bg-red-6"],
+.data-\\[state\\=checked\\]\\:bg-red-800[data-state=checked]{
+  background-color:var(--sm-accent)!important;
+  color:#07110e!important;
+  border-color:var(--sm-accent-strong)!important;
+}
+.hover\\:bg-red-700:hover,.dark\\:hover\\:bg-red-700:hover:where(.dark,.dark *),
+.dark\\:hover\\:bg-red-600:hover:where(.dark,.dark *),
+.dark\\:hover\\:bg-red-800:hover:where(.dark,.dark *),
+[class*="hover:bg-red-"]:hover{
+  background-color:#2fc48c!important;
+  color:#07110e!important;
+}
+.text-red-600,.text-red-300,.text-red-800,
+.dark\\:text-red-600:where(.dark,.dark *),
+.dark\\:text-red-300:where(.dark,.dark *),
+[class*="text-red-"]{
+  color:var(--sm-accent)!important;
+}
+.border-red-600,.border-red-800,.focus\\:border-red-800:focus,
+.dark\\:border-red-600:where(.dark,.dark *),
+.dark\\:hover\\:border-red-600:hover:where(.dark,.dark *),
+[class*="border-red-"],[class*="focus:border-red-"]:focus{
+  border-color:var(--sm-accent-strong)!important;
+}
+.ring-red-600,.focus\\:ring-red-600:focus,.focus\\:ring-red-700:focus,
+.dark\\:focus\\:ring-red-700:focus:where(.dark,.dark *),
+[class*="ring-red-"]{
+  --tw-ring-color:rgba(61,222,160,.45)!important;
+}
+.bg-red-100,.dark\\:bg-red-100:where(.dark,.dark *),
+[class*="bg-red-1"]{
+  background-color:var(--sm-accent-dim)!important;
+  color:var(--sm-accent)!important;
+}
+input,textarea,select,
+input:where(:not([type])),input:where([type=text]),input:where([type=password]),
+input:where([type=email]),input:where([type=search]),input:where([type=number]),
+textarea,select{
+  background-color:var(--sm-bg0)!important;
+  color:var(--sm-text)!important;
+  border-color:var(--sm-line)!important;
+  border-radius:10px!important;
+}
+input:focus,textarea:focus,select:focus{
+  border-color:var(--sm-accent-strong)!important;
+  --tw-ring-color:rgba(61,222,160,.35)!important;
+  outline:none!important;
+}
+button,a,[role=button]{
+  border-radius:10px!important;
+}
+button.rounded-full,[class*="rounded-full"]{
+  border-radius:999px!important;
+}
+/* Keep destructive actions readable */
+button[class*="danger"],.text-red-600.font-bold{
+  color:var(--sm-danger)!important;
+}
+""".strip()
+
+WG_UI_THEME_SNIPPET = (
+    f'<base href="{WG_UI_PREFIX}/" />'
+    '<link rel="preconnect" href="https://fonts.googleapis.com" />'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
+    '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />'
+    '<style id="sm-wg-theme">'
+    + WG_UI_THEME_CSS.replace("\n", " ")
+    + "</style>"
+    '<script id="sm-wg-theme-js">(function(){'
+    f"var P='{WG_UI_PREFIX}';"
+    "try{"
+    "document.cookie='theme=dark; Path='+P+'/; Max-Age=31536000; SameSite=Lax';"
+    "document.documentElement.classList.add('dark');"
+    "document.documentElement.classList.remove('light');"
+    "document.documentElement.setAttribute('data-color-mode-forced','dark');"
+    "}catch(e){}"
+    "function fix(u){if(typeof u!=='string')return u;"
+    "if(!u||u.charAt(0)==='#'||u.indexOf('data:')===0||u.indexOf('blob:')===0||u.indexOf('mailto:')===0)return u;"
+    "if(u.indexOf(P+'/')===0||u===P)return u;"
+    "if(u.indexOf('https://vpn.vpstruelord.com')===0){var r=u.slice(29);return r?P+r:P+'/';}"
+    "if(u.indexOf('http://vpn.vpstruelord.com')===0){var r2=u.slice(28);return r2?P+r2:P+'/';}"
+    "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return P+u;"
+    "return u;}"
+    "var xo=XMLHttpRequest.prototype.open;"
+    "XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=fix(u);}catch(e){}"
+    "return xo.apply(this,arguments);};"
+    "if(window.fetch){var _f=window.fetch;window.fetch=function(i,n){"
+    "try{if(typeof i==='string')i=fix(i);else if(i&&i.url)i=new Request(fix(i.url),i);}catch(e){}"
+    "return _f.call(this,i,n);};}"
+    "var _ps=history.pushState;history.pushState=function(s,t,u){"
+    "if(u!=null)try{arguments[2]=fix(String(u));}catch(e){}"
+    "return _ps.apply(this,arguments);};"
+    "var _rs=history.replaceState;history.replaceState=function(s,t,u){"
+    "if(u!=null)try{arguments[2]=fix(String(u));}catch(e){}"
+    "return _rs.apply(this,arguments);};"
+    "document.addEventListener('click',function(ev){"
+    "var a=ev.target&&ev.target.closest&&ev.target.closest('a[href]');"
+    "if(!a)return;"
+    "var href=a.getAttribute('href');"
+    "if(!href||href.charAt(0)!=='/'||href.charAt(1)==='/'||href.indexOf(P+'/')===0||href===P)return;"
+    "if(a.target&&a.target!=='_self')return;"
+    "ev.preventDefault();try{location.assign(P+href);}catch(e){location.href=P+href;}"
+    "},true);"
+    "})();</script>"
+)
+
 PANEL_TAGLINE = os.environ.get("PANEL_TAGLINE", "")
 SESSION_HOURS = float(os.environ.get("SESSION_HOURS", "12"))
 COOKIE_NAME = "sm_session"
@@ -8772,7 +8962,250 @@ def proxy_buffalo_request(handler: "Handler", method: str) -> None:
     handler.wfile.write(body)
 
 
-class Handler(BaseHTTPRequestHandler):
+def _wg_ui_rewrite_location(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    lower = raw.lower()
+    for host in WG_UI_PUBLIC_HOSTS:
+        host_l = host.lower()
+        if host_l.startswith("http://") or host_l.startswith("https://"):
+            prefix = host_l
+        else:
+            # bare host — try both schemes against the Location value
+            for scheme in ("https://", "http://"):
+                p = scheme + host_l
+                if lower.startswith(p):
+                    rest = raw[len(p) :]
+                    if not rest.startswith("/"):
+                        rest = "/" + rest
+                    return WG_UI_PREFIX + rest
+            continue
+        if lower.startswith(prefix):
+            rest = raw[len(prefix) :]
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            return WG_UI_PREFIX + rest
+    if raw.startswith("/") and not raw.startswith("//"):
+        if raw == WG_UI_PREFIX or raw.startswith(WG_UI_PREFIX + "/"):
+            return raw
+        return WG_UI_PREFIX + raw
+    return raw
+
+
+def _wg_ui_rewrite_set_cookie(cookie: str) -> str:
+    parts = [p.strip() for p in (cookie or "").split(";") if p.strip()]
+    if not parts:
+        return cookie
+    out = [parts[0]]
+    saw_path = False
+    for part in parts[1:]:
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={WG_UI_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            continue
+        elif low.startswith("samesite="):
+            out.append("SameSite=Lax")
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={WG_UI_PREFIX}/")
+    # Force dark theme preference for nuxt-color-mode (cookie name: theme).
+    return "; ".join(out)
+
+
+def _wg_ui_rewrite_html(text: str) -> str:
+    def repl_attr(match: re.Match[str]) -> str:
+        attr, quote, path = match.group(1), match.group(2), match.group(3)
+        if path.startswith(WG_UI_PREFIX + "/") or path == WG_UI_PREFIX:
+            return match.group(0)
+        return f"{attr}={quote}{WG_UI_PREFIX}{path}{quote}"
+
+    text = re.sub(
+        r"\b(href|src|action)=(['\"])(/(?!/|"
+        + re.escape(WG_UI_PREFIX.lstrip("/"))
+        + r"/)[^'\"]*)\2",
+        repl_attr,
+        text,
+        flags=re.I,
+    )
+
+    def repl_abs(match: re.Match[str]) -> str:
+        quote, path = match.group(1), match.group(2)
+        if path.startswith(WG_UI_PREFIX + "/") or path == WG_UI_PREFIX:
+            return match.group(0)
+        return f"{quote}{WG_UI_PREFIX}{path}{quote}"
+
+    # importmap / JSON absolute paths: "/_nuxt/...", "/manifest.json", etc.
+    text = re.sub(
+        r"(['\"])(/(?:_nuxt|api|login|logout|clients|admin|manifest\.json|favicon\.png|apple-touch-icon\.png)[^'\"]*)\1",
+        repl_abs,
+        text,
+        flags=re.I,
+    )
+    # Force dark on <html>
+    def force_dark_html(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        if "data-color-mode-forced" not in attrs.lower():
+            attrs = ' data-color-mode-forced="dark"' + attrs
+        if re.search(r"\bclass\s*=", attrs, flags=re.I):
+            attrs = re.sub(
+                r'class=(["\'])(.*?)\1',
+                lambda c: (
+                    f'class={c.group(1)}{c.group(2)}{c.group(1)}'
+                    if re.search(r"(^|\s)dark(\s|$)", c.group(2))
+                    else f'class={c.group(1)}{(c.group(2) + " dark").strip()}{c.group(1)}'
+                ),
+                attrs,
+                count=1,
+                flags=re.I,
+            )
+        else:
+            attrs = ' class="dark"' + attrs
+        return f"<html{attrs}>"
+
+    text = re.sub(r"<html\b([^>]*)>", force_dark_html, text, count=1, flags=re.I)
+    return text
+
+
+def _wg_ui_inject_theme(body: bytes, content_type: str) -> bytes:
+    ctype = (content_type or "").lower()
+    if "text/html" not in ctype:
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = body.decode("latin-1")
+        except Exception:
+            return body
+    if "sm-wg-theme" in text:
+        return body
+    text = _wg_ui_rewrite_html(text)
+    snippet = WG_UI_THEME_SNIPPET
+    lower = text.lower()
+    head_idx = lower.find("<head>")
+    if head_idx != -1:
+        insert_at = head_idx + len("<head>")
+        text = text[:insert_at] + snippet + text[insert_at:]
+    else:
+        idx = lower.find("</head>")
+        if idx != -1:
+            text = text[:idx] + snippet + text[idx:]
+        else:
+            text = snippet + text
+    return text.encode("utf-8")
+
+
+def proxy_wg_ui_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to wg-easy with ServerManager theme injection."""
+    parsed = urlparse(handler.path)
+    rel = parsed.path[len(WG_UI_PREFIX) :] or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    upstream = urljoin(WG_UI_UPSTREAM + "/", rel.lstrip("/"))
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers = {}
+    for key in (
+        "Accept",
+        "Accept-Language",
+        "Content-Type",
+        "X-Requested-With",
+        "Referer",
+        "Origin",
+    ):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        # Ensure dark theme preference reaches nuxt-color-mode.
+        if not any(p.lower().startswith("theme=") for p in kept):
+            kept.append("theme=dark")
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    else:
+        headers["Cookie"] = "theme=dark"
+    headers["Host"] = urlparse(WG_UI_UPSTREAM).netloc
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-WgUiProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+    headers["X-Forwarded-Proto"] = "https"
+    headers["X-Forwarded-Host"] = handler.headers.get("Host") or PORTAL_HOST
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        handler._json(502, {"error": f"wg-ui proxy failed: {exc}"})
+        return
+
+    content_type = (
+        upstream_headers.get("Content-Type")
+        or upstream_headers.get("content-type")
+        or "application/octet-stream"
+    )
+    body = _wg_ui_inject_theme(body, content_type)
+
+    # Always advertise dark theme cookie for this prefix.
+    set_cookies = list(set_cookies or [])
+    set_cookies.append(f"theme=dark; Path={WG_UI_PREFIX}/; Max-Age=31536000; SameSite=Lax")
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _wg_ui_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie in set_cookies:
+        if cookie:
+            handler.send_header("Set-Cookie", _wg_ui_rewrite_set_cookie(cookie))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+    handler.end_headers()
+    if method.upper() != "HEAD":
+        handler.wfile.write(body)
     server_version = "ServerManager/1.2"
 
     def log_message(self, fmt: str, *args) -> None:
@@ -9197,6 +9630,8 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_buffalo_request(self, "GET")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "GET")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "GET")
         self._json(404, {"error": "not found"})
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -9214,6 +9649,8 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_nas_files_request(self, "HEAD")
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "HEAD")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "HEAD")
         self.send_response(404)
         self.end_headers()
 
@@ -9361,12 +9798,18 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_buffalo_request(self, "POST")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "POST")
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            return proxy_wg_ui_request(self, "POST")
         self._json(404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "PUT")
         if not self._require_auth(api=True):
             return
-        path = urlparse(self.path).path
         if path == "/api/lan-aliases":
             try:
                 payload = self._read_json()
@@ -9412,6 +9855,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "DELETE")
         if not self._require_auth(api=True):
             return
         if path.startswith("/api/openvpn/clients/"):
@@ -9423,6 +9870,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        self._json(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_wg_ui_request(self, "PATCH")
         self._json(404, {"error": "not found"})
 
     def _serve_file(self, path: Path, content_type: str) -> None:
