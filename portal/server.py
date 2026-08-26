@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import ftplib
+import gzip
+import http.client
 import io
 import mimetypes
 import base64
@@ -7697,11 +7699,173 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
     return text.encode("utf-8")
 
 
+# Cache rewritten static NAS UI assets on the VPS so phones don't re-pull
+# Sencha/Ext over the ~40ms WireGuard hop on every Files open.
+_NAS_FILES_CACHE_LOCK = threading.Lock()
+_NAS_FILES_CACHE: dict[str, tuple[float, int, str, bytes]] = {}
+_NAS_FILES_CACHE_BYTES = 0
+_NAS_FILES_CACHE_MAX_BYTES = int(
+    os.environ.get("NAS_FILES_CACHE_MAX_BYTES", str(48 * 1024 * 1024))
+)
+_NAS_FILES_CACHE_TTL = float(os.environ.get("NAS_FILES_CACHE_TTL", str(6 * 3600)))
+_NAS_STATIC_EXTS = (
+    ".js",
+    ".css",
+    ".png",
+    ".gif",
+    ".jpg",
+    ".jpeg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".svg",
+    ".map",
+)
+_nas_http_tls = threading.local()
+
+
+def _nas_files_cacheable(method: str, rel: str) -> bool:
+    if method != "GET":
+        return False
+    rel_l = (rel or "/").lower().split("?", 1)[0]
+    if rel_l.startswith("/rpc/"):
+        return False
+    return any(rel_l.endswith(ext) for ext in _NAS_STATIC_EXTS)
+
+
+def _nas_files_browser_cache_control(rel: str) -> str:
+    rel_l = (rel or "/").lower().split("?", 1)[0]
+    if rel_l.startswith("/rpc/"):
+        return "no-store"
+    if any(rel_l.endswith(ext) for ext in _NAS_STATIC_EXTS):
+        # Buffalo ships versioned paths under /st/js/sencha-touch-1.1.0/ etc.
+        return "private, max-age=86400"
+    return "private, max-age=0, must-revalidate"
+
+
+def _nas_files_cache_get(key: str) -> tuple[int, str, bytes] | None:
+    now = time.time()
+    with _NAS_FILES_CACHE_LOCK:
+        hit = _NAS_FILES_CACHE.get(key)
+        if not hit:
+            return None
+        expires, status, ctype, body = hit
+        if expires < now:
+            _NAS_FILES_CACHE.pop(key, None)
+            global _NAS_FILES_CACHE_BYTES
+            _NAS_FILES_CACHE_BYTES = max(0, _NAS_FILES_CACHE_BYTES - len(body))
+            return None
+        return status, ctype, body
+
+
+def _nas_files_cache_put(key: str, status: int, ctype: str, body: bytes) -> None:
+    if status != 200 or not body:
+        return
+    global _NAS_FILES_CACHE_BYTES
+    with _NAS_FILES_CACHE_LOCK:
+        old = _NAS_FILES_CACHE.pop(key, None)
+        if old:
+            _NAS_FILES_CACHE_BYTES = max(0, _NAS_FILES_CACHE_BYTES - len(old[3]))
+        while (
+            _NAS_FILES_CACHE
+            and _NAS_FILES_CACHE_BYTES + len(body) > _NAS_FILES_CACHE_MAX_BYTES
+        ):
+            # Drop oldest insert order (dict preserves order).
+            _k, _v = next(iter(_NAS_FILES_CACHE.items()))
+            _NAS_FILES_CACHE.pop(_k, None)
+            _NAS_FILES_CACHE_BYTES = max(0, _NAS_FILES_CACHE_BYTES - len(_v[3]))
+        _NAS_FILES_CACHE[key] = (
+            time.time() + _NAS_FILES_CACHE_TTL,
+            status,
+            ctype,
+            body,
+        )
+        _NAS_FILES_CACHE_BYTES += len(body)
+
+
+def _nas_files_reset_conn() -> None:
+    conn = getattr(_nas_http_tls, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _nas_http_tls.conn = None
+
+
+def _nas_files_http_exchange(
+    method: str,
+    path_q: str,
+    headers: dict[str, str],
+    payload: bytes | None,
+    timeout: float,
+) -> tuple[int, dict[str, str], list[str], bytes, http.client.HTTPResponse | None]:
+    """Keep-alive HTTP to the NAS (one connection per worker thread)."""
+    parsed = urlparse(NAS_FILES_UPSTREAM)
+    host = parsed.hostname or "192.168.8.159"
+    port = int(parsed.port or 80)
+    if not path_q.startswith("/"):
+        path_q = "/" + path_q
+
+    def _once() -> tuple[int, dict[str, str], list[str], bytes, http.client.HTTPResponse | None]:
+        conn = getattr(_nas_http_tls, "conn", None)
+        if conn is None:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            _nas_http_tls.conn = conn
+        else:
+            conn.timeout = timeout
+        conn.request(method, path_q, body=payload, headers=headers)
+        resp = conn.getresponse()
+        status = int(resp.status)
+        upstream_headers = {k: v for k, v in resp.getheaders()}
+        set_cookies = [v for k, v in resp.getheaders() if k.lower() == "set-cookie"]
+        # Caller streams large bodies; otherwise read fully so conn can be reused.
+        return status, upstream_headers, set_cookies, b"", resp
+
+    try:
+        return _once()
+    except (http.client.HTTPException, OSError, TimeoutError):
+        _nas_files_reset_conn()
+        try:
+            return _once()
+        except (http.client.HTTPException, OSError, TimeoutError) as exc:
+            _nas_files_reset_conn()
+            raise URLError(str(exc)) from exc
+
+
+def _nas_files_maybe_gzip(handler: "Handler", body: bytes, content_type: str) -> tuple[bytes, str | None]:
+    ctype = (content_type or "").lower()
+    if not body or len(body) < 512:
+        return body, None
+    if not any(
+        x in ctype
+        for x in (
+            "javascript",
+            "ecmascript",
+            "text/css",
+            "text/html",
+            "text/plain",
+            "application/json",
+            "image/svg",
+        )
+    ):
+        return body, None
+    ae = (handler.headers.get("Accept-Encoding") or "").lower()
+    if "gzip" not in ae:
+        return body, None
+    compressed = gzip.compress(body, compresslevel=5)
+    if len(compressed) >= len(body) * 0.95:
+        return body, None
+    return compressed, "gzip"
+
+
 def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     """Same-origin reverse proxy to Buffalo WebAccess (file manager on :9000).
 
     Streams binary file open/download/thumbnail responses (multi‑GB movies) and
     forwards Range/HEAD so browsers can play video and icons can load.
+    Caches rewritten static JS/CSS/images on the VPS and allows browser caching.
     """
     import shutil
 
@@ -7709,6 +7873,9 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     rel = parsed.path[len(NAS_FILES_PREFIX) :] or "/"
     if not rel.startswith("/"):
         rel = "/" + rel
+    path_q = rel
+    if parsed.query:
+        path_q = rel + "?" + parsed.query
     upstream = urljoin(NAS_FILES_UPSTREAM + "/", rel.lstrip("/"))
     if parsed.query:
         upstream = upstream + "?" + parsed.query
@@ -7757,43 +7924,99 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
     headers["Host"] = urlparse(NAS_FILES_UPSTREAM).netloc or "192.168.8.159:9000"
     headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-NasFilesProxy/1.0"
     headers["Accept-Encoding"] = "identity"
+    headers["Connection"] = "keep-alive"
 
     rel_l = rel.lower()
     stream_body = method == "HEAD" or any(
         rel_l.startswith(p)
         for p in ("/rpc/cat", "/rpc/download", "/rpc/thumbnail")
     )
+    cache_key = f"{method}:{path_q}"
+    use_cache = _nas_files_cacheable(method, rel) and not stream_body
 
-    req = Request(upstream, data=payload, headers=headers, method=method)
+    # Serve rewritten static assets from VPS memory when possible.
+    if use_cache:
+        cached = _nas_files_cache_get(cache_key)
+        if cached is not None:
+            status, content_type, body = cached
+            etag = '"' + hashlib.md5(body).hexdigest() + '"'
+            inm = (handler.headers.get("If-None-Match") or "").strip()
+            if inm and inm == etag:
+                handler.send_response(304)
+                handler.send_header("ETag", etag)
+                handler.send_header("Cache-Control", _nas_files_browser_cache_control(rel))
+                handler.end_headers()
+                return
+            out_body, enc = _nas_files_maybe_gzip(handler, body, content_type)
+            handler.send_response(status)
+            handler.send_header("Content-Type", content_type)
+            handler.send_header("Content-Length", str(len(out_body)))
+            handler.send_header("Cache-Control", _nas_files_browser_cache_control(rel))
+            handler.send_header("ETag", etag)
+            handler.send_header("X-Nas-Cache", "HIT")
+            if enc:
+                handler.send_header("Content-Encoding", enc)
+                handler.send_header("Vary", "Accept-Encoding")
+            handler.end_headers()
+            if method != "HEAD":
+                handler.wfile.write(out_body)
+            return
+
     resp = None
+    body = b""
+    status = 502
+    upstream_headers: dict[str, str] = {}
+    set_cookies: list[str] = []
     try:
-        resp = urlopen(req, timeout=600)
-        status = int(getattr(resp, "status", 200) or 200)
-        upstream_headers = {k: v for k, v in resp.headers.items()}
-        set_cookies: list[str] = []
-        if hasattr(resp.headers, "get_all"):
-            set_cookies = resp.headers.get_all("Set-Cookie") or []
-        elif resp.headers.get("Set-Cookie"):
-            set_cookies = [resp.headers.get("Set-Cookie")]
-        body = b"" if stream_body else resp.read()
-    except HTTPError as exc:
-        status = int(getattr(exc, "code", 502) or 502)
-        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
-        set_cookies = []
-        if exc.headers and hasattr(exc.headers, "get_all"):
-            set_cookies = exc.headers.get_all("Set-Cookie") or []
-        elif exc.headers and exc.headers.get("Set-Cookie"):
-            set_cookies = [exc.headers.get("Set-Cookie")]
+        timeout = 600.0 if stream_body else 60.0
+        status, upstream_headers, set_cookies, _, resp = _nas_files_http_exchange(
+            method, path_q, headers, payload, timeout
+        )
         if stream_body:
-            # Still stream error bodies when present (rare); otherwise empty.
-            resp = exc
             body = b""
         else:
-            body = exc.read() if hasattr(exc, "read") else b""
+            assert resp is not None
+            body = resp.read()
+            # Do not resp.close() — that closes the keep-alive socket.
             resp = None
     except (URLError, TimeoutError, OSError) as exc:
-        handler._json(502, {"error": f"nas files proxy failed: {exc}"})
-        return
+        # Fallback to urllib once if keep-alive path fails hard.
+        try:
+            req = Request(upstream, data=payload, headers=headers, method=method)
+            resp = urlopen(req, timeout=600)
+            status = int(getattr(resp, "status", 200) or 200)
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+            body = b"" if stream_body else resp.read()
+            if not stream_body and resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                resp = None
+        except HTTPError as http_exc:
+            status = int(getattr(http_exc, "code", 502) or 502)
+            upstream_headers = {
+                k: v for k, v in (http_exc.headers.items() if http_exc.headers else [])
+            }
+            set_cookies = []
+            if http_exc.headers and hasattr(http_exc.headers, "get_all"):
+                set_cookies = http_exc.headers.get_all("Set-Cookie") or []
+            elif http_exc.headers and http_exc.headers.get("Set-Cookie"):
+                set_cookies = [http_exc.headers.get("Set-Cookie")]
+            if stream_body:
+                resp = http_exc
+                body = b""
+            else:
+                body = http_exc.read() if hasattr(http_exc, "read") else b""
+                resp = None
+        except (URLError, TimeoutError, OSError):
+            handler._json(502, {"error": f"nas files proxy failed: {exc}"})
+            return
 
     content_type = (
         upstream_headers.get("Content-Type")
@@ -7806,30 +8029,31 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
         content_type = "application/json; charset=utf-8"
     if not stream_body:
         body = _nas_files_inject(body, content_type)
-
-    handler.send_response(status)
-    skip = {
-        "transfer-encoding",
-        "content-length",
-        "connection",
-        "content-encoding",
-        "x-frame-options",
-        "content-security-policy",
-        "set-cookie",
-    }
-    for key, value in upstream_headers.items():
-        low = key.lower()
-        if low in skip:
-            continue
-        if low == "location":
-            handler.send_header(key, _nas_files_rewrite_location(value))
-        else:
-            handler.send_header(key, value)
-    for cookie_hdr in set_cookies:
-        if cookie_hdr:
-            handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie_hdr))
+        if use_cache and status == 200:
+            _nas_files_cache_put(cache_key, status, content_type, body)
 
     if stream_body:
+        handler.send_response(status)
+        skip = {
+            "transfer-encoding",
+            "content-length",
+            "connection",
+            "content-encoding",
+            "x-frame-options",
+            "content-security-policy",
+            "set-cookie",
+        }
+        for key, value in upstream_headers.items():
+            low = key.lower()
+            if low in skip:
+                continue
+            if low == "location":
+                handler.send_header(key, _nas_files_rewrite_location(value))
+            else:
+                handler.send_header(key, value)
+        for cookie_hdr in set_cookies:
+            if cookie_hdr:
+                handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie_hdr))
         # Preserve upstream Content-Length / Accept-Ranges for video seeking.
         cl = upstream_headers.get("Content-Length") or upstream_headers.get("content-length")
         if cl and method != "HEAD":
@@ -7854,6 +8078,7 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
                     resp.close()
                 except Exception:
                     pass
+                # Body consumed; keep-alive socket may still be reusable.
         elif resp is not None:
             try:
                 resp.close()
@@ -7866,11 +8091,53 @@ def proxy_nas_files_request(handler: "Handler", method: str) -> None:
             resp.close()
         except Exception:
             pass
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Cache-Control", "no-store")
+
+    etag = '"' + hashlib.md5(body).hexdigest() + '"' if body else None
+    inm = (handler.headers.get("If-None-Match") or "").strip()
+    if etag and inm == etag and status == 200:
+        handler.send_response(304)
+        handler.send_header("ETag", etag)
+        handler.send_header("Cache-Control", _nas_files_browser_cache_control(rel))
+        handler.end_headers()
+        return
+
+    out_body, enc = _nas_files_maybe_gzip(handler, body, content_type)
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+        "cache-control",
+        "etag",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _nas_files_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie_hdr in set_cookies:
+        if cookie_hdr:
+            handler.send_header("Set-Cookie", _nas_files_rewrite_set_cookie(cookie_hdr))
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(out_body)))
+    handler.send_header("Cache-Control", _nas_files_browser_cache_control(rel))
+    if etag:
+        handler.send_header("ETag", etag)
+    if use_cache:
+        handler.send_header("X-Nas-Cache", "MISS")
+    if enc:
+        handler.send_header("Content-Encoding", enc)
+        handler.send_header("Vary", "Accept-Encoding")
     handler.end_headers()
     if method != "HEAD":
-        handler.wfile.write(body)
+        handler.wfile.write(out_body)
 
 
 def _buffalo_rewrite_location(value: str) -> str:
