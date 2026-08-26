@@ -5255,7 +5255,7 @@ def build_portal_settings() -> dict:
     host = PORTAL_HOST or "portal.vpstruelord.com"
     links = [
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
-        {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "https://vpn.vpstruelord.com/"},
+        {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
