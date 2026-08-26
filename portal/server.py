@@ -60,6 +60,19 @@ WG_CLIENT_DOWNLOAD_NAME = os.environ.get(
 WG_CLIENT_NAME = os.environ.get("WG_CLIENT_NAME", "GL-MT6000")
 WG_EASY_DB_CONTAINER = os.environ.get("WG_EASY_DB_CONTAINER", "wg-easy")
 WG_EASY_DB_PATH = os.environ.get("WG_EASY_DB_PATH", "/etc/wireguard/wg-easy.db")
+OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients"))
+OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
+OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
+
+
+def load_openvpn_client_conf(filename: str) -> bytes:
+    path = OVPN_CLIENT_DIR / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"missing OpenVPN profile {path}")
+    # Refuse path escape
+    if path.resolve().parent != OVPN_CLIENT_DIR.resolve():
+        raise ValueError("invalid OpenVPN profile path")
+    return path.read_bytes()
 
 
 def build_flint_wireguard_conf(client_name: str = "") -> bytes:
@@ -8681,6 +8694,58 @@ class Handler(BaseHTTPRequestHandler):
                 name = WG_CLIENT_DOWNLOAD_NAME
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-wireguard-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/openvpn/config",
+            "/api/openvpn/flint",
+            "/download/flint.ovpn",
+            "/download/GL-MT6000.ovpn",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_openvpn_client_conf(OVPN_FLINT_NAME)
+                name = "GL-MT6000.ovpn"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/openvpn/phone",
+            "/download/james-iphone.ovpn",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_openvpn_client_conf(OVPN_PHONE_NAME)
+                name = "james-iphone.ovpn"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
                 self.send_header(
                     "Content-Disposition",
                     f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
