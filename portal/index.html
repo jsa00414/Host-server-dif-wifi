@@ -510,6 +510,19 @@
     button:hover { border-color: rgba(61,222,160,.35); }
     button:disabled { opacity: .55; cursor: not-allowed; }
     button.primary { background: var(--accent); color: #062016; border-color: transparent; }
+    a.ghost {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line, rgba(170,210,185,0.24));
+      border-radius: 10px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: none;
+    }
     a.primary {
       display: inline-flex;
       align-items: center;
@@ -1349,9 +1362,21 @@
             <div class="panel-body">
               <p class="hint" style="margin:0 0 10px">School / campus profile — endpoint <code>74.208.76.213:5000</code>, MTU <code>1280</code>. Import on the Flint, then <strong>enable</strong> the tunnel (upload alone is not enough).</p>
               <div class="settings-actions">
-                <a class="primary" id="wgConfigDownloadLink" href="/api/wireguard/config" download="GL-MT6000-school.conf">Download config</a>
+                <a class="primary" id="wgConfigDownloadLink" href="https://portal.vpstruelord.com/api/wireguard/config" download="GL-MT6000-school.conf">Download config</a>
               </div>
               <p class="hint" style="margin:10px 0 0">Direct link (while logged in): <code>https://portal.vpstruelord.com/api/wireguard/config</code></p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>OpenVPN (school)</h3></div>
+            <div class="panel-body">
+              <p class="hint" style="margin:0 0 10px">Preferred on campus Wi‑Fi. TCP <code>74.208.76.213:443</code> (shares HTTPS), <code>tls-auth</code> + <code>AES-256-CBC</code>. On the Flint: disable WireGuard, <strong>delete any old OpenVPN client</strong>, import this profile, then enable it.</p>
+              <div class="settings-actions">
+                <a class="primary" id="ovpnFlintDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/flint" download="GL-MT6000.ovpn">Download Flint .ovpn</a>
+                <a class="ghost" id="ovpnPhoneDownloadLink" href="https://portal.vpstruelord.com/api/openvpn/phone" download="james-iphone.ovpn">Download iPhone .ovpn</a>
+              </div>
+              <p class="hint" style="margin:10px 0 0">Direct links (while logged in): <code>https://portal.vpstruelord.com/api/openvpn/flint</code> · <code>https://portal.vpstruelord.com/api/openvpn/phone</code></p>
             </div>
           </div>
 
