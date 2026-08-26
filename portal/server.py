@@ -6280,6 +6280,14 @@ body *,body *::before,body *::after{text-shadow:none!important;box-shadow:none!i
   margin:0!important;padding:0!important;overflow:hidden!important;border:0!important;
   background:none!important}
 
+/* Hide Buffalo WebAccess "Displaying... (large number of items)" overlay */
+#loading-main,#loading-mask,#loading-text,#loading-cancel,
+#loading-main .loading-indicator,#loading-main img{
+  display:none!important;visibility:hidden!important;opacity:0!important;
+  pointer-events:none!important;height:0!important;width:0!important;
+  max-height:0!important;overflow:hidden!important;border:0!important;
+  margin:0!important;padding:0!important}
+
 /* Kill Ext framed skins / gradients everywhere */
 .x-panel,.x-panel-body,.x-panel-bwrap,.x-panel-bbar,.x-panel-tbar,.x-panel-header,
 .x-toolbar,.x-border-layout-ct,.x-grid3,.x-grid3-header,.x-grid3-body,.x-grid3-row,
@@ -6628,7 +6636,10 @@ td.x-grid3-hd-over,td.sort-desc,td.sort-asc,td.x-grid3-hd-menu-open{
 .x-mask-msg,.x-mask-loading,#loading-msg{
   background:var(--sm-bg2)!important;border:1px solid var(--sm-line)!important;
   border-radius:12px!important;color:var(--sm-text)!important;padding:12px 16px!important}
-#loading-mask,#loading-main,.ext-el-mask{background:var(--sm-bg0)!important}
+/* Keep Ext body mask usable for dialogs, but never show the Displaying... panel */
+#loading-mask,#loading-main,.ext-el-mask#loading-mask{
+  display:none!important;visibility:hidden!important;pointer-events:none!important;
+  opacity:0!important;background:transparent!important}
 .loading-indicator,.x-tbar-loading,.x-status-busy,.x-loading-spinner{color:var(--sm-accent)!important}
 .x-shadow{display:none!important}
 
@@ -7202,7 +7213,23 @@ NAS_FILES_SNIPPET = (
     "n.style.visibility='hidden';"
     "}"
     "}catch(e){}}"
+    "function smDisableDisplayingOverlay(){"
     "try{"
+    "var hide=function(){"
+    "try{var lm=document.getElementById('loading-main');if(lm){lm.style.setProperty('display','none','important');lm.style.setProperty('visibility','hidden','important');}}catch(e){}"
+    "try{var lmk=document.getElementById('loading-mask');if(lmk){lmk.style.setProperty('display','none','important');lmk.style.setProperty('visibility','hidden','important');}}catch(e){}"
+    "try{if(window.Ext&&Ext.getBody)Ext.getBody().unmask();}catch(e){}"
+    "};"
+    "hide();"
+    "if(window.loadingAnimation){"
+    "try{loadingAnimation.show=function(){hide();return;};}catch(e){}"
+    "try{loadingAnimation.changeText=function(){return;};}catch(e){}"
+    "try{if(loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
+    "}"
+    "}catch(e){}}"
+    "try{"
+    "smDisableDisplayingOverlay();"
+    "setInterval(smDisableDisplayingOverlay,1500);"
     "setTimeout(smClearStuckMask,2500);"
     "setTimeout(smClearStuckMask,5000);"
     "setTimeout(smClearStuckMask,9000);"
@@ -7225,7 +7252,7 @@ NAS_FILES_SNIPPET = (
     "setTimeout(smHookMsgShow,500);"
     "setTimeout(smHookMsgShow,1500);"
     "}catch(e){}"
-    "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;}catch(e){}"
+    "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smDisableDisplayingOverlay=smDisableDisplayingOverlay;}catch(e){}"
     # Keep Ext.Viewport sized to the iframe — parent layout changes often skip window.resize.
     "function smNasViewSize(){"
     "var w=Math.max(document.documentElement.clientWidth||0,window.innerWidth||0);"
