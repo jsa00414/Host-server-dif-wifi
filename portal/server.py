@@ -6801,32 +6801,34 @@ select,.x-combo-list{
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
 /* Icon/thumbnail view — CSS grid instead of broken Ext absolute positions in iframe */
-#main-panel .x-panel-body > .x-view{
+#main-panel .x-view{
   display:grid!important;
-  grid-template-columns:repeat(auto-fill,minmax(220px,1fr))!important;
-  grid-auto-flow:row!important;
+  grid-template-columns:repeat(auto-fill,minmax(240px,1fr))!important;
+  grid-auto-flow:row dense!important;
   gap:8px 12px!important;
   align-content:start!important;
   position:relative!important;
   left:0!important;top:0!important;
   width:100%!important;
   height:auto!important;
-  min-height:100%!important;
+  min-height:0!important;
+  max-height:none!important;
   padding:10px 12px!important;
   box-sizing:border-box!important;
 }
-#main-panel .x-panel-body > .x-view > .x-clear{
+#main-panel .x-view > .x-clear{
   display:none!important;
   height:0!important;
   margin:0!important;
   padding:0!important;
+  grid-column:1/-1!important;
 }
-#main-panel .x-panel-body > .x-view > .icon-thumbnail,
-#main-panel .x-panel-body > .x-view .thumb-wrap,
-#main-panel .x-panel-body > .x-view .icon-side,
-#main-panel .x-panel-body > .x-view .icon-small,
-#main-panel .x-panel-body > .x-view .icon-medium,
-#main-panel .x-panel-body > .x-view .icon-large{
+#main-panel .x-view > .icon-thumbnail,
+#main-panel .x-view .thumb-wrap,
+#main-panel .x-view .icon-side,
+#main-panel .x-view .icon-small,
+#main-panel .x-view .icon-medium,
+#main-panel .x-view .icon-large{
   position:static!important;
   left:auto!important;top:auto!important;
   right:auto!important;bottom:auto!important;
@@ -6835,13 +6837,15 @@ select,.x-combo-list{
   margin:0!important;
   box-sizing:border-box!important;
 }
-#main-panel .x-panel-body > .x-view > .icon-thumbnail{
+#main-panel .x-view > .icon-thumbnail{
   display:block!important;
   min-width:0!important;
+  grid-column:auto!important;
+  grid-row:auto!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-side,
-#main-panel .x-panel-body > .x-view .thumb-wrap.icon-side,
-#main-panel .x-panel-body > .x-view .icon-side{
+#main-panel .x-view .icon-thumbnail .icon-side,
+#main-panel .x-view .thumb-wrap.icon-side,
+#main-panel .x-view .icon-side{
   display:flex!important;
   align-items:flex-start!important;
   gap:10px!important;
@@ -6850,22 +6854,22 @@ select,.x-combo-list{
   width:100%!important;
   height:auto!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-side[style],
-#main-panel .x-panel-body > .x-view .icon-side[style]{
+#main-panel .x-view .icon-thumbnail .icon-side[style],
+#main-panel .x-view .icon-side[style]{
   width:100%!important;
   height:auto!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail .dd-img,
-#main-panel .x-panel-body > .x-view .icon-side .dd-img,
-#main-panel .x-panel-body > .x-view .icon-side img{
+#main-panel .x-view .icon-thumbnail .dd-img,
+#main-panel .x-view .icon-side .dd-img,
+#main-panel .x-view .icon-side img{
   flex:0 0 48px!important;
   width:48px!important;
   height:48px!important;
   object-fit:contain!important;
   margin:0!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail .icon-info,
-#main-panel .x-panel-body > .x-view .icon-side .icon-info{
+#main-panel .x-view .icon-thumbnail .icon-info,
+#main-panel .x-view .icon-side .icon-info{
   float:none!important;
   flex:1 1 auto!important;
   width:auto!important;
@@ -6875,27 +6879,27 @@ select,.x-combo-list{
   gap:2px!important;
   overflow:hidden!important;
 }
-#main-panel .x-panel-body > .x-view .icon-info > span{
+#main-panel .x-view .icon-info > span{
   display:block!important;
   text-align:left!important;
   white-space:nowrap!important;
   overflow:hidden!important;
   text-overflow:ellipsis!important;
 }
-#main-panel .x-panel-body > .x-view .icon-info > span.sm-nas-size-empty{
+#main-panel .x-view .icon-info > span.sm-nas-size-empty{
   display:none!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-over,
-#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-selected{
+#main-panel .x-view .icon-thumbnail.x-view-over,
+#main-panel .x-view .icon-thumbnail.x-view-selected{
   background:rgba(255,255,255,.05)!important;
   border:1px solid var(--sm-line)!important;
   border-radius:12px!important;
 }
-#main-panel .x-panel-body > .x-view .icon-thumbnail.x-view-selected{
+#main-panel .x-view .icon-thumbnail.x-view-selected{
   background:var(--sm-accent-dim)!important;
   border-color:var(--sm-accent-strong)!important;
 }
-#main-panel .x-panel-body > .x-view .x-dv-focus{
+#main-panel .x-view .x-dv-focus{
   display:none!important;
   width:0!important;height:0!important;
   overflow:hidden!important;
@@ -7638,13 +7642,54 @@ NAS_FILES_SNIPPET = (
     "if(t==='--'||t==='-'||t==='')sp.classList.add('sm-nas-size-empty');"
     "else sp.classList.remove('sm-nas-size-empty');"
     "});"
+    "document.querySelectorAll('#main-panel .x-view').forEach(function(view){"
+    "try{view.style.setProperty('display','grid','important');"
+    "view.style.setProperty('position','relative','important');"
+    "view.style.setProperty('height','auto','important');"
+    "view.style.setProperty('min-height','0','important');"
+    "view.style.setProperty('width','100%','important');"
+    "view.style.removeProperty('left');"
+    "view.style.removeProperty('top');}catch(e){}"
+    "});"
     "document.querySelectorAll('#main-panel .x-view > .icon-thumbnail').forEach(function(el){"
     "try{el.style.setProperty('position','static','important');"
     "el.style.setProperty('left','auto','important');"
     "el.style.setProperty('top','auto','important');"
+    "el.style.setProperty('right','auto','important');"
+    "el.style.setProperty('bottom','auto','important');"
     "el.style.removeProperty('width');"
     "el.style.removeProperty('height');}catch(e){}"
     "});"
+    "}catch(e){}}"
+    "function smPatchDataViewRefresh(){"
+    "try{"
+    "if(window.__smDvPatched||!window.Ext||!Ext.DataView)return;"
+    "var orig=Ext.DataView.prototype.refresh;"
+    "if(!orig)return;"
+    "Ext.DataView.prototype.refresh=function(){"
+    "var out=orig.apply(this,arguments);"
+    "try{setTimeout(smFixIconGridLabels,0);}catch(e){}"
+    "return out;};"
+    "window.__smDvPatched=true;"
+    "}catch(e){}}"
+    "function smWatchIconGrid(){"
+    "try{"
+    "smPatchDataViewRefresh();"
+    "if(window.__smIconGridWatch)return;"
+    "window.__smIconGridWatch=true;"
+    "function hook(){"
+    "document.querySelectorAll('#main-panel .x-view').forEach(function(view){"
+    "if(view.__smObserved)return;"
+    "view.__smObserved=true;"
+    "try{"
+    "new MutationObserver(function(){try{smFixIconGridLabels();}catch(e){}})"
+    ".observe(view,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});"
+    "}catch(e){}"
+    "});"
+    "smFixIconGridLabels();"
+    "}"
+    "hook();"
+    "setInterval(hook,1200);"
     "}catch(e){}}"
     "function smRefreshFileIconView(){"
     "try{"
@@ -7682,6 +7727,7 @@ NAS_FILES_SNIPPET = (
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
     "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();}catch(e){}"
+    "try{if(typeof smWatchIconGrid==='function')smWatchIconGrid();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
@@ -7732,7 +7778,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smFixIconGridLabels=smFixIconGridLabels;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smFixIconGridLabels=smFixIconGridLabels;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -7874,6 +7920,7 @@ NAS_FILES_SNIPPET = (
     "setInterval(smPaintScrollPorts,2000);"
     "}"
     "try{smMobileScrollFix();}catch(e){}"
+    "try{smWatchIconGrid();}catch(e){}"
     "try{"
     "window.addEventListener('resize',function(){smNasFit(true);},false);"
 
@@ -7897,7 +7944,8 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();},1200);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();},1200);"
+    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();},2000);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
