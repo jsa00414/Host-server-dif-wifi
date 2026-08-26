@@ -2205,12 +2205,12 @@
       renderAll();
       refreshVpsStatus();
       if (data.router && data.router.ok === false) {
-        setStatus("Router offline over VPN — fix WireGuard on the Flint (see log)", "err");
+        setStatus("Router offline over VPN — check OpenVPN/SSH on the Flint (see log)", "err");
       } else {
         setStatus("Ready", "ok");
       }
       showLog(data.router && data.router.ok === false
-        ? `Router unreachable at ${data.router.host || "10.8.0.3"}. After factory reset: connect to Flint Wi‑Fi, re-import GL-MT6000 from Portal → Settings → Download config (https://portal.vpstruelord.com/api/wireguard/config), enable SSH, then run /opt/wireguard/scripts/flint-post-reset.sh on the router.\n\n${data.router.error || ""}`
+        ? `Router unreachable at ${data.router.host || "10.9.0.2"}. Keep OpenVPN connected. On Flint Wi‑Fi run the Allow VPN SSH script (Portal → Settings → OpenVPN), then Reload.\n\n${data.router.error || ""}`
         : (lanDevices.length
         ? `Loaded. LAN: ${lanDevices.map((d) => d.hostname ? `${d.ip} (${d.hostname})` : d.ip).join(", ")}`
         : "Configuration loaded."));

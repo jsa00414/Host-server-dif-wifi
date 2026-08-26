@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import subprocess
 import syslog
 import tempfile
@@ -1982,13 +1983,7 @@ def parse_live_dnat() -> list[dict]:
 
 def parse_ufw_gl_forwards() -> list[dict]:
     """Import UFW 'GL forward*' allows that may not have DNAT yet."""
-    proc = subprocess.run(
-        ["ufw", "status"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    proc = _run_ufw(["status"])
     if proc.returncode != 0:
         return []
     row_re = re.compile(
@@ -3865,21 +3860,40 @@ def _is_vpn_ufw_from(frm: str) -> bool:
     return VPN_UFW_FROM.replace(" ", "") in f or f.startswith("10.8.0.")
 
 
+def _run_ufw(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
+    """Run ufw; missing binary returns rc=127 instead of raising."""
+    bin_path = shutil.which("ufw")
+    if not bin_path:
+        return subprocess.CompletedProcess(
+            args=["ufw", *args], returncode=127, stdout="", stderr="ufw not installed"
+        )
+    try:
+        return subprocess.run(
+            [bin_path, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(
+            args=["ufw", *args], returncode=1, stdout="", stderr=str(exc)
+        )
+
+
 def read_firewall_state() -> dict:
-    verbose = subprocess.run(
-        ["ufw", "status", "verbose"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
-    numbered = subprocess.run(
-        ["ufw", "status", "numbered"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    verbose = _run_ufw(["status", "verbose"])
+    numbered = _run_ufw(["status", "numbered"])
+    if verbose.returncode == 127:
+        return {
+            "active": False,
+            "default_incoming": "deny",
+            "default_outgoing": "allow",
+            "default_routed": "deny",
+            "vpn_from": VPN_UFW_FROM,
+            "rules": [],
+            "error": "ufw not installed",
+        }
     active = False
     default_in = "deny"
     default_out = "allow"
@@ -4034,18 +4048,24 @@ def _ufw_allow_cmd(rule: dict) -> list[str]:
 
 
 def write_firewall_state(rules: list[dict]) -> dict:
+    if not shutil.which("ufw"):
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": "ufw not installed",
+            "active": False,
+            "default_incoming": "deny",
+            "default_outgoing": "allow",
+            "default_routed": "deny",
+            "vpn_from": VPN_UFW_FROM,
+            "rules": [],
+        }
     desired = validate_firewall_rules(rules)
     desired_keys = {(r["port"], r["proto"]): r for r in desired}
     logs: list[str] = []
 
     # Delete current IPv4/v6 rules that are unwanted or need recreate (vpn_only change)
-    numbered = subprocess.run(
-        ["ufw", "status", "numbered"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    numbered = _run_ufw(["status", "numbered"])
     rows: list[tuple[int, int, str, bool, bool]] = []
     for line in (numbered.stdout or "").splitlines():
         line = line.strip()
@@ -4072,13 +4092,7 @@ def write_firewall_state(rules: list[dict]) -> dict:
         elif bool(want.get("vpn_only")) == bool(cur_vpn):
             continue  # keep matching rule
         # else recreate (vpn_only flipped)
-        proc = subprocess.run(
-            ["ufw", "--force", "delete", str(num)],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+        proc = _run_ufw(["--force", "delete", str(num)])
         logs.append(
             f"delete {num} {port}/{proto}: rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
         )
@@ -4091,20 +4105,15 @@ def write_firewall_state(rules: list[dict]) -> dict:
     for key, rule in desired_keys.items():
         if key in have and have[key] == bool(rule.get("vpn_only")):
             continue
-        proc = subprocess.run(
-            _ufw_allow_cmd(rule),
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+        cmd = _ufw_allow_cmd(rule)
+        proc = _run_ufw(cmd[1:] if cmd and cmd[0] == "ufw" else cmd)
         scope = "vpn" if rule.get("vpn_only") else "public"
         logs.append(
             f"allow {rule['port']}/{rule['proto']} ({scope}): rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
         )
 
     # Ensure ufw enabled with deny incoming
-    subprocess.run(["ufw", "--force", "enable"], capture_output=True, text=True, timeout=20)
+    _run_ufw(["--force", "enable"])
     final = read_firewall_state()
     return {
         "ok": True,
