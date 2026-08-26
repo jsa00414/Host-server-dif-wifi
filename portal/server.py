@@ -9206,6 +9206,9 @@ def proxy_wg_ui_request(handler: "Handler", method: str) -> None:
     handler.end_headers()
     if method.upper() != "HEAD":
         handler.wfile.write(body)
+
+
+class Handler(BaseHTTPRequestHandler):
     server_version = "ServerManager/1.2"
 
     def log_message(self, fmt: str, *args) -> None:
