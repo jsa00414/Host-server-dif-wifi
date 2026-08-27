@@ -16,7 +16,11 @@ mkdir -p "$IKEV2_DIR/certs" "$IKEV2_DIR/private"
 
 # Prefer live Let's Encrypt cert from Caddy (trusted by Windows).
 if [[ -f "$CADDY_CERT_DIR/${IKEV2_HOST}.crt" && -f "$CADDY_CERT_DIR/${IKEV2_HOST}.key" ]]; then
-  cp -f "$CADDY_CERT_DIR/${IKEV2_HOST}.crt" "$IKEV2_DIR/certs/server.crt"
+  # Leaf only in server.crt; intermediates go to cacerts (AppArmor-readable).
+  awk 'BEGIN{n=0} /BEGIN CERT/{n++} n==1{print} n>1{exit}' \
+    "$CADDY_CERT_DIR/${IKEV2_HOST}.crt" > "$IKEV2_DIR/certs/server.crt"
+  awk 'BEGIN{n=0} /BEGIN CERT/{n++} n>1{print}' \
+    "$CADDY_CERT_DIR/${IKEV2_HOST}.crt" > "$IKEV2_DIR/certs/chain.pem"
   cp -f "$CADDY_CERT_DIR/${IKEV2_HOST}.key" "$IKEV2_DIR/private/server.key"
   chmod 644 "$IKEV2_DIR/certs/server.crt"
   chmod 600 "$IKEV2_DIR/private/server.key"
@@ -83,15 +87,28 @@ conn ikev2-eap
     auto=add
 EOF
 
-# Install cert where strongSwan looks by default
-mkdir -p /etc/ipsec.d/certs /etc/ipsec.d/private
+# Install cert where strongSwan looks by default (AppArmor: /etc/ipsec.d only)
+mkdir -p /etc/ipsec.d/certs /etc/ipsec.d/private /etc/ipsec.d/cacerts
 cp -f "$IKEV2_DIR/certs/server.crt" /etc/ipsec.d/certs/server.crt
 cp -f "$IKEV2_DIR/private/server.key" /etc/ipsec.d/private/server.key
+chmod 644 /etc/ipsec.d/certs/server.crt
 chmod 600 /etc/ipsec.d/private/server.key
+if [[ -f "$IKEV2_DIR/certs/chain.pem" ]] && grep -q "BEGIN CERTIFICATE" "$IKEV2_DIR/certs/chain.pem"; then
+  cp -f "$IKEV2_DIR/certs/chain.pem" /etc/ipsec.d/cacerts/le-intermediate.pem
+fi
+if [[ -f "$IKEV2_DIR/certs/ca.crt" ]]; then
+  cp -f "$IKEV2_DIR/certs/ca.crt" /etc/ipsec.d/cacerts/ikev2-ca.pem
+fi
 
+# Caddy/Let's Encrypt keys are typically ECDSA (P-256). AppArmor only allows
+# charon to read under /etc/ipsec.d/, so keep key/cert there and declare ECDSA.
+KEY_ALG="ECDSA"
+if openssl pkey -in /etc/ipsec.d/private/server.key -noout -text 2>/dev/null | grep -qi "RSA Private"; then
+  KEY_ALG="RSA"
+fi
 cat > /etc/ipsec.secrets << EOF
 # ServerManager IKEv2 secrets
-: RSA server.key
+: ${KEY_ALG} server.key
 ${IKEV2_USER} : EAP "${IKEV2_PASS}"
 EOF
 chmod 600 /etc/ipsec.secrets
