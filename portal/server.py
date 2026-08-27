@@ -126,8 +126,19 @@ OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients")
 OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
 OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
+OVPN_SERVER_CONF = Path(
+    os.environ.get("OVPN_SERVER_CONF", "/opt/openvpn/server.conf")
+)
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
+)
+# OpenVPN clients use AdGuard (→ Pi-hole → Unbound), same filter path as WireGuard.
+# Push the OVPN gateway IP and DNAT :53 → AdGuard — direct 10.42.42.44 from tun0
+# does not traverse the docker bridge reliably.
+OVPN_DNS_PUSH = os.environ.get("OVPN_DNS_PUSH", "10.9.0.1").strip() or "10.9.0.1"
+OVPN_DNS_ADGUARD = os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44").strip() or "10.42.42.44"
+OVPN_DNS_ROUTE = os.environ.get("OVPN_DNS_ROUTE", "10.42.42.0 255.255.255.0").strip() or (
+    "10.42.42.0 255.255.255.0"
 )
 OVPN_CREATE_SCRIPT = Path(
     os.environ.get("OVPN_CREATE_SCRIPT", "/opt/openvpn/scripts/create-client.sh")
@@ -1841,6 +1852,236 @@ def _ovpn_flint_connected() -> bool:
         return bool(build_openvpn_status().get("flint_connected"))
     except Exception:
         return False
+
+
+def ensure_ovpn_adguard_dns(*, restart: bool = True) -> dict:
+    """Point OpenVPN clients at AdGuard (→ Pi-hole), matching WireGuard DNS.
+
+    Updates server.conf push DNS/route, ensures firewall can reach AdGuard from
+    the 10.9.0.0/24 tunnel, and restarts OpenVPN when the config changes.
+    """
+    conf_path = OVPN_SERVER_CONF
+    actions: list[str] = []
+    if not conf_path.is_file():
+        return {"ok": False, "error": f"missing {conf_path}", "actions": actions}
+
+    text = conf_path.read_text(encoding="utf-8", errors="replace")
+    dns = OVPN_DNS_PUSH
+    adguard = OVPN_DNS_ADGUARD
+    route = OVPN_DNS_ROUTE
+    wanted_lines = [
+        f'push "route {route}"',
+        f'push "dhcp-option DNS {dns}"',
+    ]
+    # Drop public DNS pushes and any prior AdGuard/route DNS lines we manage.
+    out_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('push "dhcp-option DNS '):
+            continue
+        if stripped.startswith('push "route 10.42.42.0 '):
+            continue
+        out_lines.append(line)
+    # Insert managed DNS pushes before client-config-dir / script-security if present.
+    insert_at = len(out_lines)
+    for i, line in enumerate(out_lines):
+        if line.strip().startswith("client-config-dir") or line.strip().startswith(
+            "script-security"
+        ):
+            insert_at = i
+            break
+    for i, wanted in enumerate(wanted_lines):
+        out_lines.insert(insert_at + i, wanted)
+    new_text = "\n".join(out_lines).rstrip() + "\n"
+    changed = new_text != text
+    if changed:
+        backup = conf_path.with_suffix(conf_path.suffix + ".bak-dns")
+        try:
+            if not backup.is_file():
+                backup.write_text(text, encoding="utf-8")
+                actions.append(f"backup {backup}")
+        except Exception:
+            pass
+        conf_path.write_text(new_text, encoding="utf-8")
+        actions.append(f"wrote DNS pushes → {dns} (DNAT → {adguard}) (+ route {route})")
+    else:
+        actions.append(f"server.conf DNS already {dns}")
+
+    # Firewall: OVPN clients → AdGuard DNS (+ MASQ onto docker bridge).
+    fw = Path(os.environ.get("OVPN_FIREWALL_SCRIPT", str(OVPN_SCRIPTS_DIR / "ovpn-firewall.sh")))
+    if fw.is_file():
+        try:
+            subprocess.run(["bash", str(fw)], capture_output=True, text=True, timeout=20)
+            actions.append("ran ovpn-firewall.sh")
+        except Exception as exc:
+            actions.append(f"firewall script: {exc}")
+
+    def _ensure_rule(table: str | None, check_args: list[str], add_args: list[str]) -> None:
+        cmd = ["iptables"]
+        if table:
+            cmd.extend(["-t", table])
+        if subprocess.run(cmd + ["-C", *check_args], capture_output=True, timeout=5).returncode == 0:
+            return
+        subprocess.run(cmd + add_args, capture_output=True, timeout=5)
+
+    try:
+        # DNAT tunnel DNS to AdGuard (works; direct 10.42.42.44 from tun0 does not).
+        for proto in ("udp", "tcp"):
+            _ensure_rule(
+                "nat",
+                [
+                    "PREROUTING",
+                    "-i",
+                    "tun0",
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-OVPN-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{adguard}:53",
+                ],
+                [
+                    "-I",
+                    "PREROUTING",
+                    "1",
+                    "-i",
+                    "tun0",
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-OVPN-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{adguard}:53",
+                ],
+            )
+        _ensure_rule(
+            None,
+            [
+                "FORWARD",
+                "-s",
+                "10.9.0.0/24",
+                "-d",
+                "10.42.42.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "ACCEPT",
+            ],
+            [
+                "-I",
+                "FORWARD",
+                "1",
+                "-s",
+                "10.9.0.0/24",
+                "-d",
+                "10.42.42.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "ACCEPT",
+            ],
+        )
+        _ensure_rule(
+            None,
+            [
+                "FORWARD",
+                "-s",
+                "10.42.42.0/24",
+                "-d",
+                "10.9.0.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "ACCEPT",
+            ],
+            [
+                "-I",
+                "FORWARD",
+                "1",
+                "-s",
+                "10.42.42.0/24",
+                "-d",
+                "10.9.0.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "ACCEPT",
+            ],
+        )
+        _ensure_rule(
+            "nat",
+            [
+                "POSTROUTING",
+                "-s",
+                "10.9.0.0/24",
+                "-d",
+                "10.42.42.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "MASQUERADE",
+            ],
+            [
+                "-I",
+                "POSTROUTING",
+                "1",
+                "-s",
+                "10.9.0.0/24",
+                "-d",
+                "10.42.42.0/24",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-OVPN-DNS",
+                "-j",
+                "MASQUERADE",
+            ],
+        )
+        actions.append(f"iptables OVPN DNS DNAT → {adguard}")
+    except Exception as exc:
+        actions.append(f"iptables: {exc}")
+
+    if changed and restart and OVPN_SERVICE:
+        proc = subprocess.run(
+            ["systemctl", "restart", OVPN_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        actions.append(
+            f"restart {OVPN_SERVICE}: "
+            + ("ok" if proc.returncode == 0 else (proc.stderr or proc.stdout or "fail").strip())
+        )
+    return {
+        "ok": True,
+        "changed": changed,
+        "dns": dns,
+        "adguard": adguard,
+        "route": route,
+        "actions": actions,
+    }
 
 
 def ensure_ovpn_home_lan_routes() -> dict:
@@ -4874,6 +5115,20 @@ def build_dns_map() -> dict:
                 {"label": "Internet", "ok": None},
             ],
             "note": "Used by WireGuard peers (phone / Flint tunnel DNS).",
+        },
+        {
+            "title": "OpenVPN DNS",
+            "nodes": [
+                {"label": "Client", "detail": f"DNS {OVPN_DNS_PUSH}", "ok": None},
+                {"label": "AdGuard", "detail": OVPN_DNS_ADGUARD, "ok": ag},
+                {"label": "Pi-hole", "detail": "172.30.0.4", "ok": pi},
+                {"label": "Unbound", "detail": "recursive", "ok": un},
+                {"label": "Internet", "ok": None},
+            ],
+            "note": (
+                f"OpenVPN pushes DNS {OVPN_DNS_PUSH} (DNAT → AdGuard → Pi-hole → Unbound). "
+                "Phone profiles pick this up on reconnect; Flint LAN prefers the same path."
+            ),
         },
         {
             "title": "Surfshark exit DNS (pass 2)",
@@ -10598,7 +10853,15 @@ def main() -> None:
                 set_ts_host_protect(True)
         except Exception:
             pass
-    # School OpenVPN: prefer tun0 for home LAN + allow Flint OVPN→LAN (Buffalo).
+    # School OpenVPN: AdGuard DNS + prefer tun0 for home LAN (Buffalo).
+    try:
+        threading.Thread(
+            target=lambda: ensure_ovpn_adguard_dns(restart=True),
+            name="ovpn-adguard-dns",
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
     try:
         if _ovpn_flint_connected():
             threading.Thread(

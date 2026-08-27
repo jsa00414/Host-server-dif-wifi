@@ -83,5 +83,34 @@ EOF
   fi
 fi
 
+# --- DNS: AdGuard (→ Pi-hole) via OpenVPN gateway ---
+# Use 10.9.0.1 (VPS OVPN gateway). VPS DNATs :53 → AdGuard. Direct 10.42.42.44
+# from the tunnel is unreliable across the docker bridge.
+OVPN_DNS="${OVPN_DNS:-10.9.0.1}"
+echo "Adding OpenVPN DNS ${OVPN_DNS} (AdGuard → Pi-hole) as Flint LAN upstream…"
+
+iptables -C forwarding_rule -s 192.168.8.0/24 -d 10.9.0.0/24 -j ACCEPT 2>/dev/null \
+  || iptables -I forwarding_rule 1 -s 192.168.8.0/24 -d 10.9.0.0/24 -j ACCEPT 2>/dev/null || true
+iptables -C forwarding_rule -i br-lan -d 10.9.0.1 -p udp --dport 53 -j ACCEPT 2>/dev/null \
+  || iptables -I forwarding_rule 1 -i br-lan -d 10.9.0.1 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+
+EXISTING="$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true)"
+case " $EXISTING " in
+  *" ${OVPN_DNS} "*|*" ${OVPN_DNS}#"*) ;;
+  *)
+    while uci -q delete dhcp.@dnsmasq[0].server >/dev/null 2>&1; do :; done
+    uci add_list dhcp.@dnsmasq[0].server="${OVPN_DNS}"
+    for srv in $EXISTING; do
+      [ "$srv" = "${OVPN_DNS}" ] && continue
+      # Drop direct AdGuard IP if present — gateway DNAT path is preferred
+      [ "$srv" = "10.42.42.44" ] && continue
+      uci add_list dhcp.@dnsmasq[0].server="$srv"
+    done
+    ;;
+esac
+uci set dhcp.@dnsmasq[0].noresolv='0'
+uci commit dhcp
+/etc/init.d/dnsmasq restart >/dev/null 2>&1 || /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+
 echo "Done. VPS can SSH to 10.9.0.2 and reach Buffalo at 192.168.8.159 over OpenVPN."
-echo "Keep OpenVPN connected at school; WireGuard can stay disabled."
+echo "LAN DNS prefers ${OVPN_DNS} → AdGuard → Pi-hole (WAN DNS kept as fallback)."
