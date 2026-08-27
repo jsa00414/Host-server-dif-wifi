@@ -6638,40 +6638,104 @@ html.sm-auth-top #menu-bar #login_button .x-btn-text{
   color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
 html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
 
-/* Compact nav row — hide back/forward/up/history buttons, keep location + search */
-html.sm-merged-chrome #control-panel .navi-button,
-html.sm-merged-chrome #control-panel #navi-button-up,
+/* Windows Explorer-style nav: back/forward/up + address bar + search */
 html.sm-merged-chrome #control-panel #alertButton{
   display:none!important;visibility:hidden!important;width:0!important;height:0!important;
   overflow:hidden!important;margin:0!important;padding:0!important}
 html.sm-merged-chrome #control-panel{
   display:block!important;visibility:visible!important;
-  height:auto!important;min-height:36px!important;max-height:none!important;
-  overflow:visible!important;padding:2px 8px!important;margin:0!important;
-  border:0!important;border-bottom:1px solid var(--sm-line)!important}
+  height:auto!important;min-height:44px!important;max-height:none!important;
+  overflow:visible!important;padding:6px 10px!important;margin:0!important;
+  border:0!important;border-bottom:1px solid var(--sm-line)!important;
+  background:var(--sm-bg1)!important}
 html.sm-merged-chrome #control-panel .x-toolbar-ct{
   display:flex!important;align-items:center!important;gap:8px!important;width:100%!important}
-html.sm-merged-chrome #control-panel #location-bar{
-  flex:1 1 auto!important;min-width:120px!important;width:auto!important;
-  max-width:none!important;height:32px!important;margin:0!important}
-html.sm-merged-chrome #control-panel #search-textbox{
-  flex:0 1 220px!important;min-width:120px!important;width:auto!important;margin:0!important}
-/* Full path text in location bar (e.g. /Movies_And_Shows/Movies) */
+html.sm-merged-chrome #control-panel .navi-button,
+html.sm-merged-chrome #control-panel #navi-button-up{
+  display:inline-flex!important;visibility:visible!important;
+  width:34px!important;min-width:34px!important;max-width:34px!important;
+  height:34px!important;margin:0!important;padding:0!important;
+  flex:0 0 34px!important;border:0!important;background:transparent!important;
+  border-radius:8px!important}
+html.sm-merged-chrome #control-panel .navi-button .x-btn,
+html.sm-merged-chrome #control-panel #navi-button-up .x-btn,
+html.sm-merged-chrome #control-panel .navi-button .x-btn-ml,
+html.sm-merged-chrome #control-panel .navi-button .x-btn-mc,
+html.sm-merged-chrome #control-panel .navi-button .x-btn-mr,
+html.sm-merged-chrome #control-panel .navi-button table{
+  background:transparent!important;border:0!important;box-shadow:none!important;
+  width:34px!important;height:34px!important;min-width:34px!important}
+html.sm-merged-chrome #control-panel .navi-button:hover,
+html.sm-merged-chrome #control-panel #navi-button-up:hover{
+  background:rgba(255,255,255,.06)!important}
+/* Hide Buffalo pill crumbs; use continuous address field */
 html.sm-path-text #location-buttons,
 html.sm-path-text #location-buttons-ie,
-html.sm-path-text #location-bar .x-box-item img[src*="location_spacer"]{
-  display:none!important;visibility:hidden!important}
+html.sm-path-text #location-bar .x-box-item img[src*="location_spacer"],
+html.sm-win-nav #location-buttons,
+html.sm-win-nav #location-buttons-ie,
+html.sm-win-nav .location_item,
+html.sm-win-nav .location_item2{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  overflow:hidden!important;pointer-events:none!important}
 html.sm-path-text #control-panel #location-bar,
-html.sm-merged-chrome #control-panel #location-bar{
-  flex:1 1 auto!important;min-width:0!important;max-width:none!important}
+html.sm-merged-chrome #control-panel #location-bar,
+html.sm-win-nav #control-panel #location-bar{
+  flex:1 1 auto!important;min-width:0!important;max-width:none!important;
+  width:auto!important;height:34px!important;margin:0!important;
+  border:0!important;background:transparent!important}
 html.sm-path-text #location-bar .x-panel-body,
 html.sm-path-text #location-bar .x-form-field-wrap,
+html.sm-path-text #location-textfield,
+html.sm-win-nav #location-bar .x-panel-body,
+html.sm-win-nav #location-bar .x-form-field-wrap{
+  width:100%!important;max-width:none!important;box-sizing:border-box!important;
+  height:34px!important}
+html.sm-win-nav #control-panel #location-textfield,
 html.sm-path-text #location-textfield{
-  width:100%!important;max-width:none!important;box-sizing:border-box!important}
-html.sm-path-text #location-textfield{
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important;
-  font-size:13px!important;letter-spacing:.01em!important;
-  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+  display:block!important;visibility:visible!important;
+  width:100%!important;min-width:0!important;max-width:none!important;
+  min-height:34px!important;height:34px!important;
+  margin:0!important;padding:0 12px 0 36px!important;
+  border:1px solid var(--sm-line)!important;border-radius:8px!important;
+  background:var(--sm-bg0)!important;background-image:none!important;
+  color:var(--sm-text)!important;
+  font-family:"Segoe UI",Sora,system-ui,sans-serif!important;
+  font-size:13px!important;font-weight:500!important;letter-spacing:.01em!important;
+  line-height:32px!important;white-space:nowrap!important;
+  overflow:hidden!important;text-overflow:ellipsis!important;
+  box-shadow:none!important}
+html.sm-win-nav #location-bar .x-form-field-wrap{
+  position:relative!important}
+html.sm-win-nav #location-bar .x-form-field-wrap::before{
+  content:""!important;position:absolute!important;left:10px!important;top:50%!important;
+  width:16px!important;height:16px!important;transform:translateY(-50%)!important;
+  background:no-repeat center/contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2384998c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/%3E%3Cpath d='M3 7V5a2 2 0 0 1 2-2h4l2 2'/%3E%3C/svg%3E")!important;
+  pointer-events:none!important;z-index:2!important}
+html.sm-win-nav #control-panel #search-textbox,
+html.sm-merged-chrome #control-panel #search-textbox{
+  flex:0 0 220px!important;min-width:160px!important;max-width:280px!important;
+  width:220px!important;margin:0 0 0 4px!important;
+  min-height:34px!important;height:34px!important;
+  padding:0 12px 0 34px!important;border-radius:8px!important;
+  border:1px solid var(--sm-line)!important;background:var(--sm-bg0)!important;
+  font-family:"Segoe UI",Sora,system-ui,sans-serif!important;font-size:13px!important}
+html.sm-win-nav #control-panel .x-form-field-wrap:has(#search-textbox),
+html.sm-win-nav #search-panel .x-form-field-wrap{
+  position:relative!important}
+html.sm-win-nav #search-panel .x-form-field-wrap::before,
+html.sm-win-nav #control-panel .x-toolbar-cell:has(#search-textbox)::before{
+  content:""!important;position:absolute!important;left:12px!important;top:50%!important;
+  width:14px!important;height:14px!important;transform:translateY(-50%)!important;z-index:2!important;
+  background:no-repeat center/contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2384998c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E")!important;
+  pointer-events:none!important}
+/* Hide Ext clear "x" trigger on address/search (Windows bar has no floating x) */
+html.sm-win-nav #location-bar .x-form-clear-trigger,
+html.sm-win-nav #location-bar .x-form-trigger,
+html.sm-win-nav #search-panel .x-form-clear-trigger{
+  display:none!important;width:0!important;visibility:hidden!important}
 #control-panel.sm-nas-gone{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
@@ -6684,45 +6748,29 @@ html.sm-merged-chrome #menu-bar{
 html.sm-merged-chrome #menu-bar .x-toolbar-ct{
   display:flex!important;align-items:center!important;flex:1 1 auto!important;
   width:100%!important;gap:6px!important}
-html.sm-merged-chrome #menu-bar #location-bar{
-  flex:1 1 auto!important;min-width:100px!important;width:auto!important;
-  max-width:none!important;height:32px!important;margin:0!important;
-  border:0!important;border-bottom:0!important;background:transparent!important}
-html.sm-merged-chrome #menu-bar #location-buttons,
-html.sm-merged-chrome #menu-bar #location-buttons-ie{
-  height:30px!important;border:0!important;background:transparent!important}
-html.sm-merged-chrome #menu-bar #search-textbox,
-html.sm-merged-chrome #menu-bar #location-textfield{
-  flex:0 1 160px!important;width:160px!important;min-width:96px!important;
-  max-width:220px!important;min-height:32px!important;margin:0!important}
-html.sm-merged-chrome #menu-bar .location_item,
-html.sm-merged-chrome #menu-bar .location_item2{
-  min-height:28px!important;line-height:28px!important;font-size:12px!important}
 @media (max-width:900px){
-  html.sm-merged-chrome #menu-bar{flex-wrap:wrap!important}
-  html.sm-merged-chrome #menu-bar #location-bar{
-    flex:1 1 100%!important;order:10!important}
-  html.sm-merged-chrome #menu-bar #search-textbox{
-    flex:1 1 120px!important;order:11!important}
+  html.sm-merged-chrome #control-panel .x-toolbar-ct{flex-wrap:wrap!important}
+  html.sm-win-nav #control-panel #location-bar{flex:1 1 100%!important;order:10!important}
+  html.sm-win-nav #control-panel #search-textbox{flex:1 1 140px!important;order:11!important;width:auto!important}
 }
 
-/* Location / search */
+/* Location / search (shared fields) */
 #control-panel,#location-bar,.navi-button,#location-buttons,#location-buttons-ie,#search-panel{
-  background:var(--sm-bg2)!important;background-image:none!important;
-  border:0!important;border-bottom:1px solid var(--sm-line)!important}
+  background:var(--sm-bg1)!important;background-image:none!important;
+  border:0!important}
 #location-textfield,#search-textbox,.x-form-text,.x-form-field,
 .x-form-textarea,.x-form-field-wrap .x-form-text{
-  background:var(--sm-bg3)!important;background-image:none!important;
+  background:var(--sm-bg0)!important;background-image:none!important;
   color:var(--sm-text)!important;border:1px solid var(--sm-line)!important;
-  border-radius:10px!important;min-height:34px!important;font-size:14px!important;
+  border-radius:8px!important;min-height:34px!important;font-size:13px!important;
   padding:6px 10px!important;box-shadow:none!important}
 #location-textfield:focus,#search-textbox:focus,.x-form-focus,.x-form-text:focus{
-  border-color:var(--sm-accent)!important;box-shadow:0 0 0 2px var(--sm-accent-dim)!important;
+  border-color:rgba(170,210,185,.45)!important;box-shadow:0 0 0 2px var(--sm-accent-dim)!important;
   outline:none!important}
 .x-form-invalid,.x-form-invalid.x-form-text{
   border-color:var(--sm-danger)!important;background:rgba(255,107,107,.08)!important}
 .location_item2,.active_history_item{color:var(--sm-accent)!important}
-.navi-button .x-btn{min-width:36px!important;min-height:36px!important}
+.navi-button .x-btn{min-width:34px!important;min-height:34px!important}
 .x-form-trigger,.x-form-arrow-trigger,.x-form-date-trigger,.x-form-clear-trigger{
   background-color:var(--sm-bg3)!important;filter:invert(1) brightness(1.2);border:0!important}
 .x-form-item-label,.x-form-cb-label,.x-form-item label,.x-form-label-top label{
@@ -7369,21 +7417,32 @@ NAS_FILES_SNIPPET = (
     "function smMergeNaviBar(){"
     "try{"
     "document.documentElement.classList.add('sm-merged-chrome');"
-    "if(window.__smNaviMerged)return true;"
+    "document.documentElement.classList.add('sm-path-text');"
+    "document.documentElement.classList.add('sm-win-nav');"
+    "if(window.__smNaviMerged){"
+    "try{smEnsureWinPathField();}catch(e){}"
+    "return true;"
+    "}"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var nav=Ext.getCmp('control-panel');"
     "if(nav){"
     "try{"
-    "nav.items.each(function(it,idx){"
-    "if(!it||idx>=5)return;"
+    "nav.items.each(function(it){"
+    "if(!it)return;"
+    "var id=(it.id||'')+'';"
+    "if(id==='alertButton'||id.indexOf('history')>=0){"
     "try{if(it.hide)it.hide();}catch(e){}"
+    "}"
+    "else{"
+    "try{if(it.show)it.show();}catch(e){}"
+    "}"
     "});"
     "}catch(e){}"
     "try{nav.doLayout();}catch(e){}"
     "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "window.__smNaviMerged=true;"
-    "try{document.documentElement.classList.add('sm-path-text');}catch(e){}"
+    "try{smEnsureWinPathField();}catch(e){}"
     "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
     "var _smTree=Ext.getCmp('tree-panel');"
     "var _smNode=_smTree&&_smTree.getSelectionModel().getSelectedNode();"
@@ -7392,6 +7451,48 @@ NAS_FILES_SNIPPET = (
     "}}catch(e){}"
     "return true;"
     "}catch(e){return false;}}"
+    "function smPathToDisplay(path){"
+    "path=String(path||'/');"
+    "var parts=path.split('/').filter(function(p){return !!p;});"
+    "return parts.length?('Files > '+parts.join(' > ')):'Files';"
+    "}"
+    "function smDisplayToPath(text){"
+    "text=String(text||'').trim();"
+    "if(!text||text==='Files'||text==='/')return '/';"
+    "if(text.charAt(0)==='/')return text.replace(/\\/+/g,'/')||'/';"
+    "text=text.replace(/^Files\\s*>\\s*/i,'');"
+    "var parts=text.split(/\\s*>\\s*/).map(function(p){return p.trim();}).filter(Boolean);"
+    "return parts.length?('/'+parts.join('/')):'/';"
+    "}"
+    "function smEnsureWinPathField(){"
+    "try{"
+    "if(!window.Ext||!Ext.getCmp)return;"
+    "var tf=Ext.getCmp('location-textfield');"
+    "var bar=Ext.getCmp('location-bar');"
+    "if(tf&&bar&&bar.layout&&bar.layout.setActiveItem){"
+    "try{bar.layout.setActiveItem(1);}catch(e){}"
+    "}"
+    "if(tf&&!tf.__smWinPathHook){"
+    "tf.__smWinPathHook=true;"
+    "tf.on('specialkey',function(field,e){"
+    "try{"
+    "if(e.getKey&&e.getKey()===e.ENTER){"
+    "var real=smDisplayToPath(field.getValue());"
+    "field.setValue(smPathToDisplay(real));"
+    "if(typeof selectTreePath_absolute==='function')selectTreePath_absolute(real);"
+    "else if(typeof update_location_bar==='function')update_location_bar(real);"
+    "}"
+    "}catch(err){}"
+    "});"
+    "tf.on('blur',function(field){"
+    "try{"
+    "var real=smDisplayToPath(field.getValue());"
+    "field.setValue(smPathToDisplay(real));"
+    "}catch(err){}"
+    "});"
+    "}"
+    "}catch(e){}"
+    "}"
     "function smMoveAuthToTop(){"
     "try{"
     "var user=document.getElementById('userName');"
@@ -7441,7 +7542,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinPathField=smEnsureWinPathField;}catch(e){}"
     "function smKickFilesLoad(){"
     "try{"
     "if(window.__smKickFilesDone)return true;"
@@ -8459,7 +8560,7 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
     text = _nas_files_hook_dataview(text)
-    # Show full directory path as text in the location bar.
+    # Show Windows-style path (Files > Folder) in the location text field.
     text = re.sub(
         r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
         "    locations.doLayout();\r\n"
@@ -8467,9 +8568,10 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "        var _smTf = Ext.getCmp('location-textfield');\r\n"
         "        var _smBar = Ext.getCmp('location-bar');\r\n"
         "        if (_smTf && _smBar) {\r\n"
-        "            _smTf.setValue(path || '/');\r\n"
+        "            var _smDisp = (typeof smPathToDisplay === 'function') ? smPathToDisplay(path || '/') : (path || '/');\r\n"
+        "            _smTf.setValue(_smDisp);\r\n"
         "            _smBar.layout.setActiveItem(1);\r\n"
-        "            try { document.documentElement.classList.add('sm-path-text'); } catch(e) {}\r\n"
+        "            try { document.documentElement.classList.add('sm-path-text'); document.documentElement.classList.add('sm-win-nav'); } catch(e) {}\r\n"
         "        }\r\n"
         "    } catch(e) {}\r\n"
         "}\r\n\r\nfunction update_location_bar_search",
@@ -8484,7 +8586,8 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "        var _smTf = Ext.getCmp('location-textfield');\r\n"
         "        var _smBar = Ext.getCmp('location-bar');\r\n"
         "        if (_smTf && _smBar) {\r\n"
-        "            _smTf.setValue((path || '/') + ' : \"' + words + '\"');\r\n"
+        "            var _smDisp = (typeof smPathToDisplay === 'function') ? smPathToDisplay(path || '/') : (path || '/');\r\n"
+        "            _smTf.setValue(_smDisp + ' : \"' + words + '\"');\r\n"
         "            _smBar.layout.setActiveItem(1);\r\n"
         "        }\r\n"
         "    } catch(e) {}\r\n"
