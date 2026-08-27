@@ -6801,6 +6801,14 @@ select,.x-combo-list{
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
 /* Icon tile views — Ext 2.3 DataView root is .x-border-panel (no .x-view class) */
+/* Hide Name/Size/Date/Type sort bar above icon tiles (keep it for side-by-side/list) */
+#icon-panel-small .x-border-layout-ct > .x-toolbar,
+#icon-panel-medium .x-border-layout-ct > .x-toolbar,
+#icon-panel-large .x-border-layout-ct > .x-toolbar{
+  display:none!important;visibility:hidden!important;pointer-events:none!important;
+  height:0!important;min-height:0!important;max-height:0!important;line-height:0!important;
+  overflow:hidden!important;border:0!important;padding:0!important;margin:0!important;
+  opacity:0!important}
 #icon-panel-small .x-border-layout-ct,#icon-panel-medium .x-border-layout-ct,
 #icon-panel-large .x-border-layout-ct,#sidebyside-panel .x-border-layout-ct{
   width:100%!important;max-width:100%!important;box-sizing:border-box!important}
@@ -7659,7 +7667,21 @@ NAS_FILES_SNIPPET = (
     "var min=tilePanels[p].indexOf('small')>=0?88:tilePanels[p].indexOf('large')>=0?208:128;"
     "try{"
     "var bl=root.closest('.x-border-layout-ct');"
-    "if(bl){bl.style.setProperty('width','100%','important');bl.style.setProperty('max-width','100%','important');}"
+    "if(bl){"
+    "bl.style.setProperty('width','100%','important');bl.style.setProperty('max-width','100%','important');"
+    "var tb=bl.querySelector(':scope > .x-toolbar');"
+    "if(tb){"
+    "tb.style.setProperty('display','none','important');"
+    "tb.style.setProperty('visibility','hidden','important');"
+    "tb.style.setProperty('height','0','important');"
+    "tb.style.setProperty('min-height','0','important');"
+    "tb.style.setProperty('max-height','0','important');"
+    "tb.style.setProperty('overflow','hidden','important');"
+    "tb.style.setProperty('padding','0','important');"
+    "tb.style.setProperty('margin','0','important');"
+    "tb.style.setProperty('border','0','important');"
+    "}"
+    "}"
     "root.style.setProperty('display','grid','important');"
     "root.style.setProperty('grid-template-columns','repeat(auto-fill,minmax('+min+'px,1fr))','important');"
     "root.style.setProperty('gap','10px 12px','important');"
@@ -7669,8 +7691,8 @@ NAS_FILES_SNIPPET = (
     "root.style.setProperty('max-width','100%','important');"
     "root.style.setProperty('height','auto','important');"
     "root.style.setProperty('min-height','0','important');"
-    "root.style.removeProperty('left');"
-    "root.style.removeProperty('top');"
+    "root.style.setProperty('left','0','important');"
+    "root.style.setProperty('top','0','important');"
     "}catch(e){}"
     "root.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
     "try{"
