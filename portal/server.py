@@ -6668,30 +6668,36 @@ html.sm-merged-chrome #control-panel .navi-button table{
 html.sm-merged-chrome #control-panel .navi-button:hover,
 html.sm-merged-chrome #control-panel #navi-button-up:hover{
   background:rgba(255,255,255,.07)!important}
-/* Hide Buffalo native crumbs/textfield; custom Windows address bar paints over them */
+/* Hide Buffalo native crumbs/textfield; Windows address bar stays in-flow inside #location-bar only */
 html.sm-win-nav #location-buttons,
 html.sm-win-nav #location-buttons-ie,
 html.sm-win-nav #location-textfield,
 html.sm-win-nav #location-bar .x-box-item img[src*="location_spacer"],
-html.sm-win-nav .location_item,
-html.sm-win-nav .location_item2,
+html.sm-win-nav #location-bar .location_item,
+html.sm-win-nav #location-bar .location_item2,
 html.sm-win-nav #location-bar .x-form-clear-trigger,
-html.sm-win-nav #location-bar .x-form-trigger{
+html.sm-win-nav #location-bar .x-form-trigger,
+html.sm-win-nav #location-bar .x-form-field-wrap{
   display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  max-width:0!important;max-height:0!important;margin:0!important;padding:0!important;
   overflow:hidden!important;pointer-events:none!important;opacity:0!important}
 html.sm-win-nav #control-panel #location-bar,
 html.sm-merged-chrome #control-panel #location-bar{
   position:relative!important;flex:1 1 auto!important;min-width:0!important;
-  max-width:none!important;width:auto!important;height:34px!important;margin:0 4px!important;
-  border:0!important;background:transparent!important}
+  max-width:none!important;width:auto!important;height:34px!important;max-height:34px!important;
+  margin:0 4px!important;border:0!important;background:transparent!important;
+  overflow:hidden!important;isolation:isolate!important;z-index:2!important}
 html.sm-win-nav #location-bar .x-panel-body{
-  position:relative!important;width:100%!important;height:34px!important;
-  overflow:visible!important;background:transparent!important;border:0!important}
+  position:relative!important;display:block!important;width:100%!important;
+  height:34px!important;max-height:34px!important;overflow:hidden!important;
+  background:transparent!important;border:0!important}
 #sm-win-address{
-  position:absolute!important;inset:0!important;z-index:5!important;
+  position:relative!important;top:auto!important;left:auto!important;right:auto!important;
+  bottom:auto!important;inset:auto!important;z-index:1!important;
   display:flex!important;align-items:center!important;gap:2px!important;
-  box-sizing:border-box!important;width:100%!important;height:34px!important;
-  padding:0 10px 0 34px!important;overflow:hidden!important;
+  box-sizing:border-box!important;width:100%!important;max-width:100%!important;
+  height:34px!important;max-height:34px!important;min-height:34px!important;
+  padding:0 10px 0 34px!important;overflow:hidden!important;flex:1 1 auto!important;
   border:1px solid var(--sm-line)!important;border-radius:8px!important;
   background:var(--sm-bg0)!important;cursor:text!important}
 #sm-win-address::before{
@@ -6721,6 +6727,11 @@ html.sm-win-nav #location-bar .x-panel-body{
 #sm-win-address.is-editing .sm-win-crumb,
 #sm-win-address.is-editing .sm-win-chev{display:none!important}
 #sm-win-address.is-editing .sm-win-edit{display:block!important}
+/* Keep file pane clickable even if address chrome mis-parents */
+#main-panel,#main-panel .x-panel-bwrap,#main-panel .x-panel-body,#main-panel .x-border-panel{
+  pointer-events:auto!important}
+#sm-win-address.sm-win-misplaced{
+  display:none!important;pointer-events:none!important;width:0!important;height:0!important}
 html.sm-win-nav #control-panel #search-textbox,
 html.sm-merged-chrome #control-panel #search-textbox{
   flex:0 0 220px!important;min-width:160px!important;max-width:260px!important;
@@ -7474,10 +7485,36 @@ NAS_FILES_SNIPPET = (
     "else if(typeof update_location_bar==='function')update_location_bar(path);"
     "}catch(e){}"
     "}"
+    "function smWinClosest(el,sel){"
+    "try{"
+    "if(!el)return null;"
+    "if(el.closest)return el.closest(sel);"
+    "var cur=el;"
+    "while(cur&&cur.nodeType===1){"
+    "if(cur.id==='sm-win-address'&&sel.indexOf('sm-win-address')>=0)return cur;"
+    "if(sel.charAt(0)==='.'&&cur.classList&&cur.classList.contains(sel.slice(1)))return cur;"
+    "cur=cur.parentElement;"
+    "}"
+    "}catch(e){}"
+    "return null;"
+    "}"
+    "function smWinHostOk(host,bar){"
+    "try{"
+    "if(!host||!bar)return false;"
+    "if(!bar.contains(host))return false;"
+    "var r=host.getBoundingClientRect();"
+    "var br=bar.getBoundingClientRect();"
+    "if(!r||!br)return true;"
+    "if(r.height>48)return false;"
+    "if(r.width>br.width+40)return false;"
+    "if(r.bottom>br.bottom+8)return false;"
+    "return true;"
+    "}catch(e){return false;}"
+    "}"
     "function smRenderWinAddress(path){"
     "try{"
     "var host=document.getElementById('sm-win-address');"
-    "if(!host)return;"
+    "if(!host||host.classList.contains('sm-win-misplaced'))return;"
     "path=String(path||'/');"
     "host.dataset.path=path;"
     "host.classList.remove('is-editing');"
@@ -7542,14 +7579,23 @@ NAS_FILES_SNIPPET = (
     "document.documentElement.classList.add('sm-win-nav');"
     "var bar=document.getElementById('location-bar');"
     "if(!bar)return;"
-    "var body=bar.querySelector('.x-panel-body')||bar;"
+    "var body=bar;"
+    "try{"
+    "var pb=bar.querySelector('.x-panel-body');"
+    "if(pb&&bar.contains(pb))body=pb;"
+    "}catch(e){}"
     "var host=document.getElementById('sm-win-address');"
+    "if(host&&!bar.contains(host)){"
+    "try{host.parentNode&&host.parentNode.removeChild(host);}catch(e){}"
+    "host=null;"
+    "}"
     "if(!host){"
     "host=document.createElement('div');"
     "host.id='sm-win-address';"
-    "body.appendChild(host);"
+    "body.insertBefore(host,body.firstChild);"
     "host.addEventListener('click',function(ev){"
-    "if(ev.target.closest('.sm-win-crumb')||ev.target.classList.contains('sm-win-edit'))return;"
+    "var t=ev.target;"
+    "if(smWinClosest(t,'.sm-win-crumb')||(t&&t.classList&&t.classList.contains('sm-win-edit')))return;"
     "host.classList.add('is-editing');"
     "var edit=host.querySelector('.sm-win-edit');"
     "if(edit){"
@@ -7558,6 +7604,17 @@ NAS_FILES_SNIPPET = (
     "}"
     "});"
     "}"
+    "else if(host.parentNode!==body){"
+    "try{body.insertBefore(host,body.firstChild);}catch(e){}"
+    "}"
+    "if(!smWinHostOk(host,bar)){"
+    "host.classList.add('sm-win-misplaced');"
+    "try{host.style.display='none';host.style.pointerEvents='none';}catch(e){}"
+    "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
+    "return;"
+    "}"
+    "host.classList.remove('sm-win-misplaced');"
+    "try{host.style.display='';host.style.pointerEvents='';}catch(e){}"
     "var path='/';"
     "try{"
     "if(window.Ext&&Ext.getCmp){"
@@ -7567,6 +7624,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){}"
     "if(host.dataset.path!==path||!host.childNodes.length)smRenderWinAddress(path);"
+    "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
     "}catch(e){}"
     "}"
     "function smMoveAuthToTop(){"
