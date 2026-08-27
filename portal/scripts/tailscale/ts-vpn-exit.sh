@@ -12,6 +12,9 @@ RT_TABLE="52"
 TS_IFACE="tailscale0"
 WG_SUBNET="${WG_SUBNET:-10.8.0.0/24}"
 OVPN_SUBNET="${OVPN_SUBNET:-10.9.0.0/24}"
+OVPN_IFACE="${OVPN_IFACE:-tun0}"
+LAN_SUBNET="${LAN_SUBNET:-192.168.8.0/24}"
+GL_SUBNET="${GL_SUBNET:-10.0.0.0/24}"
 ACTION="${1:-status}"
 EXIT_IP="${2:-}"
 
@@ -102,10 +105,36 @@ add_mangle() {
   iptables -t mangle -A SM-TS-VPN-EXIT -m comment --comment "$MANGLE_COMMENT" -j MARK --set-mark "$MARK"
   iptables -t mangle -A PREROUTING -s "$WG_SUBNET" -j SM-TS-VPN-EXIT
   iptables -t mangle -A PREROUTING -s "$OVPN_SUBNET" -j SM-TS-VPN-EXIT
-  if [ -n "$WG_DOCKER_BRIDGE" ]; then
-    iptables -t mangle -A PREROUTING -s 192.168.8.0/24 -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
-    iptables -t mangle -A PREROUTING -s 10.0.0.0/24 -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
+  if ip link show "$OVPN_IFACE" >/dev/null 2>&1; then
+    iptables -t mangle -A PREROUTING -s "$LAN_SUBNET" -i "$OVPN_IFACE" -j SM-TS-VPN-EXIT
+    iptables -t mangle -A PREROUTING -s "$GL_SUBNET" -i "$OVPN_IFACE" -j SM-TS-VPN-EXIT
   fi
+  if [ -n "$WG_DOCKER_BRIDGE" ]; then
+    iptables -t mangle -A PREROUTING -s "$LAN_SUBNET" -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
+    iptables -t mangle -A PREROUTING -s "$GL_SUBNET" -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
+  fi
+}
+
+add_forward_rules() {
+  local iface="$1"
+  iptables -C FORWARD -i "$OVPN_IFACE" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -i "$OVPN_IFACE" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j ACCEPT
+  iptables -C FORWARD -i "$iface" -o "$OVPN_IFACE" -m state --state RELATED,ESTABLISHED -m comment --comment "$MANGLE_COMMENT" -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -i "$iface" -o "$OVPN_IFACE" -m state --state RELATED,ESTABLISHED -m comment --comment "$MANGLE_COMMENT" -j ACCEPT
+  for subnet in "$LAN_SUBNET" "$GL_SUBNET"; do
+    iptables -C FORWARD -s "$subnet" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j ACCEPT 2>/dev/null \
+      || iptables -I FORWARD 1 -s "$subnet" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j ACCEPT
+  done
+}
+
+del_forward_rules() {
+  local line
+  while line=$(iptables -S FORWARD 2>/dev/null | grep -- "$MANGLE_COMMENT" | head -1); do
+    [ -n "$line" ] || break
+    line="${line/-A /-D }"
+    # shellcheck disable=SC2086
+    eval iptables $line 2>/dev/null || break
+  done
 }
 
 setup_table() {
@@ -117,7 +146,7 @@ setup_table() {
 add_client_masq() {
   local iface="$1"
   local subnet
-  for subnet in "$WG_SUBNET" "$OVPN_SUBNET" 192.168.8.0/24 10.0.0.0/24; do
+  for subnet in "$WG_SUBNET" "$OVPN_SUBNET" "$LAN_SUBNET" "$GL_SUBNET"; do
     iptables -t nat -C POSTROUTING -s "$subnet" -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
       || iptables -t nat -I POSTROUTING 1 -s "$subnet" -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
     iptables -t nat -C POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
@@ -196,17 +225,19 @@ enable_vpn_exit() {
   wg_easy_masq_off "$TS_IFACE"
   setup_table "$TS_IFACE"
   add_mangle
+  add_forward_rules "$TS_IFACE"
   add_ip_rules
   save_state 1 "$exit_ip" "$TS_IFACE"
   if [ -x "$TS_EXIT_DNS" ] && [ -f /opt/dns/ts-exit-dns.enabled ]; then
     "$TS_EXIT_DNS" enable "$TS_IFACE" 2>&1 || true
   fi
-  echo "tailscale vpn-exit enabled via ${exit_ip}; VPS→${PUBLIC_IP} (WG ${WG_SUBNET}, OVPN ${OVPN_SUBNET})"
+  echo "tailscale vpn-exit enabled via ${exit_ip}; VPS→${PUBLIC_IP} (WG ${WG_SUBNET}, OVPN ${OVPN_SUBNET}, LAN ${LAN_SUBNET}, GL ${GL_SUBNET})"
 }
 
 disable_vpn_exit() {
   tailscale set --exit-node= 2>&1 || true
   del_mangle
+  del_forward_rules
   ip route flush table "$RT_TABLE" 2>/dev/null || true
   del_ip_rules
   del_stale_wg_routes "$(wg_easy_ip)"
@@ -241,6 +272,7 @@ case "$ACTION" in
         wg_easy_masq_off "$TS_IFACE"
         setup_table "$TS_IFACE"
         add_mangle
+        add_forward_rules "$TS_IFACE"
         add_ip_rules
       fi
     fi

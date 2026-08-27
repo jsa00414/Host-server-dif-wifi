@@ -1199,8 +1199,8 @@
         <div class="ts-card">
           <div class="ts-row">
             <div>
-              <label for="tsCustomExit">VPN Exit (WireGuard + OpenVPN)</label>
-              <div class="ts-sub">Send WireGuard and OpenVPN client traffic through a Tailscale exit — VPS keeps its public IP</div>
+              <label for="tsCustomExit">VPN Exit (WG + OVPN + home LAN)</label>
+              <div class="ts-sub">WireGuard, OpenVPN, and Flint/home LAN (192.168.8.0/24, 10.0.0.0/24) exit via Tailscale — VPS keeps its public IP</div>
             </div>
             <label class="switch"><input type="checkbox" id="tsCustomExit" /><span></span></label>
           </div>
@@ -2400,9 +2400,9 @@
           let msg = `Connected as ${data.hostname || "vpstruelord-vps"}${data.ips?.length ? " · " + data.ips.join(", ") : ""}.`;
           msg += " VPS keeps its public IP.";
           if (data.custom_exit_node) {
-            msg += " WireGuard + OpenVPN exit via Tailscale exit node.";
+            msg += " WireGuard, OpenVPN, and home LAN exit via Tailscale exit node.";
           } else {
-            msg += " WireGuard + OpenVPN exit via VPS public IP.";
+            msg += " VPN clients exit via VPS public IP.";
           }
           if (data.run_exit_node) {
             msg += data.exit_dns_filter

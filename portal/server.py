@@ -6102,8 +6102,9 @@ def apply_tailscale(payload: dict) -> dict:
     """Apply Tailscale settings.
 
     - VPS host always keeps its public IP (host-protect ip rules).
-    - Custom Exit Node routes *WireGuard* (10.8.0.0/24) and *OpenVPN* (10.9.0.0/24)
-      via the chosen Tailscale exit; it does not steal the VPS management path.
+    - Custom Exit Node routes *WireGuard* (10.8.0.0/24), *OpenVPN* (10.9.0.0/24),
+      and Flint/home LAN (192.168.8.0/24, 10.0.0.0/24) via the chosen Tailscale exit;
+      it does not steal the VPS management path.
     - Run Exit Node advertises this VPS as an exit for other Tailscale clients.
     """
     enabled = bool(payload.get("enabled"))
