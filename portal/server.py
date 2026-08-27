@@ -1739,6 +1739,147 @@ OVPN_STATUS_LOG = Path(
 OVPN_FLINT_VPN_IP = os.environ.get("OVPN_FLINT_VPN_IP", "10.9.0.2").strip() or "10.9.0.2"
 OVPN_SERVICE = os.environ.get("OVPN_SERVICE", "openvpn-server-sm").strip() or "openvpn-server-sm"
 OVPN_LISTEN = os.environ.get("OVPN_LISTEN", "74.208.76.213:443").strip() or "74.208.76.213:443"
+IKEV2_DIR = Path(os.environ.get("IKEV2_DIR", "/opt/ikev2"))
+IKEV2_HOST = os.environ.get("IKEV2_HOST", PORTAL_HOST or "portal.vpstruelord.com").strip() or (
+    "portal.vpstruelord.com"
+)
+IKEV2_USER = os.environ.get("IKEV2_USER", "windows").strip() or "windows"
+IKEV2_POOL = os.environ.get("IKEV2_POOL", "10.10.0.0/24").strip() or "10.10.0.0/24"
+IKEV2_DNS = os.environ.get("IKEV2_DNS", "10.9.0.1").strip() or "10.9.0.1"
+IKEV2_SERVICE = os.environ.get("IKEV2_SERVICE", "strongswan-starter").strip() or "strongswan-starter"
+
+
+def build_ikev2_status() -> dict:
+    """Status + credentials for Windows built-in IKEv2 VPN."""
+    active = False
+    detail = ""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "is-active", IKEV2_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        active = (proc.stdout or "").strip() == "active"
+        detail = (proc.stdout or proc.stderr or "").strip() or ("active" if active else "inactive")
+    except Exception as exc:
+        detail = str(exc)
+
+    password = ""
+    pass_file = IKEV2_DIR / "windows.pass"
+    if pass_file.is_file():
+        try:
+            password = pass_file.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            password = ""
+
+    peers: list[dict] = []
+    try:
+        proc = subprocess.run(
+            ["ipsec", "statusall"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        text = proc.stdout or ""
+        for line in text.splitlines():
+            # Example: ikev2-eap[3]: ESTABLISHED ... 74.x[...]...10.y[...]
+            if "ESTABLISHED" in line and "ikev2" in line.lower():
+                peers.append({"id": line.strip().split(":", 1)[0].strip(), "remote": line.strip()})
+            elif "===" in line and "10.10." in line:
+                peers.append({"vip": line.strip(), "remote": ""})
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "active": active,
+        "detail": detail,
+        "host": IKEV2_HOST,
+        "username": IKEV2_USER,
+        "password": password,
+        "pool": IKEV2_POOL,
+        "dns": IKEV2_DNS,
+        "adguard": OVPN_DNS_ADGUARD,
+        "ports": "UDP 500 / 4500",
+        "peers": peers[:20],
+        "ps1": "/api/ikev2/windows-ps1",
+    }
+
+
+def load_ikev2_ca_pem() -> str:
+    """Return the IKEv2 CA PEM Windows must trust (empty if missing)."""
+    for path in (IKEV2_DIR / "certs" / "ca.crt", Path("/etc/ipsec.d/cacerts/ikev2-ca.pem")):
+        if path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+                if "BEGIN CERTIFICATE" in text:
+                    return text + "\n"
+            except Exception:
+                continue
+    return ""
+
+
+def load_ikev2_windows_ps1() -> bytes:
+    """PowerShell helper that trusts the IKEv2 CA and creates the VPN profile."""
+    candidates = [
+        Path(__file__).resolve().parent / "scripts" / "ikev2" / "Setup-ServerManagerVpn.ps1",
+        IKEV2_DIR / "Setup-ServerManagerVpn.ps1",
+    ]
+    ca_pem = load_ikev2_ca_pem().strip() or "@@CA_CERT_PEM@@"
+    text = ""
+    for path in candidates:
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            break
+    if not text:
+        text = f"""# ServerManager Windows IKEv2
+$Server = "{IKEV2_HOST}"
+$Name = "ServerManager IKEv2"
+$Username = "{IKEV2_USER}"
+$CaPem = @"
+@@CA_CERT_PEM@@
+"@
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {{ throw "Run PowerShell as Administrator" }}
+if ($CaPem -match "BEGIN CERTIFICATE") {{
+  $caPath = Join-Path $env:TEMP "ServerManager-IKEv2-CA.crt"
+  Set-Content -Path $caPath -Value $CaPem.Trim() -Encoding ASCII
+  Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null
+}}
+Get-VpnConnection -Name $Name -AllUserConnection -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -AllUserConnection -ErrorAction SilentlyContinue
+Add-VpnConnection -Name $Name -ServerAddress $Server -TunnelType Ikev2 -AuthenticationMethod Eap -EncryptionLevel Required -RememberCredential -AllUserConnection -Force
+Set-VpnConnectionIPsecConfiguration -ConnectionName $Name -AuthenticationTransformConstants SHA256128 -CipherTransformConstants AES256 -DHGroup Group14 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -PfsGroup None -AllUserConnection -Force
+Write-Host "Connect via Settings -> VPN -> $Name (user $Username)"
+"""
+    text = text.replace("portal.vpstruelord.com", IKEV2_HOST)
+    text = text.replace('Username = "windows"', f'Username = "{IKEV2_USER}"')
+    text = text.replace("@@CA_CERT_PEM@@", ca_pem)
+    # UTF-8 BOM so Windows PowerShell 5.1 parses the file correctly
+    return b"\xef\xbb\xbf" + text.encode("utf-8")
+
+
+def load_ikev2_windows_cmd() -> bytes:
+    """CMD launcher that elevates and runs the sibling .ps1 (same download folder)."""
+    body = """@echo off
+setlocal
+NET SESSION >nul 2>&1
+if %errorLevel% NEQ 0 (
+  echo Requesting Administrator...
+  powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+set "PS1=%~dp0Setup-ServerManagerVpn.ps1"
+if not exist "%PS1%" (
+  echo ERROR: Setup-ServerManagerVpn.ps1 not found next to this .cmd
+  echo Download both files into the same folder, then run this .cmd
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+if errorlevel 1 pause
+"""
+    return body.replace("\n", "\r\n").encode("ascii", errors="replace")
 
 
 def parse_openvpn_status(text: str) -> dict:
@@ -5839,6 +5980,7 @@ def build_portal_settings() -> dict:
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
+        {"id": "windows-vpn", "label": "Windows VPN (IKEv2)", "url": f"https://{host}/windows-vpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
@@ -10260,6 +10402,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/openvpn.html":
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
+        if path in ("/windows-vpn.html", "/ikev2.html"):
+            return self._serve_file(STATIC_DIR / "windows-vpn.html", "text/html; charset=utf-8")
         if path == "/login.html":
             # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
@@ -10410,6 +10554,80 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, build_openvpn_status())
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/ikev2/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_ikev2_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/ikev2/windows-ps1", "/download/Setup-ServerManagerVpn.ps1"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_ikev2_windows_ps1()
+                name = "Setup-ServerManagerVpn.ps1"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/ikev2/windows-cmd", "/download/Setup-ServerManagerVpn.cmd"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_ikev2_windows_cmd()
+                name = "Setup-ServerManagerVpn.cmd"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/ikev2/ca.crt", "/download/ServerManager-IKEv2-CA.crt"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                pem = load_ikev2_ca_pem().encode("utf-8")
+                if not pem:
+                    self._json(404, {"ok": False, "error": "IKEv2 CA not found — run setup-ikev2.sh"})
+                    return
+                name = "ServerManager-IKEv2-CA.crt"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-x509-ca-cert")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(pem)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(pem)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
             return
         if path == "/api/openvpn/clients":
             if not self._require_auth(api=True):
