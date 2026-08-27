@@ -8613,6 +8613,7 @@ def _nas_files_patch_css(text: str) -> str:
 
 def _nas_files_hook_dataview(text: str) -> str:
     """Wrap Buffalo DataView refresh to re-apply portal tile layout."""
+    # Use .replace (not %) — hook JS contains literal '100%' widths.
     hook = (
         "(function(_smDv){if(!_smDv||_smDv.__smGridHook)return;"
         "_smDv.__smGridHook=1;var _smRf=_smDv.refresh;"
@@ -8622,7 +8623,7 @@ def _nas_files_hook_dataview(text: str) -> str:
         "_smDv.el.dom.style.setProperty('max-width','100%','important');"
         "}"
         "if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
-        "return _smOut;};})(%s);"
+        "return _smOut;};})(__SM_DV__);"
     )
     replacements = (
         "var dataView_small = makeDataView(makeTemplate(tpl_small), ICON_SMALL_TEXT_WIDTH, ICON_SMALL_WIDTH, ICON_SMALL_HEIGHT);",
@@ -8632,8 +8633,9 @@ def _nas_files_hook_dataview(text: str) -> str:
     )
     for line in replacements:
         var = line.split("=", 1)[0].strip().replace("var ", "").strip()
-        patched = line + "\n    " + hook % var
-        if hook % var not in text:
+        hook_js = hook.replace("__SM_DV__", var, 1)
+        patched = line + "\n    " + hook_js
+        if hook_js not in text:
             text = text.replace(line, patched, 1)
     return text
 
@@ -9225,31 +9227,35 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
         except Exception:
             return body
 
-    if is_json:
-        return _nas_files_rewrite_json_paths(text).encode("utf-8")
+    try:
+        if is_json:
+            return _nas_files_rewrite_json_paths(text).encode("utf-8")
 
-    if is_css:
-        return _nas_files_patch_css(text).encode("utf-8")
+        if is_css:
+            return _nas_files_patch_css(text).encode("utf-8")
 
-    if is_js:
-        return _nas_files_rewrite_js_paths(text).encode("utf-8")
+        if is_js:
+            return _nas_files_rewrite_js_paths(text).encode("utf-8")
 
-    if "sm-nas-files-js" in text:
-        return body
-    text = _nas_files_rewrite_html_paths(text)
-    snippet = NAS_FILES_SNIPPET
-    lower = text.lower()
-    head_idx = lower.find("<head>")
-    if head_idx != -1:
-        insert_at = head_idx + len("<head>")
-        text = text[:insert_at] + snippet + text[insert_at:]
-    else:
-        idx = lower.find("</head>")
-        if idx != -1:
-            text = text[:idx] + snippet + text[idx:]
+        if "sm-nas-files-js" in text:
+            return body
+        text = _nas_files_rewrite_html_paths(text)
+        snippet = NAS_FILES_SNIPPET
+        lower = text.lower()
+        head_idx = lower.find("<head>")
+        if head_idx != -1:
+            insert_at = head_idx + len("<head>")
+            text = text[:insert_at] + snippet + text[insert_at:]
         else:
-            text = snippet + text
-    return text.encode("utf-8")
+            idx = lower.find("</head>")
+            if idx != -1:
+                text = text[:idx] + snippet + text[idx:]
+            else:
+                text = snippet + text
+        return text.encode("utf-8")
+    except Exception:
+        # Never drop NAS static assets if a rewrite/hook regresses.
+        return body
 
 
 # Cache rewritten static NAS UI assets on the VPS so phones don't re-pull
