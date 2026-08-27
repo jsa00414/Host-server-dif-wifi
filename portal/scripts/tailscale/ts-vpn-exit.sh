@@ -1,5 +1,5 @@
 #!/bin/bash
-# VPS keeps public IP. WireGuard clients exit via Tailscale exit node.
+# VPS keeps public IP. WireGuard + OpenVPN clients exit via Tailscale exit node.
 set -uo pipefail
 
 STATE_FILE="/opt/dns/ts-vpn-exit.state"
@@ -10,6 +10,8 @@ MANGLE_COMMENT="SM-TS-VPN-EXIT"
 MARK="0x174"
 RT_TABLE="52"
 TS_IFACE="tailscale0"
+WG_SUBNET="${WG_SUBNET:-10.8.0.0/24}"
+OVPN_SUBNET="${OVPN_SUBNET:-10.9.0.0/24}"
 ACTION="${1:-status}"
 EXIT_IP="${2:-}"
 
@@ -23,8 +25,32 @@ wg_easy_ip() {
 
 wg_docker_bridge() {
   local ip="${1:-$(wg_easy_ip)}"
+  local bridge subnet net
   [ -n "$ip" ] || return 1
-  ip -4 route get "$ip" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+  subnet="$(echo "$ip" | awk -F. '{print $1"."$2"."$3".0/24"}')"
+  bridge="$(ip -4 route show table main | awk -v s="$subnet" '$1==s && $0 !~ /via / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+  if [ -n "$bridge" ] && [[ "$bridge" == br-* ]]; then
+    printf '%s\n' "$bridge"
+    return 0
+  fi
+  net="$(docker inspect wg-easy --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | head -1)"
+  if [ -n "$net" ]; then
+    bridge="$(docker network inspect "$net" --format '{{if .Options}}{{index .Options "com.docker.network.bridge.name"}}{{end}}' 2>/dev/null)"
+    if [ -n "$bridge" ]; then
+      printf '%s\n' "$bridge"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+del_stale_wg_routes() {
+  local ip="${1:-$(wg_easy_ip)}"
+  [ -n "$ip" ] || return 0
+  ip route del "$WG_SUBNET" via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del 192.168.8.0/24 via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del 10.0.0.0/24 via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del "${ip}/32" dev tailscale0 2>/dev/null || true
 }
 
 WG_EASY_IP="$(wg_easy_ip)"
@@ -64,6 +90,9 @@ del_mangle() {
 
 add_mangle() {
   del_mangle
+  WG_EASY_IP="$(wg_easy_ip)"
+  WG_DOCKER_BRIDGE="$(wg_docker_bridge "$WG_EASY_IP")"
+  del_stale_wg_routes "$WG_EASY_IP"
   iptables -t mangle -N SM-TS-VPN-EXIT 2>/dev/null || iptables -t mangle -F SM-TS-VPN-EXIT
   iptables -t mangle -A SM-TS-VPN-EXIT -d 10.0.0.0/8 -j RETURN
   iptables -t mangle -A SM-TS-VPN-EXIT -d 172.16.0.0/12 -j RETURN
@@ -71,7 +100,8 @@ add_mangle() {
   iptables -t mangle -A SM-TS-VPN-EXIT -d ${PUBLIC_IP}/32 -j RETURN
   iptables -t mangle -A SM-TS-VPN-EXIT -d 100.64.0.0/10 -j RETURN
   iptables -t mangle -A SM-TS-VPN-EXIT -m comment --comment "$MANGLE_COMMENT" -j MARK --set-mark "$MARK"
-  iptables -t mangle -A PREROUTING -s 10.8.0.0/24 -j SM-TS-VPN-EXIT
+  iptables -t mangle -A PREROUTING -s "$WG_SUBNET" -j SM-TS-VPN-EXIT
+  iptables -t mangle -A PREROUTING -s "$OVPN_SUBNET" -j SM-TS-VPN-EXIT
   if [ -n "$WG_DOCKER_BRIDGE" ]; then
     iptables -t mangle -A PREROUTING -s 192.168.8.0/24 -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
     iptables -t mangle -A PREROUTING -s 10.0.0.0/24 -i "$WG_DOCKER_BRIDGE" -j SM-TS-VPN-EXIT
@@ -84,8 +114,18 @@ setup_table() {
   ip route add default dev "$iface" table "$RT_TABLE" 2>/dev/null || true
 }
 
+add_client_masq() {
+  local iface="$1"
+  local subnet
+  for subnet in "$WG_SUBNET" "$OVPN_SUBNET" 192.168.8.0/24 10.0.0.0/24; do
+    iptables -t nat -C POSTROUTING -s "$subnet" -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
+      || iptables -t nat -I POSTROUTING 1 -s "$subnet" -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
+      || iptables -t nat -I POSTROUTING 1 -s "$subnet" -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
+  done
+}
+
 wg_easy_peer_masq_on() {
-  # Keep SNAT for VPS→Flint management traffic over the wg-easy tunnel.
   docker exec wg-easy sh -c '
     for iface in $(wg show interfaces 2>/dev/null); do
       iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null \
@@ -96,32 +136,26 @@ wg_easy_peer_masq_on() {
 }
 
 wg_easy_masq_off() {
-  docker exec wg-easy iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
-    && docker exec wg-easy iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
+  docker exec wg-easy iptables -t nat -C POSTROUTING -s "$WG_SUBNET" -o eth0 -j MASQUERADE 2>/dev/null \
+    && docker exec wg-easy iptables -t nat -D POSTROUTING -s "$WG_SUBNET" -o eth0 -j MASQUERADE 2>/dev/null \
     || true
   wg_easy_peer_masq_on
-  local iface="$1"
-  iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 192.168.8.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.0.0.0/24 -o ens6 -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 192.168.8.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
-  iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -I POSTROUTING 1 -s 10.0.0.0/24 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
+  add_client_masq "$1"
   if [ -n "$WG_EASY_IP" ]; then
-    iptables -t nat -C POSTROUTING -s "$WG_EASY_IP"/32 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
-      || iptables -t nat -I POSTROUTING 1 -s "$WG_EASY_IP"/32 -o "$iface" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s "$WG_EASY_IP"/32 -o "$1" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE 2>/dev/null \
+      || iptables -t nat -I POSTROUTING 1 -s "$WG_EASY_IP"/32 -o "$1" -m comment --comment "$MANGLE_COMMENT" -j MASQUERADE
   fi
 }
 
+ovpn_masq_on() {
+  iptables -t nat -C POSTROUTING -s "$OVPN_SUBNET" -o ens6 -m comment --comment SM-OVPN-MASQ -j MASQUERADE 2>/dev/null \
+    || iptables -t nat -A POSTROUTING -s "$OVPN_SUBNET" -o ens6 -m comment --comment SM-OVPN-MASQ -j MASQUERADE 2>/dev/null \
+    || true
+}
+
 wg_easy_masq_on() {
-  docker exec wg-easy iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
-    || docker exec wg-easy iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null \
+  docker exec wg-easy iptables -t nat -C POSTROUTING -s "$WG_SUBNET" -o eth0 -j MASQUERADE 2>/dev/null \
+    || docker exec wg-easy iptables -t nat -A POSTROUTING -s "$WG_SUBNET" -o eth0 -j MASQUERADE 2>/dev/null \
     || true
   local line
   while line=$(iptables -t nat -S POSTROUTING 2>/dev/null | grep -- "$MANGLE_COMMENT" | head -1); do
@@ -130,6 +164,7 @@ wg_easy_masq_on() {
     # shellcheck disable=SC2086
     eval iptables -t nat $line 2>/dev/null || break
   done
+  ovpn_masq_on
 }
 
 save_state() {
@@ -166,7 +201,7 @@ enable_vpn_exit() {
   if [ -x "$TS_EXIT_DNS" ] && [ -f /opt/dns/ts-exit-dns.enabled ]; then
     "$TS_EXIT_DNS" enable "$TS_IFACE" 2>&1 || true
   fi
-  echo "tailscale vpn-exit enabled via ${exit_ip}; VPS→${PUBLIC_IP}"
+  echo "tailscale vpn-exit enabled via ${exit_ip}; VPS→${PUBLIC_IP} (WG ${WG_SUBNET}, OVPN ${OVPN_SUBNET})"
 }
 
 disable_vpn_exit() {
@@ -174,6 +209,7 @@ disable_vpn_exit() {
   del_mangle
   ip route flush table "$RT_TABLE" 2>/dev/null || true
   del_ip_rules
+  del_stale_wg_routes "$(wg_easy_ip)"
   wg_easy_masq_on
   if [ -x "$TS_HOST_PROTECT" ]; then
     "$TS_HOST_PROTECT" protect-only 2>/dev/null || true
@@ -186,6 +222,8 @@ status_vpn_exit() {
   if [ -f "$STATE_FILE" ]; then cat "$STATE_FILE"; else echo "ENABLED=0"; fi
   echo "--- tailscale ---"
   tailscale status 2>/dev/null || true
+  echo "--- mangle ---"
+  iptables -t mangle -S PREROUTING 2>/dev/null | grep SM-TS || true
   echo "--- ip rules ---"
   ip rule show | sed -n '1,40p'
 }

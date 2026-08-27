@@ -35,7 +35,7 @@ add_rules() {
   local wg_ip
   wg_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' wg-easy 2>/dev/null | awk 'NF{print; exit}')"
   wg_ip="${wg_ip:-10.42.42.42}"
-  for src in 10.8.0.0/24 192.168.8.0/24 10.0.0.0/24 "${wg_ip}/32"; do
+  for src in 10.8.0.0/24 10.9.0.0/24 192.168.8.0/24 10.0.0.0/24 "${wg_ip}/32"; do
     for proto in udp tcp; do
       iptables -t nat -A PREROUTING -s "$src" -p "$proto" --dport 53 \
         -m comment --comment "$COMMENT" -j REDIRECT --to-ports 53

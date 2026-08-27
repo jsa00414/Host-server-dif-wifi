@@ -5,6 +5,7 @@ set -uo pipefail
 STATE_FILE="/opt/dns/ts-host-protect.state"
 PUBLIC_IP="$(ip -4 -o addr show dev ens6 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1)"
 PUBLIC_IP="${PUBLIC_IP:-74.208.54.132}"
+OVPN_SUBNET="${OVPN_SUBNET:-10.9.0.0/24}"
 ACTION="${1:-status}"
 
 wg_easy_ip() {
@@ -14,8 +15,32 @@ wg_easy_ip() {
 
 wg_docker_bridge() {
   local ip="${1:-$(wg_easy_ip)}"
+  local bridge subnet net
   [ -n "$ip" ] || return 1
-  ip -4 route get "$ip" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+  subnet="$(echo "$ip" | awk -F. '{print $1"."$2"."$3".0/24"}')"
+  bridge="$(ip -4 route show table main | awk -v s="$subnet" '$1==s && $0 !~ /via / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+  if [ -n "$bridge" ] && [[ "$bridge" == br-* ]]; then
+    printf '%s\n' "$bridge"
+    return 0
+  fi
+  net="$(docker inspect wg-easy --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | head -1)"
+  if [ -n "$net" ]; then
+    bridge="$(docker network inspect "$net" --format '{{if .Options}}{{index .Options "com.docker.network.bridge.name"}}{{end}}' 2>/dev/null)"
+    if [ -n "$bridge" ]; then
+      printf '%s\n' "$bridge"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+del_stale_wg_routes() {
+  local ip="${1:-$(wg_easy_ip)}"
+  [ -n "$ip" ] || return 0
+  ip route del 10.8.0.0/24 via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del 192.168.8.0/24 via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del 10.0.0.0/24 via "$ip" dev tailscale0 2>/dev/null || true
+  ip route del "${ip}/32" dev tailscale0 2>/dev/null || true
 }
 
 WG_EASY_IP="$(wg_easy_ip)"
@@ -27,7 +52,7 @@ tailscale_running() {
 
 del_ip_rules() {
   local prio
-  for prio in 100 101 102 103 104 105 106 107 108; do
+  for prio in 100 101 102 103 104 105 106 107 108 109; do
     local i=0
     while [ "$i" -lt 12 ]; do
       ip rule del priority "$prio" 2>/dev/null || break
@@ -47,11 +72,13 @@ add_ip_rules() {
   ip rule add priority 106 to 172.16.0.0/12 lookup main 2>/dev/null || true
   ip rule add priority 107 to 127.0.0.0/8 lookup main 2>/dev/null || true
   ip rule add priority 108 to 100.64.0.0/10 lookup main 2>/dev/null || true
+  ip rule add priority 109 to "$OVPN_SUBNET" lookup main 2>/dev/null || true
 }
 
 del_router_routes() {
   local ip bridge
   ip="$(wg_easy_ip)"
+  del_stale_wg_routes "$ip"
   bridge="$(wg_docker_bridge "$ip")"
   [ -n "$ip" ] || return 0
   [ -n "$bridge" ] || return 0
@@ -62,6 +89,8 @@ del_router_routes() {
 
 add_router_routes() {
   del_router_routes
+  WG_EASY_IP="$(wg_easy_ip)"
+  WG_DOCKER_BRIDGE="$(wg_docker_bridge "$WG_EASY_IP")"
   [ -n "$WG_EASY_IP" ] || return 0
   [ -n "$WG_DOCKER_BRIDGE" ] || return 0
   ip route replace 10.8.0.0/24 via "$WG_EASY_IP" dev "$WG_DOCKER_BRIDGE" metric 10 2>/dev/null || true
@@ -103,7 +132,7 @@ disable_protect() {
 status_protect() {
   if [ -f "$STATE_FILE" ]; then cat "$STATE_FILE"; else echo "ENABLED=0"; fi
   echo "--- routes ---"
-  ip -4 route show table main 2>/dev/null | grep -E '10\.8\.0\.|192\.168\.8\.|10\.42\.42\.' || true
+  ip -4 route show table main 2>/dev/null | grep -E '10\.8\.0\.|10\.9\.0\.|192\.168\.8\.|10\.42\.42\.' || true
   echo "--- ip rules ---"
   ip rule show | sed -n '1,20p'
 }

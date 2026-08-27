@@ -5099,7 +5099,7 @@ def _read_vpn_exit_state() -> dict:
 
 
 def set_vpn_only_exit(enabled: bool, exit_ip: str = "") -> tuple[bool, str]:
-    """Route WireGuard via Tailscale exit; keep VPS public IP on main table."""
+    """Route WireGuard + OpenVPN via Tailscale exit; keep VPS public IP on main table."""
     if not TS_VPN_EXIT_SCRIPT.is_file():
         return False, "ts-vpn-exit.sh missing"
     if enabled:
@@ -5247,9 +5247,10 @@ def tailscale_status() -> dict:
     advertise_lan = bool(lan_set & adv_set)
 
     vpn_exit = _read_vpn_exit_state()
-    exit_ip = str(vpn_exit.get("exit_ip") or prefs.get("ExitNodeIP") or "").strip()
-    # Prefer our VPN-only state; fall back to live Tailscale prefs
-    custom_exit = bool(vpn_exit.get("enabled")) or bool(exit_ip or prefs.get("ExitNodeID"))
+    exit_ip = str(vpn_exit.get("exit_ip") or "").strip()
+    custom_exit = bool(vpn_exit.get("enabled"))
+    if custom_exit and not exit_ip:
+        exit_ip = str(prefs.get("ExitNodeIP") or "").strip()
     # advertise-exit-node shows up as default routes in prefs; ExitNodeOption needs admin approval
     run_exit = (
         "0.0.0.0/0" in adv_set
@@ -6101,8 +6102,8 @@ def apply_tailscale(payload: dict) -> dict:
     """Apply Tailscale settings.
 
     - VPS host always keeps its public IP (host-protect ip rules).
-    - Custom Exit Node routes *WireGuard VPN* (10.8.0.0/24) via the chosen
-      Tailscale exit; it does not steal the VPS management path.
+    - Custom Exit Node routes *WireGuard* (10.8.0.0/24) and *OpenVPN* (10.9.0.0/24)
+      via the chosen Tailscale exit; it does not steal the VPS management path.
     - Run Exit Node advertises this VPS as an exit for other Tailscale clients.
     """
     enabled = bool(payload.get("enabled"))
