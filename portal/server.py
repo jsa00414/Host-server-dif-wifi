@@ -6638,91 +6638,175 @@ html.sm-auth-top #menu-bar #login_button .x-btn-text{
   color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
 html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
 
-/* Compact nav row — hide back/forward/up/history buttons, keep location + search */
-html.sm-merged-chrome #control-panel .navi-button,
-html.sm-merged-chrome #control-panel #navi-button-up,
-html.sm-merged-chrome #control-panel #alertButton{
+/* Windows 11 Explorer-style nav — custom row replaces Ext toolbar table layout */
+html.sm-merged-chrome #control-panel #alertButton,
+html.sm-win-nav #control-panel #alertButton{
   display:none!important;visibility:hidden!important;width:0!important;height:0!important;
   overflow:hidden!important;margin:0!important;padding:0!important}
-html.sm-merged-chrome #control-panel{
-  display:block!important;visibility:visible!important;
-  height:auto!important;min-height:36px!important;max-height:none!important;
-  overflow:visible!important;padding:2px 8px!important;margin:0!important;
-  border:0!important;border-bottom:1px solid var(--sm-line)!important}
-html.sm-merged-chrome #control-panel .x-toolbar-ct{
-  display:flex!important;align-items:center!important;gap:8px!important;width:100%!important}
+html.sm-merged-chrome #control-panel,
+html.sm-win-nav #control-panel{
+  display:block!important;visibility:visible!important;position:relative!important;
+  box-sizing:border-box!important;
+  height:auto!important;min-height:0!important;max-height:none!important;
+  overflow:visible!important;padding:4px 10px!important;margin:0!important;
+  border:0!important;border-bottom:1px solid var(--sm-line)!important;
+  background:var(--sm-bg1)!important;
+  line-height:normal!important;z-index:30!important}
+html.sm-win-nav #headerPanel,
+html.sm-merged-chrome #headerPanel{
+  position:relative!important;z-index:25!important;overflow:visible!important;
+  background:var(--sm-bg1)!important}
+/* Hide native Ext toolbar chrome; custom #sm-win-explorer-bar paints the nav */
+html.sm-win-nav #control-panel>.x-toolbar-ct,
+html.sm-win-nav #control-panel>table,
+html.sm-win-nav #control-panel .x-toolbar-left,
+html.sm-win-nav #control-panel .x-toolbar-right,
+html.sm-win-nav #control-panel .x-toolbar-cell,
+html.sm-win-nav #location-buttons,
+html.sm-win-nav #location-buttons-ie,
+html.sm-win-nav #location-textfield,
+html.sm-win-nav #location-bar .x-box-item img[src*="location_spacer"],
+html.sm-win-nav #location-bar .location_item,
+html.sm-win-nav #location-bar .location_item2,
+html.sm-win-nav #location-bar .x-form-clear-trigger,
+html.sm-win-nav #location-bar .x-form-trigger,
+html.sm-win-nav #location-bar .x-form-field-wrap,
+html.sm-win-nav #control-panel .sm-win-hide{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  max-width:0!important;max-height:0!important;margin:0!important;padding:0!important;
+  overflow:hidden!important;pointer-events:none!important;opacity:0!important}
+#sm-win-explorer-bar{
+  display:flex!important;align-items:center!important;gap:8px!important;
+  width:100%!important;max-width:100%!important;box-sizing:border-box!important;
+  min-height:34px!important;height:auto!important;margin:0!important;padding:0!important;
+  line-height:normal!important;position:relative!important;z-index:31!important}
+#sm-win-explorer-bar .sm-win-nav-btns{
+  display:flex!important;align-items:center!important;gap:2px!important;
+  flex:0 0 auto!important}
+#sm-win-explorer-bar .sm-win-nav-btn{
+  appearance:none!important;width:32px!important;height:32px!important;
+  margin:0!important;padding:0!important;border:0!important;border-radius:6px!important;
+  background:transparent!important;cursor:pointer!important;position:relative!important;
+  flex:0 0 32px!important;opacity:.9!important}
+#sm-win-explorer-bar .sm-win-nav-btn:hover{background:rgba(255,255,255,.08)!important}
+#sm-win-explorer-bar .sm-win-nav-btn.is-disabled{opacity:.35!important;cursor:default!important}
+#sm-win-explorer-bar .sm-win-nav-btn::before{
+  content:""!important;position:absolute!important;inset:7px!important;
+  background-repeat:no-repeat!important;background-position:center!important;background-size:contain!important}
+#sm-win-explorer-bar .sm-win-back::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-fwd::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18l6-6-6-6'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-up::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5'/%3E%3Cpath d='M5 12l7-7 7 7'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-ref::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-3-6.7'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E")!important}
+/* Park Ext #location-bar off-layout so doLayout cannot wipe our address host */
+html.sm-win-nav #control-panel #location-bar,
 html.sm-merged-chrome #control-panel #location-bar{
-  flex:1 1 auto!important;min-width:120px!important;width:auto!important;
-  max-width:none!important;height:32px!important;margin:0!important}
-html.sm-merged-chrome #control-panel #search-textbox{
-  flex:0 1 220px!important;min-width:120px!important;width:auto!important;margin:0!important}
-/* Full path text in location bar (e.g. /Movies_And_Shows/Movies) */
-html.sm-path-text #location-buttons,
-html.sm-path-text #location-buttons-ie,
-html.sm-path-text #location-bar .x-box-item img[src*="location_spacer"]{
-  display:none!important;visibility:hidden!important}
-html.sm-path-text #control-panel #location-bar,
-html.sm-merged-chrome #control-panel #location-bar{
-  flex:1 1 auto!important;min-width:0!important;max-width:none!important}
-html.sm-path-text #location-bar .x-panel-body,
-html.sm-path-text #location-bar .x-form-field-wrap,
-html.sm-path-text #location-textfield{
-  width:100%!important;max-width:none!important;box-sizing:border-box!important}
-html.sm-path-text #location-textfield{
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important;
-  font-size:13px!important;letter-spacing:.01em!important;
-  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+  position:absolute!important;left:-9999px!important;top:0!important;
+  width:1px!important;height:1px!important;min-width:0!important;max-width:1px!important;
+  margin:0!important;padding:0!important;border:0!important;overflow:hidden!important;
+  visibility:hidden!important;opacity:0!important;pointer-events:none!important;
+  flex:0 0 0!important;display:block!important}
+html.sm-win-nav #location-bar .x-panel-body,
+html.sm-win-nav #location-bar .x-panel-bwrap{
+  display:block!important;width:1px!important;height:1px!important;overflow:hidden!important;
+  background:transparent!important;border:0!important}
+#sm-win-address{
+  position:relative!important;top:auto!important;left:auto!important;right:auto!important;
+  bottom:auto!important;inset:auto!important;z-index:1!important;
+  display:flex!important;align-items:center!important;gap:0!important;
+  box-sizing:border-box!important;width:auto!important;max-width:none!important;
+  height:34px!important;max-height:34px!important;min-height:34px!important;min-width:0!important;
+  padding:0 10px 0 36px!important;overflow:hidden!important;flex:1 1 auto!important;
+  border:1px solid rgba(255,255,255,.12)!important;border-radius:8px!important;
+  background:var(--sm-bg0)!important;cursor:text!important}
+#sm-win-address::before{
+  content:""!important;position:absolute!important;left:11px!important;top:50%!important;
+  width:16px!important;height:16px!important;transform:translateY(-50%)!important;
+  background:no-repeat center/contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c5d4cc' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10.5L12 3l9 7.5'/%3E%3Cpath d='M5 9.5V20h14V9.5'/%3E%3C/svg%3E")!important;
+  pointer-events:none!important}
+#sm-win-address .sm-win-crumb{
+  appearance:none!important;border:0!important;background:transparent!important;
+  color:var(--sm-text)!important;cursor:pointer!important;
+  font:400 13px/1.2 "Segoe UI",Sora,system-ui,sans-serif!important;
+  padding:3px 6px!important;border-radius:4px!important;white-space:nowrap!important;
+  max-width:280px!important;overflow:hidden!important;text-overflow:ellipsis!important}
+#sm-win-address .sm-win-crumb:hover{background:rgba(255,255,255,.08)!important}
+#sm-win-address .sm-win-crumb.is-current{color:var(--sm-text)!important;cursor:default!important;font-weight:500!important}
+#sm-win-address .sm-win-crumb.is-current:hover{background:transparent!important}
+#sm-win-address .sm-win-chev{
+  flex:0 0 auto!important;color:rgba(232,242,236,.55)!important;
+  font:400 14px/1 "Segoe UI",system-ui,sans-serif!important;padding:0 1px!important;
+  user-select:none!important;pointer-events:none!important}
+#sm-win-address .sm-win-edit{
+  display:none!important;flex:1 1 auto!important;min-width:0!important;height:28px!important;
+  margin:0!important;padding:0 4px!important;border:0!important;outline:none!important;
+  background:transparent!important;color:var(--sm-text)!important;
+  font:400 13px/28px "Segoe UI",Sora,system-ui,sans-serif!important}
+#sm-win-address.is-editing .sm-win-crumb,
+#sm-win-address.is-editing .sm-win-chev{display:none!important}
+#sm-win-address.is-editing .sm-win-edit{display:block!important}
+#main-panel,#main-panel .x-panel-bwrap,#main-panel .x-panel-body,#main-panel .x-border-panel{
+  pointer-events:auto!important}
+#sm-win-address.sm-win-misplaced{
+  display:none!important;pointer-events:none!important;width:0!important;height:0!important}
+#sm-win-search-wrap{
+  position:relative!important;flex:0 0 240px!important;min-width:160px!important;max-width:280px!important;
+  height:34px!important}
+#sm-win-search-wrap input{
+  width:100%!important;height:34px!important;box-sizing:border-box!important;
+  margin:0!important;padding:0 12px 0 34px!important;border-radius:8px!important;
+  border:1px solid rgba(255,255,255,.12)!important;background:var(--sm-bg0)!important;
+  font:400 13px/34px "Segoe UI",Sora,system-ui,sans-serif!important;
+  color:var(--sm-text)!important;outline:none!important;box-shadow:none!important}
+#sm-win-search-wrap input::placeholder{color:rgba(232,242,236,.45)!important;opacity:1!important}
+#sm-win-search-wrap::before{
+  content:""!important;position:absolute!important;left:11px!important;top:50%!important;
+  width:15px!important;height:15px!important;transform:translateY(-50%)!important;z-index:2!important;
+  background:no-repeat center/contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2384998c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E")!important;
+  pointer-events:none!important}
+html.sm-win-nav #control-panel #search-textbox,
+html.sm-win-nav #search-panel,
+html.sm-win-nav #search-panel .x-form-field-wrap,
+html.sm-win-nav #search-panel .x-form-clear-trigger{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  pointer-events:none!important;opacity:0!important;position:absolute!important;left:-9999px!important}
 #control-panel.sm-nas-gone{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
-  overflow:hidden!important;padding:0!important;margin:0!important;
-  border:0!important}
+  overflow:hidden!important;padding:0!important;margin:0!important;border:0!important}
 html.sm-merged-chrome #menu-bar{
   display:flex!important;align-items:center!important;flex-wrap:nowrap!important;
-  gap:6px!important;padding:4px 8px!important;
-  border-bottom:1px solid var(--sm-line)!important}
+  gap:6px!important;padding:4px 8px!important;border-bottom:1px solid var(--sm-line)!important}
 html.sm-merged-chrome #menu-bar .x-toolbar-ct{
   display:flex!important;align-items:center!important;flex:1 1 auto!important;
   width:100%!important;gap:6px!important}
-html.sm-merged-chrome #menu-bar #location-bar{
-  flex:1 1 auto!important;min-width:100px!important;width:auto!important;
-  max-width:none!important;height:32px!important;margin:0!important;
-  border:0!important;border-bottom:0!important;background:transparent!important}
-html.sm-merged-chrome #menu-bar #location-buttons,
-html.sm-merged-chrome #menu-bar #location-buttons-ie{
-  height:30px!important;border:0!important;background:transparent!important}
-html.sm-merged-chrome #menu-bar #search-textbox,
-html.sm-merged-chrome #menu-bar #location-textfield{
-  flex:0 1 160px!important;width:160px!important;min-width:96px!important;
-  max-width:220px!important;min-height:32px!important;margin:0!important}
-html.sm-merged-chrome #menu-bar .location_item,
-html.sm-merged-chrome #menu-bar .location_item2{
-  min-height:28px!important;line-height:28px!important;font-size:12px!important}
 @media (max-width:900px){
-  html.sm-merged-chrome #menu-bar{flex-wrap:wrap!important}
-  html.sm-merged-chrome #menu-bar #location-bar{
-    flex:1 1 100%!important;order:10!important}
-  html.sm-merged-chrome #menu-bar #search-textbox{
-    flex:1 1 120px!important;order:11!important}
+  #sm-win-explorer-bar{flex-wrap:wrap!important}
+  #sm-win-search-wrap{flex:1 1 100%!important;max-width:none!important;order:11!important}
+  #sm-win-address{flex:1 1 100%!important;order:10!important;min-width:100%!important}
 }
 
-/* Location / search */
+/* Location / search shared */
 #control-panel,#location-bar,.navi-button,#location-buttons,#location-buttons-ie,#search-panel{
-  background:var(--sm-bg2)!important;background-image:none!important;
-  border:0!important;border-bottom:1px solid var(--sm-line)!important}
+  background:var(--sm-bg1)!important;background-image:none!important;border:0!important}
 #location-textfield,#search-textbox,.x-form-text,.x-form-field,
 .x-form-textarea,.x-form-field-wrap .x-form-text{
-  background:var(--sm-bg3)!important;background-image:none!important;
+  background:var(--sm-bg0)!important;background-image:none!important;
   color:var(--sm-text)!important;border:1px solid var(--sm-line)!important;
-  border-radius:10px!important;min-height:34px!important;font-size:14px!important;
+  border-radius:8px!important;min-height:34px!important;font-size:13px!important;
   padding:6px 10px!important;box-shadow:none!important}
 #location-textfield:focus,#search-textbox:focus,.x-form-focus,.x-form-text:focus{
-  border-color:var(--sm-accent)!important;box-shadow:0 0 0 2px var(--sm-accent-dim)!important;
+  border-color:rgba(170,210,185,.45)!important;box-shadow:0 0 0 2px var(--sm-accent-dim)!important;
   outline:none!important}
 .x-form-invalid,.x-form-invalid.x-form-text{
   border-color:var(--sm-danger)!important;background:rgba(255,107,107,.08)!important}
 .location_item2,.active_history_item{color:var(--sm-accent)!important}
-.navi-button .x-btn{min-width:36px!important;min-height:36px!important}
+.navi-button .x-btn{min-width:32px!important;min-height:32px!important}
 .x-form-trigger,.x-form-arrow-trigger,.x-form-date-trigger,.x-form-clear-trigger{
   background-color:var(--sm-bg3)!important;filter:invert(1) brightness(1.2);border:0!important}
 .x-form-item-label,.x-form-cb-label,.x-form-item label,.x-form-label-top label{
@@ -6865,9 +6949,8 @@ select,.x-combo-list{
 /* Side-by-side list — full-width rows on DataView .x-border-panel root */
 #sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   display:block!important;
-  position:relative!important;left:0!important;top:0!important;
-  width:100%!important;min-width:100%!important;max-width:100%!important;
-  height:auto!important;padding:0!important;box-sizing:border-box!important}
+  width:100%!important;min-width:0!important;max-width:100%!important;
+  box-sizing:border-box!important;padding:0!important;overflow:auto!important}
 #sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
   position:static!important;
   left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
@@ -6877,29 +6960,49 @@ select,.x-combo-list{
   border-bottom:1px solid var(--sm-line)!important}
 #sidebyside-panel .icon-thumbnail .icon-side{
   display:flex!important;flex-direction:row!important;align-items:center!important;
-  gap:12px!important;padding:8px 12px!important;
-  width:100%!important;max-width:100%!important;height:auto!important;min-height:72px!important;
+  gap:12px!important;padding:6px 12px!important;
+  width:100%!important;max-width:100%!important;height:auto!important;min-height:44px!important;
   margin:0!important;box-sizing:border-box!important}
 #sidebyside-panel .icon-thumbnail .icon-side[style]{
   width:100%!important;height:auto!important}
 #sidebyside-panel .icon-thumbnail img,#sidebyside-panel .icon-thumbnail .dd-img{
-  float:none!important;flex:0 0 48px!important;
-  width:48px!important;height:48px!important;object-fit:contain!important;margin:0!important}
+  float:none!important;flex:0 0 40px!important;
+  width:40px!important;height:40px!important;object-fit:contain!important;margin:0!important}
 #sidebyside-panel .icon-thumbnail .icon-info{
   float:none!important;flex:1 1 auto!important;
   width:auto!important;min-width:0!important;padding-top:0!important;
   display:grid!important;
-  grid-template-columns:minmax(140px,2fr) minmax(72px,1fr) minmax(120px,1fr)!important;
+  grid-template-columns:minmax(200px,1fr) 100px 160px 100px!important;
   column-gap:12px!important;align-items:center!important;overflow:hidden!important}
+#sidebyside-panel .icon-info > .x-editable,
 #sidebyside-panel .icon-info > span{
-  display:block!important;text-align:left!important;
-  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
-#sidebyside-panel .icon-info > span.sm-nas-size-empty{display:none!important}
+  display:block!important;text-align:left!important;min-width:0!important;
+  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
+  color:var(--sm-text)!important;font-size:13px!important;line-height:1.3!important}
+#sidebyside-panel .icon-info > .x-editable{
+  grid-column:1!important;font-weight:500!important}
+#sidebyside-panel .icon-info > span.sm-nas-col-size{grid-column:2!important;color:var(--sm-muted)!important}
+#sidebyside-panel .icon-info > span.sm-nas-col-date{grid-column:3!important;color:var(--sm-muted)!important}
+#sidebyside-panel .icon-info > span.sm-nas-col-type{grid-column:4!important;color:var(--sm-muted)!important}
+#sidebyside-panel .icon-info > span.sm-nas-size-empty{
+  display:block!important;visibility:visible!important;color:var(--sm-muted)!important;opacity:.55!important}
 #sidebyside-panel .icon-thumbnail.x-view-over,#sidebyside-panel .icon-thumbnail.x-view-selected{
   background:rgba(255,255,255,.05)!important;background-image:none!important;
   border-color:var(--sm-line)!important}
 #sidebyside-panel .icon-thumbnail.x-view-selected{
   background:var(--sm-accent-dim)!important;border-color:var(--sm-accent-strong)!important}
+/* Sort header row: spread Name/Size/Date/Type across the content width */
+#sidebyside-panel > .x-panel-bwrap > .x-panel-body > .x-border-layout-ct > .x-toolbar,
+#sidebyside-panel .x-border-layout-ct > .x-toolbar{
+  padding-left:52px!important;box-sizing:border-box!important}
+#sidebyside-panel .x-border-layout-ct > .x-toolbar .x-toolbar-left > table{
+  width:100%!important;table-layout:fixed!important}
+#sidebyside-panel .x-border-layout-ct > .x-toolbar .x-toolbar-left > table > tbody > tr > .x-toolbar-cell{
+  width:25%!important}
+#sidebyside-panel .x-border-layout-ct > .x-toolbar .x-btn{
+  width:100%!important;max-width:100%!important}
+#sidebyside-panel .x-border-layout-ct > .x-toolbar .x-btn-text{
+  text-align:left!important;padding-left:0!important}
 #icon-panel-small .icon-thumbnail .x-dv-focus,#icon-panel-medium .icon-thumbnail .x-dv-focus,
 #icon-panel-large .icon-thumbnail .x-dv-focus,#sidebyside-panel .icon-thumbnail .x-dv-focus{
   display:none!important;width:0!important;height:0!important;
@@ -7369,29 +7472,400 @@ NAS_FILES_SNIPPET = (
     "function smMergeNaviBar(){"
     "try{"
     "document.documentElement.classList.add('sm-merged-chrome');"
+    "document.documentElement.classList.add('sm-win-nav');"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
     "if(window.__smNaviMerged)return true;"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var nav=Ext.getCmp('control-panel');"
     "if(nav){"
     "try{"
-    "nav.items.each(function(it,idx){"
-    "if(!it||idx>=5)return;"
+    "nav.items.each(function(it){"
+    "if(!it)return;"
+    "var id=(it.id||'')+'';"
+    "if(id==='alertButton'||id.toLowerCase().indexOf('history')>=0){"
     "try{if(it.hide)it.hide();}catch(e){}"
+    "}"
     "});"
     "}catch(e){}"
-    "try{nav.doLayout();}catch(e){}"
-    "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "window.__smNaviMerged=true;"
-    "try{document.documentElement.classList.add('sm-path-text');}catch(e){}"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
+    "try{smHookWinLocation();}catch(e){}"
+    "try{smEnsureWinAddress();}catch(e){}"
     "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
     "var _smTree=Ext.getCmp('tree-panel');"
     "var _smNode=_smTree&&_smTree.getSelectionModel().getSelectedNode();"
-    "if(_smNode&&_smNode.path)update_location_bar(_smNode.path);"
-    "else update_location_bar('/');"
+    "if(_smNode&&_smNode.path){update_location_bar(_smNode.path);smRenderWinAddress(_smNode.path);}"
+    "else{update_location_bar('/');smRenderWinAddress('/');}"
     "}}catch(e){}"
     "return true;"
     "}catch(e){return false;}}"
+    "function smRefreshCurrentFolder(){"
+    "try{"
+    "if(!window.Ext||!Ext.getCmp)return;"
+    "var tree=Ext.getCmp('tree-panel');"
+    "var node=tree&&tree.getSelectionModel().getSelectedNode();"
+    "if(!node){node=tree&&tree.getNodeById('/');}"
+    "if(!node)return;"
+    "if(typeof addRecordWithPath==='function')addRecordWithPath(node,function(){});"
+    "else if(typeof selectTreePath_absolute==='function')selectTreePath_absolute(node.path||'/');"
+    "}catch(e){}"
+    "}"
+    "function smRunSearch(word){"
+    "try{"
+    "word=String(word||'').trim();"
+    "if(!word)return;"
+    "var tf=document.getElementById('search-textbox');"
+    "if(tf)tf.value=word;"
+    "try{if(window.Ext&&Ext.getCmp){var c=Ext.getCmp('search-textbox');if(c&&c.setValue)c.setValue(word);}}catch(e){}"
+    "if(typeof search==='function')search(word);"
+    "}catch(e){}"
+    "}"
+    "function smEnsureWinExplorerBar(){"
+    "try{"
+    "document.documentElement.classList.add('sm-win-nav');"
+    "var cp=document.getElementById('control-panel');"
+    "if(!cp)return;"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!row){"
+    "row=document.createElement('div');"
+    "row.id='sm-win-explorer-bar';"
+    "var btns=document.createElement('div');"
+    "btns.className='sm-win-nav-btns';"
+    "function mkBtn(cls,title,fn){"
+    "var b=document.createElement('button');"
+    "b.type='button';b.className='sm-win-nav-btn '+cls;b.title=title;"
+    "b.setAttribute('aria-label',title);"
+    "b.addEventListener('click',function(ev){ev.preventDefault();try{fn();}catch(e){}});"
+    "btns.appendChild(b);return b;"
+    "}"
+    "mkBtn('sm-win-back','Back',function(){if(typeof historyBack==='function')historyBack();});"
+    "mkBtn('sm-win-fwd','Forward',function(){if(typeof historyForward==='function')historyForward();});"
+    "mkBtn('sm-win-up','Up',function(){if(typeof goUp==='function')goUp();else if(typeof Ext!=='undefined'&&Ext.getCmp){var u=Ext.getCmp('navi-button-up');if(u&&u.handler)u.handler.call(u);}});"
+    "mkBtn('sm-win-ref','Refresh',smRefreshCurrentFolder);"
+    "row.appendChild(btns);"
+    "var searchWrap=document.createElement('div');"
+    "searchWrap.id='sm-win-search-wrap';"
+    "var sIn=document.createElement('input');"
+    "sIn.type='search';sIn.id='sm-win-search-input';sIn.autocomplete='off';sIn.spellcheck=false;"
+    "sIn.placeholder='Search Home';"
+    "sIn.addEventListener('keydown',function(ev){"
+    "if(ev.key==='Enter'){ev.preventDefault();smRunSearch(sIn.value);}"
+    "});"
+    "searchWrap.appendChild(sIn);"
+    "row.appendChild(searchWrap);"
+    "cp.insertBefore(row,cp.firstChild);"
+    "}"
+    # Keep Ext location-bar in DOM for APIs, but park it outside the visible flex row.
+    "var loc=document.getElementById('location-bar');"
+    "if(loc&&loc.parentNode===row){"
+    "try{cp.appendChild(loc);}catch(e){}"
+    "}"
+    "try{smSyncWinHeaderLayout();}catch(e){}"
+    "}catch(e){}"
+    "}"
+    "function smSyncWinHeaderLayout(){"
+    "try{"
+    "var cp=document.getElementById('control-panel');"
+    "var hp=document.getElementById('headerPanel');"
+    "var menu=document.getElementById('menu-bar');"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!cp)return;"
+    "cp.style.height='auto';cp.style.minHeight='0';cp.style.maxHeight='none';"
+    "cp.style.overflow='visible';cp.style.paddingTop='4px';cp.style.paddingBottom='4px';"
+    "cp.style.position='relative';cp.style.zIndex='30';"
+    "if(row){row.style.height='auto';row.style.minHeight='34px';}"
+    "var topEdge=0;"
+    "try{topEdge=(hp&&hp.getBoundingClientRect().top)||0;}catch(e){}"
+    "var bottom=0;"
+    "try{"
+    "if(menu)bottom=Math.max(bottom,menu.getBoundingClientRect().bottom);"
+    "bottom=Math.max(bottom,cp.getBoundingClientRect().bottom);"
+    "if(row)bottom=Math.max(bottom,row.getBoundingClientRect().bottom);"
+    "}catch(e){}"
+    "var headerH=Math.max(78,Math.round(bottom-topEdge));"
+    "if(hp){"
+    "hp.style.height=headerH+'px';"
+    "hp.style.minHeight=headerH+'px';"
+    "hp.style.overflow='visible';"
+    "hp.style.position='relative';"
+    "hp.style.zIndex='25';"
+    "}"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var _smCp=Ext.getCmp('control-panel');"
+    "if(_smCp){"
+    "var _smCpH=Math.max(38,(row&&row.offsetHeight)||34)+8;"
+    "try{_smCp.height=_smCpH;}catch(e){}"
+    "try{if(_smCp.setHeight)_smCp.setHeight(_smCpH);}catch(e){}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var ids=['main-panel','left-panel'];"
+    "for(var i=0;i<ids.length;i++){"
+    "var el=document.getElementById(ids[i]);"
+    "if(!el)continue;"
+    "var cur=parseInt(el.style.top||'0',10);"
+    "if(isNaN(cur))cur=0;"
+    "if(cur<headerH-1){"
+    "el.style.top=headerH+'px';"
+    "try{"
+    "var vh=Math.max(document.documentElement.clientHeight||0,window.innerHeight||0);"
+    "if(vh>headerH+40)el.style.height=(vh-headerH)+'px';"
+    "}catch(e){}"
+    "}"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var cmp=Ext.getCmp(ids[i]);"
+    "if(cmp){"
+    "cmp.y=headerH;"
+    "try{if(cmp.setPagePosition)cmp.setPagePosition(cmp.getPosition(true)[0],headerH);}"
+    "catch(e1){try{if(cmp.setPosition)cmp.setPosition(cmp.x||0,headerH);}catch(e2){}}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "}"
+    "try{"
+    "var vp=typeof smFindViewport==='function'?smFindViewport():null;"
+    "if(vp&&vp.doLayout)vp.doLayout(true,true);"
+    "}catch(e){}"
+    # Re-assert tops after Ext layout — it often parks center/west under the nav.
+    "try{"
+    "var hp2=document.getElementById('headerPanel');"
+    "var headerH2=hp2?Math.round(hp2.getBoundingClientRect().height):headerH;"
+    "if(!(headerH2>60))headerH2=headerH;"
+    "var _smPush=['main-panel','left-panel'];"
+    "for(var _pi=0;_pi<_smPush.length;_pi++){"
+    "var el2=document.getElementById(_smPush[_pi]);"
+    "if(!el2)continue;"
+    "el2.style.top=headerH2+'px';"
+    "try{"
+    "var vh2=Math.max(document.documentElement.clientHeight||0,window.innerHeight||0);"
+    "if(vh2>headerH2+40)el2.style.height=(vh2-headerH2)+'px';"
+    "}catch(e){}"
+    "}"
+    "}catch(e){}"
+    "}catch(e){}"
+    "}"
+    "function smPathParts(path){"
+    "path=String(path||'/');"
+    "return path.split('/').filter(function(p){return !!p;});"
+    "}"
+    "function smPathToDisplay(path){"
+    "var parts=smPathParts(path);"
+    "return parts.length?('Home > '+parts.join(' > ')):'Home';"
+    "}"
+    "function smDisplayToPath(text){"
+    "text=String(text||'').trim();"
+    "if(!text||text==='Home'||text==='Files'||text==='/')return '/';"
+    "if(text.charAt(0)==='/')return text.replace(/\\/+/g,'/')||'/';"
+    "text=text.replace(/^(Home|Files)\\s*>\\s*/i,'');"
+    "var parts=text.split(/\\s*>\\s*/).map(function(p){return p.trim();}).filter(Boolean);"
+    "return parts.length?('/'+parts.join('/')):'/';"
+    "}"
+    "function smUpdateSearchPlaceholder(path){"
+    "try{"
+    "var parts=smPathParts(path);"
+    "var label=parts.length?parts[parts.length-1]:'Home';"
+    "var ph='Search '+label;"
+    "var sIn=document.getElementById('sm-win-search-input');"
+    "if(sIn){sIn.placeholder=ph;sIn.setAttribute('aria-label',ph);}"
+    "var tf=document.getElementById('search-textbox');"
+    "if(tf){tf.setAttribute('placeholder',ph);}"
+    "}catch(e){}"
+    "}"
+    "function smNavigatePath(path){"
+    "try{"
+    "path=smDisplayToPath(path);"
+    "if(typeof selectTreePath_absolute==='function')selectTreePath_absolute(path);"
+    "else if(typeof update_location_bar==='function')update_location_bar(path);"
+    "}catch(e){}"
+    "}"
+    "function smWinClosest(el,sel){"
+    "try{"
+    "if(!el)return null;"
+    "if(el.closest)return el.closest(sel);"
+    "var cur=el;"
+    "while(cur&&cur.nodeType===1){"
+    "if(cur.id==='sm-win-address'&&sel.indexOf('sm-win-address')>=0)return cur;"
+    "if(sel.charAt(0)==='.'&&cur.classList&&cur.classList.contains(sel.slice(1)))return cur;"
+    "cur=cur.parentElement;"
+    "}"
+    "}catch(e){}"
+    "return null;"
+    "}"
+    "function smWinHostOk(host,bar){"
+    "try{"
+    "if(!host||!bar)return false;"
+    "if(!bar.contains(host))return false;"
+    "var r=host.getBoundingClientRect();"
+    "if(!r)return true;"
+    "if(r.height>48)return false;"
+    "return true;"
+    "}catch(e){return false;}"
+    "}"
+    "function smCurrentNasPath(){"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var tree=Ext.getCmp('tree-panel');"
+    "var node=tree&&tree.getSelectionModel().getSelectedNode();"
+    "if(node&&node.path)return String(node.path);"
+    "}"
+    "}catch(e){}"
+    "try{"
+    "var host=document.getElementById('sm-win-address');"
+    "if(host&&host.dataset&&host.dataset.path)return String(host.dataset.path);"
+    "}catch(e){}"
+    "return '/';"
+    "}"
+    "function smMountWinAddressHost(){"
+    "try{"
+    "smEnsureWinExplorerBar();"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!row)return null;"
+    "var host=document.getElementById('sm-win-address');"
+    "if(host&&!row.contains(host)){"
+    "try{host.parentNode&&host.parentNode.removeChild(host);}catch(e){}"
+    "host=null;"
+    "}"
+    "if(!host){"
+    "host=document.createElement('div');"
+    "host.id='sm-win-address';"
+    "host.addEventListener('click',function(ev){"
+    "var t=ev.target;"
+    "if(smWinClosest(t,'.sm-win-crumb')||(t&&t.classList&&t.classList.contains('sm-win-edit')))return;"
+    "host.classList.add('is-editing');"
+    "var edit=host.querySelector('.sm-win-edit');"
+    "if(edit){"
+    "edit.value=smPathToDisplay(host.dataset.path||'/');"
+    "edit.focus();edit.select();"
+    "}"
+    "});"
+    "}"
+    "var searchWrap=document.getElementById('sm-win-search-wrap');"
+    "if(host.parentNode!==row||(searchWrap&&host.nextSibling!==searchWrap)){"
+    "if(searchWrap)row.insertBefore(host,searchWrap);"
+    "else row.appendChild(host);"
+    "}"
+    "host.classList.remove('sm-win-misplaced');"
+    "try{host.style.display='';host.style.pointerEvents='';}catch(e){}"
+    "return host;"
+    "}catch(e){return null;}"
+    "}"
+    "function smRenderWinAddress(path){"
+    "try{"
+    "var host=smMountWinAddressHost();"
+    "if(!host)return;"
+    "path=String(path||'/');"
+    "if(!path||path.charAt(0)!=='/')path='/'+(path||'');"
+    "path=path.replace(/\\/+/g,'/')||'/';"
+    "if(path.length>1&&path.charAt(path.length-1)==='/')path=path.slice(0,-1);"
+    "if(host.dataset.path===path&&host.querySelector('.sm-win-crumb')){"
+    "try{smUpdateSearchPlaceholder(path);}catch(e){}"
+    "return;"
+    "}"
+    "host.dataset.path=path;"
+    "host.classList.remove('is-editing');"
+    "while(host.firstChild)host.removeChild(host.firstChild);"
+    "var parts=smPathParts(path);"
+    "var crumbs=[{name:'Home',path:'/'}];"
+    "var acc='';"
+    "for(var i=0;i<parts.length;i++){"
+    "acc+='/'+parts[i];"
+    "crumbs.push({name:parts[i],path:acc});"
+    "}"
+    "for(var c=0;c<crumbs.length;c++){"
+    "if(c>0){"
+    "var ch=document.createElement('span');"
+    "ch.className='sm-win-chev';"
+    "ch.textContent='\\u203A';"
+    "host.appendChild(ch);"
+    "}"
+    "var btn=document.createElement('button');"
+    "btn.type='button';"
+    "btn.className='sm-win-crumb'+(c===crumbs.length-1?' is-current':'');"
+    "btn.textContent=crumbs[c].name;"
+    "btn.title=crumbs[c].path;"
+    "btn.dataset.path=crumbs[c].path;"
+    "if(c!==crumbs.length-1){"
+    "btn.addEventListener('click',function(ev){"
+    "ev.preventDefault();ev.stopPropagation();"
+    "smNavigatePath(ev.currentTarget.dataset.path);"
+    "});"
+    "}"
+    "host.appendChild(btn);"
+    "}"
+    # Trailing chevron like Windows Explorer after the current folder
+    "var trail=document.createElement('span');"
+    "trail.className='sm-win-chev';"
+    "trail.textContent='\\u203A';"
+    "host.appendChild(trail);"
+    "var edit=document.createElement('input');"
+    "edit.type='text';"
+    "edit.className='sm-win-edit';"
+    "edit.spellcheck=false;"
+    "edit.value=smPathToDisplay(path);"
+    "edit.addEventListener('keydown',function(ev){"
+    "if(ev.key==='Enter'){"
+    "ev.preventDefault();"
+    "smNavigatePath(edit.value);"
+    "host.classList.remove('is-editing');"
+    "}"
+    "else if(ev.key==='Escape'){"
+    "ev.preventDefault();"
+    "host.classList.remove('is-editing');"
+    "smRenderWinAddress(host.dataset.path||'/');"
+    "}"
+    "});"
+    "edit.addEventListener('blur',function(){"
+    "setTimeout(function(){"
+    "if(!host.classList.contains('is-editing'))return;"
+    "host.classList.remove('is-editing');"
+    "smRenderWinAddress(host.dataset.path||'/');"
+    "},120);"
+    "});"
+    "host.appendChild(edit);"
+    "try{smUpdateSearchPlaceholder(path);}catch(e){}"
+    "}catch(e){}"
+    "}"
+    "function smEnsureWinAddress(optPath){"
+    "try{"
+    "document.documentElement.classList.add('sm-win-nav');"
+    "var host=smMountWinAddressHost();"
+    "if(!host)return;"
+    "if(optPath!=null&&optPath!==''){"
+    "smRenderWinAddress(String(optPath));"
+    "}else if(!host.querySelector('.sm-win-crumb')){"
+    "smRenderWinAddress(smCurrentNasPath());"
+    "}"
+    "}catch(e){}"
+    "}"
+    "function smHookWinLocation(){"
+    "try{"
+    "if(window.__smLocHooked)return true;"
+    "if(typeof update_location_bar!=='function')return false;"
+    "window.__smLocHooked=true;"
+    "var _smOrigLoc=update_location_bar;"
+    "update_location_bar=function(path){"
+    "var ret;"
+    "try{ret=_smOrigLoc.apply(this,arguments);}catch(e){ret=undefined;}"
+    "try{smRenderWinAddress(path||'/');}catch(e){}"
+    "return ret;"
+    "};"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var tree=Ext.getCmp('tree-panel');"
+    "if(tree&&tree.getSelectionModel&&!tree.__smWinPathHook){"
+    "tree.__smWinPathHook=true;"
+    "tree.getSelectionModel().on('selectionchange',function(sm,node){"
+    "try{if(node&&node.path)smRenderWinAddress(node.path);}catch(e){}"
+    "});"
+    "}"
+    "}"
+    "}catch(e){}"
+    "return true;"
+    "}catch(e){return false;}"
+    "}"
     "function smMoveAuthToTop(){"
     "try{"
     "var user=document.getElementById('userName');"
@@ -7441,11 +7915,17 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smMountWinAddressHost=smMountWinAddressHost;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smSyncWinHeaderLayout=smSyncWinHeaderLayout;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;window.smHookWinLocation=smHookWinLocation;window.smCurrentNasPath=smCurrentNasPath;}catch(e){}"
     "function smKickFilesLoad(){"
     "try{"
     "if(window.__smKickFilesDone)return true;"
     "if(window.__smKickFilesPending)return false;"
+    "window.__smKickTries=(window.__smKickTries||0)+1;"
+    "if(window.__smKickTries>3){"
+    "window.__smKickFilesDone=true;"
+    "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
+    "return true;"
+    "}"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var tree=Ext.getCmp('tree-panel');"
     "if(!tree)return false;"
@@ -7461,7 +7941,6 @@ NAS_FILES_SNIPPET = (
     "window.__smKickFilesPending=false;"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
-    "try{if(typeof smNasFit==='function')smNasFit(true);}catch(e){}"
     "}"
     "if(typeof addRecordWithPath==='function'){"
     "addRecordWithPath(dir,smKickDone);"
@@ -7473,13 +7952,12 @@ NAS_FILES_SNIPPET = (
     "view.updateView(node,smKickDone);"
     "}"
     "setTimeout(function(){"
-    "if(!window.__smKickFilesDone){"
+    "if(window.__smKickFilesDone)return;"
     "window.__smKickFilesPending=false;"
     "try{if(window.loadingAnimation&&loadingAnimation.hideAll)loadingAnimation.hideAll();}catch(e){}"
     "try{if(typeof smClearStuckMask==='function')smClearStuckMask();}catch(e){}"
     "try{if(typeof smKickFilesLoad==='function')smKickFilesLoad();}catch(e){}"
-    "}"
-    "},10000);"
+    "},8000);"
     "return true;"
     "}catch(e){window.__smKickFilesPending=false;return false;}}"
     "try{window.smKickFilesLoad=smKickFilesLoad;}catch(e){}"
@@ -7487,10 +7965,10 @@ NAS_FILES_SNIPPET = (
     "try{"
     "var _smAuthN=0;"
     "var _smAuthT=setInterval(function(){"
-    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();"
+    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smHookWinLocation();"
     "if(!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();"
-    "if(++_smAuthN>=40||window.__smKickFilesDone)clearInterval(_smAuthT);"
-    "},250);"
+    "if(++_smAuthN>=24||(window.__smNaviMerged&&window.__smKickFilesDone))clearInterval(_smAuthT);"
+    "},400);"
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){smMoveAuthToTop();smMergeNaviBar();smKickFilesLoad();},false);"
     "window.addEventListener('load',function(){smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smKickFilesLoad();},false);"
     "}catch(e){}"
@@ -7585,16 +8063,18 @@ NAS_FILES_SNIPPET = (
     "}catch(e){}}"
     "try{"
     "smDisableDisplayingOverlay();"
-    "setInterval(smDisableDisplayingOverlay,1500);"
+    "setInterval(smDisableDisplayingOverlay,4000);"
     "setTimeout(smClearStuckMask,2500);"
-    "setTimeout(smClearStuckMask,5000);"
-    "setTimeout(smClearStuckMask,9000);"
+    "setTimeout(smClearStuckMask,8000);"
+    "var _smMaskClickAt=0;"
     "document.addEventListener('touchstart',function(ev){"
-    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field,#sm-win-address')){smRestoreDialogs();return;}}catch(e){}"
+    "var now=Date.now();if(now-_smMaskClickAt<1500)return;_smMaskClickAt=now;"
     "smClearStuckMask();"
     "},true);"
     "document.addEventListener('click',function(ev){"
-    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field')){smRestoreDialogs();return;}}catch(e){}"
+    "try{var t=ev&&ev.target;if(t&&t.closest&&t.closest('.x-msgbox,.x-sheet,input,textarea,.x-input-el,.x-field,#sm-win-address')){smRestoreDialogs();return;}}catch(e){}"
+    "var now=Date.now();if(now-_smMaskClickAt<1500)return;_smMaskClickAt=now;"
     "smClearStuckMask();"
     "},true);"
     "function smHookMsgShow(){"
@@ -7655,11 +8135,9 @@ NAS_FILES_SNIPPET = (
     "return null;}"
     "function smFixIconGridLabels(){"
     "try{"
-    "document.querySelectorAll('#sidebyside-panel .icon-info > span').forEach(function(sp){"
-    "var t=(sp.textContent||'').trim();"
-    "if(t==='--'||t==='-'||t==='')sp.classList.add('sm-nas-size-empty');"
-    "else sp.classList.remove('sm-nas-size-empty');"
-    "});"
+    "if(window.__smFixGridBusy)return;"
+    "window.__smFixGridBusy=true;"
+    "try{smFixSideBySideRows();}catch(e){}"
     "var tilePanels=['icon-panel-small','icon-panel-medium','icon-panel-large'];"
     "for(var p=0;p<tilePanels.length;p++){"
     "var root=smNasDataViewRoot(tilePanels[p]);"
@@ -7713,13 +8191,22 @@ NAS_FILES_SNIPPET = (
     "if(side){"
     "try{"
     "side.style.setProperty('display','block','important');"
-    "side.style.setProperty('position','relative','important');"
     "side.style.setProperty('width','100%','important');"
-    "side.style.setProperty('min-width','100%','important');"
     "side.style.setProperty('max-width','100%','important');"
-    "side.style.setProperty('height','auto','important');"
-    "side.style.removeProperty('left');"
-    "side.style.removeProperty('top');"
+    "side.style.setProperty('box-sizing','border-box','important');"
+    # Keep Ext border-layout top/left/height so the sort toolbar is not covered.
+    "side.style.removeProperty('min-width');"
+    "try{"
+    "var ct=side.parentElement;"
+    "var tb=ct&&ct.querySelector(':scope > .x-toolbar');"
+    "if(tb){"
+    "var th=Math.max(32,Math.round(tb.getBoundingClientRect().height||40));"
+    "var top=parseInt(side.style.top||'0',10); if(isNaN(top))top=0;"
+    "if(top<th-1)side.style.top=th+'px';"
+    "var ch=ct.getBoundingClientRect().height||0;"
+    "if(ch>th+40)side.style.height=Math.max(120,Math.round(ch-th))+'px';"
+    "}"
+    "}catch(e){}"
     "}catch(e){}"
     "side.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
     "try{"
@@ -7734,7 +8221,118 @@ NAS_FILES_SNIPPET = (
     "}catch(e){}"
     "});"
     "}"
-    "}catch(e){}}"
+    "}catch(e){}"
+    "finally{window.__smFixGridBusy=false;}"
+    "}"
+    "function smSideBySideStore(){"
+    "try{"
+    "if(!window.Ext||!Ext.getCmp)return null;"
+    "var p=Ext.getCmp('sidebyside-panel');"
+    "if(!p)return null;"
+    "var dv=null;"
+    "try{dv=p.getDataView&&p.getDataView();}catch(e){}"
+    "if(!dv)dv=p.view;"
+    "return (dv&&dv.store)||null;"
+    "}catch(e){return null;}"
+    "}"
+    "function smFixSideBySideRows(){"
+    "try{"
+    "var panel=document.getElementById('sidebyside-panel');"
+    "if(!panel)return;"
+    "var store=smSideBySideStore();"
+    "var thumbs=panel.querySelectorAll('.icon-thumbnail');"
+    "function smRecGet(rec,key){"
+    "try{if(rec&&rec.get)return rec.get(key);}catch(e){}"
+    "try{if(rec&&rec.data)return rec.data[key];}catch(e){}"
+    "return null;"
+    "}"
+    "function smFmtSideDate(v){"
+    "try{"
+    "if(v==null||v==='')return '';"
+    "if(Object.prototype.toString.call(v)==='[object Date]'&&!isNaN(v.getTime())){"
+    "function z(n){n=String(n);return n.length<2?('0'+n):n;}"
+    "return v.getFullYear()+'/'+z(v.getMonth()+1)+'/'+z(v.getDate())+' '+z(v.getHours())+':'+z(v.getMinutes());"
+    "}"
+    "var s=String(v);"
+    "if(/GMT|UTC|Coordinated Universal Time/i.test(s)){"
+    "var d=new Date(s);"
+    "if(!isNaN(d.getTime()))return smFmtSideDate(d);"
+    "}"
+    "return s;"
+    "}catch(e){return String(v||'');}"
+    "}"
+    "for(var i=0;i<thumbs.length;i++){"
+    "var thumb=thumbs[i];"
+    "var info=thumb.querySelector('.icon-info');"
+    "if(!info)continue;"
+    "var nameEl=info.querySelector('.x-editable');"
+    "var spans=[];"
+    "var kids=info.children;"
+    "for(var k=0;k<kids.length;k++){"
+    "if(kids[k].classList&&kids[k].classList.contains('x-editable'))continue;"
+    "if(kids[k].tagName==='SPAN')spans.push(kids[k]);"
+    "}"
+    "var rec=null;"
+    "try{if(store&&store.getAt)rec=store.getAt(i);}catch(e){}"
+    "var fullName='';"
+    "var sizeText='';"
+    "var dateText='';"
+    "var typeText='';"
+    "var isDir=false;"
+    "if(rec){"
+    "fullName=String(smRecGet(rec,'name')||smRecGet(rec,'text')||'');"
+    "isDir=!!smRecGet(rec,'directory');"
+    "sizeText=String(smRecGet(rec,'size_string')||'');"
+    "dateText=smFmtSideDate(smRecGet(rec,'dateString')||smRecGet(rec,'time_string')||smRecGet(rec,'mtime')||'');"
+    "if(isDir)typeText='Folder';"
+    "else{"
+    "var ext=String(smRecGet(rec,'extension')||'');"
+    "typeText=ext?ext.replace(/^\\./,'').toUpperCase():'File';"
+    "}"
+    "if(!sizeText){"
+    "if(isDir)sizeText='—';"
+    "else{"
+    "var sz=smRecGet(rec,'size');"
+    "sizeText=(sz==null||sz==='')?'—':String(sz);"
+    "}"
+    "}"
+    "}"
+    "if(nameEl){"
+    "if(fullName){"
+    "if((nameEl.textContent||'')!==fullName)nameEl.textContent=fullName;"
+    "nameEl.setAttribute('title',fullName);"
+    "}else{"
+    "var cur=(nameEl.textContent||'').trim();"
+    "if(cur)nameEl.setAttribute('title',cur);"
+    "}"
+    "}"
+    "if(!dateText&&spans[1])dateText=smFmtSideDate((spans[1].textContent||'').trim());"
+    "if(sizeText==='--'||sizeText==='-'||sizeText==='')sizeText='—';"
+    "while(spans.length<3){"
+    "var ns=document.createElement('span');"
+    "info.appendChild(ns);"
+    "spans.push(ns);"
+    "}"
+    "spans[0].textContent=sizeText;"
+    "spans[0].classList.add('sm-nas-col-size');"
+    "spans[0].classList.remove('sm-nas-size-empty');"
+    "if(sizeText==='—')spans[0].classList.add('sm-nas-size-empty');"
+    "spans[1].textContent=dateText;"
+    "spans[1].classList.add('sm-nas-col-date');"
+    "spans[2].textContent=typeText||'';"
+    "spans[2].classList.add('sm-nas-col-type');"
+    "}"
+    "}catch(e){}"
+    "}"
+    "function smScheduleFixIconGrid(){"
+    "try{"
+    "if(window.__smFixGridTimer)return;"
+    "window.__smFixGridTimer=setTimeout(function(){"
+    "window.__smFixGridTimer=null;"
+    "try{smFixIconGridLabels();}catch(e){}"
+    "},80);"
+    "}catch(e){try{smFixIconGridLabels();}catch(e2){}}"
+    "}"
     "function smPatchDataViewRefresh(){"
     "try{"
     "if(window.__smDvPatched||!window.Ext||!Ext.DataView)return;"
@@ -7747,7 +8345,8 @@ NAS_FILES_SNIPPET = (
     "this.el.dom.style.setProperty('width','100%','important');"
     "this.el.dom.style.setProperty('max-width','100%','important');"
     "}"
-    "if(window.smFixIconGridLabels)window.smFixIconGridLabels();"
+    "if(window.smScheduleFixIconGrid)window.smScheduleFixIconGrid();"
+    "else if(window.smFixIconGridLabels)window.smFixIconGridLabels();"
     "}catch(e){}"
     "return out;};"
     "window.__smDvPatched=true;"
@@ -7763,14 +8362,15 @@ NAS_FILES_SNIPPET = (
     "if(!view||view.__smObserved)return;"
     "view.__smObserved=true;"
     "try{"
-    "new MutationObserver(function(){try{smFixIconGridLabels();}catch(e){}})"
-    ".observe(view,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});"
+    # childList only — watching style/class re-triggers smFixIconGridLabels forever
+    "new MutationObserver(function(){try{smScheduleFixIconGrid();}catch(e){}})"
+    ".observe(view,{childList:true,subtree:true});"
     "}catch(e){}"
     "});"
-    "smFixIconGridLabels();"
+    "smScheduleFixIconGrid();"
     "}"
     "hook();"
-    "setInterval(hook,1200);"
+    "setInterval(hook,4000);"
     "}catch(e){}}"
     "function smRefreshFileIconView(){"
     "try{"
@@ -7780,8 +8380,8 @@ NAS_FILES_SNIPPET = (
     "var cv=main.getComponent(0);"
     "if(!cv)return false;"
     "var dv=(cv.getDataView&&cv.getDataView())||(cv.view&&cv.view.getView&&cv.view.getView())||null;"
-    "if(dv&&dv.refresh){dv.refresh();try{smFixIconGridLabels();}catch(e){}return true;}"
-    "try{smFixIconGridLabels();}catch(e){}"
+    "if(dv&&dv.refresh){dv.refresh();try{if(window.smScheduleFixIconGrid)smScheduleFixIconGrid();else smFixIconGridLabels();}catch(e){}return true;}"
+    "try{if(window.smScheduleFixIconGrid)smScheduleFixIconGrid();else smFixIconGridLabels();}catch(e){}"
     "}catch(e){}"
     "return false;}"
     "function smNasFit(force){"
@@ -7807,6 +8407,7 @@ NAS_FILES_SNIPPET = (
     "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
+    "try{if(typeof smSyncWinHeaderLayout==='function')smSyncWinHeaderLayout();}catch(e){}"
     "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();}catch(e){}"
     "try{if(typeof smWatchIconGrid==='function')smWatchIconGrid();}catch(e){}"
     "var vp=smFindViewport();"
@@ -7814,8 +8415,7 @@ NAS_FILES_SNIPPET = (
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
     "try{if(vp.doLayout)vp.doLayout(true,true);}catch(e){}"
     "}"
-    "try{if(typeof smRefreshFileIconView==='function')smRefreshFileIconView();}catch(e){}"
-    "try{if(typeof smFixIconGridLabels==='function')smFixIconGridLabels();}catch(e){}"
+    "try{if(typeof smScheduleFixIconGrid==='function')smScheduleFixIconGrid();else if(typeof smFixIconGridLabels==='function')smFixIconGridLabels();}catch(e){}"
     "try{"
     "var main=Ext.getCmp&&Ext.getCmp('main-panel');"
     "var left=Ext.getCmp&&Ext.getCmp('left-panel');"
@@ -7844,7 +8444,6 @@ NAS_FILES_SNIPPET = (
     "try{if(stage.doComponentLayout)stage.doComponentLayout();else if(stage.doLayout)stage.doLayout();}catch(e){}"
     "}"
     "}catch(e){}"
-    "try{smClearStuckMask();}catch(e){}"
     "try{if(narrow&&typeof window.smPaintScrollPorts==='function')window.smPaintScrollPorts();}catch(e){}"
     "}"
     "var nodes=document.querySelectorAll('.x-viewport');"
@@ -7859,7 +8458,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smNasDataViewRoot=smNasDataViewRoot;window.smFixIconGridLabels=smFixIconGridLabels;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smNasDataViewRoot=smNasDataViewRoot;window.smFixIconGridLabels=smFixIconGridLabels;window.smScheduleFixIconGrid=smScheduleFixIconGrid;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -8003,16 +8602,21 @@ NAS_FILES_SNIPPET = (
     "try{smMobileScrollFix();}catch(e){}"
     "try{smWatchIconGrid();}catch(e){}"
     "try{"
-    "window.addEventListener('resize',function(){smNasFit(true);},false);"
-
-    "window.addEventListener('orientationchange',function(){setTimeout(function(){smNasFit(true);},50);},false);"
+    "function smNasFitDebounced(){"
+    "try{"
+    "if(window.__smFitDebounce)clearTimeout(window.__smFitDebounce);"
+    "window.__smFitDebounce=setTimeout(function(){window.__smFitDebounce=null;smNasFit(true);},120);"
+    "}catch(e){try{smNasFit(true);}catch(e2){}}"
+    "}"
+    "window.addEventListener('resize',smNasFitDebounced,false);"
+    "window.addEventListener('orientationchange',function(){setTimeout(smNasFitDebounced,50);},false);"
     "if(window.visualViewport){"
-    "visualViewport.addEventListener('resize',function(){smNasFit(true);},false);}"
+    "visualViewport.addEventListener('resize',smNasFitDebounced,false);}"
     "var _smFitN=0;"
     "var _smFitT=setInterval(function(){"
     "smPatchExtDom();smNasFit(false);"
-    "if(++_smFitN>=20)clearInterval(_smFitT);"
-    "},500);"
+    "if(++_smFitN>=12)clearInterval(_smFitT);"
+    "},700);"
     "if(document.readyState==='complete')setTimeout(function(){smNasFit(true);},0);"
     "else window.addEventListener('load',function(){"
     "setTimeout(function(){smNasFit(true);},0);"
@@ -8025,8 +8629,8 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();},1200);"
-    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();},2000);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();smHookWinLocation();},1200);"
+    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();smHookWinLocation();},2000);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
@@ -8378,6 +8982,7 @@ def _nas_files_patch_css(text: str) -> str:
 
 def _nas_files_hook_dataview(text: str) -> str:
     """Wrap Buffalo DataView refresh to re-apply portal tile layout."""
+    # Use .replace (not %) — hook JS contains literal '100%' widths.
     hook = (
         "(function(_smDv){if(!_smDv||_smDv.__smGridHook)return;"
         "_smDv.__smGridHook=1;var _smRf=_smDv.refresh;"
@@ -8386,8 +8991,9 @@ def _nas_files_hook_dataview(text: str) -> str:
         "_smDv.el.dom.style.setProperty('width','100%','important');"
         "_smDv.el.dom.style.setProperty('max-width','100%','important');"
         "}"
-        "if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
-        "return _smOut;};})(%s);"
+        "if(window.smScheduleFixIconGrid)window.smScheduleFixIconGrid();"
+        "else if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
+        "return _smOut;};})(__SM_DV__);"
     )
     replacements = (
         "var dataView_small = makeDataView(makeTemplate(tpl_small), ICON_SMALL_TEXT_WIDTH, ICON_SMALL_WIDTH, ICON_SMALL_HEIGHT);",
@@ -8397,8 +9003,9 @@ def _nas_files_hook_dataview(text: str) -> str:
     )
     for line in replacements:
         var = line.split("=", 1)[0].strip().replace("var ", "").strip()
-        patched = line + "\n    " + hook % var
-        if hook % var not in text:
+        hook_js = hook.replace("__SM_DV__", var, 1)
+        patched = line + "\n    " + hook_js
+        if hook_js not in text:
             text = text.replace(line, patched, 1)
     return text
 
@@ -8459,18 +9066,16 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
     text = _nas_files_hook_dataview(text)
-    # Show full directory path as text in the location bar.
+    # Keep Ext location bar in sync, and paint Windows-style breadcrumb overlay.
     text = re.sub(
         r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
-        "    locations.doLayout();\r\n"
+        "    try { locations.doLayout(); } catch (_smDl) {}\r\n"
         "    try {\r\n"
         "        var _smTf = Ext.getCmp('location-textfield');\r\n"
-        "        var _smBar = Ext.getCmp('location-bar');\r\n"
-        "        if (_smTf && _smBar) {\r\n"
-        "            _smTf.setValue(path || '/');\r\n"
-        "            _smBar.layout.setActiveItem(1);\r\n"
-        "            try { document.documentElement.classList.add('sm-path-text'); } catch(e) {}\r\n"
-        "        }\r\n"
+        "        if (_smTf) { _smTf.setValue(path || '/'); }\r\n"
+        "        try { document.documentElement.classList.add('sm-win-nav'); } catch(e) {}\r\n"
+        "        if (typeof smEnsureWinAddress === 'function') smEnsureWinAddress(path || '/');\r\n"
+        "        else if (typeof smRenderWinAddress === 'function') smRenderWinAddress(path || '/');\r\n"
         "    } catch(e) {}\r\n"
         "}\r\n\r\nfunction update_location_bar_search",
         text,
@@ -8481,12 +9086,9 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "function update_location_bar_search(path, words) {\r\n"
         "    update_location_bar(path);\r\n"
         "    try {\r\n"
+        "        if (typeof smRenderWinAddress === 'function') smRenderWinAddress(path || '/');\r\n"
         "        var _smTf = Ext.getCmp('location-textfield');\r\n"
-        "        var _smBar = Ext.getCmp('location-bar');\r\n"
-        "        if (_smTf && _smBar) {\r\n"
-        "            _smTf.setValue((path || '/') + ' : \"' + words + '\"');\r\n"
-        "            _smBar.layout.setActiveItem(1);\r\n"
-        "        }\r\n"
+        "        if (_smTf) { _smTf.setValue((path || '/') + ' : \"' + words + '\"'); }\r\n"
         "    } catch(e) {}\r\n"
         "}\r\n\r\n/******* search box",
         text,
@@ -8995,31 +9597,35 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
         except Exception:
             return body
 
-    if is_json:
-        return _nas_files_rewrite_json_paths(text).encode("utf-8")
+    try:
+        if is_json:
+            return _nas_files_rewrite_json_paths(text).encode("utf-8")
 
-    if is_css:
-        return _nas_files_patch_css(text).encode("utf-8")
+        if is_css:
+            return _nas_files_patch_css(text).encode("utf-8")
 
-    if is_js:
-        return _nas_files_rewrite_js_paths(text).encode("utf-8")
+        if is_js:
+            return _nas_files_rewrite_js_paths(text).encode("utf-8")
 
-    if "sm-nas-files-js" in text:
-        return body
-    text = _nas_files_rewrite_html_paths(text)
-    snippet = NAS_FILES_SNIPPET
-    lower = text.lower()
-    head_idx = lower.find("<head>")
-    if head_idx != -1:
-        insert_at = head_idx + len("<head>")
-        text = text[:insert_at] + snippet + text[insert_at:]
-    else:
-        idx = lower.find("</head>")
-        if idx != -1:
-            text = text[:idx] + snippet + text[idx:]
+        if "sm-nas-files-js" in text:
+            return body
+        text = _nas_files_rewrite_html_paths(text)
+        snippet = NAS_FILES_SNIPPET
+        lower = text.lower()
+        head_idx = lower.find("<head>")
+        if head_idx != -1:
+            insert_at = head_idx + len("<head>")
+            text = text[:insert_at] + snippet + text[insert_at:]
         else:
-            text = snippet + text
-    return text.encode("utf-8")
+            idx = lower.find("</head>")
+            if idx != -1:
+                text = text[:idx] + snippet + text[idx:]
+            else:
+                text = snippet + text
+        return text.encode("utf-8")
+    except Exception:
+        # Never drop NAS static assets if a rewrite/hook regresses.
+        return body
 
 
 # Cache rewritten static NAS UI assets on the VPS so phones don't re-pull
