@@ -23,32 +23,8 @@ wg_easy_ip() {
 
 wg_docker_bridge() {
   local ip="${1:-$(wg_easy_ip)}"
-  local bridge subnet net
   [ -n "$ip" ] || return 1
-  subnet="$(echo "$ip" | awk -F. '{print $1"."$2"."$3".0/24"}')"
-  bridge="$(ip -4 route show table main | awk -v s="$subnet" '$1==s && $0 !~ /via / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
-  if [ -n "$bridge" ] && [[ "$bridge" == br-* ]]; then
-    printf '%s\n' "$bridge"
-    return 0
-  fi
-  net="$(docker inspect wg-easy --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | head -1)"
-  if [ -n "$net" ]; then
-    bridge="$(docker network inspect "$net" --format '{{if .Options}}{{index .Options "com.docker.network.bridge.name"}}{{end}}' 2>/dev/null)"
-    if [ -n "$bridge" ]; then
-      printf '%s\n' "$bridge"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-del_stale_wg_routes() {
-  local ip="${1:-$(wg_easy_ip)}"
-  [ -n "$ip" ] || return 0
-  ip route del 10.8.0.0/24 via "$ip" dev tailscale0 2>/dev/null || true
-  ip route del 192.168.8.0/24 via "$ip" dev tailscale0 2>/dev/null || true
-  ip route del 10.0.0.0/24 via "$ip" dev tailscale0 2>/dev/null || true
-  ip route del "${ip}/32" dev tailscale0 2>/dev/null || true
+  ip -4 route get "$ip" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
 }
 
 WG_EASY_IP="$(wg_easy_ip)"
@@ -88,9 +64,6 @@ del_mangle() {
 
 add_mangle() {
   del_mangle
-  WG_EASY_IP="$(wg_easy_ip)"
-  WG_DOCKER_BRIDGE="$(wg_docker_bridge "$WG_EASY_IP")"
-  del_stale_wg_routes "$WG_EASY_IP"
   iptables -t mangle -N SM-TS-VPN-EXIT 2>/dev/null || iptables -t mangle -F SM-TS-VPN-EXIT
   iptables -t mangle -A SM-TS-VPN-EXIT -d 10.0.0.0/8 -j RETURN
   iptables -t mangle -A SM-TS-VPN-EXIT -d 172.16.0.0/12 -j RETURN
@@ -189,9 +162,6 @@ enable_vpn_exit() {
   setup_table "$TS_IFACE"
   add_mangle
   add_ip_rules
-  if [ -x "$TS_HOST_PROTECT" ]; then
-    "$TS_HOST_PROTECT" enable 2>/dev/null || "$TS_HOST_PROTECT" protect-only 2>/dev/null || true
-  fi
   save_state 1 "$exit_ip" "$TS_IFACE"
   if [ -x "$TS_EXIT_DNS" ] && [ -f /opt/dns/ts-exit-dns.enabled ]; then
     "$TS_EXIT_DNS" enable "$TS_IFACE" 2>&1 || true
@@ -204,7 +174,6 @@ disable_vpn_exit() {
   del_mangle
   ip route flush table "$RT_TABLE" 2>/dev/null || true
   del_ip_rules
-  del_stale_wg_routes "$(wg_easy_ip)"
   wg_easy_masq_on
   if [ -x "$TS_HOST_PROTECT" ]; then
     "$TS_HOST_PROTECT" protect-only 2>/dev/null || true

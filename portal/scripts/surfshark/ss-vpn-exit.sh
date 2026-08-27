@@ -22,23 +22,8 @@ wg_easy_ip() {
 
 wg_docker_bridge() {
   local ip="${1:-$(wg_easy_ip)}"
-  local bridge subnet net
   [ -n "$ip" ] || return 1
-  subnet="$(echo "$ip" | awk -F. '{print $1"."$2"."$3".0/24"}')"
-  bridge="$(ip -4 route show table main | awk -v s="$subnet" '$1==s && $0 !~ /via / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
-  if [ -n "$bridge" ] && [[ "$bridge" == br-* ]]; then
-    printf '%s\n' "$bridge"
-    return 0
-  fi
-  net="$(docker inspect wg-easy --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | head -1)"
-  if [ -n "$net" ]; then
-    bridge="$(docker network inspect "$net" --format '{{if .Options}}{{index .Options "com.docker.network.bridge.name"}}{{end}}' 2>/dev/null)"
-    if [ -n "$bridge" ]; then
-      printf '%s\n' "$bridge"
-      return 0
-    fi
-  fi
-  return 1
+  ip -4 route get "$ip" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
 }
 
 WG_EASY_IP="$(wg_easy_ip)"
