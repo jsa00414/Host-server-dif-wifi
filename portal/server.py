@@ -6800,13 +6800,14 @@ select,.x-combo-list{
   text-shadow:none!important}
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
-/* Icon/thumbnail view — CSS grid instead of broken Ext absolute positions in iframe */
+/* Icon/thumbnail view — flex wrap (Buffalo mainPanel.css uses float:left tiles) */
+.icon-panel .x-view,
 #main-panel .x-view{
-  display:grid!important;
-  grid-template-columns:repeat(auto-fill,minmax(240px,1fr))!important;
-  grid-auto-flow:row dense!important;
-  gap:8px 12px!important;
-  align-content:start!important;
+  display:flex!important;
+  flex-wrap:wrap!important;
+  align-content:flex-start!important;
+  align-items:stretch!important;
+  gap:10px 12px!important;
   position:relative!important;
   left:0!important;top:0!important;
   width:100%!important;
@@ -6816,13 +6817,15 @@ select,.x-combo-list{
   padding:10px 12px!important;
   box-sizing:border-box!important;
 }
+.icon-panel .x-view > .x-clear,
 #main-panel .x-view > .x-clear{
   display:none!important;
-  height:0!important;
-  margin:0!important;
-  padding:0!important;
-  grid-column:1/-1!important;
+  flex:0 0 100%!important;
+  width:0!important;height:0!important;
+  margin:0!important;padding:0!important;
+  overflow:hidden!important;
 }
+.icon-panel .icon-thumbnail,
 #main-panel .x-view > .icon-thumbnail,
 #main-panel .x-view .thumb-wrap,
 #main-panel .x-view .icon-side,
@@ -6833,16 +6836,16 @@ select,.x-combo-list{
   left:auto!important;top:auto!important;
   right:auto!important;bottom:auto!important;
   float:none!important;
-  width:auto!important;height:auto!important;
+  clear:none!important;
+  width:240px!important;
+  max-width:100%!important;
+  flex:0 0 240px!important;
+  height:auto!important;
   margin:0!important;
+  padding:0!important;
   box-sizing:border-box!important;
 }
-#main-panel .x-view > .icon-thumbnail{
-  display:block!important;
-  min-width:0!important;
-  grid-column:auto!important;
-  grid-row:auto!important;
-}
+.icon-panel .icon-thumbnail .icon-side,
 #main-panel .x-view .icon-thumbnail .icon-side,
 #main-panel .x-view .thumb-wrap.icon-side,
 #main-panel .x-view .icon-side{
@@ -6854,31 +6857,40 @@ select,.x-combo-list{
   width:100%!important;
   height:auto!important;
 }
-#main-panel .x-view .icon-thumbnail .icon-side[style],
+.icon-panel .icon-thumbnail .icon-side[style],
+.icon-panel .icon-side[style],
 #main-panel .x-view .icon-side[style]{
   width:100%!important;
   height:auto!important;
 }
+.icon-panel .icon-thumbnail img,
+.icon-panel .icon-side img,
+.icon-panel .icon-side .dd-img,
 #main-panel .x-view .icon-thumbnail .dd-img,
 #main-panel .x-view .icon-side .dd-img,
 #main-panel .x-view .icon-side img{
+  float:none!important;
   flex:0 0 48px!important;
   width:48px!important;
   height:48px!important;
   object-fit:contain!important;
   margin:0!important;
 }
+.icon-panel .icon-thumbnail .icon-info,
+.icon-panel .icon-info,
 #main-panel .x-view .icon-thumbnail .icon-info,
 #main-panel .x-view .icon-side .icon-info{
   float:none!important;
   flex:1 1 auto!important;
   width:auto!important;
   min-width:0!important;
+  padding-top:0!important;
   display:flex!important;
   flex-direction:column!important;
   gap:2px!important;
   overflow:hidden!important;
 }
+.icon-panel .x-view .icon-info > span,
 #main-panel .x-view .icon-info > span{
   display:block!important;
   text-align:left!important;
@@ -6886,19 +6898,26 @@ select,.x-combo-list{
   overflow:hidden!important;
   text-overflow:ellipsis!important;
 }
+.icon-panel .x-view .icon-info > span.sm-nas-size-empty,
 #main-panel .x-view .icon-info > span.sm-nas-size-empty{
   display:none!important;
 }
+.icon-panel .icon-thumbnail.x-view-over,
+.icon-panel .icon-thumbnail.x-view-selected,
 #main-panel .x-view .icon-thumbnail.x-view-over,
 #main-panel .x-view .icon-thumbnail.x-view-selected{
   background:rgba(255,255,255,.05)!important;
+  background-image:none!important;
   border:1px solid var(--sm-line)!important;
   border-radius:12px!important;
+  padding:0!important;
 }
+.icon-panel .icon-thumbnail.x-view-selected,
 #main-panel .x-view .icon-thumbnail.x-view-selected{
   background:var(--sm-accent-dim)!important;
   border-color:var(--sm-accent-strong)!important;
 }
+.icon-panel .x-view .x-dv-focus,
 #main-panel .x-view .x-dv-focus{
   display:none!important;
   width:0!important;height:0!important;
@@ -7643,7 +7662,8 @@ NAS_FILES_SNIPPET = (
     "else sp.classList.remove('sm-nas-size-empty');"
     "});"
     "document.querySelectorAll('#main-panel .x-view').forEach(function(view){"
-    "try{view.style.setProperty('display','grid','important');"
+    "try{view.style.setProperty('display','flex','important');"
+    "view.style.setProperty('flex-wrap','wrap','important');"
     "view.style.setProperty('position','relative','important');"
     "view.style.setProperty('height','auto','important');"
     "view.style.setProperty('min-height','0','important');"
@@ -7651,13 +7671,16 @@ NAS_FILES_SNIPPET = (
     "view.style.removeProperty('left');"
     "view.style.removeProperty('top');}catch(e){}"
     "});"
-    "document.querySelectorAll('#main-panel .x-view > .icon-thumbnail').forEach(function(el){"
+    "document.querySelectorAll('#main-panel .icon-thumbnail, .icon-panel .icon-thumbnail').forEach(function(el){"
     "try{el.style.setProperty('position','static','important');"
+    "el.style.setProperty('float','none','important');"
     "el.style.setProperty('left','auto','important');"
     "el.style.setProperty('top','auto','important');"
-    "el.style.setProperty('right','auto','important');"
-    "el.style.setProperty('bottom','auto','important');"
-    "el.style.removeProperty('width');"
+    "el.style.setProperty('flex','0 0 240px','important');"
+    "el.style.setProperty('width','240px','important');"
+    "el.style.setProperty('max-width','100%','important');"
+    "el.style.setProperty('margin','0','important');"
+    "el.style.setProperty('padding','0','important');"
     "el.style.removeProperty('height');}catch(e){}"
     "});"
     "}catch(e){}}"
@@ -8269,6 +8292,55 @@ def _nas_files_rewrite_html_paths(text: str) -> str:
     return text
 
 
+def _nas_files_patch_css(text: str) -> str:
+    """Disable Buffalo float tile layout in mainPanel.css (breaks portal flex grid)."""
+    if ".icon-panel .icon-thumbnail" not in text:
+        return text
+    text = text.replace(
+        ".icon-panel .icon-thumbnail {\n    float: left;",
+        ".icon-panel .icon-thumbnail {\n    float: none;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-thumbnail {\n    float: none;\n    margin: 15px;\n"
+        "    margin-right: 0;\n    margin-bottom: 0;\n    padding: 5px;",
+        ".icon-panel .icon-thumbnail {\n    float: none;\n    margin: 0;\n    padding: 0;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-info {\n    display: block;\n    padding-top: 20px;\n"
+        "    text-align: left;\n    float: right;\n    width: 100px;",
+        ".icon-panel .icon-info {\n    display: block;\n    padding-top: 0;\n"
+        "    text-align: left;\n    float: none;\n    width: auto;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-side img {\n    float: left;",
+        ".icon-panel .icon-side img {\n    float: none;",
+    )
+    return text
+
+
+def _nas_files_hook_dataview(text: str) -> str:
+    """Wrap Buffalo DataView refresh to re-apply portal tile layout."""
+    hook = (
+        "(function(_smDv){if(!_smDv||_smDv.__smGridHook)return;"
+        "_smDv.__smGridHook=1;var _smRf=_smDv.refresh;"
+        "_smDv.refresh=function(){var _smOut=_smRf.apply(this,arguments);"
+        "try{if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
+        "return _smOut;};})(%s);"
+    )
+    replacements = (
+        "var dataView_small = makeDataView(makeTemplate(tpl_small), ICON_SMALL_TEXT_WIDTH, ICON_SMALL_WIDTH, ICON_SMALL_HEIGHT);",
+        "var dataView_medium = makeDataView(makeTemplate(tpl_medium), ICON_MEDIUM_TEXT_WIDTH, ICON_MEDIUM_WIDTH, ICON_MEDIUM_HEIGHT);",
+        "var dataView_large = makeDataView(makeTemplate(tpl_large), ICON_LARGE_TEXT_WIDTH, ICON_LARGE_WIDTH, ICON_LARGE_HEIGHT);",
+        "var dataView_side = makeDataView(makeTemplate(tpl_side), SIDEBYSIDE_INFO_WIDTH, SIDEBYSIDE_WIDTH, SIDEBYSIDE_HEIGHT);",
+    )
+    for line in replacements:
+        var = line.split("=", 1)[0].strip().replace("var ", "").strip()
+        patched = line + "\n    " + hook % var
+        if hook % var not in text:
+            text = text.replace(line, patched, 1)
+    return text
+
+
 def _nas_files_rewrite_js_paths(text: str) -> str:
     """Rewrite hardcoded absolute WebAccess paths inside JS sources."""
     # Avoid double-prefixing if already rewritten.
@@ -8324,6 +8396,7 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
+    text = _nas_files_hook_dataview(text)
     # Show full directory path as text in the location bar.
     text = re.sub(
         r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
@@ -8849,7 +8922,8 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
     )
     is_html = "text/html" in ctype
     is_json = "application/json" in ctype or "text/json" in ctype or ctype.endswith("+json")
-    if not is_js and not is_html and not is_json:
+    is_css = "text/css" in ctype
+    if not is_js and not is_html and not is_json and not is_css:
         return body
     try:
         text = body.decode("utf-8")
@@ -8861,6 +8935,9 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
 
     if is_json:
         return _nas_files_rewrite_json_paths(text).encode("utf-8")
+
+    if is_css:
+        return _nas_files_patch_css(text).encode("utf-8")
 
     if is_js:
         return _nas_files_rewrite_js_paths(text).encode("utf-8")
