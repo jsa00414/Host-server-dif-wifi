@@ -1,5 +1,5 @@
 # ServerManager - Windows built-in IKEv2 VPN setup
-# Run in elevated PowerShell (Run as administrator).
+# Run in elevated PowerShell (Run as administrator) OR use the .cmd launcher.
 param(
   [string]$Server = "portal.vpstruelord.com",
   [string]$Name = "ServerManager IKEv2",
@@ -16,19 +16,12 @@ if (-not $isAdmin) {
   exit 1
 }
 
-# @@CA_CERT_PEM@@ is replaced by the portal when downloading this script.
-$CaPem = @"
-@@CA_CERT_PEM@@
-"@
-
-if ($CaPem -match "BEGIN CERTIFICATE") {
-  $caPath = Join-Path $env:TEMP "ServerManager-IKEv2-CA.crt"
-  Set-Content -Path $caPath -Value $CaPem.Trim() -Encoding ASCII
-  Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-  Write-Host "Installed ServerManager IKEv2 CA into Trusted Root."
-} else {
-  Write-Host "WARNING: CA not embedded - download ca.crt from Portal Windows VPN if connect fails." -ForegroundColor Yellow
-}
+# NAT-T fix (common on home Wi-Fi / school networks)
+New-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Services\PolicyAgent" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\PolicyAgent" -Name "AssumeUDPEncapsulationContextOnSendRule" -Type DWord -Value 2 -Force
+# Allow modern DH for IKEv2
+New-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Services\RasMan\Parameters" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\RasMan\Parameters" -Name "NegotiateDH2048_AES256" -Type DWord -Value 1 -Force
 
 Get-VpnConnection -Name $Name -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -ErrorAction SilentlyContinue
 Get-VpnConnection -Name $Name -AllUserConnection -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -AllUserConnection -ErrorAction SilentlyContinue
@@ -58,5 +51,6 @@ Write-Host ""
 Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
+Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

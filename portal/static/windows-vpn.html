@@ -114,18 +114,17 @@
     <section class="panel">
       <div class="panel-head"><h2>Setup on Windows</h2></div>
       <div class="panel-body">
-        <p class="hint">Download both files into the same folder. Double-click the <strong>.cmd</strong> (UAC prompt) — it installs the CA and creates the VPN profile.</p>
+        <p class="hint">Download both files into the same folder, then double-click the <strong>.cmd</strong> (accept UAC). Server uses a public Let's Encrypt certificate — no CA install needed.</p>
         <button type="button" class="btn primary" id="dlPs1">Download Setup-ServerManagerVpn.ps1</button>
         <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerVpn.cmd</button>
-        <button type="button" class="btn" id="dlCa">Download CA only</button>
         <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Save <code>Setup-ServerManagerVpn.ps1</code> and <code>Setup-ServerManagerVpn.cmd</code> in the same folder (Downloads is fine).</li>
-          <li>Double-click <strong>Setup-ServerManagerVpn.cmd</strong> and accept the Administrator prompt.</li>
+          <li>Save both files in the same folder (Downloads is fine).</li>
+          <li>Double-click <strong>Setup-ServerManagerVpn.cmd</strong> and accept the Administrator prompt (recreates the VPN profile).</li>
           <li>Open <strong>Settings -&gt; Network &amp; internet -&gt; VPN</strong>.</li>
           <li>Select <strong>ServerManager IKEv2</strong> -&gt; Connect with the username/password above.</li>
         </ol>
-        <p class="hint" style="margin-top:14px">If the button does nothing, open this page outside the portal frame: <a href="/windows-vpn.html" target="_blank" rel="noopener">windows-vpn.html</a></p>
+        <p class="hint" style="margin-top:14px">If download buttons do nothing, open <a href="/windows-vpn.html" target="_blank" rel="noopener">windows-vpn.html</a> in a new tab.</p>
         <p class="hint" style="margin-top:14px">Manual settings if you prefer the Windows UI:</p>
         <pre id="manualBox">VPN provider: Windows (built-in)
 Connection name: ServerManager IKEv2
@@ -228,7 +227,6 @@ Type of sign-in info: User name and password`;
     }
     $("dlPs1").onclick = () => downloadFile("/api/ikev2/windows-ps1", "Setup-ServerManagerVpn.ps1");
     $("dlCmd").onclick = () => downloadFile("/api/ikev2/windows-cmd", "Setup-ServerManagerVpn.cmd");
-    $("dlCa").onclick = () => downloadFile("/api/ikev2/ca.crt", "ServerManager-IKEv2-CA.crt");
     refresh();
     setInterval(refresh, 8000);
   </script>
