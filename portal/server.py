@@ -6949,9 +6949,8 @@ select,.x-combo-list{
 /* Side-by-side list — full-width rows on DataView .x-border-panel root */
 #sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   display:block!important;
-  position:relative!important;left:0!important;top:0!important;
-  width:100%!important;min-width:100%!important;max-width:100%!important;
-  height:auto!important;padding:0!important;box-sizing:border-box!important}
+  width:100%!important;min-width:0!important;max-width:100%!important;
+  box-sizing:border-box!important;padding:0!important;overflow:auto!important}
 #sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
   position:static!important;
   left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
@@ -6961,8 +6960,8 @@ select,.x-combo-list{
   border-bottom:1px solid var(--sm-line)!important}
 #sidebyside-panel .icon-thumbnail .icon-side{
   display:flex!important;flex-direction:row!important;align-items:center!important;
-  gap:12px!important;padding:8px 12px!important;
-  width:100%!important;max-width:100%!important;height:auto!important;min-height:56px!important;
+  gap:12px!important;padding:6px 12px!important;
+  width:100%!important;max-width:100%!important;height:auto!important;min-height:44px!important;
   margin:0!important;box-sizing:border-box!important}
 #sidebyside-panel .icon-thumbnail .icon-side[style]{
   width:100%!important;height:auto!important}
@@ -8192,13 +8191,22 @@ NAS_FILES_SNIPPET = (
     "if(side){"
     "try{"
     "side.style.setProperty('display','block','important');"
-    "side.style.setProperty('position','relative','important');"
     "side.style.setProperty('width','100%','important');"
-    "side.style.setProperty('min-width','100%','important');"
     "side.style.setProperty('max-width','100%','important');"
-    "side.style.setProperty('height','auto','important');"
-    "side.style.removeProperty('left');"
-    "side.style.removeProperty('top');"
+    "side.style.setProperty('box-sizing','border-box','important');"
+    # Keep Ext border-layout top/left/height so the sort toolbar is not covered.
+    "side.style.removeProperty('min-width');"
+    "try{"
+    "var ct=side.parentElement;"
+    "var tb=ct&&ct.querySelector(':scope > .x-toolbar');"
+    "if(tb){"
+    "var th=Math.max(32,Math.round(tb.getBoundingClientRect().height||40));"
+    "var top=parseInt(side.style.top||'0',10); if(isNaN(top))top=0;"
+    "if(top<th-1)side.style.top=th+'px';"
+    "var ch=ct.getBoundingClientRect().height||0;"
+    "if(ch>th+40)side.style.height=Math.max(120,Math.round(ch-th))+'px';"
+    "}"
+    "}catch(e){}"
     "}catch(e){}"
     "side.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
     "try{"
