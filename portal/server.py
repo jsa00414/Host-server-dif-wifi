@@ -6646,10 +6646,12 @@ html.sm-win-nav #control-panel #alertButton{
 html.sm-merged-chrome #control-panel,
 html.sm-win-nav #control-panel{
   display:block!important;visibility:visible!important;position:relative!important;
-  height:auto!important;min-height:52px!important;max-height:none!important;
-  overflow:visible!important;padding:8px 12px!important;margin:0!important;
+  box-sizing:border-box!important;
+  height:auto!important;min-height:0!important;max-height:none!important;
+  overflow:hidden!important;padding:4px 10px!important;margin:0!important;
   border:0!important;border-bottom:1px solid var(--sm-line)!important;
-  background:var(--sm-bg1)!important}
+  background:var(--sm-bg1)!important;
+  line-height:0!important}
 /* Hide native Ext toolbar chrome; custom #sm-win-explorer-bar paints the nav */
 html.sm-win-nav #control-panel>.x-toolbar-ct,
 html.sm-win-nav #control-panel>table,
@@ -6672,7 +6674,8 @@ html.sm-win-nav #control-panel .sm-win-hide{
 #sm-win-explorer-bar{
   display:flex!important;align-items:center!important;gap:8px!important;
   width:100%!important;max-width:100%!important;box-sizing:border-box!important;
-  min-height:34px!important}
+  min-height:34px!important;height:34px!important;margin:0!important;padding:0!important;
+  line-height:normal!important}
 #sm-win-explorer-bar .sm-win-nav-btns{
   display:flex!important;align-items:center!important;gap:2px!important;
   flex:0 0 auto!important}
@@ -7500,6 +7503,14 @@ NAS_FILES_SNIPPET = (
     "document.documentElement.classList.add('sm-win-nav');"
     "var cp=document.getElementById('control-panel');"
     "if(!cp)return;"
+    "try{"
+    "cp.style.height='auto';cp.style.minHeight='0';cp.style.maxHeight='none';"
+    "cp.style.paddingTop='4px';cp.style.paddingBottom='4px';"
+    "if(window.Ext&&Ext.getCmp){var _smCp=Ext.getCmp('control-panel');"
+    "if(_smCp){try{_smCp.setHeight(false);}catch(e){}"
+    "try{if(_smCp.ownerCt&&_smCp.ownerCt.doLayout)_smCp.ownerCt.doLayout(true,true);}catch(e){}"
+    "}}"
+    "}catch(e){}"
     "var row=document.getElementById('sm-win-explorer-bar');"
     "if(!row){"
     "row=document.createElement('div');"
