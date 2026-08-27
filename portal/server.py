@@ -6800,32 +6800,37 @@ select,.x-combo-list{
   text-shadow:none!important}
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
-/* Icon tile views — CSS grid (Ext DataView sets a narrow single-column width) */
-#icon-panel-small .x-panel-body,#icon-panel-medium .x-panel-body,#icon-panel-large .x-panel-body,
-#sidebyside-panel .x-panel-body{
+/* Icon tile views — Ext 2.3 DataView root is .x-border-panel (no .x-view class) */
+#icon-panel-small .x-border-layout-ct,#icon-panel-medium .x-border-layout-ct,
+#icon-panel-large .x-border-layout-ct,#sidebyside-panel .x-border-layout-ct{
   width:100%!important;max-width:100%!important;box-sizing:border-box!important}
-#icon-panel-small .x-view,#icon-panel-medium .x-view,#icon-panel-large .x-view{
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar),
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar),
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   display:grid!important;
   grid-auto-flow:row dense!important;
   align-content:start!important;
   gap:10px 12px!important;
   position:relative!important;
   left:0!important;top:0!important;
-  width:100%!important;min-width:100%!important;
+  width:100%!important;min-width:100%!important;max-width:100%!important;
   height:auto!important;min-height:0!important;max-height:none!important;
   padding:10px 12px!important;box-sizing:border-box!important}
-#icon-panel-small .x-view{
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   grid-template-columns:repeat(auto-fill,minmax(88px,1fr))!important}
-#icon-panel-medium .x-view{
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   grid-template-columns:repeat(auto-fill,minmax(128px,1fr))!important}
-#icon-panel-large .x-view{
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   grid-template-columns:repeat(auto-fill,minmax(208px,1fr))!important}
-#icon-panel-small .x-view > .x-clear,#icon-panel-medium .x-view > .x-clear,
-#icon-panel-large .x-view > .x-clear,#sidebyside-panel .x-view > .x-clear{
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear{
   display:none!important;width:0!important;height:0!important;
   margin:0!important;padding:0!important;overflow:hidden!important}
-#icon-panel-small .x-view > .icon-thumbnail,#icon-panel-medium .x-view > .icon-thumbnail,
-#icon-panel-large .x-view > .icon-thumbnail{
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail,
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail,
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
   position:static!important;
   left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
   float:none!important;clear:none!important;
@@ -6849,13 +6854,13 @@ select,.x-combo-list{
 #icon-panel-small .icon-thumbnail.x-view-selected,#icon-panel-medium .icon-thumbnail.x-view-selected,
 #icon-panel-large .icon-thumbnail.x-view-selected{
   background:var(--sm-accent-dim)!important;border-color:var(--sm-accent-strong)!important}
-/* Side-by-side list — full-width rows aligned to sort toolbar columns */
-#sidebyside-panel .x-view{
+/* Side-by-side list — full-width rows on DataView .x-border-panel root */
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   display:block!important;
   position:relative!important;left:0!important;top:0!important;
-  width:100%!important;min-width:100%!important;
+  width:100%!important;min-width:100%!important;max-width:100%!important;
   height:auto!important;padding:0!important;box-sizing:border-box!important}
-#sidebyside-panel .x-view > .icon-thumbnail{
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
   position:static!important;
   left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
   float:none!important;clear:both!important;
@@ -6887,8 +6892,8 @@ select,.x-combo-list{
   border-color:var(--sm-line)!important}
 #sidebyside-panel .icon-thumbnail.x-view-selected{
   background:var(--sm-accent-dim)!important;border-color:var(--sm-accent-strong)!important}
-#icon-panel-small .x-view .x-dv-focus,#icon-panel-medium .x-view .x-dv-focus,
-#icon-panel-large .x-view .x-dv-focus,#sidebyside-panel .x-view .x-dv-focus{
+#icon-panel-small .icon-thumbnail .x-dv-focus,#icon-panel-medium .icon-thumbnail .x-dv-focus,
+#icon-panel-large .icon-thumbnail .x-dv-focus,#sidebyside-panel .icon-thumbnail .x-dv-focus{
   display:none!important;width:0!important;height:0!important;
   overflow:hidden!important;position:absolute!important;pointer-events:none!important}
 /* Detail/list grid — keep Ext table layout (do not apply DataView tile rules) */
@@ -7626,6 +7631,20 @@ NAS_FILES_SNIPPET = (
     "});}"
     "}catch(e){}"
     "return vp;}"
+    "function smNasDataViewRoot(panelId){"
+    "try{"
+    "var panel=document.getElementById(panelId);"
+    "if(!panel)return null;"
+    "var bl=panel.querySelector('.x-border-layout-ct');"
+    "if(!bl)return null;"
+    "for(var i=0;i<bl.children.length;i++){"
+    "var c=bl.children[i];"
+    "if(!c||!c.classList)continue;"
+    "if(c.classList.contains('x-toolbar'))continue;"
+    "if(c.querySelector('.icon-thumbnail')||c.classList.contains('x-border-panel'))return c;"
+    "}"
+    "}catch(e){}"
+    "return null;}"
     "function smFixIconGridLabels(){"
     "try{"
     "document.querySelectorAll('#sidebyside-panel .icon-info > span').forEach(function(sp){"
@@ -7633,24 +7652,27 @@ NAS_FILES_SNIPPET = (
     "if(t==='--'||t==='-'||t==='')sp.classList.add('sm-nas-size-empty');"
     "else sp.classList.remove('sm-nas-size-empty');"
     "});"
-    "['#icon-panel-small','#icon-panel-medium','#icon-panel-large'].forEach(function(sel){"
-    "document.querySelectorAll(sel+' .x-view').forEach(function(view){"
+    "var tilePanels=['icon-panel-small','icon-panel-medium','icon-panel-large'];"
+    "for(var p=0;p<tilePanels.length;p++){"
+    "var root=smNasDataViewRoot(tilePanels[p]);"
+    "if(!root)continue;"
+    "var min=tilePanels[p].indexOf('small')>=0?88:tilePanels[p].indexOf('large')>=0?208:128;"
     "try{"
-    "var body=view.closest('.x-panel-body');"
-    "if(body){body.style.setProperty('width','100%','important');body.style.setProperty('max-width','100%','important');}"
-    "var min=sel.indexOf('small')>=0?88:sel.indexOf('large')>=0?208:128;"
-    "view.style.setProperty('display','grid','important');"
-    "view.style.setProperty('grid-template-columns','repeat(auto-fill,minmax('+min+'px,1fr))','important');"
-    "view.style.setProperty('gap','10px 12px','important');"
-    "view.style.setProperty('position','relative','important');"
-    "view.style.setProperty('width','100%','important');"
-    "view.style.setProperty('min-width','100%','important');"
-    "view.style.setProperty('height','auto','important');"
-    "view.style.setProperty('min-height','0','important');"
-    "view.style.removeProperty('left');"
-    "view.style.removeProperty('top');"
+    "var bl=root.closest('.x-border-layout-ct');"
+    "if(bl){bl.style.setProperty('width','100%','important');bl.style.setProperty('max-width','100%','important');}"
+    "root.style.setProperty('display','grid','important');"
+    "root.style.setProperty('grid-template-columns','repeat(auto-fill,minmax('+min+'px,1fr))','important');"
+    "root.style.setProperty('gap','10px 12px','important');"
+    "root.style.setProperty('position','relative','important');"
+    "root.style.setProperty('width','100%','important');"
+    "root.style.setProperty('min-width','100%','important');"
+    "root.style.setProperty('max-width','100%','important');"
+    "root.style.setProperty('height','auto','important');"
+    "root.style.setProperty('min-height','0','important');"
+    "root.style.removeProperty('left');"
+    "root.style.removeProperty('top');"
     "}catch(e){}"
-    "view.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
+    "root.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
     "try{"
     "el.style.setProperty('position','static','important');"
     "el.style.setProperty('float','none','important');"
@@ -7664,21 +7686,20 @@ NAS_FILES_SNIPPET = (
     "el.style.removeProperty('height');"
     "}catch(e){}"
     "});"
-    "});"
-    "});"
-    "document.querySelectorAll('#sidebyside-panel .x-view').forEach(function(view){"
+    "}"
+    "var side=smNasDataViewRoot('sidebyside-panel');"
+    "if(side){"
     "try{"
-    "var body=view.closest('.x-panel-body');"
-    "if(body){body.style.setProperty('width','100%','important');body.style.setProperty('max-width','100%','important');}"
-    "view.style.setProperty('display','block','important');"
-    "view.style.setProperty('position','relative','important');"
-    "view.style.setProperty('width','100%','important');"
-    "view.style.setProperty('min-width','100%','important');"
-    "view.style.setProperty('height','auto','important');"
-    "view.style.removeProperty('left');"
-    "view.style.removeProperty('top');"
+    "side.style.setProperty('display','block','important');"
+    "side.style.setProperty('position','relative','important');"
+    "side.style.setProperty('width','100%','important');"
+    "side.style.setProperty('min-width','100%','important');"
+    "side.style.setProperty('max-width','100%','important');"
+    "side.style.setProperty('height','auto','important');"
+    "side.style.removeProperty('left');"
+    "side.style.removeProperty('top');"
     "}catch(e){}"
-    "view.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
+    "side.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
     "try{"
     "el.style.setProperty('position','static','important');"
     "el.style.setProperty('float','none','important');"
@@ -7690,7 +7711,7 @@ NAS_FILES_SNIPPET = (
     "el.style.removeProperty('height');"
     "}catch(e){}"
     "});"
-    "});"
+    "}"
     "}catch(e){}}"
     "function smPatchDataViewRefresh(){"
     "try{"
@@ -7699,7 +7720,13 @@ NAS_FILES_SNIPPET = (
     "if(!orig)return;"
     "Ext.DataView.prototype.refresh=function(){"
     "var out=orig.apply(this,arguments);"
-    "try{setTimeout(smFixIconGridLabels,0);}catch(e){}"
+    "try{"
+    "if(this.el&&this.el.dom){"
+    "this.el.dom.style.setProperty('width','100%','important');"
+    "this.el.dom.style.setProperty('max-width','100%','important');"
+    "}"
+    "if(window.smFixIconGridLabels)window.smFixIconGridLabels();"
+    "}catch(e){}"
     "return out;};"
     "window.__smDvPatched=true;"
     "}catch(e){}}"
@@ -7709,8 +7736,9 @@ NAS_FILES_SNIPPET = (
     "if(window.__smIconGridWatch)return;"
     "window.__smIconGridWatch=true;"
     "function hook(){"
-    "document.querySelectorAll('#icon-panel-small .x-view,#icon-panel-medium .x-view,#icon-panel-large .x-view,#sidebyside-panel .x-view').forEach(function(view){"
-    "if(view.__smObserved)return;"
+    "['icon-panel-small','icon-panel-medium','icon-panel-large','sidebyside-panel'].forEach(function(pid){"
+    "var view=smNasDataViewRoot(pid);"
+    "if(!view||view.__smObserved)return;"
     "view.__smObserved=true;"
     "try{"
     "new MutationObserver(function(){try{smFixIconGridLabels();}catch(e){}})"
@@ -7809,7 +7837,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smFixIconGridLabels=smFixIconGridLabels;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smNasDataViewRoot=smNasDataViewRoot;window.smFixIconGridLabels=smFixIconGridLabels;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -8332,7 +8360,11 @@ def _nas_files_hook_dataview(text: str) -> str:
         "(function(_smDv){if(!_smDv||_smDv.__smGridHook)return;"
         "_smDv.__smGridHook=1;var _smRf=_smDv.refresh;"
         "_smDv.refresh=function(){var _smOut=_smRf.apply(this,arguments);"
-        "try{if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
+        "try{if(_smDv.el&&_smDv.el.dom){"
+        "_smDv.el.dom.style.setProperty('width','100%','important');"
+        "_smDv.el.dom.style.setProperty('max-width','100%','important');"
+        "}"
+        "if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
         "return _smOut;};})(%s);"
     )
     replacements = (
