@@ -114,15 +114,18 @@
     <section class="panel">
       <div class="panel-head"><h2>Setup on Windows</h2></div>
       <div class="panel-body">
-        <p class="hint">Download the PowerShell script and run it <strong>as Administrator</strong> (installs the VPN CA + profile), then connect.</p>
-        <a class="btn primary" id="dlPs1" href="/api/ikev2/windows-ps1">Download Setup-ServerManagerVpn.ps1</a>
-        <a class="btn" href="/api/ikev2/ca.crt">Download CA only</a>
+        <p class="hint">Download both files into the same folder. Double-click the <strong>.cmd</strong> (UAC prompt) — it installs the CA and creates the VPN profile.</p>
+        <button type="button" class="btn primary" id="dlPs1">Download Setup-ServerManagerVpn.ps1</button>
+        <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerVpn.cmd</button>
+        <button type="button" class="btn" id="dlCa">Download CA only</button>
+        <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Open <strong>PowerShell as Administrator</strong>, then run the downloaded script (or: <code>Set-ExecutionPolicy -Scope Process Bypass; \\path\\to\\Setup-ServerManagerVpn.ps1</code>).</li>
-          <li>Open <strong>Settings → Network &amp; internet → VPN</strong>.</li>
-          <li>Select <strong>ServerManager IKEv2</strong> → Connect.</li>
-          <li>Sign in with the username/password above.</li>
+          <li>Save <code>Setup-ServerManagerVpn.ps1</code> and <code>Setup-ServerManagerVpn.cmd</code> in the same folder (Downloads is fine).</li>
+          <li>Double-click <strong>Setup-ServerManagerVpn.cmd</strong> and accept the Administrator prompt.</li>
+          <li>Open <strong>Settings -&gt; Network &amp; internet -&gt; VPN</strong>.</li>
+          <li>Select <strong>ServerManager IKEv2</strong> -&gt; Connect with the username/password above.</li>
         </ol>
+        <p class="hint" style="margin-top:14px">If the button does nothing, open this page outside the portal frame: <a href="/windows-vpn.html" target="_blank" rel="noopener">windows-vpn.html</a></p>
         <p class="hint" style="margin-top:14px">Manual settings if you prefer the Windows UI:</p>
         <pre id="manualBox">VPN provider: Windows (built-in)
 Connection name: ServerManager IKEv2
@@ -198,6 +201,34 @@ Type of sign-in info: User name and password`;
       passVisible = !passVisible;
       $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
     };
+    async function downloadFile(path, filename) {
+      const msg = $("dlMsg");
+      msg.className = "msg";
+      msg.textContent = "Downloading…";
+      try {
+        const res = await fetch(path, { credentials: "same-origin" });
+        if (res.status === 401) { location.href = "/login.html"; return; }
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        msg.className = "msg ok";
+        msg.textContent = "Saved " + filename;
+      } catch (e) {
+        msg.className = "msg err";
+        msg.textContent = "Download failed: " + (e.message || e);
+      }
+    }
+    $("dlPs1").onclick = () => downloadFile("/api/ikev2/windows-ps1", "Setup-ServerManagerVpn.ps1");
+    $("dlCmd").onclick = () => downloadFile("/api/ikev2/windows-cmd", "Setup-ServerManagerVpn.cmd");
+    $("dlCa").onclick = () => downloadFile("/api/ikev2/ca.crt", "ServerManager-IKEv2-CA.crt");
     refresh();
     setInterval(refresh, 8000);
   </script>

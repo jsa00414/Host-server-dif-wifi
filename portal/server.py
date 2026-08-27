@@ -1827,20 +1827,18 @@ def load_ikev2_windows_ps1() -> bytes:
         IKEV2_DIR / "Setup-ServerManagerVpn.ps1",
     ]
     ca_pem = load_ikev2_ca_pem().strip() or "@@CA_CERT_PEM@@"
+    text = ""
     for path in candidates:
         if path.is_file():
             text = path.read_text(encoding="utf-8", errors="replace")
-            text = text.replace("portal.vpstruelord.com", IKEV2_HOST)
-            text = text.replace('Username = "windows"', f'Username = "{IKEV2_USER}"')
-            text = text.replace("@@CA_CERT_PEM@@", ca_pem)
-            return text.encode("utf-8")
-    # Inline fallback
-    body = f"""# ServerManager Windows IKEv2
+            break
+    if not text:
+        text = f"""# ServerManager Windows IKEv2
 $Server = "{IKEV2_HOST}"
 $Name = "ServerManager IKEv2"
 $Username = "{IKEV2_USER}"
 $CaPem = @"
-{ca_pem}
+@@CA_CERT_PEM@@
 "@
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {{ throw "Run PowerShell as Administrator" }}
@@ -1852,9 +1850,36 @@ if ($CaPem -match "BEGIN CERTIFICATE") {{
 Get-VpnConnection -Name $Name -AllUserConnection -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -AllUserConnection -ErrorAction SilentlyContinue
 Add-VpnConnection -Name $Name -ServerAddress $Server -TunnelType Ikev2 -AuthenticationMethod Eap -EncryptionLevel Required -RememberCredential -AllUserConnection -Force
 Set-VpnConnectionIPsecConfiguration -ConnectionName $Name -AuthenticationTransformConstants SHA256128 -CipherTransformConstants AES256 -DHGroup Group14 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -PfsGroup None -AllUserConnection -Force
-Write-Host "Connect via Settings → VPN → $Name (user $Username)"
+Write-Host "Connect via Settings -> VPN -> $Name (user $Username)"
 """
-    return body.encode("utf-8")
+    text = text.replace("portal.vpstruelord.com", IKEV2_HOST)
+    text = text.replace('Username = "windows"', f'Username = "{IKEV2_USER}"')
+    text = text.replace("@@CA_CERT_PEM@@", ca_pem)
+    # UTF-8 BOM so Windows PowerShell 5.1 parses the file correctly
+    return b"\xef\xbb\xbf" + text.encode("utf-8")
+
+
+def load_ikev2_windows_cmd() -> bytes:
+    """CMD launcher that elevates and runs the sibling .ps1 (same download folder)."""
+    body = """@echo off
+setlocal
+NET SESSION >nul 2>&1
+if %errorLevel% NEQ 0 (
+  echo Requesting Administrator...
+  powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+set "PS1=%~dp0Setup-ServerManagerVpn.ps1"
+if not exist "%PS1%" (
+  echo ERROR: Setup-ServerManagerVpn.ps1 not found next to this .cmd
+  echo Download both files into the same folder, then run this .cmd
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+if errorlevel 1 pause
+"""
+    return body.replace("\n", "\r\n").encode("ascii", errors="replace")
 
 
 def parse_openvpn_status(text: str) -> dict:
@@ -10546,6 +10571,27 @@ class Handler(BaseHTTPRequestHandler):
 
                 body = load_ikev2_windows_ps1()
                 name = "Setup-ServerManagerVpn.ps1"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/ikev2/windows-cmd", "/download/Setup-ServerManagerVpn.cmd"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_ikev2_windows_cmd()
+                name = "Setup-ServerManagerVpn.cmd"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header(

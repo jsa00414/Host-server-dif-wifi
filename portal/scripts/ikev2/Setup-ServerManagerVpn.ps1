@@ -1,4 +1,4 @@
-# ServerManager — add Windows built-in IKEv2 VPN
+# ServerManager - Windows built-in IKEv2 VPN setup
 # Run in elevated PowerShell (Run as administrator).
 param(
   [string]$Server = "portal.vpstruelord.com",
@@ -7,12 +7,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "Creating Windows VPN profile '$Name' → $Server (IKEv2)..."
+Write-Host "Creating Windows VPN profile '$Name' -> $Server (IKEv2)..."
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
   [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-  Write-Host "ERROR: Right-click PowerShell → Run as administrator, then re-run this script." -ForegroundColor Red
+  Write-Host "ERROR: Right-click PowerShell -> Run as administrator, then re-run this script." -ForegroundColor Red
   exit 1
 }
 
@@ -27,7 +27,7 @@ if ($CaPem -match "BEGIN CERTIFICATE") {
   Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
   Write-Host "Installed ServerManager IKEv2 CA into Trusted Root."
 } else {
-  Write-Host "WARNING: CA not embedded — download from Portal → Windows VPN if connect fails." -ForegroundColor Yellow
+  Write-Host "WARNING: CA not embedded - download ca.crt from Portal Windows VPN if connect fails." -ForegroundColor Yellow
 }
 
 Get-VpnConnection -Name $Name -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -ErrorAction SilentlyContinue
@@ -55,6 +55,8 @@ Set-VpnConnectionIPsecConfiguration `
   -Force
 
 Write-Host ""
-Write-Host "Done. Connect from Settings → Network & internet → VPN → $Name"
+Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
-Write-Host "  Password: (Portal → Windows VPN)"
+Write-Host "  Password: (Portal -> Windows VPN)"
+Write-Host "Press Enter to close..."
+[void][System.Console]::ReadLine()
