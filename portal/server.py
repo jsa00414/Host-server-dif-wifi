@@ -6694,24 +6694,24 @@ html.sm-win-nav #control-panel .sm-win-hide{
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5'/%3E%3Cpath d='M5 12l7-7 7 7'/%3E%3C/svg%3E")!important}
 #sm-win-explorer-bar .sm-win-ref::before{
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-3-6.7'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E")!important}
+/* Park Ext #location-bar off-layout so doLayout cannot wipe our address host */
 html.sm-win-nav #control-panel #location-bar,
 html.sm-merged-chrome #control-panel #location-bar{
-  position:static!important;flex:1 1 auto!important;min-width:0!important;
-  max-width:none!important;width:auto!important;height:34px!important;max-height:34px!important;
-  margin:0!important;border:0!important;background:transparent!important;
-  overflow:visible!important;isolation:isolate!important;z-index:2!important;
-  display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important}
+  position:absolute!important;left:-9999px!important;top:0!important;
+  width:1px!important;height:1px!important;min-width:0!important;max-width:1px!important;
+  margin:0!important;padding:0!important;border:0!important;overflow:hidden!important;
+  visibility:hidden!important;opacity:0!important;pointer-events:none!important;
+  flex:0 0 0!important;display:block!important}
 html.sm-win-nav #location-bar .x-panel-body,
 html.sm-win-nav #location-bar .x-panel-bwrap{
-  position:relative!important;display:block!important;width:100%!important;
-  height:34px!important;max-height:34px!important;overflow:hidden!important;
-  background:transparent!important;border:0!important;visibility:visible!important}
+  display:block!important;width:1px!important;height:1px!important;overflow:hidden!important;
+  background:transparent!important;border:0!important}
 #sm-win-address{
   position:relative!important;top:auto!important;left:auto!important;right:auto!important;
   bottom:auto!important;inset:auto!important;z-index:1!important;
   display:flex!important;align-items:center!important;gap:0!important;
-  box-sizing:border-box!important;width:100%!important;max-width:100%!important;
-  height:34px!important;max-height:34px!important;min-height:34px!important;
+  box-sizing:border-box!important;width:auto!important;max-width:none!important;
+  height:34px!important;max-height:34px!important;min-height:34px!important;min-width:0!important;
   padding:0 10px 0 36px!important;overflow:hidden!important;flex:1 1 auto!important;
   border:1px solid rgba(255,255,255,.12)!important;border-radius:8px!important;
   background:var(--sm-bg0)!important;cursor:text!important}
@@ -6726,7 +6726,7 @@ html.sm-win-nav #location-bar .x-panel-bwrap{
   color:var(--sm-text)!important;cursor:pointer!important;
   font:400 13px/1.2 "Segoe UI",Sora,system-ui,sans-serif!important;
   padding:3px 6px!important;border-radius:4px!important;white-space:nowrap!important;
-  max-width:160px!important;overflow:hidden!important;text-overflow:ellipsis!important}
+  max-width:280px!important;overflow:hidden!important;text-overflow:ellipsis!important}
 #sm-win-address .sm-win-crumb:hover{background:rgba(255,255,255,.08)!important}
 #sm-win-address .sm-win-crumb.is-current{color:var(--sm-text)!important;cursor:default!important;font-weight:500!important}
 #sm-win-address .sm-win-crumb.is-current:hover{background:transparent!important}
@@ -6781,7 +6781,7 @@ html.sm-merged-chrome #menu-bar .x-toolbar-ct{
 @media (max-width:900px){
   #sm-win-explorer-bar{flex-wrap:wrap!important}
   #sm-win-search-wrap{flex:1 1 100%!important;max-width:none!important;order:11!important}
-  html.sm-win-nav #control-panel #location-bar{flex:1 1 100%!important;order:10!important;min-width:100%!important}
+  #sm-win-address{flex:1 1 100%!important;order:10!important;min-width:100%!important}
 }
 
 /* Location / search shared */
@@ -7464,12 +7464,13 @@ NAS_FILES_SNIPPET = (
     "}"
     "window.__smNaviMerged=true;"
     "try{smEnsureWinExplorerBar();}catch(e){}"
+    "try{smHookWinLocation();}catch(e){}"
     "try{smEnsureWinAddress();}catch(e){}"
     "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
     "var _smTree=Ext.getCmp('tree-panel');"
     "var _smNode=_smTree&&_smTree.getSelectionModel().getSelectedNode();"
-    "if(_smNode&&_smNode.path)update_location_bar(_smNode.path);"
-    "else update_location_bar('/');"
+    "if(_smNode&&_smNode.path){update_location_bar(_smNode.path);smRenderWinAddress(_smNode.path);}"
+    "else{update_location_bar('/');smRenderWinAddress('/');}"
     "}}catch(e){}"
     "return true;"
     "}catch(e){return false;}}"
@@ -7529,13 +7530,11 @@ NAS_FILES_SNIPPET = (
     "row.appendChild(searchWrap);"
     "cp.insertBefore(row,cp.firstChild);"
     "}"
+    # Keep Ext location-bar in DOM for APIs, but park it outside the visible flex row.
     "var loc=document.getElementById('location-bar');"
-    "if(loc&&row&&loc.parentNode!==row){"
-    "var searchWrap=document.getElementById('sm-win-search-wrap');"
-    "if(searchWrap)row.insertBefore(loc,searchWrap);"
-    "else row.appendChild(loc);"
+    "if(loc&&loc.parentNode===row){"
+    "try{cp.appendChild(loc);}catch(e){}"
     "}"
-    "try{smEnsureWinAddress();}catch(e){}"
     "}catch(e){}"
     "}"
     "function smPathParts(path){"
@@ -7595,11 +7594,66 @@ NAS_FILES_SNIPPET = (
     "return true;"
     "}catch(e){return false;}"
     "}"
-    "function smRenderWinAddress(path){"
+    "function smCurrentNasPath(){"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var tree=Ext.getCmp('tree-panel');"
+    "var node=tree&&tree.getSelectionModel().getSelectedNode();"
+    "if(node&&node.path)return String(node.path);"
+    "}"
+    "}catch(e){}"
     "try{"
     "var host=document.getElementById('sm-win-address');"
-    "if(!host||host.classList.contains('sm-win-misplaced'))return;"
+    "if(host&&host.dataset&&host.dataset.path)return String(host.dataset.path);"
+    "}catch(e){}"
+    "return '/';"
+    "}"
+    "function smMountWinAddressHost(){"
+    "try{"
+    "smEnsureWinExplorerBar();"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!row)return null;"
+    "var host=document.getElementById('sm-win-address');"
+    "if(host&&!row.contains(host)){"
+    "try{host.parentNode&&host.parentNode.removeChild(host);}catch(e){}"
+    "host=null;"
+    "}"
+    "if(!host){"
+    "host=document.createElement('div');"
+    "host.id='sm-win-address';"
+    "host.addEventListener('click',function(ev){"
+    "var t=ev.target;"
+    "if(smWinClosest(t,'.sm-win-crumb')||(t&&t.classList&&t.classList.contains('sm-win-edit')))return;"
+    "host.classList.add('is-editing');"
+    "var edit=host.querySelector('.sm-win-edit');"
+    "if(edit){"
+    "edit.value=smPathToDisplay(host.dataset.path||'/');"
+    "edit.focus();edit.select();"
+    "}"
+    "});"
+    "}"
+    "var searchWrap=document.getElementById('sm-win-search-wrap');"
+    "if(host.parentNode!==row||(searchWrap&&host.nextSibling!==searchWrap)){"
+    "if(searchWrap)row.insertBefore(host,searchWrap);"
+    "else row.appendChild(host);"
+    "}"
+    "host.classList.remove('sm-win-misplaced');"
+    "try{host.style.display='';host.style.pointerEvents='';}catch(e){}"
+    "return host;"
+    "}catch(e){return null;}"
+    "}"
+    "function smRenderWinAddress(path){"
+    "try{"
+    "var host=smMountWinAddressHost();"
+    "if(!host)return;"
     "path=String(path||'/');"
+    "if(!path||path.charAt(0)!=='/')path='/'+(path||'');"
+    "path=path.replace(/\\/+/g,'/')||'/';"
+    "if(path.length>1&&path.charAt(path.length-1)==='/')path=path.slice(0,-1);"
+    "if(host.dataset.path===path&&host.querySelector('.sm-win-crumb')){"
+    "try{smUpdateSearchPlaceholder(path);}catch(e){}"
+    "return;"
+    "}"
     "host.dataset.path=path;"
     "host.classList.remove('is-editing');"
     "while(host.firstChild)host.removeChild(host.firstChild);"
@@ -7662,60 +7716,45 @@ NAS_FILES_SNIPPET = (
     "});"
     "host.appendChild(edit);"
     "try{smUpdateSearchPlaceholder(path);}catch(e){}"
-    "try{smEnsureWinExplorerBar();}catch(e){}"
     "}catch(e){}"
     "}"
-    "function smEnsureWinAddress(){"
+    "function smEnsureWinAddress(optPath){"
     "try{"
     "document.documentElement.classList.add('sm-win-nav');"
-    "try{smEnsureWinExplorerBar();}catch(e){}"
-    "var bar=document.getElementById('location-bar');"
-    "if(!bar)return;"
-    "var body=bar;"
-    "try{"
-    "var pb=bar.querySelector('.x-panel-body');"
-    "if(pb&&bar.contains(pb))body=pb;"
+    "var host=smMountWinAddressHost();"
+    "if(!host)return;"
+    "if(optPath!=null&&optPath!==''){"
+    "smRenderWinAddress(String(optPath));"
+    "}else if(!host.querySelector('.sm-win-crumb')){"
+    "smRenderWinAddress(smCurrentNasPath());"
+    "}"
     "}catch(e){}"
-    "var host=document.getElementById('sm-win-address');"
-    "if(host&&!bar.contains(host)){"
-    "try{host.parentNode&&host.parentNode.removeChild(host);}catch(e){}"
-    "host=null;"
     "}"
-    "if(!host){"
-    "host=document.createElement('div');"
-    "host.id='sm-win-address';"
-    "body.insertBefore(host,body.firstChild);"
-    "host.addEventListener('click',function(ev){"
-    "var t=ev.target;"
-    "if(smWinClosest(t,'.sm-win-crumb')||(t&&t.classList&&t.classList.contains('sm-win-edit')))return;"
-    "host.classList.add('is-editing');"
-    "var edit=host.querySelector('.sm-win-edit');"
-    "if(edit){"
-    "edit.value=smPathToDisplay(host.dataset.path||'/');"
-    "edit.focus();edit.select();"
-    "}"
-    "});"
-    "}"
-    "else if(host.parentNode!==body){"
-    "try{body.insertBefore(host,body.firstChild);}catch(e){}"
-    "}"
-    "if(!smWinHostOk(host,bar)){"
-    "host.classList.add('sm-win-misplaced');"
-    "try{host.style.display='none';host.style.pointerEvents='none';}catch(e){}"
-    "return;"
-    "}"
-    "host.classList.remove('sm-win-misplaced');"
-    "try{host.style.display='';host.style.pointerEvents='';}catch(e){}"
-    "var path='/';"
+    "function smHookWinLocation(){"
+    "try{"
+    "if(window.__smLocHooked)return true;"
+    "if(typeof update_location_bar!=='function')return false;"
+    "window.__smLocHooked=true;"
+    "var _smOrigLoc=update_location_bar;"
+    "update_location_bar=function(path){"
+    "var ret;"
+    "try{ret=_smOrigLoc.apply(this,arguments);}catch(e){ret=undefined;}"
+    "try{smRenderWinAddress(path||'/');}catch(e){}"
+    "return ret;"
+    "};"
     "try{"
     "if(window.Ext&&Ext.getCmp){"
     "var tree=Ext.getCmp('tree-panel');"
-    "var node=tree&&tree.getSelectionModel().getSelectedNode();"
-    "if(node&&node.path)path=node.path;"
+    "if(tree&&tree.getSelectionModel&&!tree.__smWinPathHook){"
+    "tree.__smWinPathHook=true;"
+    "tree.getSelectionModel().on('selectionchange',function(sm,node){"
+    "try{if(node&&node.path)smRenderWinAddress(node.path);}catch(e){}"
+    "});"
+    "}"
     "}"
     "}catch(e){}"
-    "if(host.dataset.path!==path||!host.childNodes.length)smRenderWinAddress(path);"
-    "}catch(e){}"
+    "return true;"
+    "}catch(e){return false;}"
     "}"
     "function smMoveAuthToTop(){"
     "try{"
@@ -7766,7 +7805,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smMountWinAddressHost=smMountWinAddressHost;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;window.smHookWinLocation=smHookWinLocation;window.smCurrentNasPath=smCurrentNasPath;}catch(e){}"
     "function smKickFilesLoad(){"
     "try{"
     "if(window.__smKickFilesDone)return true;"
@@ -7816,7 +7855,7 @@ NAS_FILES_SNIPPET = (
     "try{"
     "var _smAuthN=0;"
     "var _smAuthT=setInterval(function(){"
-    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();"
+    "smMoveAuthToTop();smHideIconBar();smMergeNaviBar();smHookWinLocation();"
     "if(!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();"
     "if(++_smAuthN>=24||(window.__smNaviMerged&&window.__smKickFilesDone))clearInterval(_smAuthT);"
     "},400);"
@@ -8374,8 +8413,8 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();},1200);"
-    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();},2000);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();smHookWinLocation();},1200);"
+    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();smHookWinLocation();},2000);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
@@ -8814,13 +8853,13 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
     # Keep Ext location bar in sync, and paint Windows-style breadcrumb overlay.
     text = re.sub(
         r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
-        "    locations.doLayout();\r\n"
+        "    try { locations.doLayout(); } catch (_smDl) {}\r\n"
         "    try {\r\n"
         "        var _smTf = Ext.getCmp('location-textfield');\r\n"
         "        if (_smTf) { _smTf.setValue(path || '/'); }\r\n"
         "        try { document.documentElement.classList.add('sm-win-nav'); } catch(e) {}\r\n"
-        "        if (typeof smEnsureWinAddress === 'function') smEnsureWinAddress();\r\n"
-        "        if (typeof smRenderWinAddress === 'function') smRenderWinAddress(path || '/');\r\n"
+        "        if (typeof smEnsureWinAddress === 'function') smEnsureWinAddress(path || '/');\r\n"
+        "        else if (typeof smRenderWinAddress === 'function') smRenderWinAddress(path || '/');\r\n"
         "    } catch(e) {}\r\n"
         "}\r\n\r\nfunction update_location_bar_search",
         text,
