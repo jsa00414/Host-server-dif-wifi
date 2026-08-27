@@ -6648,10 +6648,14 @@ html.sm-win-nav #control-panel{
   display:block!important;visibility:visible!important;position:relative!important;
   box-sizing:border-box!important;
   height:auto!important;min-height:0!important;max-height:none!important;
-  overflow:hidden!important;padding:2px 10px!important;margin:0!important;
+  overflow:visible!important;padding:4px 10px!important;margin:0!important;
   border:0!important;border-bottom:1px solid var(--sm-line)!important;
   background:var(--sm-bg1)!important;
-  line-height:normal!important}
+  line-height:normal!important;z-index:30!important}
+html.sm-win-nav #headerPanel,
+html.sm-merged-chrome #headerPanel{
+  position:relative!important;z-index:25!important;overflow:visible!important;
+  background:var(--sm-bg1)!important}
 /* Hide native Ext toolbar chrome; custom #sm-win-explorer-bar paints the nav */
 html.sm-win-nav #control-panel>.x-toolbar-ct,
 html.sm-win-nav #control-panel>table,
@@ -6674,8 +6678,8 @@ html.sm-win-nav #control-panel .sm-win-hide{
 #sm-win-explorer-bar{
   display:flex!important;align-items:center!important;gap:8px!important;
   width:100%!important;max-width:100%!important;box-sizing:border-box!important;
-  min-height:34px!important;height:34px!important;margin:0!important;padding:0!important;
-  line-height:normal!important}
+  min-height:34px!important;height:auto!important;margin:0!important;padding:0!important;
+  line-height:normal!important;position:relative!important;z-index:31!important}
 #sm-win-explorer-bar .sm-win-nav-btns{
   display:flex!important;align-items:center!important;gap:2px!important;
   flex:0 0 auto!important}
@@ -7503,19 +7507,6 @@ NAS_FILES_SNIPPET = (
     "document.documentElement.classList.add('sm-win-nav');"
     "var cp=document.getElementById('control-panel');"
     "if(!cp)return;"
-    "try{"
-    "cp.style.height='auto';cp.style.minHeight='0';cp.style.maxHeight='none';"
-    "cp.style.paddingTop='2px';cp.style.paddingBottom='2px';"
-    "if(window.Ext&&Ext.getCmp){"
-    "var _smCp=Ext.getCmp('control-panel');"
-    "if(_smCp){"
-    "try{var _smH=Math.max(34,(document.getElementById('sm-win-explorer-bar')||cp).offsetHeight||38)+4;_smCp.setHeight(_smH);}catch(e){}"
-    "try{if(_smCp.ownerCt&&_smCp.ownerCt.doLayout)_smCp.ownerCt.doLayout(true,true);}catch(e){}"
-    "}"
-    "var _smHp=Ext.getCmp('headerPanel');"
-    "if(_smHp&&_smHp.doLayout){try{_smHp.doLayout(true,true);}catch(e){}}"
-    "}"
-    "}catch(e){}"
     "var row=document.getElementById('sm-win-explorer-bar');"
     "if(!row){"
     "row=document.createElement('div');"
@@ -7551,6 +7542,89 @@ NAS_FILES_SNIPPET = (
     "if(loc&&loc.parentNode===row){"
     "try{cp.appendChild(loc);}catch(e){}"
     "}"
+    "try{smSyncWinHeaderLayout();}catch(e){}"
+    "}catch(e){}"
+    "}"
+    "function smSyncWinHeaderLayout(){"
+    "try{"
+    "var cp=document.getElementById('control-panel');"
+    "var hp=document.getElementById('headerPanel');"
+    "var menu=document.getElementById('menu-bar');"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!cp)return;"
+    "cp.style.height='auto';cp.style.minHeight='0';cp.style.maxHeight='none';"
+    "cp.style.overflow='visible';cp.style.paddingTop='4px';cp.style.paddingBottom='4px';"
+    "cp.style.position='relative';cp.style.zIndex='30';"
+    "if(row){row.style.height='auto';row.style.minHeight='34px';}"
+    "var topEdge=0;"
+    "try{topEdge=(hp&&hp.getBoundingClientRect().top)||0;}catch(e){}"
+    "var bottom=0;"
+    "try{"
+    "if(menu)bottom=Math.max(bottom,menu.getBoundingClientRect().bottom);"
+    "bottom=Math.max(bottom,cp.getBoundingClientRect().bottom);"
+    "if(row)bottom=Math.max(bottom,row.getBoundingClientRect().bottom);"
+    "}catch(e){}"
+    "var headerH=Math.max(78,Math.round(bottom-topEdge));"
+    "if(hp){"
+    "hp.style.height=headerH+'px';"
+    "hp.style.minHeight=headerH+'px';"
+    "hp.style.overflow='visible';"
+    "hp.style.position='relative';"
+    "hp.style.zIndex='25';"
+    "}"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var _smCp=Ext.getCmp('control-panel');"
+    "if(_smCp){"
+    "var _smCpH=Math.max(38,(row&&row.offsetHeight)||34)+8;"
+    "try{_smCp.height=_smCpH;}catch(e){}"
+    "try{if(_smCp.setHeight)_smCp.setHeight(_smCpH);}catch(e){}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "var ids=['main-panel','left-panel'];"
+    "for(var i=0;i<ids.length;i++){"
+    "var el=document.getElementById(ids[i]);"
+    "if(!el)continue;"
+    "var cur=parseInt(el.style.top||'0',10);"
+    "if(isNaN(cur))cur=0;"
+    "if(cur<headerH-1){"
+    "el.style.top=headerH+'px';"
+    "try{"
+    "var vh=Math.max(document.documentElement.clientHeight||0,window.innerHeight||0);"
+    "if(vh>headerH+40)el.style.height=(vh-headerH)+'px';"
+    "}catch(e){}"
+    "}"
+    "try{"
+    "if(window.Ext&&Ext.getCmp){"
+    "var cmp=Ext.getCmp(ids[i]);"
+    "if(cmp){"
+    "cmp.y=headerH;"
+    "try{if(cmp.setPagePosition)cmp.setPagePosition(cmp.getPosition(true)[0],headerH);}"
+    "catch(e1){try{if(cmp.setPosition)cmp.setPosition(cmp.x||0,headerH);}catch(e2){}}"
+    "}"
+    "}"
+    "}catch(e){}"
+    "}"
+    "try{"
+    "var vp=typeof smFindViewport==='function'?smFindViewport():null;"
+    "if(vp&&vp.doLayout)vp.doLayout(true,true);"
+    "}catch(e){}"
+    # Re-assert tops after Ext layout — it often parks center/west under the nav.
+    "try{"
+    "var hp2=document.getElementById('headerPanel');"
+    "var headerH2=hp2?Math.round(hp2.getBoundingClientRect().height):headerH;"
+    "if(!(headerH2>60))headerH2=headerH;"
+    "['main-panel','left-panel'].forEach(function(id){"
+    "var el=document.getElementById(id);"
+    "if(!el)return;"
+    "el.style.top=headerH2+'px';"
+    "try{"
+    "var vh=Math.max(document.documentElement.clientHeight||0,window.innerHeight||0);"
+    "if(vh>headerH2+40)el.style.height=(vh-headerH2)+'px';"
+    "}catch(e){}"
+    "});"
+    "}catch(e){}"
     "}catch(e){}"
     "}"
     "function smPathParts(path){"
@@ -7821,7 +7895,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smMountWinAddressHost=smMountWinAddressHost;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;window.smHookWinLocation=smHookWinLocation;window.smCurrentNasPath=smCurrentNasPath;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smMountWinAddressHost=smMountWinAddressHost;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smSyncWinHeaderLayout=smSyncWinHeaderLayout;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;window.smHookWinLocation=smHookWinLocation;window.smCurrentNasPath=smCurrentNasPath;}catch(e){}"
     "function smKickFilesLoad(){"
     "try{"
     "if(window.__smKickFilesDone)return true;"
@@ -8208,6 +8282,7 @@ NAS_FILES_SNIPPET = (
     "try{if(typeof smMoveAuthToTop==='function')smMoveAuthToTop();}catch(e){}"
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
+    "try{if(typeof smSyncWinHeaderLayout==='function')smSyncWinHeaderLayout();}catch(e){}"
     "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();}catch(e){}"
     "try{if(typeof smWatchIconGrid==='function')smWatchIconGrid();}catch(e){}"
     "var vp=smFindViewport();"
