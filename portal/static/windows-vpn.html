@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Windows VPN — ServerManager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #07110e; --bg1: #0e1a15; --bg2: #15241d;
+      --line: rgba(170, 210, 185, 0.14); --text: #e8f2ec; --muted: #84998c;
+      --accent: #3ddea0; --accent-dim: rgba(61, 222, 160, 0.14); --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Sora", system-ui, sans-serif; color: var(--text);
+      background:
+        radial-gradient(900px 420px at 10% -10%, rgba(61,222,160,.16), transparent 55%),
+        radial-gradient(700px 380px at 100% 0%, rgba(45,120,95,.18), transparent 50%),
+        linear-gradient(180deg, #0a1511 0%, var(--bg0) 45%, #050a08 100%);
+      padding: 28px 22px 40px;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    .eyebrow { color: var(--muted); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; margin: 0 0 8px; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -.04em; font-weight: 700; line-height: 1.05; }
+    .sub { margin: 10px 0 22px; color: var(--muted); font-size: .92rem; max-width: 40rem; line-height: 1.45; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+      background: var(--bg1); border-radius: 999px; padding: 8px 14px;
+      font-family: "IBM Plex Mono", monospace; font-size: .75rem; margin-bottom: 18px;
+    }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .pill.ok { border-color: rgba(61,222,160,.35); background: var(--accent-dim); color: var(--accent); }
+    .pill.ok .dot { background: var(--accent); }
+    .pill.err { border-color: rgba(255,107,107,.35); color: var(--danger); }
+    .pill.err .dot { background: var(--danger); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 16px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .metric {
+      background: color-mix(in srgb, var(--bg1) 88%, black);
+      border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+    }
+    .metric .k { color: var(--muted); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; }
+    .metric .v { margin-top: 6px; font-size: 1.15rem; font-weight: 650; word-break: break-all; }
+    .metric .s { margin-top: 4px; color: var(--muted); font-size: .75rem; font-family: "IBM Plex Mono", monospace; }
+    .panel {
+      background: color-mix(in srgb, var(--bg1) 90%, black);
+      border: 1px solid var(--line); border-radius: 16px; margin-bottom: 14px; overflow: hidden;
+    }
+    .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { margin: 0; font-size: .95rem; }
+    .panel-body { padding: 14px 16px 16px; }
+    .hint { color: var(--muted); font-size: .82rem; line-height: 1.5; margin: 0 0 12px; }
+    ol.steps { margin: 0; padding-left: 1.2rem; color: var(--text); font-size: .88rem; line-height: 1.55; }
+    ol.steps li { margin: 0 0 8px; }
+    code, pre {
+      font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+      background: var(--bg0); border: 1px solid var(--line); border-radius: 8px;
+    }
+    code { padding: 2px 6px; }
+    pre { padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; margin: 0 0 12px; }
+    .creds {
+      display: grid; gap: 8px; margin: 12px 0;
+      font-family: "IBM Plex Mono", monospace; font-size: .82rem;
+    }
+    .creds div {
+      display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg0);
+    }
+    .creds span.k { color: var(--muted); }
+    a.btn, button.btn {
+      appearance: none; border: 1px solid var(--line); background: var(--bg2); color: var(--text);
+      border-radius: 10px; padding: 10px 14px; font: inherit; font-size: .84rem; font-weight: 600;
+      text-decoration: none; cursor: pointer; display: inline-block; margin: 4px 6px 4px 0;
+    }
+    a.btn.primary, button.btn.primary {
+      background: var(--accent-dim); border-color: rgba(61,222,160,.35); color: var(--accent);
+    }
+    .msg { margin-top: 10px; font-size: .8rem; color: var(--muted); min-height: 1.2em; }
+    .msg.err { color: var(--danger); }
+    .msg.ok { color: var(--accent); }
+    .foot { margin-top: 18px; color: var(--muted); font-size: .72rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="eyebrow">ServerManager</p>
+    <h1>Windows VPN</h1>
+    <p class="sub">Use Windows built-in VPN (IKEv2) — no OpenVPN or WireGuard app required. DNS goes through AdGuard → Pi-hole.</p>
+    <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
+
+    <div class="grid">
+      <div class="metric"><div class="k">Server</div><div class="v" id="mHost">—</div><div class="s">IKEv2 · UDP 500/4500</div></div>
+      <div class="metric"><div class="k">Status</div><div class="v" id="mState">—</div><div class="s" id="mPool">—</div></div>
+      <div class="metric"><div class="k">DNS</div><div class="v" id="mDns">—</div><div class="s">AdGuard → Pi-hole</div></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Credentials</h2></div>
+      <div class="panel-body">
+        <div class="creds">
+          <div><span class="k">Username</span><span id="cUser">—</span></div>
+          <div><span class="k">Password</span><span id="cPass">—</span></div>
+        </div>
+        <button type="button" class="btn" id="copyPass">Copy password</button>
+        <button type="button" class="btn" id="revealPass">Show / hide</button>
+        <div class="msg" id="credMsg"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Setup on Windows</h2></div>
+      <div class="panel-body">
+        <p class="hint">Download both files into the same folder, then double-click the <strong>.cmd</strong> (accept UAC). Server uses a public Let's Encrypt certificate — no CA install needed.</p>
+        <button type="button" class="btn primary" id="dlPs1">Download Setup-ServerManagerVpn.ps1</button>
+        <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerVpn.cmd</button>
+        <div class="msg" id="dlMsg"></div>
+        <ol class="steps">
+          <li>Save both files in the same folder (Downloads is fine).</li>
+          <li>Double-click <strong>Setup-ServerManagerVpn.cmd</strong> and accept the Administrator prompt (recreates the VPN profile).</li>
+          <li>Open <strong>Settings -&gt; Network &amp; internet -&gt; VPN</strong>.</li>
+          <li>Select <strong>ServerManager IKEv2</strong> -&gt; Connect with the username/password above.</li>
+        </ol>
+        <p class="hint" style="margin-top:14px">If download buttons do nothing, open <a href="/windows-vpn.html" target="_blank" rel="noopener">windows-vpn.html</a> in a new tab.</p>
+        <p class="hint" style="margin-top:14px">Manual settings if you prefer the Windows UI:</p>
+        <pre id="manualBox">VPN provider: Windows (built-in)
+Connection name: ServerManager IKEv2
+Server name: …
+VPN type: IKEv2
+Type of sign-in info: User name and password</pre>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Online peers</h2></div>
+      <div class="panel-body" id="peersWrap"><div class="hint">Loading…</div></div>
+    </section>
+
+    <p class="foot" id="foot">Windows built-in IKEv2 · AdGuard DNS</p>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let passVisible = false;
+    let rawPass = "";
+    function esc(v) {
+      return String(v ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;");
+    }
+    async function api(path) {
+      const res = await fetch(path, { credentials: "same-origin" });
+      if (res.status === 401) { location.href = "/login.html"; throw new Error("unauthorized"); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      return data;
+    }
+    async function refresh() {
+      try {
+        const d = await api("/api/ikev2/status");
+        const ok = !!d.active;
+        $("statusPill").className = "pill " + (ok ? "ok" : "err");
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "IKEv2 online" : "IKEv2 offline"}</span>`;
+        $("mHost").textContent = d.host || "—";
+        $("mState").textContent = ok ? "Running" : "Down";
+        $("mPool").textContent = d.pool || "—";
+        $("mDns").textContent = d.dns || "—";
+        $("cUser").textContent = d.username || "—";
+        rawPass = d.password || "";
+        $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
+        $("manualBox").textContent =
+`VPN provider: Windows (built-in)
+Connection name: ServerManager IKEv2
+Server name: ${d.host || "portal.vpstruelord.com"}
+VPN type: IKEv2
+Type of sign-in info: User name and password`;
+        const peers = d.peers || [];
+        if (!peers.length) {
+          $("peersWrap").innerHTML = `<div class="hint">No Windows clients connected right now.</div>`;
+        } else {
+          $("peersWrap").innerHTML = `<pre>${esc(peers.map(p => `${p.id || ""}  ${p.remote || ""}  ${p.vip || ""}`).join("\n"))}</pre>`;
+        }
+        $("foot").textContent = `Windows built-in IKEv2 · ${d.host || ""} · ${d.detail || ""}`;
+      } catch (e) {
+        $("statusPill").className = "pill err";
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;
+      }
+    }
+    $("copyPass").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(rawPass);
+        $("credMsg").className = "msg ok";
+        $("credMsg").textContent = "Password copied";
+      } catch (e) {
+        $("credMsg").className = "msg err";
+        $("credMsg").textContent = "Copy failed";
+      }
+    };
+    $("revealPass").onclick = () => {
+      passVisible = !passVisible;
+      $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
+    };
+    async function downloadFile(path, filename) {
+      const msg = $("dlMsg");
+      msg.className = "msg";
+      msg.textContent = "Downloading…";
+      try {
+        const res = await fetch(path, { credentials: "same-origin" });
+        if (res.status === 401) { location.href = "/login.html"; return; }
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        msg.className = "msg ok";
+        msg.textContent = "Saved " + filename;
+      } catch (e) {
+        msg.className = "msg err";
+        msg.textContent = "Download failed: " + (e.message || e);
+      }
+    }
+    $("dlPs1").onclick = () => downloadFile("/api/ikev2/windows-ps1", "Setup-ServerManagerVpn.ps1");
+    $("dlCmd").onclick = () => downloadFile("/api/ikev2/windows-cmd", "Setup-ServerManagerVpn.cmd");
+    refresh();
+    setInterval(refresh, 8000);
+  </script>
+</body>
+</html>

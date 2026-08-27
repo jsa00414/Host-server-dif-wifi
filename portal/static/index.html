@@ -198,7 +198,8 @@
     #frameAdguard,
     #framePihole,
     #frameWireguard,
-    #frameOpenvpn {
+    #frameOpenvpn,
+    #frameWindowsVpn {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
@@ -829,7 +830,8 @@
       body.embed-mode #frameAdguard,
       body.embed-mode #framePihole,
       body.embed-mode #frameWireguard,
-      body.embed-mode #frameOpenvpn {
+      body.embed-mode #frameOpenvpn,
+      body.embed-mode #frameWindowsVpn {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
@@ -912,6 +914,9 @@
     </button>
     <button type="button" class="nav-btn" data-view="openvpn">
       <span class="nav-copy"><span>OpenVPN</span></span>
+    </button>
+    <button type="button" class="nav-btn" data-view="windowsvpn">
+      <span class="nav-copy"><span>Windows VPN</span></span>
     </button>
     <div class="nav-label">DNS</div>
     <button type="button" class="nav-btn" data-view="dnsmap">
@@ -1330,6 +1335,10 @@
         <iframe class="embed-frame" id="frameOpenvpn" title="OpenVPN" src="about:blank" data-src="/openvpn.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
+      <section class="view embed-view" id="view-windowsvpn">
+        <iframe class="embed-frame" id="frameWindowsVpn" title="Windows VPN (IKEv2)" src="about:blank" data-src="/windows-vpn.html" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
+
       <section class="view" id="view-settings">
         <div class="page-head">
           <h2>Settings</h2>
@@ -1457,6 +1466,7 @@
                     <option value="firewall">Firewall</option>
                     <option value="wireguard">WireGuard</option>
                     <option value="openvpn">OpenVPN</option>
+                    <option value="windowsvpn">Windows VPN</option>
                     <option value="dnsmap">DNS Map</option>
                     <option value="adguard">AdGuard</option>
                     <option value="tailscale">Tailscale</option>
@@ -1796,7 +1806,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -1813,6 +1823,10 @@
       }
       if (name === "openvpn") {
         const f = document.getElementById("frameOpenvpn");
+        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+      }
+      if (name === "windowsvpn") {
+        const f = document.getElementById("frameWindowsVpn");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "buffalo") {
@@ -2649,7 +2663,8 @@
 
     const SETTINGS_VIEWS = new Set([
       "overview", "backup", "vps", "router", "buffalo", "files",
-      "domains", "firewall", "dnsmap", "adguard", "tailscale", "surfshark", "pihole", "settings",
+      "domains", "firewall", "wireguard", "openvpn", "windowsvpn",
+      "dnsmap", "adguard", "tailscale", "surfshark", "pihole", "settings",
     ]);
     let settingsState = null;
     let overviewRefreshTimer = null;
