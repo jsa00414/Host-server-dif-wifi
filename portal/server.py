@@ -6648,10 +6648,10 @@ html.sm-win-nav #control-panel{
   display:block!important;visibility:visible!important;position:relative!important;
   box-sizing:border-box!important;
   height:auto!important;min-height:0!important;max-height:none!important;
-  overflow:hidden!important;padding:4px 10px!important;margin:0!important;
+  overflow:hidden!important;padding:2px 10px!important;margin:0!important;
   border:0!important;border-bottom:1px solid var(--sm-line)!important;
   background:var(--sm-bg1)!important;
-  line-height:0!important}
+  line-height:normal!important}
 /* Hide native Ext toolbar chrome; custom #sm-win-explorer-bar paints the nav */
 html.sm-win-nav #control-panel>.x-toolbar-ct,
 html.sm-win-nav #control-panel>table,
@@ -7505,11 +7505,16 @@ NAS_FILES_SNIPPET = (
     "if(!cp)return;"
     "try{"
     "cp.style.height='auto';cp.style.minHeight='0';cp.style.maxHeight='none';"
-    "cp.style.paddingTop='4px';cp.style.paddingBottom='4px';"
-    "if(window.Ext&&Ext.getCmp){var _smCp=Ext.getCmp('control-panel');"
-    "if(_smCp){try{_smCp.setHeight(false);}catch(e){}"
+    "cp.style.paddingTop='2px';cp.style.paddingBottom='2px';"
+    "if(window.Ext&&Ext.getCmp){"
+    "var _smCp=Ext.getCmp('control-panel');"
+    "if(_smCp){"
+    "try{var _smH=Math.max(34,(document.getElementById('sm-win-explorer-bar')||cp).offsetHeight||38)+4;_smCp.setHeight(_smH);}catch(e){}"
     "try{if(_smCp.ownerCt&&_smCp.ownerCt.doLayout)_smCp.ownerCt.doLayout(true,true);}catch(e){}"
-    "}}"
+    "}"
+    "var _smHp=Ext.getCmp('headerPanel');"
+    "if(_smHp&&_smHp.doLayout){try{_smHp.doLayout(true,true);}catch(e){}}"
+    "}"
     "}catch(e){}"
     "var row=document.getElementById('sm-win-explorer-bar');"
     "if(!row){"
