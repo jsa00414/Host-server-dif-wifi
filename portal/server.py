@@ -1807,26 +1807,51 @@ def build_ikev2_status() -> dict:
     }
 
 
+def load_ikev2_ca_pem() -> str:
+    """Return the IKEv2 CA PEM Windows must trust (empty if missing)."""
+    for path in (IKEV2_DIR / "certs" / "ca.crt", Path("/etc/ipsec.d/cacerts/ikev2-ca.pem")):
+        if path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+                if "BEGIN CERTIFICATE" in text:
+                    return text + "\n"
+            except Exception:
+                continue
+    return ""
+
+
 def load_ikev2_windows_ps1() -> bytes:
-    """PowerShell helper that creates the Windows built-in IKEv2 profile."""
+    """PowerShell helper that trusts the IKEv2 CA and creates the VPN profile."""
     candidates = [
         Path(__file__).resolve().parent / "scripts" / "ikev2" / "Setup-ServerManagerVpn.ps1",
         IKEV2_DIR / "Setup-ServerManagerVpn.ps1",
     ]
+    ca_pem = load_ikev2_ca_pem().strip() or "@@CA_CERT_PEM@@"
     for path in candidates:
         if path.is_file():
             text = path.read_text(encoding="utf-8", errors="replace")
             text = text.replace("portal.vpstruelord.com", IKEV2_HOST)
             text = text.replace('Username = "windows"', f'Username = "{IKEV2_USER}"')
+            text = text.replace("@@CA_CERT_PEM@@", ca_pem)
             return text.encode("utf-8")
     # Inline fallback
     body = f"""# ServerManager Windows IKEv2
 $Server = "{IKEV2_HOST}"
 $Name = "ServerManager IKEv2"
 $Username = "{IKEV2_USER}"
-Get-VpnConnection -Name $Name -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -ErrorAction SilentlyContinue
-Add-VpnConnection -Name $Name -ServerAddress $Server -TunnelType Ikev2 -AuthenticationMethod Eap -EncryptionLevel Required -RememberCredential -Force
-Set-VpnConnectionIPsecConfiguration -ConnectionName $Name -AuthenticationTransformConstants SHA256128 -CipherTransformConstants AES256 -DHGroup Group14 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -PfsGroup PFS2048 -Force
+$CaPem = @"
+{ca_pem}
+"@
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {{ throw "Run PowerShell as Administrator" }}
+if ($CaPem -match "BEGIN CERTIFICATE") {{
+  $caPath = Join-Path $env:TEMP "ServerManager-IKEv2-CA.crt"
+  Set-Content -Path $caPath -Value $CaPem.Trim() -Encoding ASCII
+  Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null
+}}
+Get-VpnConnection -Name $Name -AllUserConnection -ErrorAction SilentlyContinue | Remove-VpnConnection -Force -AllUserConnection -ErrorAction SilentlyContinue
+Add-VpnConnection -Name $Name -ServerAddress $Server -TunnelType Ikev2 -AuthenticationMethod Eap -EncryptionLevel Required -RememberCredential -AllUserConnection -Force
+Set-VpnConnectionIPsecConfiguration -ConnectionName $Name -AuthenticationTransformConstants SHA256128 -CipherTransformConstants AES256 -DHGroup Group14 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -PfsGroup None -AllUserConnection -Force
 Write-Host "Connect via Settings → VPN → $Name (user $Username)"
 """
     return body.encode("utf-8")
@@ -10531,6 +10556,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/ikev2/ca.crt", "/download/ServerManager-IKEv2-CA.crt"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                pem = load_ikev2_ca_pem().encode("utf-8")
+                if not pem:
+                    self._json(404, {"ok": False, "error": "IKEv2 CA not found — run setup-ikev2.sh"})
+                    return
+                name = "ServerManager-IKEv2-CA.crt"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-x509-ca-cert")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(pem)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(pem)
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return

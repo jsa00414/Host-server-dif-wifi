@@ -114,10 +114,11 @@
     <section class="panel">
       <div class="panel-head"><h2>Setup on Windows</h2></div>
       <div class="panel-body">
-        <p class="hint">Easiest: download the PowerShell script and run it, then connect with the credentials above.</p>
+        <p class="hint">Download the PowerShell script and run it <strong>as Administrator</strong> (installs the VPN CA + profile), then connect.</p>
         <a class="btn primary" id="dlPs1" href="/api/ikev2/windows-ps1">Download Setup-ServerManagerVpn.ps1</a>
+        <a class="btn" href="/api/ikev2/ca.crt">Download CA only</a>
         <ol class="steps">
-          <li>Right-click the downloaded script → <strong>Run with PowerShell</strong> (or paste into a PowerShell window).</li>
+          <li>Open <strong>PowerShell as Administrator</strong>, then run the downloaded script (or: <code>Set-ExecutionPolicy -Scope Process Bypass; \\path\\to\\Setup-ServerManagerVpn.ps1</code>).</li>
           <li>Open <strong>Settings → Network &amp; internet → VPN</strong>.</li>
           <li>Select <strong>ServerManager IKEv2</strong> → Connect.</li>
           <li>Sign in with the username/password above.</li>
