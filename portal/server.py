@@ -6800,42 +6800,108 @@ select,.x-combo-list{
   text-shadow:none!important}
 .icon-info,.file-size,.file-date{color:var(--sm-muted)!important;font-size:11px!important}
 .dd-img{border-radius:8px!important}
-/* Icon/thumbnail view — CSS grid instead of broken Ext absolute positions in iframe */
-#main-panel .x-panel-body > .x-view{
+/* Icon tile views — Ext 2.3 DataView root is .x-border-panel (no .x-view class) */
+#icon-panel-small .x-border-layout-ct,#icon-panel-medium .x-border-layout-ct,
+#icon-panel-large .x-border-layout-ct,#sidebyside-panel .x-border-layout-ct{
+  width:100%!important;max-width:100%!important;box-sizing:border-box!important}
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar),
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar),
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
   display:grid!important;
-  grid-template-columns:repeat(auto-fill,minmax(200px,1fr))!important;
-  grid-auto-flow:row!important;
-  gap:10px 14px!important;
+  grid-auto-flow:row dense!important;
   align-content:start!important;
+  gap:10px 12px!important;
   position:relative!important;
   left:0!important;top:0!important;
-  width:100%!important;
-  height:auto!important;
-  min-height:100%!important;
-  padding:10px 12px!important;
-  box-sizing:border-box!important;
-}
-#main-panel .x-panel-body > .x-view .thumb-wrap,
-#main-panel .x-panel-body > .x-view .icon-side,
-#main-panel .x-panel-body > .x-view .icon-small,
-#main-panel .x-panel-body > .x-view .icon-medium,
-#main-panel .x-panel-body > .x-view .icon-large{
+  width:100%!important;min-width:100%!important;max-width:100%!important;
+  height:auto!important;min-height:0!important;max-height:none!important;
+  padding:10px 12px!important;box-sizing:border-box!important}
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
+  grid-template-columns:repeat(auto-fill,minmax(88px,1fr))!important}
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
+  grid-template-columns:repeat(auto-fill,minmax(128px,1fr))!important}
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
+  grid-template-columns:repeat(auto-fill,minmax(208px,1fr))!important}
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear,
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .x-clear{
+  display:none!important;width:0!important;height:0!important;
+  margin:0!important;padding:0!important;overflow:hidden!important}
+#icon-panel-small .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail,
+#icon-panel-medium .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail,
+#icon-panel-large .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
   position:static!important;
-  left:auto!important;top:auto!important;
-  right:auto!important;bottom:auto!important;
-  float:none!important;
-  width:auto!important;height:auto!important;
-  margin:0!important;
-  box-sizing:border-box!important;
-}
-#main-panel .x-panel-body > .x-view .thumb-wrap.icon-side,
-#main-panel .x-panel-body > .x-view .icon-side{
-  display:flex!important;
-  align-items:flex-start!important;
-  gap:10px!important;
-  padding:8px 10px!important;
-  min-height:64px!important;
-}
+  left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
+  float:none!important;clear:none!important;
+  width:auto!important;max-width:none!important;height:auto!important;
+  margin:0!important;padding:0!important;box-sizing:border-box!important}
+#icon-panel-small .icon-thumbnail .icon-small,#icon-panel-medium .icon-thumbnail .icon-medium,
+#icon-panel-large .icon-thumbnail .icon-large{
+  width:100%!important;height:auto!important;margin:0!important}
+#icon-panel-small .icon-thumbnail img,#icon-panel-medium .icon-thumbnail img,
+#icon-panel-large .icon-thumbnail img{
+  margin-left:auto!important;margin-right:auto!important}
+#icon-panel-small .icon-thumbnail .x-editable,#icon-panel-medium .icon-thumbnail .x-editable,
+#icon-panel-large .icon-thumbnail .x-editable{
+  width:100%!important;text-align:center!important}
+#icon-panel-small .icon-thumbnail.x-view-over,#icon-panel-medium .icon-thumbnail.x-view-over,
+#icon-panel-large .icon-thumbnail.x-view-over,
+#icon-panel-small .icon-thumbnail.x-view-selected,#icon-panel-medium .icon-thumbnail.x-view-selected,
+#icon-panel-large .icon-thumbnail.x-view-selected{
+  background:rgba(255,255,255,.05)!important;background-image:none!important;
+  border:1px solid var(--sm-line)!important;border-radius:12px!important;padding:4px!important}
+#icon-panel-small .icon-thumbnail.x-view-selected,#icon-panel-medium .icon-thumbnail.x-view-selected,
+#icon-panel-large .icon-thumbnail.x-view-selected{
+  background:var(--sm-accent-dim)!important;border-color:var(--sm-accent-strong)!important}
+/* Side-by-side list — full-width rows on DataView .x-border-panel root */
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar){
+  display:block!important;
+  position:relative!important;left:0!important;top:0!important;
+  width:100%!important;min-width:100%!important;max-width:100%!important;
+  height:auto!important;padding:0!important;box-sizing:border-box!important}
+#sidebyside-panel .x-border-layout-ct > .x-border-panel:not(.x-toolbar) > .icon-thumbnail{
+  position:static!important;
+  left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;
+  float:none!important;clear:both!important;
+  width:100%!important;max-width:100%!important;height:auto!important;
+  margin:0!important;padding:0!important;box-sizing:border-box!important;
+  border-bottom:1px solid var(--sm-line)!important}
+#sidebyside-panel .icon-thumbnail .icon-side{
+  display:flex!important;flex-direction:row!important;align-items:center!important;
+  gap:12px!important;padding:8px 12px!important;
+  width:100%!important;max-width:100%!important;height:auto!important;min-height:72px!important;
+  margin:0!important;box-sizing:border-box!important}
+#sidebyside-panel .icon-thumbnail .icon-side[style]{
+  width:100%!important;height:auto!important}
+#sidebyside-panel .icon-thumbnail img,#sidebyside-panel .icon-thumbnail .dd-img{
+  float:none!important;flex:0 0 48px!important;
+  width:48px!important;height:48px!important;object-fit:contain!important;margin:0!important}
+#sidebyside-panel .icon-thumbnail .icon-info{
+  float:none!important;flex:1 1 auto!important;
+  width:auto!important;min-width:0!important;padding-top:0!important;
+  display:grid!important;
+  grid-template-columns:minmax(140px,2fr) minmax(72px,1fr) minmax(120px,1fr)!important;
+  column-gap:12px!important;align-items:center!important;overflow:hidden!important}
+#sidebyside-panel .icon-info > span{
+  display:block!important;text-align:left!important;
+  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+#sidebyside-panel .icon-info > span.sm-nas-size-empty{display:none!important}
+#sidebyside-panel .icon-thumbnail.x-view-over,#sidebyside-panel .icon-thumbnail.x-view-selected{
+  background:rgba(255,255,255,.05)!important;background-image:none!important;
+  border-color:var(--sm-line)!important}
+#sidebyside-panel .icon-thumbnail.x-view-selected{
+  background:var(--sm-accent-dim)!important;border-color:var(--sm-accent-strong)!important}
+#icon-panel-small .icon-thumbnail .x-dv-focus,#icon-panel-medium .icon-thumbnail .x-dv-focus,
+#icon-panel-large .icon-thumbnail .x-dv-focus,#sidebyside-panel .icon-thumbnail .x-dv-focus{
+  display:none!important;width:0!important;height:0!important;
+  overflow:hidden!important;position:absolute!important;pointer-events:none!important}
+/* Detail/list grid — keep Ext table layout (do not apply DataView tile rules) */
+#list-panel .x-grid3-body{display:block!important;width:100%!important}
+#list-panel .x-grid3-row td{vertical-align:middle!important}
+#list-panel .x-grid3-cell-inner{
+  display:block!important;visibility:visible!important;opacity:1!important;
+  overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
 .x-view-empty,.x-grid-empty,.empty-text{
   color:var(--sm-muted)!important;font-size:14px!important;padding:24px!important;text-align:center!important}
 
@@ -7565,6 +7631,125 @@ NAS_FILES_SNIPPET = (
     "});}"
     "}catch(e){}"
     "return vp;}"
+    "function smNasDataViewRoot(panelId){"
+    "try{"
+    "var panel=document.getElementById(panelId);"
+    "if(!panel)return null;"
+    "var bl=panel.querySelector('.x-border-layout-ct');"
+    "if(!bl)return null;"
+    "for(var i=0;i<bl.children.length;i++){"
+    "var c=bl.children[i];"
+    "if(!c||!c.classList)continue;"
+    "if(c.classList.contains('x-toolbar'))continue;"
+    "if(c.querySelector('.icon-thumbnail')||c.classList.contains('x-border-panel'))return c;"
+    "}"
+    "}catch(e){}"
+    "return null;}"
+    "function smFixIconGridLabels(){"
+    "try{"
+    "document.querySelectorAll('#sidebyside-panel .icon-info > span').forEach(function(sp){"
+    "var t=(sp.textContent||'').trim();"
+    "if(t==='--'||t==='-'||t==='')sp.classList.add('sm-nas-size-empty');"
+    "else sp.classList.remove('sm-nas-size-empty');"
+    "});"
+    "var tilePanels=['icon-panel-small','icon-panel-medium','icon-panel-large'];"
+    "for(var p=0;p<tilePanels.length;p++){"
+    "var root=smNasDataViewRoot(tilePanels[p]);"
+    "if(!root)continue;"
+    "var min=tilePanels[p].indexOf('small')>=0?88:tilePanels[p].indexOf('large')>=0?208:128;"
+    "try{"
+    "var bl=root.closest('.x-border-layout-ct');"
+    "if(bl){bl.style.setProperty('width','100%','important');bl.style.setProperty('max-width','100%','important');}"
+    "root.style.setProperty('display','grid','important');"
+    "root.style.setProperty('grid-template-columns','repeat(auto-fill,minmax('+min+'px,1fr))','important');"
+    "root.style.setProperty('gap','10px 12px','important');"
+    "root.style.setProperty('position','relative','important');"
+    "root.style.setProperty('width','100%','important');"
+    "root.style.setProperty('min-width','100%','important');"
+    "root.style.setProperty('max-width','100%','important');"
+    "root.style.setProperty('height','auto','important');"
+    "root.style.setProperty('min-height','0','important');"
+    "root.style.removeProperty('left');"
+    "root.style.removeProperty('top');"
+    "}catch(e){}"
+    "root.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
+    "try{"
+    "el.style.setProperty('position','static','important');"
+    "el.style.setProperty('float','none','important');"
+    "el.style.setProperty('left','auto','important');"
+    "el.style.setProperty('top','auto','important');"
+    "el.style.setProperty('width','auto','important');"
+    "el.style.setProperty('max-width','none','important');"
+    "el.style.setProperty('margin','0','important');"
+    "el.style.setProperty('padding','0','important');"
+    "el.style.removeProperty('flex');"
+    "el.style.removeProperty('height');"
+    "}catch(e){}"
+    "});"
+    "}"
+    "var side=smNasDataViewRoot('sidebyside-panel');"
+    "if(side){"
+    "try{"
+    "side.style.setProperty('display','block','important');"
+    "side.style.setProperty('position','relative','important');"
+    "side.style.setProperty('width','100%','important');"
+    "side.style.setProperty('min-width','100%','important');"
+    "side.style.setProperty('max-width','100%','important');"
+    "side.style.setProperty('height','auto','important');"
+    "side.style.removeProperty('left');"
+    "side.style.removeProperty('top');"
+    "}catch(e){}"
+    "side.querySelectorAll(':scope > .icon-thumbnail').forEach(function(el){"
+    "try{"
+    "el.style.setProperty('position','static','important');"
+    "el.style.setProperty('float','none','important');"
+    "el.style.setProperty('left','auto','important');"
+    "el.style.setProperty('top','auto','important');"
+    "el.style.setProperty('width','100%','important');"
+    "el.style.setProperty('max-width','100%','important');"
+    "el.style.removeProperty('flex');"
+    "el.style.removeProperty('height');"
+    "}catch(e){}"
+    "});"
+    "}"
+    "}catch(e){}}"
+    "function smPatchDataViewRefresh(){"
+    "try{"
+    "if(window.__smDvPatched||!window.Ext||!Ext.DataView)return;"
+    "var orig=Ext.DataView.prototype.refresh;"
+    "if(!orig)return;"
+    "Ext.DataView.prototype.refresh=function(){"
+    "var out=orig.apply(this,arguments);"
+    "try{"
+    "if(this.el&&this.el.dom){"
+    "this.el.dom.style.setProperty('width','100%','important');"
+    "this.el.dom.style.setProperty('max-width','100%','important');"
+    "}"
+    "if(window.smFixIconGridLabels)window.smFixIconGridLabels();"
+    "}catch(e){}"
+    "return out;};"
+    "window.__smDvPatched=true;"
+    "}catch(e){}}"
+    "function smWatchIconGrid(){"
+    "try{"
+    "smPatchDataViewRefresh();"
+    "if(window.__smIconGridWatch)return;"
+    "window.__smIconGridWatch=true;"
+    "function hook(){"
+    "['icon-panel-small','icon-panel-medium','icon-panel-large','sidebyside-panel'].forEach(function(pid){"
+    "var view=smNasDataViewRoot(pid);"
+    "if(!view||view.__smObserved)return;"
+    "view.__smObserved=true;"
+    "try{"
+    "new MutationObserver(function(){try{smFixIconGridLabels();}catch(e){}})"
+    ".observe(view,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});"
+    "}catch(e){}"
+    "});"
+    "smFixIconGridLabels();"
+    "}"
+    "hook();"
+    "setInterval(hook,1200);"
+    "}catch(e){}}"
     "function smRefreshFileIconView(){"
     "try{"
     "if(!window.Ext||!Ext.getCmp)return false;"
@@ -7573,7 +7758,8 @@ NAS_FILES_SNIPPET = (
     "var cv=main.getComponent(0);"
     "if(!cv)return false;"
     "var dv=(cv.getDataView&&cv.getDataView())||(cv.view&&cv.view.getView&&cv.view.getView())||null;"
-    "if(dv&&dv.refresh){dv.refresh();return true;}"
+    "if(dv&&dv.refresh){dv.refresh();try{smFixIconGridLabels();}catch(e){}return true;}"
+    "try{smFixIconGridLabels();}catch(e){}"
     "}catch(e){}"
     "return false;}"
     "function smNasFit(force){"
@@ -7600,12 +7786,14 @@ NAS_FILES_SNIPPET = (
     "try{if(typeof smHideIconBar==='function')smHideIconBar();}catch(e){}"
     "try{if(typeof smMergeNaviBar==='function')smMergeNaviBar();}catch(e){}"
     "try{if(typeof smKickFilesLoad==='function'&&!window.__smKickFilesDone&&!window.__smKickFilesPending)smKickFilesLoad();}catch(e){}"
+    "try{if(typeof smWatchIconGrid==='function')smWatchIconGrid();}catch(e){}"
     "var vp=smFindViewport();"
     "if(vp){"
     "try{if(vp.setSize)vp.setSize(w,h);}catch(e){}"
     "try{if(vp.doLayout)vp.doLayout(true,true);}catch(e){}"
     "}"
     "try{if(typeof smRefreshFileIconView==='function')smRefreshFileIconView();}catch(e){}"
+    "try{if(typeof smFixIconGridLabels==='function')smFixIconGridLabels();}catch(e){}"
     "try{"
     "var main=Ext.getCmp&&Ext.getCmp('main-panel');"
     "var left=Ext.getCmp&&Ext.getCmp('left-panel');"
@@ -7649,7 +7837,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "}catch(e){try{console.error('smNasFit',e);}catch(e2){}}}"
     
-    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;}catch(e){}"
+    "try{window.smNasFit=smNasFit;window.smClearStuckMask=smClearStuckMask;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smRestoreDialogs=smRestoreDialogs;window.smRefreshFileIconView=smRefreshFileIconView;window.smNasDataViewRoot=smNasDataViewRoot;window.smFixIconGridLabels=smFixIconGridLabels;window.smWatchIconGrid=smWatchIconGrid;}catch(e){}"
     "function smMobileScrollFix(){"
     "if(window.__smMobileScrollFix)return;"
     "window.__smMobileScrollFix=true;"
@@ -7791,6 +7979,7 @@ NAS_FILES_SNIPPET = (
     "setInterval(smPaintScrollPorts,2000);"
     "}"
     "try{smMobileScrollFix();}catch(e){}"
+    "try{smWatchIconGrid();}catch(e){}"
     "try{"
     "window.addEventListener('resize',function(){smNasFit(true);},false);"
 
@@ -7814,7 +8003,8 @@ NAS_FILES_SNIPPET = (
     "try{if(Ext.onReady){Ext.onReady(function(){"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);},0);"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},500);"
-    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();},1200);"
+    "setTimeout(function(){smMoveAuthToTop();smMergeNaviBar();smHideIconBar();smKickFilesLoad();smWatchIconGrid();},1200);"
+    "setTimeout(function(){smWatchIconGrid();smFixIconGridLabels();},2000);"
     "setTimeout(smClearStuckMask,2000);"
     "});}else{"
     "setTimeout(function(){smMoveAuthToTop();smNasFit(true);smClearStuckMask();},800);"
@@ -8138,6 +8328,59 @@ def _nas_files_rewrite_html_paths(text: str) -> str:
     return text
 
 
+def _nas_files_patch_css(text: str) -> str:
+    """Disable Buffalo float tile layout in mainPanel.css (breaks portal flex grid)."""
+    if ".icon-panel .icon-thumbnail" not in text:
+        return text
+    text = text.replace(
+        ".icon-panel .icon-thumbnail {\n    float: left;",
+        ".icon-panel .icon-thumbnail {\n    float: none;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-thumbnail {\n    float: none;\n    margin: 15px;\n"
+        "    margin-right: 0;\n    margin-bottom: 0;\n    padding: 5px;",
+        ".icon-panel .icon-thumbnail {\n    float: none;\n    margin: 0;\n    padding: 0;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-info {\n    display: block;\n    padding-top: 20px;\n"
+        "    text-align: left;\n    float: right;\n    width: 100px;",
+        ".icon-panel .icon-info {\n    display: block;\n    padding-top: 0;\n"
+        "    text-align: left;\n    float: none;\n    width: auto;",
+    )
+    text = text.replace(
+        ".icon-panel .icon-side img {\n    float: left;",
+        ".icon-panel .icon-side img {\n    float: none;",
+    )
+    return text
+
+
+def _nas_files_hook_dataview(text: str) -> str:
+    """Wrap Buffalo DataView refresh to re-apply portal tile layout."""
+    hook = (
+        "(function(_smDv){if(!_smDv||_smDv.__smGridHook)return;"
+        "_smDv.__smGridHook=1;var _smRf=_smDv.refresh;"
+        "_smDv.refresh=function(){var _smOut=_smRf.apply(this,arguments);"
+        "try{if(_smDv.el&&_smDv.el.dom){"
+        "_smDv.el.dom.style.setProperty('width','100%','important');"
+        "_smDv.el.dom.style.setProperty('max-width','100%','important');"
+        "}"
+        "if(window.smFixIconGridLabels)window.smFixIconGridLabels();}catch(e){}"
+        "return _smOut;};})(%s);"
+    )
+    replacements = (
+        "var dataView_small = makeDataView(makeTemplate(tpl_small), ICON_SMALL_TEXT_WIDTH, ICON_SMALL_WIDTH, ICON_SMALL_HEIGHT);",
+        "var dataView_medium = makeDataView(makeTemplate(tpl_medium), ICON_MEDIUM_TEXT_WIDTH, ICON_MEDIUM_WIDTH, ICON_MEDIUM_HEIGHT);",
+        "var dataView_large = makeDataView(makeTemplate(tpl_large), ICON_LARGE_TEXT_WIDTH, ICON_LARGE_WIDTH, ICON_LARGE_HEIGHT);",
+        "var dataView_side = makeDataView(makeTemplate(tpl_side), SIDEBYSIDE_INFO_WIDTH, SIDEBYSIDE_WIDTH, SIDEBYSIDE_HEIGHT);",
+    )
+    for line in replacements:
+        var = line.split("=", 1)[0].strip().replace("var ", "").strip()
+        patched = line + "\n    " + hook % var
+        if hook % var not in text:
+            text = text.replace(line, patched, 1)
+    return text
+
+
 def _nas_files_rewrite_js_paths(text: str) -> str:
     """Rewrite hardcoded absolute WebAccess paths inside JS sources."""
     # Avoid double-prefixing if already rewritten.
@@ -8193,6 +8436,7 @@ def _nas_files_rewrite_js_paths(text: str) -> str:
         "_response.status != 200 || (_response.statusText && _response.statusText != \"OK\")",
     )
     text = _nas_files_patch_removed_toolbar_buttons(text)
+    text = _nas_files_hook_dataview(text)
     # Show full directory path as text in the location bar.
     text = re.sub(
         r"    locations\.doLayout\(\);\r?\n\}\r?\n\r?\nfunction update_location_bar_search",
@@ -8718,7 +8962,8 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
     )
     is_html = "text/html" in ctype
     is_json = "application/json" in ctype or "text/json" in ctype or ctype.endswith("+json")
-    if not is_js and not is_html and not is_json:
+    is_css = "text/css" in ctype
+    if not is_js and not is_html and not is_json and not is_css:
         return body
     try:
         text = body.decode("utf-8")
@@ -8730,6 +8975,9 @@ def _nas_files_inject(body: bytes, content_type: str) -> bytes:
 
     if is_json:
         return _nas_files_rewrite_json_paths(text).encode("utf-8")
+
+    if is_css:
+        return _nas_files_patch_css(text).encode("utf-8")
 
     if is_js:
         return _nas_files_rewrite_js_paths(text).encode("utf-8")
