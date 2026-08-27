@@ -6638,37 +6638,24 @@ html.sm-auth-top #menu-bar #login_button .x-btn-text{
   color:var(--sm-text)!important;font:600 12px/1.2 "Sora",system-ui,sans-serif!important}
 html.sm-auth-top #menu-bar::after{display:none!important;content:none!important}
 
-/* Windows Explorer-style nav (dark theme): [back][fwd][up] | address crumbs | search */
-html.sm-merged-chrome #control-panel #alertButton{
+/* Windows 11 Explorer-style nav — custom row replaces Ext toolbar table layout */
+html.sm-merged-chrome #control-panel #alertButton,
+html.sm-win-nav #control-panel #alertButton{
   display:none!important;visibility:hidden!important;width:0!important;height:0!important;
   overflow:hidden!important;margin:0!important;padding:0!important}
-html.sm-merged-chrome #control-panel{
-  display:block!important;visibility:visible!important;
-  height:auto!important;min-height:48px!important;max-height:none!important;
-  overflow:visible!important;padding:8px 10px!important;margin:0!important;
+html.sm-merged-chrome #control-panel,
+html.sm-win-nav #control-panel{
+  display:block!important;visibility:visible!important;position:relative!important;
+  height:auto!important;min-height:52px!important;max-height:none!important;
+  overflow:visible!important;padding:8px 12px!important;margin:0!important;
   border:0!important;border-bottom:1px solid var(--sm-line)!important;
   background:var(--sm-bg1)!important}
-html.sm-merged-chrome #control-panel .x-toolbar-ct{
-  display:flex!important;align-items:center!important;gap:6px!important;width:100%!important}
-html.sm-merged-chrome #control-panel .navi-button,
-html.sm-merged-chrome #control-panel #navi-button-up{
-  display:inline-flex!important;visibility:visible!important;
-  width:32px!important;min-width:32px!important;max-width:32px!important;
-  height:32px!important;margin:0!important;padding:0!important;
-  flex:0 0 32px!important;border:0!important;background:transparent!important;
-  border-radius:6px!important;opacity:.9!important}
-html.sm-merged-chrome #control-panel .navi-button .x-btn,
-html.sm-merged-chrome #control-panel #navi-button-up .x-btn,
-html.sm-merged-chrome #control-panel .navi-button .x-btn-ml,
-html.sm-merged-chrome #control-panel .navi-button .x-btn-mc,
-html.sm-merged-chrome #control-panel .navi-button .x-btn-mr,
-html.sm-merged-chrome #control-panel .navi-button table{
-  background:transparent!important;border:0!important;box-shadow:none!important;
-  width:32px!important;height:32px!important;min-width:32px!important}
-html.sm-merged-chrome #control-panel .navi-button:hover,
-html.sm-merged-chrome #control-panel #navi-button-up:hover{
-  background:rgba(255,255,255,.07)!important}
-/* Hide Buffalo native crumbs/textfield; Windows address bar stays in-flow inside #location-bar only */
+/* Hide native Ext toolbar chrome; custom #sm-win-explorer-bar paints the nav */
+html.sm-win-nav #control-panel>.x-toolbar-ct,
+html.sm-win-nav #control-panel>table,
+html.sm-win-nav #control-panel .x-toolbar-left,
+html.sm-win-nav #control-panel .x-toolbar-right,
+html.sm-win-nav #control-panel .x-toolbar-cell,
 html.sm-win-nav #location-buttons,
 html.sm-win-nav #location-buttons-ie,
 html.sm-win-nav #location-textfield,
@@ -6677,80 +6664,110 @@ html.sm-win-nav #location-bar .location_item,
 html.sm-win-nav #location-bar .location_item2,
 html.sm-win-nav #location-bar .x-form-clear-trigger,
 html.sm-win-nav #location-bar .x-form-trigger,
-html.sm-win-nav #location-bar .x-form-field-wrap{
+html.sm-win-nav #location-bar .x-form-field-wrap,
+html.sm-win-nav #control-panel .sm-win-hide{
   display:none!important;visibility:hidden!important;width:0!important;height:0!important;
   max-width:0!important;max-height:0!important;margin:0!important;padding:0!important;
   overflow:hidden!important;pointer-events:none!important;opacity:0!important}
+#sm-win-explorer-bar{
+  display:flex!important;align-items:center!important;gap:8px!important;
+  width:100%!important;max-width:100%!important;box-sizing:border-box!important;
+  min-height:34px!important}
+#sm-win-explorer-bar .sm-win-nav-btns{
+  display:flex!important;align-items:center!important;gap:2px!important;
+  flex:0 0 auto!important}
+#sm-win-explorer-bar .sm-win-nav-btn{
+  appearance:none!important;width:32px!important;height:32px!important;
+  margin:0!important;padding:0!important;border:0!important;border-radius:6px!important;
+  background:transparent!important;cursor:pointer!important;position:relative!important;
+  flex:0 0 32px!important;opacity:.9!important}
+#sm-win-explorer-bar .sm-win-nav-btn:hover{background:rgba(255,255,255,.08)!important}
+#sm-win-explorer-bar .sm-win-nav-btn.is-disabled{opacity:.35!important;cursor:default!important}
+#sm-win-explorer-bar .sm-win-nav-btn::before{
+  content:""!important;position:absolute!important;inset:7px!important;
+  background-repeat:no-repeat!important;background-position:center!important;background-size:contain!important}
+#sm-win-explorer-bar .sm-win-back::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-fwd::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18l6-6-6-6'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-up::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5'/%3E%3Cpath d='M5 12l7-7 7 7'/%3E%3C/svg%3E")!important}
+#sm-win-explorer-bar .sm-win-ref::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f2ec' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-3-6.7'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E")!important}
 html.sm-win-nav #control-panel #location-bar,
 html.sm-merged-chrome #control-panel #location-bar{
-  position:relative!important;flex:1 1 auto!important;min-width:0!important;
+  position:static!important;flex:1 1 auto!important;min-width:0!important;
   max-width:none!important;width:auto!important;height:34px!important;max-height:34px!important;
-  margin:0 4px!important;border:0!important;background:transparent!important;
-  overflow:hidden!important;isolation:isolate!important;z-index:2!important}
-html.sm-win-nav #location-bar .x-panel-body{
+  margin:0!important;border:0!important;background:transparent!important;
+  overflow:visible!important;isolation:isolate!important;z-index:2!important;
+  display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important}
+html.sm-win-nav #location-bar .x-panel-body,
+html.sm-win-nav #location-bar .x-panel-bwrap{
   position:relative!important;display:block!important;width:100%!important;
   height:34px!important;max-height:34px!important;overflow:hidden!important;
-  background:transparent!important;border:0!important}
+  background:transparent!important;border:0!important;visibility:visible!important}
 #sm-win-address{
   position:relative!important;top:auto!important;left:auto!important;right:auto!important;
   bottom:auto!important;inset:auto!important;z-index:1!important;
-  display:flex!important;align-items:center!important;gap:2px!important;
+  display:flex!important;align-items:center!important;gap:0!important;
   box-sizing:border-box!important;width:100%!important;max-width:100%!important;
   height:34px!important;max-height:34px!important;min-height:34px!important;
-  padding:0 10px 0 34px!important;overflow:hidden!important;flex:1 1 auto!important;
-  border:1px solid var(--sm-line)!important;border-radius:8px!important;
+  padding:0 10px 0 36px!important;overflow:hidden!important;flex:1 1 auto!important;
+  border:1px solid rgba(255,255,255,.12)!important;border-radius:8px!important;
   background:var(--sm-bg0)!important;cursor:text!important}
 #sm-win-address::before{
-  content:""!important;position:absolute!important;left:10px!important;top:50%!important;
+  content:""!important;position:absolute!important;left:11px!important;top:50%!important;
   width:16px!important;height:16px!important;transform:translateY(-50%)!important;
   background:no-repeat center/contain
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2384998c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/%3E%3Cpath d='M3 7V5a2 2 0 0 1 2-2h4l2 2'/%3E%3C/svg%3E")!important;
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c5d4cc' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10.5L12 3l9 7.5'/%3E%3Cpath d='M5 9.5V20h14V9.5'/%3E%3C/svg%3E")!important;
   pointer-events:none!important}
 #sm-win-address .sm-win-crumb{
   appearance:none!important;border:0!important;background:transparent!important;
   color:var(--sm-text)!important;cursor:pointer!important;
-  font:500 13px/1.2 "Segoe UI",Sora,system-ui,sans-serif!important;
-  padding:4px 7px!important;border-radius:4px!important;white-space:nowrap!important;
-  max-width:180px!important;overflow:hidden!important;text-overflow:ellipsis!important}
+  font:400 13px/1.2 "Segoe UI",Sora,system-ui,sans-serif!important;
+  padding:3px 6px!important;border-radius:4px!important;white-space:nowrap!important;
+  max-width:160px!important;overflow:hidden!important;text-overflow:ellipsis!important}
 #sm-win-address .sm-win-crumb:hover{background:rgba(255,255,255,.08)!important}
-#sm-win-address .sm-win-crumb.is-current{color:var(--sm-muted)!important;cursor:default!important}
+#sm-win-address .sm-win-crumb.is-current{color:var(--sm-text)!important;cursor:default!important;font-weight:500!important}
 #sm-win-address .sm-win-crumb.is-current:hover{background:transparent!important}
 #sm-win-address .sm-win-chev{
-  flex:0 0 auto!important;color:var(--sm-muted)!important;opacity:.85!important;
+  flex:0 0 auto!important;color:rgba(232,242,236,.55)!important;
   font:400 14px/1 "Segoe UI",system-ui,sans-serif!important;padding:0 1px!important;
   user-select:none!important;pointer-events:none!important}
 #sm-win-address .sm-win-edit{
   display:none!important;flex:1 1 auto!important;min-width:0!important;height:28px!important;
   margin:0!important;padding:0 4px!important;border:0!important;outline:none!important;
   background:transparent!important;color:var(--sm-text)!important;
-  font:500 13px/28px "Segoe UI",Sora,system-ui,sans-serif!important}
+  font:400 13px/28px "Segoe UI",Sora,system-ui,sans-serif!important}
 #sm-win-address.is-editing .sm-win-crumb,
 #sm-win-address.is-editing .sm-win-chev{display:none!important}
 #sm-win-address.is-editing .sm-win-edit{display:block!important}
-/* Keep file pane clickable even if address chrome mis-parents */
 #main-panel,#main-panel .x-panel-bwrap,#main-panel .x-panel-body,#main-panel .x-border-panel{
   pointer-events:auto!important}
 #sm-win-address.sm-win-misplaced{
   display:none!important;pointer-events:none!important;width:0!important;height:0!important}
-html.sm-win-nav #control-panel #search-textbox,
-html.sm-merged-chrome #control-panel #search-textbox{
-  flex:0 0 220px!important;min-width:160px!important;max-width:260px!important;
-  width:220px!important;margin:0!important;min-height:34px!important;height:34px!important;
-  padding:0 12px 0 34px!important;border-radius:8px!important;
-  border:1px solid var(--sm-line)!important;background:var(--sm-bg0)!important;
-  font-family:"Segoe UI",Sora,system-ui,sans-serif!important;font-size:13px!important;
-  color:var(--sm-text)!important}
-html.sm-win-nav #search-panel,
-html.sm-win-nav #search-panel .x-form-field-wrap{
-  position:relative!important;background:transparent!important;border:0!important}
-html.sm-win-nav #search-panel .x-form-field-wrap::before{
-  content:""!important;position:absolute!important;left:12px!important;top:50%!important;
-  width:14px!important;height:14px!important;transform:translateY(-50%)!important;z-index:2!important;
+#sm-win-search-wrap{
+  position:relative!important;flex:0 0 240px!important;min-width:160px!important;max-width:280px!important;
+  height:34px!important}
+#sm-win-search-wrap input{
+  width:100%!important;height:34px!important;box-sizing:border-box!important;
+  margin:0!important;padding:0 12px 0 34px!important;border-radius:8px!important;
+  border:1px solid rgba(255,255,255,.12)!important;background:var(--sm-bg0)!important;
+  font:400 13px/34px "Segoe UI",Sora,system-ui,sans-serif!important;
+  color:var(--sm-text)!important;outline:none!important;box-shadow:none!important}
+#sm-win-search-wrap input::placeholder{color:rgba(232,242,236,.45)!important;opacity:1!important}
+#sm-win-search-wrap::before{
+  content:""!important;position:absolute!important;left:11px!important;top:50%!important;
+  width:15px!important;height:15px!important;transform:translateY(-50%)!important;z-index:2!important;
   background:no-repeat center/contain
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2384998c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E")!important;
   pointer-events:none!important}
+html.sm-win-nav #control-panel #search-textbox,
+html.sm-win-nav #search-panel,
+html.sm-win-nav #search-panel .x-form-field-wrap,
 html.sm-win-nav #search-panel .x-form-clear-trigger{
-  display:none!important;width:0!important;visibility:hidden!important}
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  pointer-events:none!important;opacity:0!important;position:absolute!important;left:-9999px!important}
 #control-panel.sm-nas-gone{
   display:none!important;visibility:hidden!important;
   height:0!important;min-height:0!important;max-height:0!important;
@@ -6762,9 +6779,9 @@ html.sm-merged-chrome #menu-bar .x-toolbar-ct{
   display:flex!important;align-items:center!important;flex:1 1 auto!important;
   width:100%!important;gap:6px!important}
 @media (max-width:900px){
-  html.sm-merged-chrome #control-panel .x-toolbar-ct{flex-wrap:wrap!important}
-  html.sm-win-nav #control-panel #location-bar{flex:1 1 100%!important;order:10!important;margin:4px 0 0!important}
-  html.sm-win-nav #control-panel #search-textbox{flex:1 1 140px!important;order:11!important;width:auto!important}
+  #sm-win-explorer-bar{flex-wrap:wrap!important}
+  #sm-win-search-wrap{flex:1 1 100%!important;max-width:none!important;order:11!important}
+  html.sm-win-nav #control-panel #location-bar{flex:1 1 100%!important;order:10!important;min-width:100%!important}
 }
 
 /* Location / search shared */
@@ -7430,6 +7447,7 @@ NAS_FILES_SNIPPET = (
     "try{"
     "document.documentElement.classList.add('sm-merged-chrome');"
     "document.documentElement.classList.add('sm-win-nav');"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
     "if(window.__smNaviMerged)return true;"
     "if(!window.Ext||!Ext.getCmp)return false;"
     "var nav=Ext.getCmp('control-panel');"
@@ -7438,18 +7456,14 @@ NAS_FILES_SNIPPET = (
     "nav.items.each(function(it){"
     "if(!it)return;"
     "var id=(it.id||'')+'';"
-    "if(id==='alertButton'||id.indexOf('history')>=0){"
+    "if(id==='alertButton'||id.toLowerCase().indexOf('history')>=0){"
     "try{if(it.hide)it.hide();}catch(e){}"
-    "}"
-    "else{"
-    "try{if(it.show)it.show();}catch(e){}"
     "}"
     "});"
     "}catch(e){}"
-    "try{nav.doLayout();}catch(e){}"
-    "try{if(nav.ownerCt&&nav.ownerCt.doLayout)nav.ownerCt.doLayout(true,true);}catch(e){}"
     "}"
     "window.__smNaviMerged=true;"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
     "try{smEnsureWinAddress();}catch(e){}"
     "try{if(typeof update_location_bar==='function'&&window.Ext&&Ext.getCmp){"
     "var _smTree=Ext.getCmp('tree-panel');"
@@ -7459,21 +7473,97 @@ NAS_FILES_SNIPPET = (
     "}}catch(e){}"
     "return true;"
     "}catch(e){return false;}}"
+    "function smRefreshCurrentFolder(){"
+    "try{"
+    "if(!window.Ext||!Ext.getCmp)return;"
+    "var tree=Ext.getCmp('tree-panel');"
+    "var node=tree&&tree.getSelectionModel().getSelectedNode();"
+    "if(!node){node=tree&&tree.getNodeById('/');}"
+    "if(!node)return;"
+    "if(typeof addRecordWithPath==='function')addRecordWithPath(node,function(){});"
+    "else if(typeof selectTreePath_absolute==='function')selectTreePath_absolute(node.path||'/');"
+    "}catch(e){}"
+    "}"
+    "function smRunSearch(word){"
+    "try{"
+    "word=String(word||'').trim();"
+    "if(!word)return;"
+    "var tf=document.getElementById('search-textbox');"
+    "if(tf)tf.value=word;"
+    "try{if(window.Ext&&Ext.getCmp){var c=Ext.getCmp('search-textbox');if(c&&c.setValue)c.setValue(word);}}catch(e){}"
+    "if(typeof search==='function')search(word);"
+    "}catch(e){}"
+    "}"
+    "function smEnsureWinExplorerBar(){"
+    "try{"
+    "document.documentElement.classList.add('sm-win-nav');"
+    "var cp=document.getElementById('control-panel');"
+    "if(!cp)return;"
+    "var row=document.getElementById('sm-win-explorer-bar');"
+    "if(!row){"
+    "row=document.createElement('div');"
+    "row.id='sm-win-explorer-bar';"
+    "var btns=document.createElement('div');"
+    "btns.className='sm-win-nav-btns';"
+    "function mkBtn(cls,title,fn){"
+    "var b=document.createElement('button');"
+    "b.type='button';b.className='sm-win-nav-btn '+cls;b.title=title;"
+    "b.setAttribute('aria-label',title);"
+    "b.addEventListener('click',function(ev){ev.preventDefault();try{fn();}catch(e){}});"
+    "btns.appendChild(b);return b;"
+    "}"
+    "mkBtn('sm-win-back','Back',function(){if(typeof historyBack==='function')historyBack();});"
+    "mkBtn('sm-win-fwd','Forward',function(){if(typeof historyForward==='function')historyForward();});"
+    "mkBtn('sm-win-up','Up',function(){if(typeof goUp==='function')goUp();else if(typeof Ext!=='undefined'&&Ext.getCmp){var u=Ext.getCmp('navi-button-up');if(u&&u.handler)u.handler.call(u);}});"
+    "mkBtn('sm-win-ref','Refresh',smRefreshCurrentFolder);"
+    "row.appendChild(btns);"
+    "var searchWrap=document.createElement('div');"
+    "searchWrap.id='sm-win-search-wrap';"
+    "var sIn=document.createElement('input');"
+    "sIn.type='search';sIn.id='sm-win-search-input';sIn.autocomplete='off';sIn.spellcheck=false;"
+    "sIn.placeholder='Search Home';"
+    "sIn.addEventListener('keydown',function(ev){"
+    "if(ev.key==='Enter'){ev.preventDefault();smRunSearch(sIn.value);}"
+    "});"
+    "searchWrap.appendChild(sIn);"
+    "row.appendChild(searchWrap);"
+    "cp.insertBefore(row,cp.firstChild);"
+    "}"
+    "var loc=document.getElementById('location-bar');"
+    "if(loc&&row&&loc.parentNode!==row){"
+    "var searchWrap=document.getElementById('sm-win-search-wrap');"
+    "if(searchWrap)row.insertBefore(loc,searchWrap);"
+    "else row.appendChild(loc);"
+    "}"
+    "try{smEnsureWinAddress();}catch(e){}"
+    "}catch(e){}"
+    "}"
     "function smPathParts(path){"
     "path=String(path||'/');"
     "return path.split('/').filter(function(p){return !!p;});"
     "}"
     "function smPathToDisplay(path){"
     "var parts=smPathParts(path);"
-    "return parts.length?('Files > '+parts.join(' > ')):'Files';"
+    "return parts.length?('Home > '+parts.join(' > ')):'Home';"
     "}"
     "function smDisplayToPath(text){"
     "text=String(text||'').trim();"
-    "if(!text||text==='Files'||text==='/')return '/';"
+    "if(!text||text==='Home'||text==='Files'||text==='/')return '/';"
     "if(text.charAt(0)==='/')return text.replace(/\\/+/g,'/')||'/';"
-    "text=text.replace(/^Files\\s*>\\s*/i,'');"
+    "text=text.replace(/^(Home|Files)\\s*>\\s*/i,'');"
     "var parts=text.split(/\\s*>\\s*/).map(function(p){return p.trim();}).filter(Boolean);"
     "return parts.length?('/'+parts.join('/')):'/';"
+    "}"
+    "function smUpdateSearchPlaceholder(path){"
+    "try{"
+    "var parts=smPathParts(path);"
+    "var label=parts.length?parts[parts.length-1]:'Home';"
+    "var ph='Search '+label;"
+    "var sIn=document.getElementById('sm-win-search-input');"
+    "if(sIn){sIn.placeholder=ph;sIn.setAttribute('aria-label',ph);}"
+    "var tf=document.getElementById('search-textbox');"
+    "if(tf){tf.setAttribute('placeholder',ph);}"
+    "}catch(e){}"
     "}"
     "function smNavigatePath(path){"
     "try{"
@@ -7500,11 +7590,8 @@ NAS_FILES_SNIPPET = (
     "if(!host||!bar)return false;"
     "if(!bar.contains(host))return false;"
     "var r=host.getBoundingClientRect();"
-    "var br=bar.getBoundingClientRect();"
-    "if(!r||!br)return true;"
+    "if(!r)return true;"
     "if(r.height>48)return false;"
-    "if(r.width>br.width+40)return false;"
-    "if(r.bottom>br.bottom+8)return false;"
     "return true;"
     "}catch(e){return false;}"
     "}"
@@ -7517,7 +7604,7 @@ NAS_FILES_SNIPPET = (
     "host.classList.remove('is-editing');"
     "while(host.firstChild)host.removeChild(host.firstChild);"
     "var parts=smPathParts(path);"
-    "var crumbs=[{name:'Files',path:'/'}];"
+    "var crumbs=[{name:'Home',path:'/'}];"
     "var acc='';"
     "for(var i=0;i<parts.length;i++){"
     "acc+='/'+parts[i];"
@@ -7544,6 +7631,11 @@ NAS_FILES_SNIPPET = (
     "}"
     "host.appendChild(btn);"
     "}"
+    # Trailing chevron like Windows Explorer after the current folder
+    "var trail=document.createElement('span');"
+    "trail.className='sm-win-chev';"
+    "trail.textContent='\\u203A';"
+    "host.appendChild(trail);"
     "var edit=document.createElement('input');"
     "edit.type='text';"
     "edit.className='sm-win-edit';"
@@ -7569,11 +7661,14 @@ NAS_FILES_SNIPPET = (
     "},120);"
     "});"
     "host.appendChild(edit);"
+    "try{smUpdateSearchPlaceholder(path);}catch(e){}"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
     "}catch(e){}"
     "}"
     "function smEnsureWinAddress(){"
     "try{"
     "document.documentElement.classList.add('sm-win-nav');"
+    "try{smEnsureWinExplorerBar();}catch(e){}"
     "var bar=document.getElementById('location-bar');"
     "if(!bar)return;"
     "var body=bar;"
@@ -7671,7 +7766,7 @@ NAS_FILES_SNIPPET = (
     "}"
     "return true;"
     "}catch(e){return false;}}"
-    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smNavigatePath=smNavigatePath;}catch(e){}"
+    "try{window.smMoveAuthToTop=smMoveAuthToTop;window.smHideIconBar=smHideIconBar;window.smMergeNaviBar=smMergeNaviBar;window.smPathToDisplay=smPathToDisplay;window.smDisplayToPath=smDisplayToPath;window.smEnsureWinAddress=smEnsureWinAddress;window.smRenderWinAddress=smRenderWinAddress;window.smNavigatePath=smNavigatePath;window.smEnsureWinExplorerBar=smEnsureWinExplorerBar;window.smRefreshCurrentFolder=smRefreshCurrentFolder;window.smUpdateSearchPlaceholder=smUpdateSearchPlaceholder;window.smRunSearch=smRunSearch;}catch(e){}"
     "function smKickFilesLoad(){"
     "try{"
     "if(window.__smKickFilesDone)return true;"
