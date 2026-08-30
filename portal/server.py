@@ -7597,6 +7597,15 @@ a{color:var(--sm-accent)!important}
 .x-btn-text.icon-settings::before{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%2523e8f2ec%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
 .x-menu-item-icon.icon-settings{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%2523e8f2ec%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
 .x-btn-over .x-btn-text.icon-settings::before{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%25233ddea0%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
+#sm-settings-nas-row{margin:14px 4px 6px;padding:12px 0 4px;border-top:1px solid var(--sm-line)}
+#sm-settings-nas-row .sm-settings-nas-label{font-size:13px;font-weight:600;color:var(--sm-text);margin-bottom:8px}
+#sm-settings-nas-row .sm-settings-nas-hint{font-size:11px;color:var(--sm-muted);margin-top:8px;line-height:1.4}
+#sm-settings-nas-row .sm-settings-nas-btn,#sm-settings-nas-dl{
+  appearance:none;border:1px solid rgba(61,222,160,.35)!important;border-radius:10px!important;
+  background:var(--sm-accent-dim)!important;color:var(--sm-accent)!important;
+  font:600 13px Sora,system-ui,sans-serif!important;padding:10px 14px!important;cursor:pointer;
+  min-height:40px;width:100%;box-sizing:border-box;text-align:left}
+#sm-settings-nas-row .sm-settings-nas-btn:hover,#sm-settings-nas-dl:hover{background:rgba(61,222,160,.22)!important}
 
 """
 
@@ -8306,6 +8315,66 @@ NAS_FILES_SNIPPET = (
     "setTimeout(smHookMsgShow,1500);"
     "}catch(e){}"
     "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smDisableDisplayingOverlay=smDisableDisplayingOverlay;}catch(e){}"
+    "function smIsNasSettingsWindow(winEl){"
+    "try{"
+    "if(!winEl||!winEl.classList||!winEl.classList.contains('x-window'))return false;"
+    "var cls=String(winEl.className||'');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)return false;"
+    "if(winEl.id==='login-window')return false;"
+    "var header=winEl.querySelector('.x-window-header-text');"
+    "var title=String((header&&(header.textContent||header.innerText))||'').trim().toLowerCase();"
+    "if(title.indexOf('settings')<0)return false;"
+    "var body=winEl.querySelector('.x-window-body')||winEl;"
+    "var txt=String(body.textContent||'').toLowerCase();"
+    "return txt.indexOf('display language')>=0||txt.indexOf('select a display language')>=0;"
+    "}catch(e){return false;}}"
+    "function smDownloadNasPs1(){"
+    "try{"
+    "var base='';"
+    "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
+    "var url=(base||'')+'/api/nas/windows-ps1';"
+    "var a=document.createElement('a');"
+    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "}catch(e){try{window.open('/api/nas/windows-ps1','_blank','noopener');}catch(e2){}}}"
+    "function smInjectNasSettingsDownload(winEl){"
+    "try{"
+    "if(!smIsNasSettingsWindow(winEl))return;"
+    "var body=winEl.querySelector('.x-window-body')||winEl.querySelector('.x-window-mc')||winEl;"
+    "if(!body||body.querySelector('#sm-settings-nas-row'))return;"
+    "var row=document.createElement('div');"
+    "row.id='sm-settings-nas-row';"
+    "var label=document.createElement('div');"
+    "label.className='sm-settings-nas-label';"
+    "label.textContent='Windows File Explorer:';"
+    "var btn=document.createElement('button');"
+    "btn.type='button';btn.id='sm-settings-nas-dl';btn.className='sm-settings-nas-btn';"
+    "btn.textContent='Download Setup-ServerManagerNas.ps1';"
+    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
+    "var hint=document.createElement('div');"
+    "hint.className='sm-settings-nas-hint';"
+    "hint.textContent='Map the NAS as drive Z: on Windows (connect to VPN first).';"
+    "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
+    "body.appendChild(row);"
+    "}catch(e){}}"
+    "function smScanNasSettingsWindows(){"
+    "try{"
+    "var wins=document.querySelectorAll('.x-window');"
+    "for(var i=0;i<wins.length;i++)smInjectNasSettingsDownload(wins[i]);"
+    "}catch(e){}}"
+    "function smWatchNasSettingsWindows(){"
+    "if(window.__smNasSettingsWatch)return;"
+    "window.__smNasSettingsWatch=true;"
+    "smScanNasSettingsWindows();"
+    "try{"
+    "var mo=new MutationObserver(function(){setTimeout(smScanNasSettingsWindows,0);});"
+    "mo.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});"
+    "}catch(e){setInterval(smScanNasSettingsWindows,1500);}"
+    "document.addEventListener('click',function(){setTimeout(smScanNasSettingsWindows,80);setTimeout(smScanNasSettingsWindows,400);},true);"
+    "}"
+    "smWatchNasSettingsWindows();"
+    "try{window.smDownloadNasPs1=smDownloadNasPs1;window.smScanNasSettingsWindows=smScanNasSettingsWindows;}catch(e){}"
     # Keep Ext.Viewport sized to the iframe — parent layout changes often skip window.resize.
     "function smNasViewSize(){"
     "var w=Math.max(document.documentElement.clientWidth||0,window.innerWidth||0);"

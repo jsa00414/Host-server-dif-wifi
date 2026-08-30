@@ -554,6 +554,9 @@
 
     function bindFtpUi() {
       document.getElementById("ftpRefreshBtn").addEventListener("click", () => ftpBrowse(ftpPath));
+      document.getElementById("ftpWinExplorerBtn")?.addEventListener("click", () => {
+        window.open("/nas-windows.html", "_blank", "noopener");
+      });
       document.getElementById("ftpMkdirBtn").addEventListener("click", () => ftpMkdir());
       document.getElementById("ftpNewBtn").addEventListener("click", () => ftpMkdir());
       document.getElementById("ftpOpenBtn").addEventListener("click", () => ftpOpenSelected());
