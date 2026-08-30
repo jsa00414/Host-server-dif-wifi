@@ -8350,7 +8350,7 @@ NAS_FILES_SNIPPET = (
     "label.textContent='Windows File Explorer:';"
     "var btn=document.createElement('button');"
     "btn.type='button';btn.id='sm-settings-nas-dl';btn.className='sm-settings-nas-btn';"
-    "btn.textContent='Download Setup-ServerManagerNas.ps1';"
+    "btn.textContent='Download Setup';"
     "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
     "var hint=document.createElement('div');"
     "hint.className='sm-settings-nas-hint';"
