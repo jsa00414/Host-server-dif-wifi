@@ -170,15 +170,33 @@
       $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
     };
     function download(path, name) {
-      const a = document.createElement("a");
-      a.href = path;
-      a.download = name;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      $("dlMsg").className = "msg ok";
-      $("dlMsg").textContent = "Download started — check your Downloads folder";
+      const save = (blob) => {
+        const obj = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = obj;
+        a.download = name;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(obj), 1500);
+        $("dlMsg").className = "msg ok";
+        $("dlMsg").textContent = "Download started — check your Downloads folder";
+      };
+      fetch(path, { credentials: "same-origin" })
+        .then((res) => { if (!res.ok) throw new Error("download failed"); return res.blob(); })
+        .then(save)
+        .catch(() => {
+          const a = document.createElement("a");
+          a.href = path;
+          a.download = name;
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          $("dlMsg").className = "msg ok";
+          $("dlMsg").textContent = "Download started — check your Downloads folder";
+        });
     }
     $("dlPs1").onclick = () => download("/api/nas/windows-ps1", "Setup-ServerManagerNas.ps1");
     $("dlCmd").onclick = () => download("/api/nas/windows-cmd", "Setup-ServerManagerNas.cmd");

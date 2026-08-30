@@ -9,44 +9,66 @@ param(
   [string]$Label = "ServerManager NAS"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $DriveLetter = ($DriveLetter -replace '[^A-Za-z]', '').Substring(0, 1).ToUpper()
 
 Write-Host "ServerManager NAS -> ${DriveLetter}: ($Label)"
 Write-Host "Host: $NasHost  Share: $Share  User: $Username"
 Write-Host ""
 
-if (-not (Test-Connection -ComputerName $NasHost -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
-  Write-Host "ERROR: Cannot reach $NasHost" -ForegroundColor Red
-  Write-Host "Connect to home VPN first (OpenVPN, WireGuard, or Windows IKEv2), then run this script again." -ForegroundColor Yellow
-  exit 2
+if (-not $Password) {
+  Write-Host "ERROR: No password in script. Download again from the portal while logged in." -ForegroundColor Red
+  Read-Host "Press Enter to close"
+  exit 3
 }
 
-$shareCandidates = @($Share, "share", "disk1") | Where-Object { $_ } | Select-Object -Unique
+if (-not (Test-Connection -ComputerName $NasHost -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
+  Write-Host "WARNING: Ping to $NasHost failed (ICMP may be blocked). Trying SMB anyway..." -ForegroundColor Yellow
+}
+
+$shareCandidates = @($Share, "share") | Where-Object { $_ } | Select-Object -Unique
+$secure = ConvertTo-SecureString $Password -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential($Username, $secure)
+
+try { net use "${DriveLetter}:" /delete /y 2>$null | Out-Null } catch {}
+try { Remove-PSDrive -Name $DriveLetter -Force -ErrorAction SilentlyContinue } catch {}
+
 $mapped = $false
-$usedShare = ""
 $unc = ""
 
 foreach ($candidate in $shareCandidates) {
   $tryUnc = "\\$NasHost\$candidate"
   Write-Host "Trying $tryUnc ..."
+
+  try {
+    $null = New-PSDrive -Name $DriveLetter -PSProvider FileSystem -Root $tryUnc -Credential $cred -Persist -ErrorAction Stop
+    $mapped = $true
+    $unc = $tryUnc
+    break
+  } catch {
+    Write-Host "  New-PSDrive failed: $($_.Exception.Message)"
+  }
+
   cmdkey /delete:$NasHost 2>$null | Out-Null
   $null = cmdkey /add:$NasHost /user:$Username /pass:$Password
   net use "${DriveLetter}:" /delete /y 2>$null | Out-Null
-  $out = net use "${DriveLetter}:" $tryUnc /user:"$Username" "$Password" /persistent:yes 2>&1
+  # Password must come before /user: for net.exe
+  $out = net use "${DriveLetter}:" $tryUnc $Password /user:$Username /persistent:yes 2>&1
   if ($LASTEXITCODE -eq 0) {
     $mapped = $true
-    $usedShare = $candidate
     $unc = $tryUnc
     break
   }
-  Write-Host "  failed: $out"
+  Write-Host "  net use failed: $out"
 }
 
 if (-not $mapped) {
+  Write-Host ""
   Write-Host "ERROR: Could not map any SMB share on $NasHost" -ForegroundColor Red
+  Write-Host "Connect to home VPN first (OpenVPN, WireGuard, or Windows IKEv2), then run again." -ForegroundColor Yellow
   Write-Host "Tried: $($shareCandidates -join ', ')" -ForegroundColor Yellow
-  Write-Host "Check NAS SMB is enabled and the share name in Buffalo admin." -ForegroundColor Yellow
+  Write-Host ""
+  Read-Host "Press Enter to close"
   exit 1
 }
 
@@ -61,3 +83,4 @@ Write-Host ""
 Write-Host "Mapped ${DriveLetter}: -> $unc ($Label)" -ForegroundColor Green
 Write-Host "Open File Explorer -> This PC -> ${DriveLetter}:"
 Start-Process explorer.exe "${DriveLetter}:\"
+Read-Host "Press Enter to close"
