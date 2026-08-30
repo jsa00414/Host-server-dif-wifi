@@ -6130,6 +6130,7 @@ def build_vps_status() -> dict:
 
     services = [
         {"id": "panel", "label": "Portal panel", "ok": True, "detail": "running"},
+        {"id": "sslh", "label": "HTTPS mux", "ok": _svc_active("sslh-sm.service"), "detail": ":443 -> Caddy"},
         {"id": "caddy", "label": "Caddy", "ok": _docker_running("truemail-caddy-1"), "detail": "HTTPS proxy"},
         {"id": "wireguard", "label": "WireGuard", "ok": _docker_running("wg-easy"), "detail": "wg-easy"},
         {
