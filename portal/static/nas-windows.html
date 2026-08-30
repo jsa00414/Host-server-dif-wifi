@@ -83,7 +83,7 @@
   <div class="wrap">
     <p class="eyebrow">ServerManager</p>
     <h1>NAS in File Explorer</h1>
-    <p class="sub">Map your Buffalo NAS as a network drive in Windows. Connect to home VPN first so <code>192.168.8.159</code> is reachable.</p>
+    <p class="sub">Map your Buffalo NAS as a network drive in Windows via the portal public route (<code id="routeHint">portal.vpstruelord.com:1445</code> → NAS SMB). No home LAN VPN required.</p>
     <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
 
     <div class="grid">
@@ -113,12 +113,11 @@
         <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerNas.cmd</button>
         <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Connect to home VPN (OpenVPN, WireGuard, or Windows IKEv2).</li>
-          <li>Save both setup files in the same folder.</li>
-          <li>Double-click <strong>Setup-ServerManagerNas.cmd</strong>.</li>
+          <li>Download the setup script below.</li>
+          <li>Right-click <strong>Setup-ServerManagerNas.ps1</strong> → <strong>Run with PowerShell</strong> (Administrator recommended).</li>
           <li>Use <strong>This PC → Z: (ServerManager NAS)</strong> in File Explorer.</li>
         </ol>
-        <p class="hint">Manual map: <code id="manualCmd">net use Z: \\192.168.8.159\share</code></p>
+        <p class="hint">Public route: <code id="manualCmd">\\portal.vpstruelord.com\share</code> on SMB port <code id="manualPort">1445</code></p>
       </div>
     </section>
   </div>
@@ -149,7 +148,11 @@
         rawPass = d.password || "";
         $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
         $("driveHint").textContent = (d.drive || "Z") + ":";
-        $("manualCmd").textContent = `net use ${d.drive || "Z"}: ${d.unc || "\\\\192.168.8.159\\share"} /user:${d.username || "admin"} * /persistent:yes`;
+        const host = d.host || "portal.vpstruelord.com";
+        const smbPort = d.smb_port || 1445;
+        $("routeHint").textContent = `${host}:${smbPort}`;
+        $("manualPort").textContent = String(smbPort);
+        $("manualCmd").textContent = `\\\\${host}\\${d.share || "share"}`;
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;

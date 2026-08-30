@@ -1,7 +1,8 @@
-# ServerManager - Map Buffalo NAS in Windows File Explorer
-# Run while connected to home VPN (OpenVPN / WireGuard / IKEv2).
+# ServerManager - Map Buffalo NAS in Windows File Explorer via portal public route
+# VPS public port forwards to NAS SMB (default portal.vpstruelord.com:1445 -> NAS:445).
 param(
-  [string]$NasHost = "192.168.8.159",
+  [string]$NasHost = "portal.vpstruelord.com",
+  [int]$NasPort = 1445,
   [string]$Share = "share",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
@@ -17,53 +18,32 @@ function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
 function Write-Err($msg) { Write-Host $msg -ForegroundColor Red }
 
 function Test-TcpPort {
-  param([string]$HostName, [int]$Port, [int]$TimeoutMs = 4000)
+  param([string]$HostName, [int]$Port, [int]$TimeoutMs = 5000)
   try {
-  $client = New-Object System.Net.Sockets.TcpClient
-  $iar = $client.BeginConnect($HostName, $Port, $null, $null)
-  $ok = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
-  if ($ok -and $client.Connected) {
-    $client.EndConnect($iar) | Out-Null
+    $client = New-Object System.Net.Sockets.TcpClient
+    $iar = $client.BeginConnect($HostName, $Port, $null, $null)
+    $ok = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+    if ($ok -and $client.Connected) {
+      $client.EndConnect($iar) | Out-Null
+      $client.Close()
+      return $true
+    }
     $client.Close()
-    return $true
-  }
-  $client.Close()
   } catch {}
   return $false
 }
 
-function Get-VpnGateway {
-  param([string]$Prefix)
-  $addr = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.IPAddress -like "$Prefix*" -and $_.PrefixOrigin -ne 'WellKnown' } |
-    Select-Object -First 1
-  if (-not $addr) { return $null }
-  $octets = $addr.IPAddress.Split('.')
-  if ($octets.Count -ne 4) { return $null }
-  return ($octets[0..2] -join '.') + '.1'
+function Set-SmbClientPort {
+  param([int]$Port)
+  if ($Port -eq 445) { return }
+  $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+  if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+  Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
 }
 
-function Ensure-HomeLanRoute {
-  param([string]$TargetHost)
-  $targetRoute = route print $TargetHost 2>$null | Select-String "192\.168\.8\."
-  if ($targetRoute) { return $true }
-
-  $gw = $null
-  $label = $null
-  if (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '10.9.*' }) {
-    $gw = Get-VpnGateway -Prefix '10.9.'
-    $label = 'OpenVPN'
-  } elseif (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '10.8.*' }) {
-    $gw = Get-VpnGateway -Prefix '10.8.'
-    $label = 'WireGuard'
-  }
-
-  if (-not $gw) { return $false }
-
-  Write-Warn "Adding home LAN route via $label gateway $gw ..."
-  $null = route add 192.168.8.0 mask 255.255.255.0 $gw metric 1 2>&1
-  Start-Sleep -Milliseconds 500
-  return [bool](route print $TargetHost 2>$null | Select-String "192\.168\.8\.")
+function Clear-SmbClientPort {
+  $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+  Remove-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue
 }
 
 function Clear-StaleNasCreds {
@@ -116,7 +96,8 @@ function Try-MapShare {
 }
 
 Write-Step "ServerManager NAS -> ${DriveLetter}: ($Label)"
-Write-Step "Host: $NasHost  Share: $Share  User: $Username"
+Write-Step "Public route: ${NasHost}:${NasPort} -> \\${NasHost}\${Share}"
+Write-Step "User: $Username"
 Write-Step ""
 
 if (-not $Password) {
@@ -125,31 +106,30 @@ if (-not $Password) {
   exit 3
 }
 
-if (-not (Test-Connection -ComputerName $NasHost -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
-  Write-Warn "WARNING: Ping to $NasHost failed (ICMP may be blocked)."
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+  [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and $NasPort -ne 445) {
+  Write-Warn "TIP: Run as Administrator so Windows can use SMB port $NasPort."
 }
 
-if (-not (Test-TcpPort -HostName $NasHost -Port 445)) {
-  Write-Warn "Cannot reach SMB port 445 on $NasHost yet."
-  $routed = Ensure-HomeLanRoute -TargetHost $NasHost
-  if ($routed) {
-    Write-Step "Home LAN route added. Retesting SMB port ..."
-  } else {
-    Write-Warn "Could not add a home LAN route automatically."
-    Write-Warn "OpenVPN users: reconnect after the server route update, or use WireGuard with 192.168.8.0/24 allowed."
-  }
-  Start-Sleep -Seconds 1
-}
-
-if (-not (Test-TcpPort -HostName $NasHost -Port 445)) {
+if (-not (Test-TcpPort -HostName $NasHost -Port $NasPort)) {
   Write-Err ""
-  Write-Err "ERROR: Still cannot reach $NasHost on TCP port 445 (SMB)."
-  Write-Err "Connect to home VPN first, then run this script again."
-  Write-Err "If you use OpenVPN, disconnect and reconnect so the home LAN route is installed."
-  Write-Err "If you use WireGuard, ensure AllowedIPs includes 192.168.8.0/24."
+  Write-Err "ERROR: Cannot reach ${NasHost} on TCP port ${NasPort}."
+  Write-Err "The portal public NAS route may still be starting. Wait a minute and try again."
   Write-Err ""
   Read-Host "Press Enter to close"
   exit 2
+}
+
+$hadPort = $false
+if ($NasPort -ne 445) {
+  try {
+    Set-SmbClientPort -Port $NasPort
+    $hadPort = $true
+    Start-Sleep -Milliseconds 400
+  } catch {
+    Write-Warn "Could not set SMB client port $NasPort (admin required)."
+  }
 }
 
 $shareCandidates = @($Share, "share") | Where-Object { $_ } | Select-Object -Unique
@@ -159,28 +139,31 @@ $mapped = $false
 $unc = ""
 $method = ""
 
-foreach ($candidate in $shareCandidates) {
-  $tryUnc = "\\$NasHost\$candidate"
-  Write-Step "Trying $tryUnc ..."
-  foreach ($userTry in $userCandidates) {
-    $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
-    $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -User $userTry -Pass $Password -Cred $cred
-    if ($result.ok) {
-      $mapped = $true
-      $unc = $tryUnc
-      $method = $result.method
-      break
+try {
+  foreach ($candidate in $shareCandidates) {
+    $tryUnc = "\\$NasHost\$candidate"
+    Write-Step "Trying $tryUnc ..."
+    foreach ($userTry in $userCandidates) {
+      $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
+      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -User $userTry -Pass $Password -Cred $cred
+      if ($result.ok) {
+        $mapped = $true
+        $unc = $tryUnc
+        $method = $result.method
+        break
+      }
+      if ($result.error) { Write-Step "  net use failed: $($result.error)" }
     }
-    if ($result.error) { Write-Step "  net use failed: $($result.error)" }
+    if ($mapped) { break }
   }
-  if ($mapped) { break }
+} finally {
+  if ($hadPort -and -not $mapped) { Clear-SmbClientPort }
 }
 
 if (-not $mapped) {
   Write-Err ""
   Write-Err "ERROR: Could not map any SMB share on $NasHost"
-  Write-Err "SMB is reachable, but login or share access failed."
-  Write-Err "Tried shares: $($shareCandidates -join ', ')"
+  Write-Err "Public route is reachable, but login or share access failed."
   Write-Err "Download a fresh setup script from the portal and try again."
   Write-Err ""
   Read-Host "Press Enter to close"
@@ -194,6 +177,9 @@ try {
 
 Write-Host ""
 Write-Host "Mapped ${DriveLetter}: -> $unc ($Label) via $method" -ForegroundColor Green
+if ($hadPort -and $mapped) {
+  Write-Warn "SMB client port $NasPort is enabled for reconnects to the portal public route."
+}
 Write-Step "Open File Explorer -> This PC -> ${DriveLetter}:"
 Start-Process explorer.exe "${DriveLetter}:\"
 Read-Host "Press Enter to close"

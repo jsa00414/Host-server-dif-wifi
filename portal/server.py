@@ -2209,8 +2209,13 @@ FTP_PASS = _load_ftp_pass()
 
 NAS_SMB_HOST = os.environ.get("NAS_SMB_HOST", FTP_HOST).strip() or FTP_HOST
 NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
+NAS_SMB_PUBLIC_HOST = (
+    os.environ.get("NAS_SMB_PUBLIC_HOST", PORTAL_HOST).strip() or PORTAL_HOST
+)
+NAS_SMB_PUBLIC_PORT = int(os.environ.get("NAS_SMB_PUBLIC_PORT", "1445"))
 NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
 NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
+NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBLIC_PORT)))
 
 
 def _ps_single_quoted(value: str) -> str:
@@ -2220,16 +2225,19 @@ def _ps_single_quoted(value: str) -> str:
 def build_nas_windows_status() -> dict:
     """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
     st = _FTP.status()
-    unc = f"\\\\{NAS_SMB_HOST}\\{NAS_SMB_SHARE}"
+    unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
     return {
         "ok": bool(st.get("ok")),
-        "host": NAS_SMB_HOST,
+        "host": NAS_SMB_PUBLIC_HOST,
+        "lan_host": NAS_SMB_HOST,
         "share": NAS_SMB_SHARE,
         "username": FTP_USER,
         "password": FTP_PASS,
         "drive": NAS_DRIVE_LETTER,
         "label": NAS_DRIVE_LABEL,
         "unc": unc,
+        "smb_port": NAS_SMB_PUBLIC_PORT,
+        "forward_pub": NAS_SMB_FORWARD_PUB,
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -2255,7 +2263,9 @@ $Password = {_ps_single_quoted(FTP_PASS)}
 $DriveLetter = "{NAS_DRIVE_LETTER}"
 $Label = "{NAS_DRIVE_LABEL}"
 """
-    text = text.replace("192.168.8.159", NAS_SMB_HOST)
+    text = text.replace("192.168.8.159", NAS_SMB_PUBLIC_HOST)
+    text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
+    text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
@@ -2275,7 +2285,7 @@ if not exist "%PS1%" (
   pause
   exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%~dp0Setup-ServerManagerNas.ps1\"\"'"
 if errorlevel 1 pause
 """
     return body.replace("\n", "\r\n").encode("ascii", errors="replace")
@@ -2758,7 +2768,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
     reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002}
-    protected_pubs = {8080, 8443}
+    protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:
             pub = int(rule["pub"])
@@ -2784,6 +2794,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
             expected = {
                 8080: ("tcp", "192.168.8.1", 80, "flint-http"),
                 8443: ("tcp", "192.168.8.1", 443, "flint-https"),
+                NAS_SMB_FORWARD_PUB: ("tcp", NAS_SMB_HOST, 445, "nas-smb"),
             }[pub]
             proto, dest_ip, dest_port, name = expected
         key = (proto, pub)
@@ -3722,6 +3733,14 @@ def write_vps_state(rules: list[dict], comments: list[str] | None = None) -> dic
         "dest_ip": "192.168.8.1",
         "dest_port": 443,
         "name": "flint-https",
+        "external": False,
+    }
+    by_pub[NAS_SMB_FORWARD_PUB] = {
+        "pub": NAS_SMB_FORWARD_PUB,
+        "proto": "tcp",
+        "dest_ip": NAS_SMB_HOST,
+        "dest_port": 445,
+        "name": "nas-smb",
         "external": False,
     }
     managed = list(by_pub.values())
@@ -8372,7 +8391,7 @@ NAS_FILES_SNIPPET = (
     "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
     "var hint=document.createElement('div');"
     "hint.className='sm-settings-nas-hint';"
-    "hint.textContent='Map the NAS as drive Z: on Windows (connect to VPN first).';"
+    "hint.textContent='Map the NAS via the portal public route (no home LAN VPN needed).';"
     "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
     "body.appendChild(row);"
     "}catch(e){}}"
