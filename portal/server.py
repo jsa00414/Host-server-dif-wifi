@@ -2207,6 +2207,79 @@ def _load_ftp_pass() -> str:
 
 FTP_PASS = _load_ftp_pass()
 
+NAS_SMB_HOST = os.environ.get("NAS_SMB_HOST", FTP_HOST).strip() or FTP_HOST
+NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
+NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
+NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
+
+
+def _ps_single_quoted(value: str) -> str:
+    return "'" + (value or "").replace("'", "''") + "'"
+
+
+def build_nas_windows_status() -> dict:
+    """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
+    st = _FTP.status()
+    unc = f"\\\\{NAS_SMB_HOST}\\{NAS_SMB_SHARE}"
+    return {
+        "ok": bool(st.get("ok")),
+        "host": NAS_SMB_HOST,
+        "share": NAS_SMB_SHARE,
+        "username": FTP_USER,
+        "password": FTP_PASS,
+        "drive": NAS_DRIVE_LETTER,
+        "label": NAS_DRIVE_LABEL,
+        "unc": unc,
+        "port": FTP_PORT,
+        "ps1": "/api/nas/windows-ps1",
+        "detail": st.get("error") or st.get("welcome") or "",
+    }
+
+
+def load_nas_windows_ps1() -> bytes:
+    """PowerShell helper that maps the Buffalo NAS as a persistent drive letter."""
+    candidates = [
+        Path(__file__).resolve().parent / "scripts" / "nas" / "Setup-ServerManagerNas.ps1",
+    ]
+    text = ""
+    for path in candidates:
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            break
+    if not text:
+        text = f"""# ServerManager NAS
+$NasHost = "{NAS_SMB_HOST}"
+$Share = "{NAS_SMB_SHARE}"
+$Username = "{FTP_USER}"
+$Password = {_ps_single_quoted(FTP_PASS)}
+$DriveLetter = "{NAS_DRIVE_LETTER}"
+$Label = "{NAS_DRIVE_LABEL}"
+"""
+    text = text.replace("192.168.8.159", NAS_SMB_HOST)
+    text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
+    text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
+    text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
+    text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
+    text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
+    return b"\xef\xbb\xbf" + text.encode("utf-8")
+
+
+def load_nas_windows_cmd() -> bytes:
+    """CMD launcher for the NAS File Explorer setup script."""
+    body = """@echo off
+setlocal
+set "PS1=%~dp0Setup-ServerManagerNas.ps1"
+if not exist "%PS1%" (
+  echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
+  echo Download both files into the same folder, then run this .cmd
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+if errorlevel 1 pause
+"""
+    return body.replace("\n", "\r\n").encode("ascii", errors="replace")
+
 
 def ftp_norm_path(path: str) -> str:
     raw = (path or "/").replace("\\", "/")
@@ -10779,6 +10852,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
             return self._serve_file(STATIC_DIR / "windows-vpn.html", "text/html; charset=utf-8")
+        if path in ("/nas-windows.html", "/nas-setup.html"):
+            return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
             # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
@@ -11001,6 +11076,56 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(pem)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/nas/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_nas_windows_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_nas_windows_ps1()
+                name = "Setup-ServerManagerNas.ps1"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-cmd", "/download/Setup-ServerManagerNas.cmd"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_nas_windows_cmd()
+                name = "Setup-ServerManagerNas.cmd"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
