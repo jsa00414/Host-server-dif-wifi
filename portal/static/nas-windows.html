@@ -108,16 +108,32 @@
     <section class="panel">
       <div class="panel-head"><h2>Setup on Windows</h2></div>
       <div class="panel-body">
-        <p class="hint">Download both files into the same folder, then double-click the <strong>.cmd</strong> file. The script maps drive <strong id="driveHint">Z:</strong> and opens File Explorer.</p>
-        <button type="button" class="btn primary" id="dlPs1">Download Setup-ServerManagerNas.ps1</button>
-        <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerNas.cmd</button>
+        <p class="hint">Click download, then open <strong>Setup-ServerManagerNas.cmd</strong> from your Downloads folder. Click <strong>Yes</strong> on the Windows security prompt.</p>
+        <button type="button" class="btn primary" id="dlSetup">Download Setup</button>
         <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Download the setup script below.</li>
-          <li>Right-click <strong>Setup-ServerManagerNas.ps1</strong> → <strong>Run with PowerShell</strong> (Administrator recommended).</li>
+          <li>Click <strong>Download Setup</strong> above.</li>
+          <li>Open your <strong>Downloads</strong> folder and double-click <strong>Setup-ServerManagerNas.cmd</strong>.</li>
+          <li>Click <strong>Yes</strong> when Windows asks for administrator permission.</li>
           <li>Use <strong>This PC → Z: (ServerManager NAS)</strong> in File Explorer.</li>
         </ol>
-        <p class="hint">Public route: <code id="manualCmd">\\portal.vpstruelord.com\share</code> on SMB port <code id="manualPort">1445</code></p>
+        <p class="hint">One installer file maps drive <strong id="driveHint">Z:</strong> via the portal public route on port <code id="manualPort">1445</code>.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>RaiDrive (recommended for Windows)</h2></div>
+      <div class="panel-body">
+        <p class="hint">Map the NAS as a normal drive letter over public FTP — no VPN required. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
+        <div class="creds">
+          <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
+          <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
+          <div><span class="k">Account</span><span id="ftpUser">admin</span></div>
+          <div><span class="k">Password</span><span>same as above</span></div>
+          <div><span class="k">Drive</span><span>Z:</span></div>
+        </div>
+        <p class="hint">Use <strong>Passive (PASV)</strong> mode. Connect at sign-in if offered. For File Explorer FTP use <code>ftp://admin@portal.vpstruelord.com:2121/disk1</code> (browse only — opening files in Explorer FTP is limited).</p>
+        <p class="hint"><strong>Better for Explorer:</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
       </div>
     </section>
   </div>
@@ -139,8 +155,10 @@
       try {
         const d = await api("/api/nas/status");
         const ok = !!d.ok;
-        $("statusPill").className = "pill " + (ok ? "ok" : "err");
-        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "NAS reachable from VPS" : "NAS unreachable from VPS"}</span>`;
+        const smbOk = d.smb_ok;
+        const smbLabel = smbOk === true ? "SMB login ok" : (smbOk === false ? "SMB login failed" : "SMB not tested");
+        $("statusPill").className = "pill " + (ok && smbOk !== false ? "ok" : "err");
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "NAS reachable from VPS" : "NAS unreachable from VPS"} · ${smbLabel}</span>`;
         $("mUnc").textContent = d.unc || "—";
         $("mDrive").textContent = (d.drive || "Z") + ": · " + (d.label || "ServerManager NAS");
         $("mNas").textContent = ok ? "Online" : "Offline";
@@ -152,7 +170,9 @@
         const smbPort = d.smb_port || 1445;
         $("routeHint").textContent = `${host}:${smbPort}`;
         $("manualPort").textContent = String(smbPort);
-        $("manualCmd").textContent = `\\\\${host}\\${d.share || "share"}`;
+        $("ftpHost").textContent = d.ftp_host || host;
+        $("ftpPort").textContent = String(d.ftp_port || 2121);
+        $("ftpUser").textContent = d.ftp_username || "admin";
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;
@@ -172,37 +192,39 @@
       passVisible = !passVisible;
       $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
     };
-    function download(path, name) {
-      const save = (blob) => {
-        const obj = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = obj;
-        a.download = name;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(obj), 1500);
-        $("dlMsg").className = "msg ok";
-        $("dlMsg").textContent = "Download started — check your Downloads folder";
+    function downloadSetup() {
+      const fail = (msg) => {
+        $("dlMsg").className = "msg err";
+        $("dlMsg").textContent = msg || "Log in to the portal first, then try again.";
       };
-      fetch(path, { credentials: "same-origin" })
-        .then((res) => { if (!res.ok) throw new Error("download failed"); return res.blob(); })
-        .then(save)
-        .catch(() => {
+      fetch("/api/nas/download-token", { credentials: "same-origin" })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (!res.ok || !data.ok || !data.token) {
+            throw new Error(data.error || "login required");
+          }
+          const rel = data.setup || data.cmd || `/api/nas/windows-setup?t=${encodeURIComponent(data.token)}`;
+          return fetch(rel, { credentials: "same-origin" }).then((r) => {
+            if (!r.ok) throw new Error("download failed");
+            return r.blob();
+          });
+        })
+        .then((blob) => {
+          const obj = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = path;
-          a.download = name;
+          a.href = obj;
+          a.download = "Setup-ServerManagerNas.cmd";
           a.rel = "noopener";
           document.body.appendChild(a);
           a.click();
           a.remove();
+          setTimeout(() => URL.revokeObjectURL(obj), 1500);
           $("dlMsg").className = "msg ok";
-          $("dlMsg").textContent = "Download started — check your Downloads folder";
-        });
+          $("dlMsg").textContent = "Downloaded — open Setup-ServerManagerNas.cmd from Downloads and double-click it.";
+        })
+        .catch((e) => fail(e.message));
     }
-    $("dlPs1").onclick = () => download("/api/nas/windows-ps1", "Setup-ServerManagerNas.ps1");
-    $("dlCmd").onclick = () => download("/api/nas/windows-cmd", "Setup-ServerManagerNas.cmd");
+    $("dlSetup").onclick = () => downloadSetup();
     refresh();
   </script>
 </body>

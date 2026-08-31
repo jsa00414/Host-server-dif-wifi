@@ -1702,6 +1702,47 @@ ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
+NAS_DL_TOKEN_TTL = float(os.environ.get("NAS_DL_TOKEN_TTL", "600"))
+_nas_dl_tokens: dict[str, float] = {}
+_nas_dl_tokens_lock = threading.Lock()
+
+
+def _purge_nas_download_tokens(now: float | None = None) -> None:
+    ts = now if now is not None else time.time()
+    expired = [tok for tok, exp in _nas_dl_tokens.items() if exp <= ts]
+    for tok in expired:
+        _nas_dl_tokens.pop(tok, None)
+
+
+def issue_nas_download_token() -> str:
+    now = time.time()
+    with _nas_dl_tokens_lock:
+        _purge_nas_download_tokens(now)
+        token = secrets.token_urlsafe(18)
+        _nas_dl_tokens[token] = now + NAS_DL_TOKEN_TTL
+        return token
+
+
+def nas_download_token_valid(token: str) -> bool:
+    tok = (token or "").strip()
+    if not tok:
+        return False
+    now = time.time()
+    with _nas_dl_tokens_lock:
+        _purge_nas_download_tokens(now)
+        exp = _nas_dl_tokens.get(tok)
+        return bool(exp and exp > now)
+
+
+def build_nas_download_urls(token: str) -> dict[str, str]:
+    from urllib.parse import quote
+
+    q = f"?t={quote(token)}"
+    return {
+        "ps1": f"/api/nas/windows-ps1{q}",
+        "cmd": f"/api/nas/windows-setup{q}",
+        "setup": f"/api/nas/windows-setup{q}",
+    }
 
 
 def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
@@ -2209,13 +2250,80 @@ FTP_PASS = _load_ftp_pass()
 
 NAS_SMB_HOST = os.environ.get("NAS_SMB_HOST", FTP_HOST).strip() or FTP_HOST
 NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
+NAS_SMB_NETBIOS = os.environ.get("NAS_SMB_NETBIOS", "741HOMECLOUDNET").strip() or "741HOMECLOUDNET"
 NAS_SMB_PUBLIC_HOST = (
     os.environ.get("NAS_SMB_PUBLIC_HOST", PORTAL_HOST).strip() or PORTAL_HOST
 )
+NAS_SMB_PUBLIC_IP = os.environ.get("NAS_SMB_PUBLIC_IP", "74.208.76.213").strip() or "74.208.76.213"
 NAS_SMB_PUBLIC_PORT = int(os.environ.get("NAS_SMB_PUBLIC_PORT", "1445"))
 NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
 NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
 NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBLIC_PORT)))
+NAS_FTP_PUBLIC_PORT = int(os.environ.get("NAS_FTP_PUBLIC_PORT", "2121"))
+NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
+NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
+NAS_FTP_PUBLIC_USER = (
+    os.environ.get("NAS_FTP_PUBLIC_USER", "admin").strip() or "admin"
+)
+
+
+def _load_nas_smb_pass() -> str:
+    """SMB mapping password — defaults to Buffalo admin, not a separate FTP override."""
+    b64 = os.environ.get("NAS_SMB_PASS_B64", "").strip()
+    raw = os.environ.get("NAS_SMB_PASS", "").strip()
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    if raw:
+        return raw
+    return BUFFALO_SSO_PASS
+
+
+NAS_SMB_PASS = _load_nas_smb_pass()
+
+
+def _smb_probe() -> dict:
+    """Best-effort SMB login test via public forward (smbclient when available)."""
+    if not NAS_SMB_PASS:
+        return {"ok": False, "error": "NAS SMB password not configured"}
+    user = FTP_USER
+    share = NAS_SMB_SHARE
+    host = NAS_SMB_PUBLIC_IP
+    port = NAS_SMB_PUBLIC_PORT
+    import shutil
+    import subprocess
+
+    smbclient = shutil.which("smbclient")
+    if not smbclient:
+        return {"ok": None, "error": "smbclient not installed on portal host"}
+    cmd = [
+        smbclient,
+        f"//{host}/{share}",
+        "-p",
+        str(port),
+        "-U",
+        f"{user}%{NAS_SMB_PASS}",
+        "-c",
+        "ls",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode == 0:
+            return {"ok": True, "detail": "SMB login ok"}
+        if "LOGON_FAILURE" in out or "ACCESS_DENIED" in out:
+            return {"ok": False, "error": "SMB login failed (bad password or user)"}
+        return {"ok": False, "error": (out.strip() or f"smbclient exit {proc.returncode}")[:240]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:240]}
 
 
 def _ps_single_quoted(value: str) -> str:
@@ -2225,19 +2333,32 @@ def _ps_single_quoted(value: str) -> str:
 def build_nas_windows_status() -> dict:
     """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
     st = _FTP.status()
-    unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
+    smb = _smb_probe()
+    if NAS_SMB_PUBLIC_PORT != 445:
+        unc = f"\\\\{NAS_SMB_PUBLIC_HOST}@{NAS_SMB_PUBLIC_PORT}\\{NAS_SMB_SHARE}"
+    else:
+        unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
     return {
         "ok": bool(st.get("ok")),
         "host": NAS_SMB_PUBLIC_HOST,
+        "public_ip": NAS_SMB_PUBLIC_IP,
         "lan_host": NAS_SMB_HOST,
         "share": NAS_SMB_SHARE,
+        "netbios": NAS_SMB_NETBIOS,
         "username": FTP_USER,
-        "password": FTP_PASS,
+        "ftp_username": NAS_FTP_PUBLIC_USER,
+        "password": NAS_SMB_PASS,
+        "smb_ok": smb.get("ok"),
+        "smb_detail": smb.get("detail") or smb.get("error") or "",
         "drive": NAS_DRIVE_LETTER,
         "label": NAS_DRIVE_LABEL,
         "unc": unc,
         "smb_port": NAS_SMB_PUBLIC_PORT,
         "forward_pub": NAS_SMB_FORWARD_PUB,
+        "ftp_host": NAS_SMB_PUBLIC_HOST,
+        "ftp_ip": NAS_SMB_PUBLIC_IP,
+        "ftp_port": NAS_FTP_PUBLIC_PORT,
+        "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -2246,6 +2367,8 @@ def build_nas_windows_status() -> dict:
 
 def load_nas_windows_ps1() -> bytes:
     """PowerShell helper that maps the Buffalo NAS as a persistent drive letter."""
+    if not NAS_SMB_PASS:
+        raise RuntimeError("NAS password not configured (set BUFFALO_PASS_B64 on the VPS)")
     candidates = [
         Path(__file__).resolve().parent / "scripts" / "nas" / "Setup-ServerManagerNas.ps1",
     ]
@@ -2259,36 +2382,59 @@ def load_nas_windows_ps1() -> bytes:
 $NasHost = "{NAS_SMB_HOST}"
 $Share = "{NAS_SMB_SHARE}"
 $Username = "{FTP_USER}"
-$Password = {_ps_single_quoted(FTP_PASS)}
+$Password = {_ps_single_quoted(NAS_SMB_PASS)}
 $DriveLetter = "{NAS_DRIVE_LETTER}"
 $Label = "{NAS_DRIVE_LABEL}"
 """
     text = text.replace("192.168.8.159", NAS_SMB_PUBLIC_HOST)
     text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
+    text = text.replace('NasIp = "74.208.76.213"', f'NasIp = "{NAS_SMB_PUBLIC_IP}"')
     text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
+    text = text.replace('LocalListenIp = "10.255.255.1"', f'LocalListenIp = "10.255.255.1"')
+    text = text.replace('LocalSmbPort = 445', f'LocalSmbPort = 445')
+    text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = 445')
+    text = text.replace('MapAlias = "sm-nas.vpstruelord.com"', f'MapAlias = "sm-nas.{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
+    text = text.replace('NasNetbiosName = "741HOMECLOUDNET"', f'NasNetbiosName = "{NAS_SMB_NETBIOS}"')
+    text = text.replace('NasLanIp = "192.168.8.159"', f'NasLanIp = "{NAS_SMB_HOST}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
-    text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
+    text = text.replace(
+        "[string]$Password = '@@NAS_PASSWORD@@'",
+        f"[string]$Password = {_ps_single_quoted(NAS_SMB_PASS)}",
+    )
     text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
     text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
+    if "[string]$Password = '@@NAS_PASSWORD@@'" in text:
+        raise RuntimeError("password substitution failed")
     return b"\xef\xbb\xbf" + text.encode("utf-8")
 
 
-def load_nas_windows_cmd() -> bytes:
-    """CMD launcher for the NAS File Explorer setup script."""
-    body = """@echo off
+def load_nas_windows_bundle_cmd() -> bytes:
+    """Single self-extracting installer: writes PS1 next to itself, then runs elevated."""
+    ps1_bytes = load_nas_windows_ps1()
+    b64 = base64.b64encode(ps1_bytes).decode("ascii")
+    pw_b64 = base64.b64encode(NAS_SMB_PASS.encode("utf-8")).decode("ascii")
+    body = f"""@echo off
 setlocal
-set "PS1=%~dp0Setup-ServerManagerNas.ps1"
-if not exist "%PS1%" (
-  echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
-  echo Download both files into the same folder, then run this .cmd
+cd /d "%~dp0"
+set "SM_NAS_PASSWORD_B64={pw_b64}"
+echo ServerManager NAS setup - preparing...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $dir=Split-Path -Parent $self; $out=Join-Path $dir 'Setup-ServerManagerNas.ps1'; $pw=Join-Path $dir 'Setup-ServerManagerNas.pw'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $pass=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64)); [IO.File]::WriteAllText($pw, $pass, [Text.UTF8Encoding]::new($false)); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out) -Wait }} }}"
+if errorlevel 1 (
+  echo Setup failed. See %%TEMP%%\\ServerManagerNas-setup.log
   pause
-  exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%~dp0Setup-ServerManagerNas.ps1\"\"'"
-if errorlevel 1 pause
+exit /b 0
+BEGIN_PS1
+{b64}
+END_PS1
 """
     return body.replace("\n", "\r\n").encode("ascii", errors="replace")
+
+
+def load_nas_windows_cmd() -> bytes:
+    """Backward-compatible alias for the single-file installer."""
+    return load_nas_windows_bundle_cmd()
 
 
 def ftp_norm_path(path: str) -> str:
@@ -2767,7 +2913,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
         raise ValueError("vps rules must be a list")
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002}
+    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT}
     protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:
@@ -8348,34 +8494,37 @@ NAS_FILES_SNIPPET = (
     "var txt=String(body.textContent||'').toLowerCase();"
     "return txt.indexOf('display language')>=0||txt.indexOf('select a display language')>=0;"
     "}catch(e){return false;}}"
-    "function smDownloadNasPs1(){"
+    "function smSaveDownload(url,filename,onDone){"
+    "var done=onDone||function(){};"
+    "fetch(url,{credentials:'include'})"
+    ".then(function(res){if(!res.ok)throw new Error('download failed ('+res.status+')');return res.blob();})"
+    ".then(function(blob){"
+    "var obj=URL.createObjectURL(blob);"
+    "var a=document.createElement('a');"
+    "a.href=obj;a.download=filename;a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "setTimeout(function(){try{URL.revokeObjectURL(obj);}catch(e){}},1500);"
+    "done(null);"
+    "})"
+    ".catch(function(err){done(err||new Error('download failed'));});}"
+    "function smDownloadNasBundle(){"
     "try{"
     "var base='';"
     "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
-    "var url=(base||'')+'/api/nas/windows-ps1';"
-    "var save=function(blob){"
-    "var obj=URL.createObjectURL(blob);"
-    "var a=document.createElement('a');"
-    "a.href=obj;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
-    "setTimeout(function(){try{URL.revokeObjectURL(obj);}catch(e){}},1500);};"
-    "if(window.fetch){"
-    "fetch(url,{credentials:'include'}).then(function(res){"
-    "if(!res.ok)throw new Error('download failed');"
-    "return res.blob();"
-    "}).then(save).catch(function(){"
-    "var a=document.createElement('a');"
-    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
+    "fetch((base||'')+'/api/nas/download-token',{credentials:'include'})"
+    ".then(function(res){return res.json().then(function(data){return {res:res,data:data};});})"
+    ".then(function(o){"
+    "if(!o.res.ok||!o.data||!o.data.ok||!o.data.token)throw new Error('login required');"
+    "var path=o.data.setup||o.data.cmd||('/api/nas/windows-setup?t='+encodeURIComponent(o.data.token));"
+    "return smSaveDownload((base||'')+path,'Setup-ServerManagerNas.cmd',function(err){"
+    "if(err)throw err;"
+    "try{alert('Downloaded Setup-ServerManagerNas.cmd\\n\\nOpen your Downloads folder and double-click it. Click Yes on the Windows security prompt.');}catch(e){}"
     "});"
-    "return;}"
-    "var a=document.createElement('a');"
-    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
-    "}catch(e){try{window.open('/api/nas/windows-ps1','_blank','noopener');}catch(e2){}}}"
+    "})"
+    ".catch(function(){try{alert('Log in to the portal first, then click Download Setup again.');}catch(e){}});"
+    "}catch(e){try{alert('Download failed. Log in to the portal and try again.');}catch(e2){}}}"
+    "function smDownloadNasPs1(){smDownloadNasBundle();}"
     "function smInjectNasSettingsDownload(winEl){"
     "try{"
     "if(!smIsNasSettingsWindow(winEl))return;"
@@ -8389,10 +8538,10 @@ NAS_FILES_SNIPPET = (
     "var btn=document.createElement('button');"
     "btn.type='button';btn.id='sm-settings-nas-dl';btn.className='sm-settings-nas-btn';"
     "btn.textContent='Download Setup';"
-    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
+    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasBundle();});"
     "var hint=document.createElement('div');"
     "hint.className='sm-settings-nas-hint';"
-    "hint.textContent='Map the NAS via the portal public route (no home LAN VPN needed).';"
+    "hint.textContent='Downloads one Setup-ServerManagerNas.cmd file. Double-click it from Downloads (allow admin if asked).';"
     "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
     "body.appendChild(row);"
     "}catch(e){}}"
@@ -10872,6 +11021,14 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return session_valid(parse_session_cookie(self.headers.get("Cookie")))
 
+    def _nas_download_allowed(self, query: str) -> bool:
+        if self._is_authed():
+            return True
+        from urllib.parse import parse_qs
+
+        token = (parse_qs(query or "").get("t") or [""])[0]
+        return nas_download_token_valid(token)
+
     def _require_auth(self, *, api: bool = True) -> bool:
         if self._is_authed():
             return True
@@ -11194,8 +11351,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
-        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+        if path == "/api/nas/download-token":
             if not self._require_auth(api=True):
+                return
+            try:
+                token = issue_nas_download_token()
+                urls = build_nas_download_urls(token)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "token": token,
+                        "expires_in": int(NAS_DL_TOKEN_TTL),
+                        **urls,
+                    },
+                )
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+            query = urlparse(self.path).query
+            if not self._nas_download_allowed(query):
+                self._unauthorized(api=True)
                 return
             try:
                 from urllib.parse import quote
@@ -11215,13 +11392,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
-        if path in ("/api/nas/windows-cmd", "/download/Setup-ServerManagerNas.cmd"):
-            if not self._require_auth(api=True):
+        if path in (
+            "/api/nas/windows-setup",
+            "/api/nas/windows-cmd",
+            "/download/Setup-ServerManagerNas.cmd",
+            "/download/Setup-ServerManagerNas-setup.cmd",
+        ):
+            query = urlparse(self.path).query
+            if not self._nas_download_allowed(query):
+                self._unauthorized(api=True)
                 return
             try:
                 from urllib.parse import quote
 
-                body = load_nas_windows_cmd()
+                body = load_nas_windows_bundle_cmd()
                 name = "Setup-ServerManagerNas.cmd"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")

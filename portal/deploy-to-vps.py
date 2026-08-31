@@ -23,6 +23,38 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
     ),
+    (
+        ROOT / "scripts/openvpn/server.conf",
+        "/opt/openvpn/server.conf",
+    ),
+    (
+        ROOT / "scripts/nas/install-nas-smb-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-smb-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/smb-gateway.smb.conf",
+        f"{REMOTE_UI}/scripts/nas/smb-gateway.smb.conf",
+    ),
+    (
+        ROOT / "scripts/nas/nas-smb-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-smb-gateway.service",
+    ),
+    (
+        ROOT / "scripts/nas/install-nas-ftp-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/nas-ftp-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-ftp-gateway.service",
+    ),
+    (
+        ROOT / "scripts/nas/install-nas-webdav-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/nas-webdav-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
+    ),
 ]
 
 
@@ -94,6 +126,11 @@ def main() -> int:
                 f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
+        gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
+        _run(client, f"chmod +x {gateway} && bash {gateway}")
+        dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
+        _run(client, f"chmod +x {dav} && bash {dav}")
+        _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
 
