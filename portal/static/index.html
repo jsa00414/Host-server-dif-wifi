@@ -1646,7 +1646,7 @@
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
       const fallback = frame.dataset.src || "/buffalo-frame/root.html";
       try {
-        const data = await api("/api/buffalo-sso");
+        const data = await api("/api/buffalo-sso?scope=admin");
         frame.src = (data.admin && data.admin.url) || fallback;
         frame.dataset.authed = "1";
       } catch (e) {
@@ -1684,7 +1684,7 @@
         frame.dataset.authed = "0";
         // Bust a mid-load session-timeout loop inside the embed.
         if (force) frame.src = "about:blank";
-        const data = await api("/api/buffalo-sso");
+        const data = await api("/api/buffalo-sso?scope=files");
         let url = (data.files && data.files.url) || fallback;
         // Keep phones on /ui/ for scrollable file lists.
         if (isMobileClient() && String(url).indexOf("/nas-files/st") === 0) {
@@ -2866,7 +2866,7 @@
     async function reauthNasFromSettings() {
       setStatus("Refreshing NAS login…");
       try {
-        await api("/api/buffalo-sso");
+        await api("/api/buffalo-sso?scope=all");
         await Promise.all([loadBuffaloFrame(true), loadNasFilesFrame(true)]);
         setStatus("NAS login refreshed", "ok");
         showLog("Buffalo / Files SSO refreshed.", true);
@@ -2917,6 +2917,8 @@
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
         await load();
+        // Warm Buffalo admin SSO in the background so the NAS tab opens quickly.
+        api("/api/buffalo-sso?scope=admin").catch(() => {});
         const start = initialViewFromPrefs();
         if (start && start !== "overview") showView(start);
         else lockMobileViewport();

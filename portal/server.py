@@ -22,10 +22,11 @@ import syslog
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, urljoin
+from urllib.parse import parse_qs, urlparse, urljoin
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -2018,12 +2019,25 @@ def build_openvpn_status() -> dict:
     }
 
 
+_ovpn_flint_connected_cache: tuple[bool, float] = (False, 0.0)
+_ovpn_flint_connected_cache_lock = threading.Lock()
+
+
 def _ovpn_flint_connected() -> bool:
     """True when OpenVPN status shows the Flint client is online."""
+    global _ovpn_flint_connected_cache
+    now = time.time()
+    with _ovpn_flint_connected_cache_lock:
+        cached, ts = _ovpn_flint_connected_cache
+        if now - ts < 5:
+            return cached
     try:
-        return bool(build_openvpn_status().get("flint_connected"))
+        connected = bool(build_openvpn_status().get("flint_connected"))
     except Exception:
-        return False
+        connected = False
+    with _ovpn_flint_connected_cache_lock:
+        _ovpn_flint_connected_cache = (connected, now)
+    return connected
 
 
 def ensure_ovpn_home_lan_routes() -> dict:
@@ -5642,20 +5656,32 @@ def _buffalo_http_json(url: str, payload: dict | None = None, *, form: dict | No
         return 502, str(exc), []
 
 
-def buffalo_sso_login() -> dict:
-    """Log into Buffalo admin (:80) and WebAccess (:9000); return session tokens."""
-    if not BUFFALO_SSO_PASS:
-        raise RuntimeError("BUFFALO_PASS / BUFFALO_PASS_B64 not configured")
+_buffalo_sso_cache = {
+    "admin_sid": "",
+    "admin_ts": 0.0,
+    "files_session": "",
+    "files_ts": 0.0,
+}
+_buffalo_sso_cache_lock = threading.Lock()
+BUFFALO_SSO_CACHE_TTL = int(os.environ.get("BUFFALO_SSO_CACHE_TTL", "1800"))
 
-    # School OpenVPN: fix VPS routes + Flint OVPN→LAN so Buffalo is reachable.
-    try:
-        ensure_flint_ovpn_lan_access(force=False)
-    except Exception:
+
+def _buffalo_prepare_routes_async() -> None:
+    """Fix VPS routes / Flint firewall without blocking SSO."""
+
+    def _work() -> None:
         try:
-            ensure_ovpn_home_lan_routes()
+            ensure_flint_ovpn_lan_access(force=False)
         except Exception:
-            pass
+            try:
+                ensure_ovpn_home_lan_routes()
+            except Exception:
+                pass
 
+    threading.Thread(target=_work, name="buffalo-route-prep", daemon=True).start()
+
+
+def _buffalo_admin_login() -> str:
     admin_url = f"{BUFFALO_UPSTREAM}/nasapi/"
     admin_payload = {
         "jsonrpc": "2.0",
@@ -5673,7 +5699,10 @@ def buffalo_sso_login() -> dict:
             raise RuntimeError(f"Buffalo admin login failed: {a_body.get('error')}")
     if a_status >= 400 or not admin_sid:
         raise RuntimeError(f"Buffalo admin login failed ({a_status}): {a_body}")
+    return admin_sid
 
+
+def _buffalo_files_login() -> str:
     files_url = f"{NAS_FILES_UPSTREAM}/rpc/login"
     f_status, f_body, _f_cookies = _buffalo_http_json(
         files_url,
@@ -5684,19 +5713,73 @@ def buffalo_sso_login() -> dict:
         webaxs = str(f_body.get("webaxs_session") or "").strip()
     if f_status >= 400 or not webaxs:
         raise RuntimeError(f"Buffalo WebAccess login failed ({f_status}): {f_body}")
+    return webaxs
 
-    return {
-        "ok": True,
-        "user": BUFFALO_SSO_USER,
-        "admin": {
-            "sid": admin_sid,
-            "url": f"{BUFFALO_PREFIX}/root.html",
-        },
-        "files": {
-            "session": webaxs,
-            "url": f"{NAS_FILES_PREFIX}/ui/",
-        },
-    }
+
+def buffalo_sso_login(*, scope: str = "all") -> dict:
+    """Log into Buffalo admin (:80) and/or WebAccess (:9000); return session tokens."""
+    if not BUFFALO_SSO_PASS:
+        raise RuntimeError("BUFFALO_PASS / BUFFALO_PASS_B64 not configured")
+
+    scope = (scope or "all").strip().lower()
+    if scope not in ("admin", "files", "all"):
+        scope = "all"
+    need_admin = scope in ("admin", "all")
+    need_files = scope in ("files", "all")
+
+    # Don't block the UI on router SSH / route fixes — run in background.
+    _buffalo_prepare_routes_async()
+
+    now = time.time()
+    admin_sid = ""
+    webaxs = ""
+    with _buffalo_sso_cache_lock:
+        if (
+            need_admin
+            and _buffalo_sso_cache["admin_sid"]
+            and (now - float(_buffalo_sso_cache["admin_ts"] or 0)) < BUFFALO_SSO_CACHE_TTL
+        ):
+            admin_sid = _buffalo_sso_cache["admin_sid"]
+        if (
+            need_files
+            and _buffalo_sso_cache["files_session"]
+            and (now - float(_buffalo_sso_cache["files_ts"] or 0)) < BUFFALO_SSO_CACHE_TTL
+        ):
+            webaxs = _buffalo_sso_cache["files_session"]
+
+    jobs: dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        if need_admin and not admin_sid:
+            jobs["admin"] = pool.submit(_buffalo_admin_login)
+        if need_files and not webaxs:
+            jobs["files"] = pool.submit(_buffalo_files_login)
+        for key, fut in jobs.items():
+            try:
+                result = fut.result()
+            except Exception:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            if key == "admin":
+                admin_sid = str(result)
+                with _buffalo_sso_cache_lock:
+                    _buffalo_sso_cache["admin_sid"] = admin_sid
+                    _buffalo_sso_cache["admin_ts"] = now
+            elif key == "files":
+                webaxs = str(result)
+                with _buffalo_sso_cache_lock:
+                    _buffalo_sso_cache["files_session"] = webaxs
+                    _buffalo_sso_cache["files_ts"] = now
+
+    out: dict = {"ok": True, "user": BUFFALO_SSO_USER}
+    if need_admin:
+        if not admin_sid:
+            raise RuntimeError("Buffalo admin login failed: no session")
+        out["admin"] = {"sid": admin_sid, "url": f"{BUFFALO_PREFIX}/root.html"}
+    if need_files:
+        if not webaxs:
+            raise RuntimeError("Buffalo WebAccess login failed: no session")
+        out["files"] = {"session": webaxs, "url": f"{NAS_FILES_PREFIX}/ui/"}
+    return out
 
 
 def _webaxs_cookie_header(session: str) -> str:
@@ -11531,14 +11614,16 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_auth(api=True):
                 return
             try:
-                data = buffalo_sso_login()
+                scope = (parse_qs(urlparse(self.path).query).get("scope") or ["all"])[0]
+                data = buffalo_sso_login(scope=scope)
                 # Don't echo session secrets back to the browser JSON body.
-                safe = {
-                    "ok": True,
-                    "user": data.get("user"),
-                    "admin": {"url": (data.get("admin") or {}).get("url")},
-                    "files": {"url": (data.get("files") or {}).get("url")},
-                }
+                safe: dict = {"ok": True, "user": data.get("user")}
+                admin = data.get("admin") or {}
+                files = data.get("files") or {}
+                if admin:
+                    safe["admin"] = {"url": admin.get("url")}
+                if files:
+                    safe["files"] = {"url": files.get("url")}
                 self._json(200, safe, extra_cookies=_buffalo_sso_cookie_headers(data))
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
