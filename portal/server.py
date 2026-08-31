@@ -2318,10 +2318,13 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = {NAS_SMB_PUBLIC_PORT + 13005}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
-    text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
+    text = text.replace(
+        "[string]$Password = '@@NAS_PASSWORD@@'",
+        f"[string]$Password = {_ps_single_quoted(FTP_PASS)}",
+    )
     text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
     text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
-    if "@@NAS_PASSWORD@@" in text:
+    if "[string]$Password = '@@NAS_PASSWORD@@'" in text:
         raise RuntimeError("password substitution failed")
     return b"\xef\xbb\xbf" + text.encode("utf-8")
 
@@ -2330,11 +2333,13 @@ def load_nas_windows_bundle_cmd() -> bytes:
     """Single self-extracting installer: writes PS1 next to itself, then runs elevated."""
     ps1_bytes = load_nas_windows_ps1()
     b64 = base64.b64encode(ps1_bytes).decode("ascii")
+    pw_b64 = base64.b64encode(FTP_PASS.encode("utf-8")).decode("ascii")
     body = f"""@echo off
 setlocal
 cd /d "%~dp0"
+set "SM_NAS_PASSWORD_B64={pw_b64}"
 echo ServerManager NAS setup - preparing...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $out=Join-Path (Split-Path -Parent $self) 'Setup-ServerManagerNas.ps1'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out) -Wait }} }}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $out=Join-Path (Split-Path -Parent $self) 'Setup-ServerManagerNas.ps1'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $pass=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64)); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out -Password $pass }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out, '-Password', $pass) -Wait }} }}"
 if errorlevel 1 (
   echo Setup failed. See %%TEMP%%\\ServerManagerNas-setup.log
   pause

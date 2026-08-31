@@ -21,6 +21,11 @@ function Test-IsAdmin {
 }
 
 if (-not (Test-IsAdmin)) {
+  if ((-not $Password -or $Password -eq '@@NAS_PASSWORD@@') -and $env:SM_NAS_PASSWORD_B64) {
+    try {
+      $Password = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64))
+    } catch {}
+  }
   $elevateArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
   if ($Password -and $Password -ne '@@NAS_PASSWORD@@') {
     $elevateArgs += '-Password'
@@ -28,6 +33,12 @@ if (-not (Test-IsAdmin)) {
   }
   Start-Process powershell.exe -Verb RunAs -ArgumentList $elevateArgs -Wait
   exit $LASTEXITCODE
+}
+
+if ((-not $Password -or $Password -eq '@@NAS_PASSWORD@@') -and $env:SM_NAS_PASSWORD_B64) {
+  try {
+    $Password = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64))
+  } catch {}
 }
 
 $LogFile = Join-Path $env:TEMP "ServerManagerNas-setup.log"
