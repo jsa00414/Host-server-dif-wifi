@@ -2315,6 +2315,7 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('NasIp = "74.208.76.213"', f'NasIp = "{NAS_SMB_PUBLIC_IP}"')
     text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
+    text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = {NAS_SMB_PUBLIC_PORT + 13005}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace(

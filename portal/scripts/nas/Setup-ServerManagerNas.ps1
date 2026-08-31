@@ -3,6 +3,7 @@ param(
   [string]$NasHost = "portal.vpstruelord.com",
   [string]$NasIp = "74.208.76.213",
   [int]$NasPort = 1445,
+  [int]$LocalSmbPort = 14450,
   [string]$Share = "share",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
@@ -14,6 +15,7 @@ $ErrorActionPreference = "Continue"
 $DriveLetter = ($DriveLetter -replace '[^A-Za-z]', '').Substring(0, 1).ToUpper()
 $LogFile = Join-Path $env:TEMP "ServerManagerNas-setup.log"
 $script:ChangedSmbPort = $false
+$script:AddedPortProxy = $false
 
 function Write-Log($msg) {
   $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -70,8 +72,34 @@ function Test-TcpPort {
   return $false
 }
 
+function Ensure-IpHelperService {
+  $svc = Get-Service iphlpsvc -ErrorAction SilentlyContinue
+  if (-not $svc) { return }
+  if ($svc.StartType -eq 'Disabled') { Set-Service iphlpsvc -StartupType Manual }
+  if ($svc.Status -ne 'Running') { Start-Service iphlpsvc; Start-Sleep -Seconds 1 }
+}
+
+function Enable-NasPortProxy {
+  param([string]$ConnectHost, [int]$ConnectPort, [int]$ListenPort)
+  Ensure-IpHelperService
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
+  $output = & netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 connectport=$ConnectPort connectaddress=$ConnectHost 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "portproxy add failed: $output" }
+  $script:AddedPortProxy = $true
+  if (-not (Test-TcpPort -HostName '127.0.0.1' -Port $ListenPort -TimeoutMs 8000)) {
+    throw "Local SMB proxy 127.0.0.1:$ListenPort did not open."
+  }
+}
+
+function Disable-NasPortProxy {
+  param([int]$ListenPort)
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
+  $script:AddedPortProxy = $false
+}
+
 function Set-SmbClientPort {
   param([int]$Port)
+  if ($Port -eq 445) { return }
   $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
   if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
   Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
@@ -133,6 +161,12 @@ function Try-MapShare {
   $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
   $cred = New-Object System.Management.Automation.PSCredential($User, $secure)
 
+  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $User -Pass $Pass
+  if ($net.ok) {
+    return @{ ok = $true; method = 'net use' }
+  }
+  Write-Step "  net use failed: $($net.output)"
+
   if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
     try {
       $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -Credential $cred -Persistent $true -ErrorAction Stop
@@ -142,18 +176,50 @@ function Try-MapShare {
     }
   }
 
-  try {
-    $null = New-PSDrive -Name $Drive -PSProvider FileSystem -Root $Unc -Credential $cred -Persist -ErrorAction Stop
-    return @{ ok = $true; method = 'New-PSDrive' }
-  } catch {
-    Write-Step "  New-PSDrive failed: $($_.Exception.Message)"
-  }
-
-  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $User -Pass $Pass
-  if ($net.ok) {
-    return @{ ok = $true; method = 'net use' }
-  }
   return @{ ok = $false; error = $net.output }
+}
+
+function Cleanup-Setup {
+  if ($script:ChangedSmbPort) { Clear-SmbClientPort }
+  if ($script:AddedPortProxy) { Disable-NasPortProxy -ListenPort $LocalSmbPort }
+}
+
+function Build-MapAttempts {
+  param([string]$Ip, [string]$HostName, [int]$Port, [int]$LocalPort, [string]$ShareName)
+  $list = New-Object System.Collections.Generic.List[object]
+  foreach ($server in @($Ip, $HostName)) {
+    if (-not $server) { continue }
+    $list.Add([pscustomobject]@{
+      Name = 'alt-port UNC'
+      Unc = "\\${server}@${Port}\$ShareName"
+      Server = "${server}@${Port}"
+      Setup = { }
+    })
+  }
+  $list.Add([pscustomobject]@{
+    Name = 'local proxy'
+    Unc = "\\127.0.0.1\$ShareName"
+    Server = '127.0.0.1'
+    Setup = {
+      Write-Step "Creating local SMB proxy 127.0.0.1:${LocalSmbPort} -> ${NasIp}:${NasPort} ..."
+      Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
+      Write-Step "Setting Windows SMB client port to $LocalSmbPort ..."
+      Set-SmbClientPort -Port $LocalSmbPort
+    }
+  })
+  foreach ($server in @($Ip, $HostName)) {
+    if (-not $server) { continue }
+    $list.Add([pscustomobject]@{
+      Name = 'registry port'
+      Unc = "\\$server\$ShareName"
+      Server = $server
+      Setup = {
+        Write-Step "Setting Windows SMB client port to $NasPort ..."
+        Set-SmbClientPort -Port $NasPort
+      }
+    })
+  }
+  return $list
 }
 
 Write-Log "=== ServerManager NAS setup start ==="
@@ -183,27 +249,31 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 $mapped = $false
 $unc = ""
 $method = ""
+$attempts = Build-MapAttempts -Ip $NasIp -HostName $NasHost -Port $NasPort -LocalPort $LocalSmbPort -ShareName $Share
 
 try {
-  Write-Step "Setting Windows SMB client port to $NasPort ..."
-  Set-SmbClientPort -Port $NasPort
-  foreach ($server in @($NasIp, $NasHost)) {
-    if (-not $server) { continue }
-    $tryUnc = "\\$server\$Share"
-    Write-Step "Mapping $tryUnc ..."
-    $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Server $server -User $Username -Pass $Password
-    if ($result.ok) {
-      $mapped = $true
-      $unc = $tryUnc
-      $method = $result.method
-      break
-    }
-    if ($result.error) { Write-Step "  net use failed: $($result.error)" }
+  foreach ($attempt in $attempts) {
+  Cleanup-Setup
+  try {
+    & $attempt.Setup
+  } catch {
+    Write-Step "  setup failed ($($attempt.Name)): $($_.Exception.Message)"
+    continue
+  }
+  Write-Step "Trying $($attempt.Name): $($attempt.Unc) ..."
+  $result = Try-MapShare -Drive $DriveLetter -Unc $attempt.Unc -Server $attempt.Server -User $Username -Pass $Password
+  if ($result.ok) {
+    $mapped = $true
+    $unc = $attempt.Unc
+    $method = "$($result.method) ($($attempt.Name))"
+    break
+  }
+  if ($result.error) { Write-Step "  $($result.error)" }
   }
 } catch {
   Write-Err $_.Exception.Message
 } finally {
-  if (-not $mapped) { Clear-SmbClientPort }
+  if (-not $mapped) { Cleanup-Setup }
 }
 
 if (-not $mapped) {
@@ -223,7 +293,9 @@ try {
 
 Write-Host ""
 Write-Host "Mapped ${DriveLetter}: -> $unc ($Label) via $method" -ForegroundColor Green
-Write-Warn "SMB client port $NasPort stays enabled for reconnects to the portal public route."
+if ($script:ChangedSmbPort -or $script:AddedPortProxy) {
+  Write-Warn "Keep this setup PC configured for the portal public NAS route."
+}
 Write-Step "Open File Explorer -> This PC -> ${DriveLetter}:"
 Start-Process explorer.exe "${DriveLetter}:\"
 Read-Host "Press Enter to close"
