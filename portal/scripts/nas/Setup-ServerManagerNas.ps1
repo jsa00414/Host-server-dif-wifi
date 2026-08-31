@@ -122,9 +122,61 @@ function Disable-NasPortProxy {
   $script:AddedPortProxy = $false
 }
 
+function Get-HostsFilePath {
+  Join-Path $env:Windir 'System32\drivers\etc\hosts'
+}
+
+function Test-HostsHasAlias {
+  param([string]$Alias, [string]$ListenIp)
+  $hostsFile = Get-HostsFilePath
+  $content = @(Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue)
+  foreach ($line in $content) {
+    $trim = $line.Trim()
+    if (-not $trim -or $trim.StartsWith('#')) { continue }
+    if ($trim -match ('^\s*' + [regex]::Escape($ListenIp) + '\s+' + [regex]::Escape($Alias) + '(\s|$)')) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Write-HostsLines {
+  param([string[]]$Lines)
+  $hostsFile = Get-HostsFilePath
+  if (-not (Test-Path -LiteralPath $hostsFile)) {
+    throw "Hosts file not found: $hostsFile"
+  }
+
+  cmd.exe /c "attrib -r `"$hostsFile`"" | Out-Null
+  $tmp = Join-Path $env:TEMP ("hosts-sm-nas-" + [Guid]::NewGuid().ToString("n") + ".tmp")
+  $lastErr = $null
+  try {
+    [System.IO.File]::WriteAllLines($tmp, $Lines, [System.Text.Encoding]::ASCII)
+    for ($i = 1; $i -le 10; $i++) {
+      try {
+        Copy-Item -LiteralPath $tmp -Destination $hostsFile -Force -ErrorAction Stop
+        return
+      } catch {
+        $lastErr = $_
+        Start-Sleep -Milliseconds (300 * $i)
+      }
+    }
+    $copyOut = cmd.exe /c "copy /Y `"$tmp`" `"$hostsFile`"" 2>&1
+    if ($LASTEXITCODE -eq 0) { return }
+    throw "Could not update hosts file (another program may be locking it): $lastErr"
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Enable-NasHostsAlias {
   param([string]$Alias, [string]$ListenIp)
-  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  if (Test-HostsHasAlias -Alias $Alias -ListenIp $ListenIp) {
+    Write-Step "Hosts entry already set: $ListenIp $Alias"
+    $script:AddedHostsEntry = $true
+    return
+  }
+  $hostsFile = Get-HostsFilePath
   $content = @(Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue)
   $filtered = New-Object System.Collections.Generic.List[string]
   $skip = $false
@@ -139,13 +191,23 @@ function Enable-NasHostsAlias {
   }
   $filtered.Add($HostsMark)
   $filtered.Add("$ListenIp $Alias")
-  Set-Content -LiteralPath $hostsFile -Value $filtered -Encoding ASCII
-  $script:AddedHostsEntry = $true
+  try {
+    Write-HostsLines -Lines $filtered
+    $script:AddedHostsEntry = $true
+  } catch {
+    Write-Warn $_.Exception.Message
+    Write-Warn "Add this line manually in Notepad (Run as administrator): $hostsFile"
+    Write-Warn "$ListenIp $Alias"
+    if (-not (Test-HostsHasAlias -Alias $Alias -ListenIp $ListenIp)) {
+      throw "Hosts file is locked. Close VPN/DNS tools, add the line above manually, then run setup again."
+    }
+    $script:AddedHostsEntry = $true
+  }
 }
 
 function Disable-NasHostsAlias {
   param([string]$Alias)
-  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  $hostsFile = Get-HostsFilePath
   if (-not (Test-Path -LiteralPath $hostsFile)) { return }
   $lines = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
   $out = New-Object System.Collections.Generic.List[string]
@@ -159,7 +221,9 @@ function Disable-NasHostsAlias {
     if ($line -match [regex]::Escape($Alias)) { continue }
     $out.Add($line)
   }
-  Set-Content -LiteralPath $hostsFile -Value $out -Encoding ASCII
+  try {
+    Write-HostsLines -Lines $out
+  } catch {}
   $script:AddedHostsEntry = $false
 }
 
@@ -173,15 +237,21 @@ function Remove-LegacyNasRoute {
   param([string]$Alias)
   & netsh interface portproxy delete v4tov4 listenport=14450 listenaddress=127.0.0.1 | Out-Null
   Clear-SmbClientPort
-  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  $hostsFile = Get-HostsFilePath
   if (-not (Test-Path -LiteralPath $hostsFile)) { return }
   $lines = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
   $out = New-Object System.Collections.Generic.List[string]
+  $changed = $false
   foreach ($line in $lines) {
-    if ($line -match '127\.0\.0\.1\s+' + [regex]::Escape($Alias)) { continue }
+    if ($line -match '127\.0\.0\.1\s+' + [regex]::Escape($Alias)) { $changed = $true; continue }
     $out.Add($line)
   }
-  Set-Content -LiteralPath $hostsFile -Value $out -Encoding ASCII
+  if (-not $changed) { return }
+  try {
+    Write-HostsLines -Lines $out
+  } catch {
+    Write-Warn "Could not remove legacy 127.0.0.1 hosts entry automatically. Delete this line manually: 127.0.0.1 $Alias"
+  }
 }
 
 function Clear-StaleNasCreds {
