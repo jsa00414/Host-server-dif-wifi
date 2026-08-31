@@ -39,7 +39,7 @@ function Import-NasPassword {
   $dir = Split-Path -Parent $ScriptPath
   $pwFile = Join-Path $dir 'Setup-ServerManagerNas.pw'
   if (Test-Path -LiteralPath $pwFile) {
-    return (Get-Content -LiteralPath $pwFile -Raw).TrimEnd("`r", "`n")
+    return (Get-Content -LiteralPath $pwFile -Raw -Encoding UTF8).TrimEnd("`r", "`n")
   }
   if ($env:SM_NAS_PASSWORD_B64) {
     try {
@@ -48,6 +48,14 @@ function Import-NasPassword {
   }
   if ($Password -and $Password -ne '@@NAS_PASSWORD@@') { return $Password }
   return ""
+}
+
+function Read-NasPasswordPrompt {
+  Write-Warn "Automatic password failed. Enter the NAS password from the portal (Settings -> Download Setup page)."
+  $secure = Read-Host "NAS password" -AsSecureString
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
 if (-not (Test-IsAdmin)) {
@@ -153,15 +161,53 @@ function Clear-SmbClientPort {
 function Clear-StaleNasCreds {
   param([string[]]$Servers, [string]$User)
   foreach ($server in ($Servers | Where-Object { $_ } | Select-Object -Unique)) {
-    foreach ($target in @($server, "$server\$User", "\\$server")) {
+    foreach ($target in @($server, "$server\$User", "\\$server", "TERMSRV/$server", "TERMSRV/$server/$User")) {
       cmdkey /delete:$target 2>$null | Out-Null
     }
   }
 }
 
+function Enable-SmbClientCompat {
+  $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+  if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+  foreach ($pair in @(
+    @{ Name = 'AllowInsecureGuestAuth'; Value = 1 },
+    @{ Name = 'EnablePlainTextPasswd'; Value = 1 },
+    @{ Name = 'EnableSecuritySignature'; Value = 0 },
+    @{ Name = 'RequireSecuritySignature'; Value = 0 }
+  )) {
+    try {
+      Set-ItemProperty -Path $path -Name $pair.Name -Value $pair.Value -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+  }
+  if (Get-Command Set-SmbClientConfiguration -ErrorAction SilentlyContinue) {
+    try {
+      Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+  }
+}
+
+function Add-NasCredential {
+  param([string]$Target, [string]$User, [string]$Pass)
+  cmdkey /delete:$Target 2>$null | Out-Null
+  $outFile = [System.IO.Path]::GetTempFileName()
+  $errFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $proc = Start-Process -FilePath 'cmdkey.exe' -ArgumentList @("/add:$Target", "/user:$User", "/pass:$Pass") `
+      -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    $out = ((Get-Content -LiteralPath $outFile -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) -join ' '
+    return @{ ok = ($proc.ExitCode -eq 0); output = $out.Trim() }
+  } finally {
+    Remove-Item -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-NetUseMap {
-  param([string]$Drive, [string]$Unc, [string]$User, [string]$Pass)
-  $args = @('use', "${Drive}:", $Unc, $Pass, "/user:$User", '/persistent:yes')
+  param([string]$Drive, [string]$Unc, [string]$User = "", [string]$Pass = "")
+  $args = @('use', "${Drive}:", $Unc)
+  if ($User) { $args += "/user:$User" }
+  if ($Pass) { $args += $Pass }
+  $args += '/persistent:yes'
   $outFile = [System.IO.Path]::GetTempFileName()
   $errFile = [System.IO.Path]::GetTempFileName()
   try {
@@ -172,6 +218,37 @@ function Invoke-NetUseMap {
   } finally {
     Remove-Item -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
   }
+}
+
+function Invoke-WNetMap {
+  param([string]$Drive, [string]$Unc, [string]$User, [string]$Pass)
+  if (-not ("WNetAddConnection2" -as [type])) {
+    $signature = @'
+[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+public class NetResource {
+  public int Scope;
+  public int Type;
+  public int DisplayType;
+  public int Usage;
+  public string LocalName;
+  public string RemoteName;
+  public string Comment;
+  public string Provider;
+}
+[DllImport("Mpr.dll", CharSet=CharSet.Unicode)]
+public static extern int WNetAddConnection2(NetResource netResource, string password, string username, int flags);
+'@
+    Add-Type -Namespace ServerManagerNas -Name WNet -MemberDefinition $signature -ErrorAction Stop | Out-Null
+  }
+  $resource = New-Object ServerManagerNas.WNet+NetResource
+  $resource.Type = 1
+  $resource.LocalName = "${Drive}:"
+  $resource.RemoteName = $Unc
+  $result = [ServerManagerNas.WNet]::WNetAddConnection2($resource, $Pass, $User, 0)
+  if ($result -eq 0) {
+    return @{ ok = $true; output = "WNetAddConnection2 ok" }
+  }
+  return @{ ok = $false; output = "WNetAddConnection2 error $result" }
 }
 
 function Try-MapShare {
@@ -194,22 +271,41 @@ function Try-MapShare {
   Clear-StaleNasCreds -Servers $Servers -User ($Users | Select-Object -First 1)
 
   foreach ($userTry in $Users) {
-    $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
-    $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
-  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
-  if ($net.ok) {
-    return @{ ok = $true; method = "net use ($userTry)" }
-  }
-  Write-Step "  net use ($userTry) failed: $($net.output)"
-
-  if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
-    try {
-      $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -Credential $cred -Persistent $true -ErrorAction Stop
-      return @{ ok = $true; method = "New-SmbMapping ($userTry)" }
-    } catch {
-      Write-Step "  New-SmbMapping ($userTry) failed: $($_.Exception.Message)"
+    foreach ($target in ($Servers | Where-Object { $_ } | Select-Object -Unique)) {
+      $cred = Add-NasCredential -Target $target -User $userTry -Pass $Pass
+      if (-not $cred.ok) {
+        Write-Step "  cmdkey ($target / $userTry) failed: $($cred.output)"
+      }
     }
-  }
+
+    $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc
+    if ($net.ok) {
+      return @{ ok = $true; method = "net use + cmdkey ($userTry)" }
+    }
+    Write-Step "  net use + cmdkey ($userTry) failed: $($net.output)"
+
+    $wnet = Invoke-WNetMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
+    if ($wnet.ok) {
+      return @{ ok = $true; method = "WNetAddConnection2 ($userTry)" }
+    }
+    Write-Step "  WNetAddConnection2 ($userTry) failed: $($wnet.output)"
+
+    $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
+    $psCred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
+    if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
+      try {
+        $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -Credential $psCred -Persistent $true -ErrorAction Stop
+        return @{ ok = $true; method = "New-SmbMapping ($userTry)" }
+      } catch {
+        Write-Step "  New-SmbMapping ($userTry) failed: $($_.Exception.Message)"
+      }
+    }
+
+    $netDirect = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
+    if ($netDirect.ok) {
+      return @{ ok = $true; method = "net use direct ($userTry)" }
+    }
+    Write-Step "  net use direct ($userTry) failed: $($netDirect.output)"
   }
 
   return @{ ok = $false; error = "all user formats failed" }
@@ -245,42 +341,65 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
   exit 2
 }
 
-$userCandidates = @($Username, "WORKGROUP\$Username", ".\$Username") | Select-Object -Unique
+$userCandidates = @(
+  $Username,
+  "WORKGROUP\$Username",
+  ".\$Username",
+  "$MapAlias\$Username",
+  "127.0.0.1\$Username"
+) | Select-Object -Unique
 $mapped = $false
 $unc = ""
 $method = ""
+$passwordAttempts = @($Password)
 
 try {
   Write-Step "Configuring local SMB route via $MapAlias ..."
   Enable-NasHostsAlias -Alias $MapAlias
   Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Set-SmbClientPort -Port $LocalSmbPort
-  if (Get-Command Set-SmbClientConfiguration -ErrorAction SilentlyContinue) {
-    try {
-      Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force -ErrorAction SilentlyContinue | Out-Null
-    } catch {}
-  }
+  Enable-SmbClientCompat
 
   $tryUnc = "\\$MapAlias\$Share"
   Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
-  $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1') -Users $userCandidates -Pass $Password
-  if ($result.ok) {
-    $mapped = $true
-    $unc = $tryUnc
-    $method = $result.method
-  } elseif ($result.error) {
-    Write-Step "  $($result.error)"
+  foreach ($passTry in $passwordAttempts) {
+    if (-not $passTry) { continue }
+    $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1', $NasIp) -Users $userCandidates -Pass $passTry
+    if ($result.ok) {
+      $mapped = $true
+      $unc = $tryUnc
+      $method = $result.method
+      break
+    }
+    if ($result.error) {
+      Write-Step "  $($result.error)"
+    }
+  }
+
+  if (-not $mapped) {
+    $manual = Read-NasPasswordPrompt
+    if ($manual) {
+      Write-Step "Retrying with manually entered password ..."
+      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1', $NasIp) -Users $userCandidates -Pass $manual
+      if ($result.ok) {
+        $mapped = $true
+        $unc = $tryUnc
+        $method = $result.method
+      } elseif ($result.error) {
+        Write-Step "  $($result.error)"
+      }
+    }
   }
 } catch {
   Write-Err $_.Exception.Message
-} finally {
-  if (-not $mapped) { Cleanup-Setup }
 }
 
 if (-not $mapped) {
   Write-Err ""
   Write-Err "ERROR: Could not map any SMB share on $NasHost"
   Write-Err "Public route is reachable, but login or share access failed."
+  Write-Err "Download a fresh Setup-ServerManagerNas.cmd from the portal, or copy the password from NAS -> Settings."
+  Write-Err "The local SMB route was left in place for manual retry in File Explorer."
   Write-Err "See log: $LogFile"
   Write-Err ""
   Read-Host "Press Enter to close"

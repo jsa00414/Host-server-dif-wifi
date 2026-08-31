@@ -2260,6 +2260,65 @@ NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip()
 NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBLIC_PORT)))
 
 
+def _load_nas_smb_pass() -> str:
+    """SMB mapping password — defaults to Buffalo admin, not a separate FTP override."""
+    b64 = os.environ.get("NAS_SMB_PASS_B64", "").strip()
+    raw = os.environ.get("NAS_SMB_PASS", "").strip()
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    if raw:
+        return raw
+    return BUFFALO_SSO_PASS
+
+
+NAS_SMB_PASS = _load_nas_smb_pass()
+
+
+def _smb_probe() -> dict:
+    """Best-effort SMB login test via public forward (smbclient when available)."""
+    if not NAS_SMB_PASS:
+        return {"ok": False, "error": "NAS SMB password not configured"}
+    user = FTP_USER
+    share = NAS_SMB_SHARE
+    host = NAS_SMB_PUBLIC_IP
+    port = NAS_SMB_PUBLIC_PORT
+    import shutil
+    import subprocess
+
+    smbclient = shutil.which("smbclient")
+    if not smbclient:
+        return {"ok": None, "error": "smbclient not installed on portal host"}
+    cmd = [
+        smbclient,
+        f"//{host}/{share}",
+        "-p",
+        str(port),
+        "-U",
+        f"{user}%{NAS_SMB_PASS}",
+        "-c",
+        "ls",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode == 0:
+            return {"ok": True, "detail": "SMB login ok"}
+        if "LOGON_FAILURE" in out or "ACCESS_DENIED" in out:
+            return {"ok": False, "error": "SMB login failed (bad password or user)"}
+        return {"ok": False, "error": (out.strip() or f"smbclient exit {proc.returncode}")[:240]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:240]}
+
+
 def _ps_single_quoted(value: str) -> str:
     return "'" + (value or "").replace("'", "''") + "'"
 
@@ -2267,6 +2326,7 @@ def _ps_single_quoted(value: str) -> str:
 def build_nas_windows_status() -> dict:
     """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
     st = _FTP.status()
+    smb = _smb_probe()
     if NAS_SMB_PUBLIC_PORT != 445:
         unc = f"\\\\{NAS_SMB_PUBLIC_HOST}@{NAS_SMB_PUBLIC_PORT}\\{NAS_SMB_SHARE}"
     else:
@@ -2278,7 +2338,9 @@ def build_nas_windows_status() -> dict:
         "lan_host": NAS_SMB_HOST,
         "share": NAS_SMB_SHARE,
         "username": FTP_USER,
-        "password": FTP_PASS,
+        "password": NAS_SMB_PASS,
+        "smb_ok": smb.get("ok"),
+        "smb_detail": smb.get("detail") or smb.get("error") or "",
         "drive": NAS_DRIVE_LETTER,
         "label": NAS_DRIVE_LABEL,
         "unc": unc,
@@ -2292,7 +2354,7 @@ def build_nas_windows_status() -> dict:
 
 def load_nas_windows_ps1() -> bytes:
     """PowerShell helper that maps the Buffalo NAS as a persistent drive letter."""
-    if not FTP_PASS:
+    if not NAS_SMB_PASS:
         raise RuntimeError("NAS password not configured (set BUFFALO_PASS_B64 on the VPS)")
     candidates = [
         Path(__file__).resolve().parent / "scripts" / "nas" / "Setup-ServerManagerNas.ps1",
@@ -2307,7 +2369,7 @@ def load_nas_windows_ps1() -> bytes:
 $NasHost = "{NAS_SMB_HOST}"
 $Share = "{NAS_SMB_SHARE}"
 $Username = "{FTP_USER}"
-$Password = {_ps_single_quoted(FTP_PASS)}
+$Password = {_ps_single_quoted(NAS_SMB_PASS)}
 $DriveLetter = "{NAS_DRIVE_LETTER}"
 $Label = "{NAS_DRIVE_LABEL}"
 """
@@ -2321,7 +2383,7 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace(
         "[string]$Password = '@@NAS_PASSWORD@@'",
-        f"[string]$Password = {_ps_single_quoted(FTP_PASS)}",
+        f"[string]$Password = {_ps_single_quoted(NAS_SMB_PASS)}",
     )
     text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
     text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
@@ -2334,7 +2396,7 @@ def load_nas_windows_bundle_cmd() -> bytes:
     """Single self-extracting installer: writes PS1 next to itself, then runs elevated."""
     ps1_bytes = load_nas_windows_ps1()
     b64 = base64.b64encode(ps1_bytes).decode("ascii")
-    pw_b64 = base64.b64encode(FTP_PASS.encode("utf-8")).decode("ascii")
+    pw_b64 = base64.b64encode(NAS_SMB_PASS.encode("utf-8")).decode("ascii")
     body = f"""@echo off
 setlocal
 cd /d "%~dp0"

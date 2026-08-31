@@ -139,8 +139,10 @@
       try {
         const d = await api("/api/nas/status");
         const ok = !!d.ok;
-        $("statusPill").className = "pill " + (ok ? "ok" : "err");
-        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "NAS reachable from VPS" : "NAS unreachable from VPS"}</span>`;
+        const smbOk = d.smb_ok;
+        const smbLabel = smbOk === true ? "SMB login ok" : (smbOk === false ? "SMB login failed" : "SMB not tested");
+        $("statusPill").className = "pill " + (ok && smbOk !== false ? "ok" : "err");
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "NAS reachable from VPS" : "NAS unreachable from VPS"} · ${smbLabel}</span>`;
         $("mUnc").textContent = d.unc || "—";
         $("mDrive").textContent = (d.drive || "Z") + ": · " + (d.label || "ServerManager NAS");
         $("mNas").textContent = ok ? "Online" : "Offline";
