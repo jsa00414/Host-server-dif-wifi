@@ -182,7 +182,9 @@ Write-Step "Log file: $LogFile"
 Write-Step ""
 
 if ($Password -eq '@@NAS_PASSWORD@@' -or -not $Password) {
-  Write-Err "ERROR: No password in script. Download again from the portal while logged in."
+  Write-Err "ERROR: No password in script."
+  Write-Err "Download a fresh Setup-ServerManagerNas.cmd from the portal while logged in,"
+  Write-Err "or run the .cmd file (it passes the password automatically)."
   Read-Host "Press Enter to close"
   exit 3
 }

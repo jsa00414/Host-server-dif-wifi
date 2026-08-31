@@ -172,36 +172,35 @@
       $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
     };
     function download(path, name) {
-      const save = (blob) => {
-        const obj = URL.createObjectURL(blob);
+      const fail = (msg) => {
+        $("dlMsg").className = "msg err";
+        $("dlMsg").textContent = msg || "Log in to the portal first, then try again.";
+      };
+      const go = (url) => {
         const a = document.createElement("a");
-        a.href = obj;
+        a.href = url;
         a.download = name;
         a.rel = "noopener";
         document.body.appendChild(a);
         a.click();
         a.remove();
-        setTimeout(() => URL.revokeObjectURL(obj), 1500);
         $("dlMsg").className = "msg ok";
         $("dlMsg").textContent = "Download started — check your Downloads folder";
       };
-      fetch(path, { credentials: "same-origin" })
-        .then((res) => { if (!res.ok) throw new Error("download failed"); return res.blob(); })
-        .then(save)
-        .catch(() => {
-          const a = document.createElement("a");
-          a.href = path;
-          a.download = name;
-          a.rel = "noopener";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          $("dlMsg").className = "msg ok";
-          $("dlMsg").textContent = "Download started — check your Downloads folder";
-        });
+      fetch("/api/nas/download-token", { credentials: "same-origin" })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (!res.ok || !data.ok || !data.token) {
+            throw new Error(data.error || "login required");
+          }
+          const key = name.endsWith(".cmd") ? "cmd" : "ps1";
+          const rel = data[key] || `${path}?t=${encodeURIComponent(data.token)}`;
+          go(rel);
+        })
+        .catch((e) => fail(e.message || "Log in to the portal first, then try again."));
     }
-    $("dlPs1").onclick = () => download("/api/nas/windows-ps1", "Setup-ServerManagerNas.ps1");
     $("dlCmd").onclick = () => download("/api/nas/windows-cmd", "Setup-ServerManagerNas.cmd");
+    $("dlPs1").onclick = () => download("/api/nas/windows-ps1", "Setup-ServerManagerNas.ps1");
     refresh();
   </script>
 </body>

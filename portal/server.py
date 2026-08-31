@@ -1702,6 +1702,46 @@ ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
+NAS_DL_TOKEN_TTL = float(os.environ.get("NAS_DL_TOKEN_TTL", "600"))
+_nas_dl_tokens: dict[str, float] = {}
+_nas_dl_tokens_lock = threading.Lock()
+
+
+def _purge_nas_download_tokens(now: float | None = None) -> None:
+    ts = now if now is not None else time.time()
+    expired = [tok for tok, exp in _nas_dl_tokens.items() if exp <= ts]
+    for tok in expired:
+        _nas_dl_tokens.pop(tok, None)
+
+
+def issue_nas_download_token() -> str:
+    now = time.time()
+    with _nas_dl_tokens_lock:
+        _purge_nas_download_tokens(now)
+        token = secrets.token_urlsafe(18)
+        _nas_dl_tokens[token] = now + NAS_DL_TOKEN_TTL
+        return token
+
+
+def nas_download_token_valid(token: str) -> bool:
+    tok = (token or "").strip()
+    if not tok:
+        return False
+    now = time.time()
+    with _nas_dl_tokens_lock:
+        _purge_nas_download_tokens(now)
+        exp = _nas_dl_tokens.get(tok)
+        return bool(exp and exp > now)
+
+
+def build_nas_download_urls(token: str) -> dict[str, str]:
+    from urllib.parse import quote
+
+    q = f"?t={quote(token)}"
+    return {
+        "ps1": f"/api/nas/windows-ps1{q}",
+        "cmd": f"/api/nas/windows-cmd{q}",
+    }
 
 
 def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
@@ -2251,6 +2291,8 @@ def build_nas_windows_status() -> dict:
 
 def load_nas_windows_ps1() -> bytes:
     """PowerShell helper that maps the Buffalo NAS as a persistent drive letter."""
+    if not FTP_PASS:
+        raise RuntimeError("NAS password not configured (set BUFFALO_PASS_B64 on the VPS)")
     candidates = [
         Path(__file__).resolve().parent / "scripts" / "nas" / "Setup-ServerManagerNas.ps1",
     ]
@@ -2278,26 +2320,32 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
     text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
     text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
+    if "@@NAS_PASSWORD@@" in text:
+        raise RuntimeError("password substitution failed")
     return b"\xef\xbb\xbf" + text.encode("utf-8")
 
 
 def load_nas_windows_cmd() -> bytes:
     """CMD launcher for the NAS File Explorer setup script."""
-    body = """@echo off
+    if not FTP_PASS:
+        raise RuntimeError("NAS password not configured (set BUFFALO_PASS_B64 on the VPS)")
+    pw_b64 = base64.b64encode(FTP_PASS.encode("utf-8")).decode("ascii")
+    body = f"""@echo off
 setlocal
 cd /d "%~dp0"
 set "PS1=%~dp0Setup-ServerManagerNas.ps1"
 if not exist "%PS1%" (
   echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
-  echo Download both files into the same folder, then run this .cmd
+  echo Download both files from the portal into the same folder, then run this .cmd
   pause
   exit /b 1
 )
+set "PW_B64={pw_b64}"
 NET SESSION >nul 2>&1
 if %errorLevel%==0 (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PW_B64)); & \"\"%PS1%\"\" -Password $p"
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%PS1%\"\"' -Wait"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',\"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''{pw_b64}'')); & ''%PS1%'' -Password $p\") -Wait"
 )
 if errorlevel 1 pause
 """
@@ -8361,34 +8409,41 @@ NAS_FILES_SNIPPET = (
     "var txt=String(body.textContent||'').toLowerCase();"
     "return txt.indexOf('display language')>=0||txt.indexOf('select a display language')>=0;"
     "}catch(e){return false;}}"
-    "function smDownloadNasPs1(){"
+    "function smDownloadNasSetup(kind){"
     "try{"
     "var base='';"
     "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
-    "var url=(base||'')+'/api/nas/windows-ps1';"
-    "var save=function(blob){"
-    "var obj=URL.createObjectURL(blob);"
-    "var a=document.createElement('a');"
-    "a.href=obj;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
-    "setTimeout(function(){try{URL.revokeObjectURL(obj);}catch(e){}},1500);};"
+    "var name=(kind==='cmd')?'Setup-ServerManagerNas.cmd':'Setup-ServerManagerNas.ps1';"
+    "var fail=function(msg){try{alert(msg||'Log in to the portal first, then try Download again.');}catch(e){}};"
+    "var go=function(url){"
+    "try{window.top.location.href=url;}catch(e){try{window.location.href=url;}catch(e2){window.open(url,'_blank','noopener');}}};"
     "if(window.fetch){"
-    "fetch(url,{credentials:'include'}).then(function(res){"
-    "if(!res.ok)throw new Error('download failed');"
-    "return res.blob();"
-    "}).then(save).catch(function(){"
-    "var a=document.createElement('a');"
-    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
-    "});"
+    "fetch((base||'')+'/api/nas/download-token',{credentials:'include'})"
+    ".then(function(res){return res.json().then(function(data){return {res:res,data:data};});})"
+    ".then(function(o){"
+    "if(!o.res.ok||!o.data||!o.data.ok||!o.data.token)throw new Error((o.data&&o.data.error)||'login required');"
+    "var path=(kind==='cmd')?(o.data.cmd||('/api/nas/windows-cmd?t='+encodeURIComponent(o.data.token))):(o.data.ps1||('/api/nas/windows-ps1?t='+encodeURIComponent(o.data.token)));"
+    "go((base||'')+path);"
+    "})"
+    ".catch(function(){fail('Log in to the portal first, then click Download again.');});"
     "return;}"
-    "var a=document.createElement('a');"
-    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
-    "(document.body||document.documentElement).appendChild(a);"
-    "a.click();a.remove();"
-    "}catch(e){try{window.open('/api/nas/windows-ps1','_blank','noopener');}catch(e2){}}}"
+    "fail('Your browser blocked the download. Log in to the portal and try again.');"
+    "}catch(e){fail();}}"
+    "function smDownloadNasPs1(){smDownloadNasSetup('ps1');}"
+    "function smDownloadNasBundle(){"
+    "try{"
+    "var base='';"
+    "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
+    "fetch((base||'')+'/api/nas/download-token',{credentials:'include'})"
+    ".then(function(res){return res.json().then(function(data){return {res:res,data:data};});})"
+    ".then(function(o){"
+    "if(!o.res.ok||!o.data||!o.data.ok||!o.data.token)throw new Error('login required');"
+    "var open=function(path){try{window.top.location.href=(base||'')+path;}catch(e){window.location.href=(base||'')+path;}};"
+    "open(o.data.cmd||('/api/nas/windows-cmd?t='+encodeURIComponent(o.data.token)));"
+    "setTimeout(function(){try{var a=document.createElement('a');a.href=(base||'')+(o.data.ps1||('/api/nas/windows-ps1?t='+encodeURIComponent(o.data.token)));a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';(document.body||document.documentElement).appendChild(a);a.click();a.remove();}catch(e){}},700);"
+    "})"
+    ".catch(function(){try{alert('Log in to the portal first, then click Download again.');}catch(e){}});"
+    "}catch(e){}}"
     "function smInjectNasSettingsDownload(winEl){"
     "try{"
     "if(!smIsNasSettingsWindow(winEl))return;"
@@ -8402,10 +8457,10 @@ NAS_FILES_SNIPPET = (
     "var btn=document.createElement('button');"
     "btn.type='button';btn.id='sm-settings-nas-dl';btn.className='sm-settings-nas-btn';"
     "btn.textContent='Download Setup';"
-    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
+    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasBundle();});"
     "var hint=document.createElement('div');"
     "hint.className='sm-settings-nas-hint';"
-    "hint.textContent='Map the NAS via the portal public route (no home LAN VPN needed).';"
+    "hint.textContent='Downloads Setup .cmd + .ps1 (log in to the portal first). Run the .cmd as administrator.';"
     "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
     "body.appendChild(row);"
     "}catch(e){}}"
@@ -10885,6 +10940,14 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return session_valid(parse_session_cookie(self.headers.get("Cookie")))
 
+    def _nas_download_allowed(self, query: str) -> bool:
+        if self._is_authed():
+            return True
+        from urllib.parse import parse_qs
+
+        token = (parse_qs(query or "").get("t") or [""])[0]
+        return nas_download_token_valid(token)
+
     def _require_auth(self, *, api: bool = True) -> bool:
         if self._is_authed():
             return True
@@ -11207,8 +11270,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
-        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+        if path == "/api/nas/download-token":
             if not self._require_auth(api=True):
+                return
+            try:
+                token = issue_nas_download_token()
+                urls = build_nas_download_urls(token)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "token": token,
+                        "expires_in": int(NAS_DL_TOKEN_TTL),
+                        **urls,
+                    },
+                )
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+            query = urlparse(self.path).query
+            if not self._nas_download_allowed(query):
+                self._unauthorized(api=True)
                 return
             try:
                 from urllib.parse import quote
@@ -11229,7 +11312,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"ok": False, "error": str(exc)})
             return
         if path in ("/api/nas/windows-cmd", "/download/Setup-ServerManagerNas.cmd"):
-            if not self._require_auth(api=True):
+            query = urlparse(self.path).query
+            if not self._nas_download_allowed(query):
+                self._unauthorized(api=True)
                 return
             try:
                 from urllib.parse import quote
