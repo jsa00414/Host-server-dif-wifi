@@ -89,7 +89,7 @@ PUBLIC_IP="\${NAS_SMB_PUBLIC_IP:-\${VPS_PUBLIC_IP:-74.208.76.213}}"
 PUBLIC_PORT="\${NAS_FTP_PUBLIC_PORT:-2121}"
 PASV_START="\${NAS_FTP_PASV_START:-50100}"
 PASV_END="\${NAS_FTP_PASV_END:-50200}"
-exec "\$RCLONE" serve ftp buffalo:disk1 \\
+exec "\$RCLONE" serve ftp buffalo: \\
   --config "\$ROOT/rclone.conf" \\
   --addr "0.0.0.0:\${PUBLIC_PORT}" \\
   --user "\$NAS_PUBLIC_USER" \\
