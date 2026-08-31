@@ -298,17 +298,21 @@ function Add-NasCredential {
   }
 }
 
-function Invoke-NetUseMap {
-  param([string]$Drive, [string]$Unc, [string]$User = "", [string]$Pass = "")
-  $args = @('use', "${Drive}:", $Unc)
-  if ($User) { $args += "/user:$User" }
-  if ($Pass) { $args += $Pass }
-  $args += '/persistent:yes'
+function Invoke-TimedProcess {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList,
+    [int]$TimeoutMs = 25000
+  )
   $outFile = [System.IO.Path]::GetTempFileName()
   $errFile = [System.IO.Path]::GetTempFileName()
   try {
-    $proc = Start-Process -FilePath 'net.exe' -ArgumentList $args -Wait -PassThru -NoNewWindow `
+    $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru -NoNewWindow `
       -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    if (-not $proc.WaitForExit($TimeoutMs)) {
+      try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+      return @{ ok = $false; output = "timed out after $([int]($TimeoutMs / 1000))s" }
+    }
     $out = ((Get-Content -LiteralPath $outFile -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) -join ' '
     return @{ ok = ($proc.ExitCode -eq 0); output = $out.Trim() }
   } finally {
@@ -316,35 +320,17 @@ function Invoke-NetUseMap {
   }
 }
 
-function Invoke-WNetMap {
-  param([string]$Drive, [string]$Unc, [string]$User, [string]$Pass)
-  if (-not ("WNetAddConnection2" -as [type])) {
-    $signature = @'
-[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-public class NetResource {
-  public int Scope;
-  public int Type;
-  public int DisplayType;
-  public int Usage;
-  public string LocalName;
-  public string RemoteName;
-  public string Comment;
-  public string Provider;
+function Stop-StuckNetProcesses {
+  Get-Process -Name 'net' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
-[DllImport("Mpr.dll", CharSet=CharSet.Unicode)]
-public static extern int WNetAddConnection2(NetResource netResource, string password, string username, int flags);
-'@
-    Add-Type -Namespace ServerManagerNas -Name WNet -MemberDefinition $signature -ErrorAction Stop | Out-Null
-  }
-  $resource = New-Object ServerManagerNas.WNet+NetResource
-  $resource.Type = 1
-  $resource.LocalName = "${Drive}:"
-  $resource.RemoteName = $Unc
-  $result = [ServerManagerNas.WNet]::WNetAddConnection2($resource, $Pass, $User, 0)
-  if ($result -eq 0) {
-    return @{ ok = $true; output = "WNetAddConnection2 ok" }
-  }
-  return @{ ok = $false; output = "WNetAddConnection2 error $result" }
+
+function Invoke-NetUseMap {
+  param([string]$Drive, [string]$Unc, [string]$User = "", [string]$Pass = "", [int]$TimeoutMs = 25000)
+  $args = @('use', "${Drive}:", $Unc)
+  if ($User) { $args += "/user:$User" }
+  if ($Pass) { $args += $Pass }
+  $args += '/persistent:yes'
+  return Invoke-TimedProcess -FilePath 'net.exe' -ArgumentList $args -TimeoutMs $TimeoutMs
 }
 
 function Try-MapShare {
@@ -356,6 +342,7 @@ function Try-MapShare {
     [string]$Pass
   )
 
+  Stop-StuckNetProcesses
   try { net use "${Drive}:" /delete /y 2>$null | Out-Null } catch {}
   try { Remove-PSDrive -Name $Drive -Force -ErrorAction SilentlyContinue } catch {}
   try {
@@ -367,35 +354,27 @@ function Try-MapShare {
   Clear-StaleNasCreds -Servers $Servers -User ($Users | Select-Object -First 1)
 
   foreach ($userTry in $Users) {
-    foreach ($target in ($Servers | Where-Object { $_ } | Select-Object -Unique)) {
-      $cred = Add-NasCredential -Target $target -User $userTry -Pass $Pass
-      if (-not $cred.ok) {
-        Write-Step "  cmdkey ($target / $userTry) failed: $($cred.output)"
-      }
+    Write-Step "  Storing credentials for $userTry ..."
+    $cred = Add-NasCredential -Target $MapAlias -User $userTry -Pass $Pass
+    if (-not $cred.ok) {
+      Write-Step "  cmdkey ($MapAlias / $userTry) failed: $($cred.output)"
     }
 
-    $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc
+    Write-Step "  Trying net use as $userTry (20s timeout) ..."
+    $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -TimeoutMs 20000
     if ($net.ok) {
       return @{ ok = $true; method = "net use + cmdkey ($userTry)" }
     }
-    Write-Step "  net use + cmdkey ($userTry) failed: $($net.output)"
+    Write-Step "  net use ($userTry) failed: $($net.output)"
+    Stop-StuckNetProcesses
 
-    $wnet = Invoke-WNetMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
-    if ($wnet.ok) {
-      return @{ ok = $true; method = "WNetAddConnection2 ($userTry)" }
+    Write-Step "  Trying net use with explicit user $userTry (20s timeout) ..."
+    $netUser = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -TimeoutMs 20000
+    if ($netUser.ok) {
+      return @{ ok = $true; method = "net use /user ($userTry)" }
     }
-    Write-Step "  WNetAddConnection2 ($userTry) failed: $($wnet.output)"
-
-    $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
-    $psCred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
-    if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
-      try {
-        $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -Credential $psCred -Persistent $true -ErrorAction Stop
-        return @{ ok = $true; method = "New-SmbMapping ($userTry)" }
-      } catch {
-        Write-Step "  New-SmbMapping ($userTry) failed: $($_.Exception.Message)"
-      }
-    }
+    Write-Step "  net use /user ($userTry) failed: $($netUser.output)"
+    Stop-StuckNetProcesses
   }
 
   return @{ ok = $false; error = "all user formats failed" }
@@ -427,8 +406,7 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 
 $userCandidates = @(
   $Username,
-  "$MapAlias\$Username",
-  "WORKGROUP\$Username"
+  "$MapAlias\$Username"
 ) | Select-Object -Unique
 $mapped = $false
 $unc = ""
@@ -442,6 +420,7 @@ try {
   Enable-NasHostsAlias -Alias $MapAlias -ListenIp $LocalListenIp
   Enable-NasPortProxy -ListenIp $LocalListenIp -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Enable-SmbClientCompat
+  Write-Step "Local proxy ready on ${LocalListenIp}:${LocalSmbPort}"
 
   $tryUnc = "\\$MapAlias\$Share"
   Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
