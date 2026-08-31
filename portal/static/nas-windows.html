@@ -128,7 +128,7 @@
         <div class="creds">
           <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
           <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
-          <div><span class="k">Account</span><span id="ftpUser">JSA00212</span></div>
+          <div><span class="k">Account</span><span id="ftpUser">admin</span></div>
           <div><span class="k">Password</span><span>same as above</span></div>
           <div><span class="k">Drive</span><span>Z:</span></div>
         </div>
@@ -171,7 +171,7 @@
         $("manualPort").textContent = String(smbPort);
         $("ftpHost").textContent = d.ftp_host || host;
         $("ftpPort").textContent = String(d.ftp_port || 2121);
-        $("ftpUser").textContent = d.ftp_username || "JSA00212";
+        $("ftpUser").textContent = d.ftp_username || "admin";
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;

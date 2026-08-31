@@ -22,7 +22,7 @@ NAS_HOST="${NAS_SMB_HOST:-${FTP_HOST:-192.168.8.159}}"
 # Backend login to Buffalo FTP
 NAS_BACKEND_USER="${FTP_USER:-${BUFFALO_USER:-admin}}"
 # Public login shown in RaiDrive / Explorer
-NAS_PUBLIC_USER="${NAS_FTP_PUBLIC_USER:-JSA00212}"
+NAS_PUBLIC_USER="${NAS_FTP_PUBLIC_USER:-admin}"
 PUBLIC_IP="${NAS_SMB_PUBLIC_IP:-${VPS_PUBLIC_IP:-74.208.76.213}}"
 PUBLIC_PORT="${NAS_FTP_PUBLIC_PORT:-2121}"
 PASV_START="${NAS_FTP_PASV_START:-50100}"
@@ -80,7 +80,7 @@ set -a
 source /opt/wireguard/port-forward-ui.env
 set +a
 NAS_BACKEND_USER="\${FTP_USER:-\${BUFFALO_USER:-admin}}"
-NAS_PUBLIC_USER="\${NAS_FTP_PUBLIC_USER:-JSA00212}"
+NAS_PUBLIC_USER="\${NAS_FTP_PUBLIC_USER:-admin}"
 NAS_PASS="\${BUFFALO_PASS:-}"
 if [[ -z "\$NAS_PASS" && -n "\${BUFFALO_PASS_B64:-}" ]]; then
   NAS_PASS="\$(BUFFALO_PASS_B64="\$BUFFALO_PASS_B64" python3 -c 'import os,base64; print(base64.b64decode(os.environ["BUFFALO_PASS_B64"]).decode())')"

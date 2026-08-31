@@ -2263,7 +2263,7 @@ NAS_FTP_PUBLIC_PORT = int(os.environ.get("NAS_FTP_PUBLIC_PORT", "2121"))
 NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
 NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
 NAS_FTP_PUBLIC_USER = (
-    os.environ.get("NAS_FTP_PUBLIC_USER", "JSA00212").strip() or "JSA00212"
+    os.environ.get("NAS_FTP_PUBLIC_USER", "admin").strip() or "admin"
 )
 
 
