@@ -221,6 +221,7 @@
           <button type="button" id="ftpRenameBtn" disabled>Rename</button>
           <button type="button" id="ftpDeleteBtn" disabled>Delete</button>
           <button type="button" id="ftpRefreshBtn">Refresh</button>
+          <button type="button" id="ftpWinExplorerBtn">Windows Explorer</button>
         </div>
         <input type="file" id="ftpFileInput" multiple hidden />
       </div>
@@ -553,6 +554,9 @@
 
     function bindFtpUi() {
       document.getElementById("ftpRefreshBtn").addEventListener("click", () => ftpBrowse(ftpPath));
+      document.getElementById("ftpWinExplorerBtn")?.addEventListener("click", () => {
+        window.open("/nas-windows.html", "_blank", "noopener");
+      });
       document.getElementById("ftpMkdirBtn").addEventListener("click", () => ftpMkdir());
       document.getElementById("ftpNewBtn").addEventListener("click", () => ftpMkdir());
       document.getElementById("ftpOpenBtn").addEventListener("click", () => ftpOpenSelected());

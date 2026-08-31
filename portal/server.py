@@ -2207,6 +2207,89 @@ def _load_ftp_pass() -> str:
 
 FTP_PASS = _load_ftp_pass()
 
+NAS_SMB_HOST = os.environ.get("NAS_SMB_HOST", FTP_HOST).strip() or FTP_HOST
+NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
+NAS_SMB_PUBLIC_HOST = (
+    os.environ.get("NAS_SMB_PUBLIC_HOST", PORTAL_HOST).strip() or PORTAL_HOST
+)
+NAS_SMB_PUBLIC_PORT = int(os.environ.get("NAS_SMB_PUBLIC_PORT", "1445"))
+NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
+NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
+NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBLIC_PORT)))
+
+
+def _ps_single_quoted(value: str) -> str:
+    return "'" + (value or "").replace("'", "''") + "'"
+
+
+def build_nas_windows_status() -> dict:
+    """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
+    st = _FTP.status()
+    unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
+    return {
+        "ok": bool(st.get("ok")),
+        "host": NAS_SMB_PUBLIC_HOST,
+        "lan_host": NAS_SMB_HOST,
+        "share": NAS_SMB_SHARE,
+        "username": FTP_USER,
+        "password": FTP_PASS,
+        "drive": NAS_DRIVE_LETTER,
+        "label": NAS_DRIVE_LABEL,
+        "unc": unc,
+        "smb_port": NAS_SMB_PUBLIC_PORT,
+        "forward_pub": NAS_SMB_FORWARD_PUB,
+        "port": FTP_PORT,
+        "ps1": "/api/nas/windows-ps1",
+        "detail": st.get("error") or st.get("welcome") or "",
+    }
+
+
+def load_nas_windows_ps1() -> bytes:
+    """PowerShell helper that maps the Buffalo NAS as a persistent drive letter."""
+    candidates = [
+        Path(__file__).resolve().parent / "scripts" / "nas" / "Setup-ServerManagerNas.ps1",
+    ]
+    text = ""
+    for path in candidates:
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            break
+    if not text:
+        text = f"""# ServerManager NAS
+$NasHost = "{NAS_SMB_HOST}"
+$Share = "{NAS_SMB_SHARE}"
+$Username = "{FTP_USER}"
+$Password = {_ps_single_quoted(FTP_PASS)}
+$DriveLetter = "{NAS_DRIVE_LETTER}"
+$Label = "{NAS_DRIVE_LABEL}"
+"""
+    text = text.replace("192.168.8.159", NAS_SMB_PUBLIC_HOST)
+    text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
+    text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
+    text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
+    text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
+    text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
+    text = text.replace('DriveLetter = "Z"', f'DriveLetter = "{NAS_DRIVE_LETTER}"')
+    text = text.replace('Label = "ServerManager NAS"', f'Label = "{NAS_DRIVE_LABEL}"')
+    return b"\xef\xbb\xbf" + text.encode("utf-8")
+
+
+def load_nas_windows_cmd() -> bytes:
+    """CMD launcher for the NAS File Explorer setup script."""
+    body = """@echo off
+setlocal
+set "PS1=%~dp0Setup-ServerManagerNas.ps1"
+if not exist "%PS1%" (
+  echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
+  echo Download both files into the same folder, then run this .cmd
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%~dp0Setup-ServerManagerNas.ps1\"\"'"
+if errorlevel 1 pause
+"""
+    return body.replace("\n", "\r\n").encode("ascii", errors="replace")
+
 
 def ftp_norm_path(path: str) -> str:
     raw = (path or "/").replace("\\", "/")
@@ -2685,7 +2768,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
     reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002}
-    protected_pubs = {8080, 8443}
+    protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:
             pub = int(rule["pub"])
@@ -2711,6 +2794,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
             expected = {
                 8080: ("tcp", "192.168.8.1", 80, "flint-http"),
                 8443: ("tcp", "192.168.8.1", 443, "flint-https"),
+                NAS_SMB_FORWARD_PUB: ("tcp", NAS_SMB_HOST, 445, "nas-smb"),
             }[pub]
             proto, dest_ip, dest_port, name = expected
         key = (proto, pub)
@@ -3649,6 +3733,14 @@ def write_vps_state(rules: list[dict], comments: list[str] | None = None) -> dic
         "dest_ip": "192.168.8.1",
         "dest_port": 443,
         "name": "flint-https",
+        "external": False,
+    }
+    by_pub[NAS_SMB_FORWARD_PUB] = {
+        "pub": NAS_SMB_FORWARD_PUB,
+        "proto": "tcp",
+        "dest_ip": NAS_SMB_HOST,
+        "dest_port": 445,
+        "name": "nas-smb",
         "external": False,
     }
     managed = list(by_pub.values())
@@ -6038,6 +6130,7 @@ def build_vps_status() -> dict:
 
     services = [
         {"id": "panel", "label": "Portal panel", "ok": True, "detail": "running"},
+        {"id": "sslh", "label": "HTTPS mux", "ok": _svc_active("sslh-sm.service"), "detail": ":443 -> Caddy"},
         {"id": "caddy", "label": "Caddy", "ok": _docker_running("truemail-caddy-1"), "detail": "HTTPS proxy"},
         {"id": "wireguard", "label": "WireGuard", "ok": _docker_running("wg-easy"), "detail": "wg-easy"},
         {
@@ -7524,6 +7617,15 @@ a{color:var(--sm-accent)!important}
 .x-btn-text.icon-settings::before{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%2523e8f2ec%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
 .x-menu-item-icon.icon-settings{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%2523e8f2ec%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
 .x-btn-over .x-btn-text.icon-settings::before{background-color:transparent!important;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27%25233ddea0%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3EM12%2015a3%203%200%201%200%200-6%203%203%200%200%200%200%206zM19.4%2015a1.65%201.65%200%200%200%20.33%201.82l.06.06a2%202%200%201%201-2.83%202.83l-.06-.06a1.65%201.65%200%200%200-1.82-.33%201.65%201.65%200%200%200-1%201.51V21a2%202%200%201%201-4%200v-.09A1.65%201.65%200%200%200%209%2019.4a1.65%201.65%200%200%200-1.82.33l-.06.06a2%202%200%201%201-2.83-2.83l.06-.06A1.65%201.65%200%200%200%204.68%2015a1.65%201.65%200%200%200-1.51-1H3a2%202%200%201%201%200-4h.09A1.65%201.65%200%200%200%204.6%209a1.65%201.65%200%200%200-.33-1.82l-.06-.06a2%202%200%201%201%202.83-2.83l.06.06A1.65%201.65%200%200%200%209%204.68a1.65%201.65%200%200%200%201-1.51V3a2%202%200%201%201%204%200v.09a1.65%201.65%200%200%200%201%201.51%201.65%201.65%200%200%200%201.82-.33l.06-.06a2%202%200%201%201%202.83%202.83l-.06.06A1.65%201.65%200%200%200%2019.4%209a1.65%201.65%200%200%200%201.51%201H21a2%202%200%201%201%200%204h-.09a1.65%201.65%200%200%200-1.51%201z%3C%2Fsvg%3E")!important;background-size:contain!important;background-repeat:no-repeat!important;background-position:center!important;-webkit-mask-image:none!important;mask-image:none!important}
+#sm-settings-nas-row{margin:14px 4px 6px;padding:12px 0 4px;border-top:1px solid var(--sm-line)}
+#sm-settings-nas-row .sm-settings-nas-label{font-size:13px;font-weight:600;color:var(--sm-text);margin-bottom:8px}
+#sm-settings-nas-row .sm-settings-nas-hint{font-size:11px;color:var(--sm-muted);margin-top:8px;line-height:1.4}
+#sm-settings-nas-row .sm-settings-nas-btn,#sm-settings-nas-dl{
+  appearance:none;border:1px solid rgba(61,222,160,.35)!important;border-radius:10px!important;
+  background:var(--sm-accent-dim)!important;color:var(--sm-accent)!important;
+  font:600 13px Sora,system-ui,sans-serif!important;padding:10px 14px!important;cursor:pointer;
+  min-height:40px;width:100%;box-sizing:border-box;text-align:left}
+#sm-settings-nas-row .sm-settings-nas-btn:hover,#sm-settings-nas-dl:hover{background:rgba(61,222,160,.22)!important}
 
 """
 
@@ -8233,6 +8335,84 @@ NAS_FILES_SNIPPET = (
     "setTimeout(smHookMsgShow,1500);"
     "}catch(e){}"
     "try{window.smRestoreDialogs=smRestoreDialogs;window.smHideOrphanDialogs=smHideOrphanDialogs;window.smDisableDisplayingOverlay=smDisableDisplayingOverlay;}catch(e){}"
+    "function smIsNasSettingsWindow(winEl){"
+    "try{"
+    "if(!winEl||!winEl.classList||!winEl.classList.contains('x-window'))return false;"
+    "var cls=String(winEl.className||'');"
+    "if(cls.indexOf('x-hidden')>=0||cls.indexOf('x-item-hidden')>=0)return false;"
+    "if(winEl.id==='login-window')return false;"
+    "var header=winEl.querySelector('.x-window-header-text');"
+    "var title=String((header&&(header.textContent||header.innerText))||'').trim().toLowerCase();"
+    "if(title.indexOf('settings')<0)return false;"
+    "var body=winEl.querySelector('.x-window-body')||winEl;"
+    "var txt=String(body.textContent||'').toLowerCase();"
+    "return txt.indexOf('display language')>=0||txt.indexOf('select a display language')>=0;"
+    "}catch(e){return false;}}"
+    "function smDownloadNasPs1(){"
+    "try{"
+    "var base='';"
+    "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
+    "var url=(base||'')+'/api/nas/windows-ps1';"
+    "var save=function(blob){"
+    "var obj=URL.createObjectURL(blob);"
+    "var a=document.createElement('a');"
+    "a.href=obj;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "setTimeout(function(){try{URL.revokeObjectURL(obj);}catch(e){}},1500);};"
+    "if(window.fetch){"
+    "fetch(url,{credentials:'include'}).then(function(res){"
+    "if(!res.ok)throw new Error('download failed');"
+    "return res.blob();"
+    "}).then(save).catch(function(){"
+    "var a=document.createElement('a');"
+    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "});"
+    "return;}"
+    "var a=document.createElement('a');"
+    "a.href=url;a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "}catch(e){try{window.open('/api/nas/windows-ps1','_blank','noopener');}catch(e2){}}}"
+    "function smInjectNasSettingsDownload(winEl){"
+    "try{"
+    "if(!smIsNasSettingsWindow(winEl))return;"
+    "var body=winEl.querySelector('.x-window-body')||winEl.querySelector('.x-window-mc')||winEl;"
+    "if(!body||body.querySelector('#sm-settings-nas-row'))return;"
+    "var row=document.createElement('div');"
+    "row.id='sm-settings-nas-row';"
+    "var label=document.createElement('div');"
+    "label.className='sm-settings-nas-label';"
+    "label.textContent='Windows File Explorer:';"
+    "var btn=document.createElement('button');"
+    "btn.type='button';btn.id='sm-settings-nas-dl';btn.className='sm-settings-nas-btn';"
+    "btn.textContent='Download Setup';"
+    "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasPs1();});"
+    "var hint=document.createElement('div');"
+    "hint.className='sm-settings-nas-hint';"
+    "hint.textContent='Map the NAS via the portal public route (no home LAN VPN needed).';"
+    "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
+    "body.appendChild(row);"
+    "}catch(e){}}"
+    "function smScanNasSettingsWindows(){"
+    "try{"
+    "var wins=document.querySelectorAll('.x-window');"
+    "for(var i=0;i<wins.length;i++)smInjectNasSettingsDownload(wins[i]);"
+    "}catch(e){}}"
+    "function smWatchNasSettingsWindows(){"
+    "if(window.__smNasSettingsWatch)return;"
+    "window.__smNasSettingsWatch=true;"
+    "smScanNasSettingsWindows();"
+    "try{"
+    "var mo=new MutationObserver(function(){setTimeout(smScanNasSettingsWindows,0);});"
+    "mo.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});"
+    "}catch(e){setInterval(smScanNasSettingsWindows,1500);}"
+    "document.addEventListener('click',function(){setTimeout(smScanNasSettingsWindows,80);setTimeout(smScanNasSettingsWindows,400);},true);"
+    "}"
+    "smWatchNasSettingsWindows();"
+    "try{window.smDownloadNasPs1=smDownloadNasPs1;window.smScanNasSettingsWindows=smScanNasSettingsWindows;}catch(e){}"
     # Keep Ext.Viewport sized to the iframe — parent layout changes often skip window.resize.
     "function smNasViewSize(){"
     "var w=Math.max(document.documentElement.clientWidth||0,window.innerWidth||0);"
@@ -10779,6 +10959,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
             return self._serve_file(STATIC_DIR / "windows-vpn.html", "text/html; charset=utf-8")
+        if path in ("/nas-windows.html", "/nas-setup.html"):
+            return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
             # Always clear any stale session display path; if still authed, go home
             if self._is_authed():
@@ -11001,6 +11183,56 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(pem)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/nas/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_nas_windows_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-ps1", "/download/Setup-ServerManagerNas.ps1"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_nas_windows_ps1()
+                name = "Setup-ServerManagerNas.ps1"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in ("/api/nas/windows-cmd", "/download/Setup-ServerManagerNas.cmd"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_nas_windows_cmd()
+                name = "Setup-ServerManagerNas.cmd"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
