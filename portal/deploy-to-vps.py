@@ -47,6 +47,14 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-ftp-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-ftp-gateway.service",
     ),
+    (
+        ROOT / "scripts/nas/install-nas-webdav-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/nas-webdav-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
+    ),
 ]
 
 
@@ -120,6 +128,8 @@ def main() -> int:
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
         _run(client, f"chmod +x {gateway} && bash {gateway}")
+        dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
+        _run(client, f"chmod +x {dav} && bash {dav}")
         _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
