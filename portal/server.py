@@ -2250,6 +2250,7 @@ FTP_PASS = _load_ftp_pass()
 
 NAS_SMB_HOST = os.environ.get("NAS_SMB_HOST", FTP_HOST).strip() or FTP_HOST
 NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
+NAS_SMB_NETBIOS = os.environ.get("NAS_SMB_NETBIOS", "741HOMECLOUDNET").strip() or "741HOMECLOUDNET"
 NAS_SMB_PUBLIC_HOST = (
     os.environ.get("NAS_SMB_PUBLIC_HOST", PORTAL_HOST).strip() or PORTAL_HOST
 )
@@ -2337,6 +2338,7 @@ def build_nas_windows_status() -> dict:
         "public_ip": NAS_SMB_PUBLIC_IP,
         "lan_host": NAS_SMB_HOST,
         "share": NAS_SMB_SHARE,
+        "netbios": NAS_SMB_NETBIOS,
         "username": FTP_USER,
         "password": NAS_SMB_PASS,
         "smb_ok": smb.get("ok"),
@@ -2382,6 +2384,7 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = 445')
     text = text.replace('MapAlias = "sm-nas.vpstruelord.com"', f'MapAlias = "sm-nas.{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
+    text = text.replace('NasNetbiosName = "741HOMECLOUDNET"', f'NasNetbiosName = "{NAS_SMB_NETBIOS}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace(
         "[string]$Password = '@@NAS_PASSWORD@@'",

@@ -7,6 +7,7 @@ param(
   [int]$LocalSmbPort = 445,
   [string]$MapAlias = "sm-nas.vpstruelord.com",
   [string]$Share = "share",
+  [string]$NasNetbiosName = "741HOMECLOUDNET",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
   [string]$DriveLetter = "Z",
@@ -354,26 +355,26 @@ function Try-MapShare {
   Clear-StaleNasCreds -Servers $Servers -User ($Users | Select-Object -First 1)
 
   foreach ($userTry in $Users) {
+    Write-Step "  Trying net use as $userTry with stored password (20s timeout) ..."
+    $netDirect = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass -TimeoutMs 20000
+    if ($netDirect.ok) {
+      return @{ ok = $true; method = "net use direct ($userTry)" }
+    }
+    Write-Step "  net use direct ($userTry) failed: $($netDirect.output)"
+    Stop-StuckNetProcesses
+
     Write-Step "  Storing credentials for $userTry ..."
     $cred = Add-NasCredential -Target $MapAlias -User $userTry -Pass $Pass
     if (-not $cred.ok) {
       Write-Step "  cmdkey ($MapAlias / $userTry) failed: $($cred.output)"
     }
 
-    Write-Step "  Trying net use as $userTry (20s timeout) ..."
+    Write-Step "  Trying net use with cmdkey as $userTry (20s timeout) ..."
     $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -TimeoutMs 20000
     if ($net.ok) {
       return @{ ok = $true; method = "net use + cmdkey ($userTry)" }
     }
-    Write-Step "  net use ($userTry) failed: $($net.output)"
-    Stop-StuckNetProcesses
-
-    Write-Step "  Trying net use with explicit user $userTry (20s timeout) ..."
-    $netUser = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -TimeoutMs 20000
-    if ($netUser.ok) {
-      return @{ ok = $true; method = "net use /user ($userTry)" }
-    }
-    Write-Step "  net use /user ($userTry) failed: $($netUser.output)"
+    Write-Step "  net use + cmdkey ($userTry) failed: $($net.output)"
     Stop-StuckNetProcesses
   }
 
@@ -406,6 +407,7 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 
 $userCandidates = @(
   $Username,
+  "$NasNetbiosName\$Username",
   "$MapAlias\$Username"
 ) | Select-Object -Unique
 $mapped = $false
