@@ -269,7 +269,6 @@ function Enable-SmbClientCompat {
   if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
   foreach ($pair in @(
     @{ Name = 'AllowInsecureGuestAuth'; Value = 1 },
-    @{ Name = 'EnablePlainTextPasswd'; Value = 1 },
     @{ Name = 'EnableSecuritySignature'; Value = 0 },
     @{ Name = 'RequireSecuritySignature'; Value = 0 }
   )) {
@@ -277,11 +276,36 @@ function Enable-SmbClientCompat {
       Set-ItemProperty -Path $path -Name $pair.Name -Value $pair.Value -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
   }
+  $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation'
+  if (-not (Test-Path $policy)) { New-Item -Path $policy -Force | Out-Null }
+  Set-ItemProperty -Path $policy -Name 'AllowNTLMFallback' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
   if (Get-Command Set-SmbClientConfiguration -ErrorAction SilentlyContinue) {
     try {
-      Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force -ErrorAction SilentlyContinue | Out-Null
+      Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -EnableInsecureGuestAccess $true -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
   }
+}
+
+function Enable-NtlmForNas {
+  param([string]$Alias, [string]$ListenIp)
+  # Win11 24H2 can block SMB when Lsa\MSV1_0 is missing or incomplete (error 1937).
+  $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  Set-ItemProperty -Path $lsa -Name 'LmCompatibilityLevel' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+
+  $msv = Join-Path $lsa 'MSV1_0'
+  if (-not (Test-Path $msv)) { New-Item -Path $msv -Force | Out-Null }
+  Set-ItemProperty -Path $msv -Name 'Auth132' -Value 'IISSUBA' -Type String -Force -ErrorAction SilentlyContinue | Out-Null
+  Set-ItemProperty -Path $msv -Name 'NtlmMinClientSec' -Value 0x20000000 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+  Set-ItemProperty -Path $msv -Name 'NtlmMinServerSec' -Value 0x20000000 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+  Set-ItemProperty -Path $msv -Name 'BlockNtlmv1SSO' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+
+  $existing = @()
+  try {
+    $existing = @(Get-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -ErrorAction SilentlyContinue).BackConnectionHostNames
+  } catch {}
+  if (-not $existing) { $existing = @() }
+  $merged = @($existing + @($Alias, $ListenIp) | Where-Object { $_ } | Select-Object -Unique)
+  New-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -PropertyType MultiString -Value $merged -Force -ErrorAction SilentlyContinue | Out-Null
 }
 
 function Add-NasCredential {
@@ -422,6 +446,8 @@ try {
   Enable-NasHostsAlias -Alias $MapAlias -ListenIp $LocalListenIp
   Enable-NasPortProxy -ListenIp $LocalListenIp -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Enable-SmbClientCompat
+  Enable-NtlmForNas -Alias $MapAlias -ListenIp $LocalListenIp
+  Write-Step "Enabled NTLM compatibility for Windows 11 / SMB"
   Write-Step "Local proxy ready on ${LocalListenIp}:${LocalSmbPort}"
 
   $tryUnc = "\\$MapAlias\$Share"
