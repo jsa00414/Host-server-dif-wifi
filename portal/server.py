@@ -2315,7 +2315,6 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('NasIp = "74.208.76.213"', f'NasIp = "{NAS_SMB_PUBLIC_IP}"')
     text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
-    text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = {NAS_SMB_PUBLIC_PORT + 13005}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace(
@@ -2339,7 +2338,7 @@ setlocal
 cd /d "%~dp0"
 set "SM_NAS_PASSWORD_B64={pw_b64}"
 echo ServerManager NAS setup - preparing...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $out=Join-Path (Split-Path -Parent $self) 'Setup-ServerManagerNas.ps1'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $pass=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64)); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out -Password $pass }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out, '-Password', $pass) -Wait }} }}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $dir=Split-Path -Parent $self; $out=Join-Path $dir 'Setup-ServerManagerNas.ps1'; $pw=Join-Path $dir 'Setup-ServerManagerNas.pw'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $pass=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64)); [IO.File]::WriteAllText($pw, $pass, [Text.UTF8Encoding]::new($false)); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out) -Wait }} }}"
 if errorlevel 1 (
   echo Setup failed. See %%TEMP%%\\ServerManagerNas-setup.log
   pause
