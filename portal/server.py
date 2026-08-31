@@ -2259,6 +2259,9 @@ NAS_SMB_PUBLIC_PORT = int(os.environ.get("NAS_SMB_PUBLIC_PORT", "1445"))
 NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
 NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
 NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBLIC_PORT)))
+NAS_FTP_PUBLIC_PORT = int(os.environ.get("NAS_FTP_PUBLIC_PORT", "2121"))
+NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
+NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
 
 
 def _load_nas_smb_pass() -> str:
@@ -2348,6 +2351,10 @@ def build_nas_windows_status() -> dict:
         "unc": unc,
         "smb_port": NAS_SMB_PUBLIC_PORT,
         "forward_pub": NAS_SMB_FORWARD_PUB,
+        "ftp_host": NAS_SMB_PUBLIC_HOST,
+        "ftp_ip": NAS_SMB_PUBLIC_IP,
+        "ftp_port": NAS_FTP_PUBLIC_PORT,
+        "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -2902,7 +2909,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
         raise ValueError("vps rules must be a list")
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002}
+    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT}
     protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:

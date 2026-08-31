@@ -120,6 +120,21 @@
         <p class="hint">One installer file maps drive <strong id="driveHint">Z:</strong> via the portal public route on port <code id="manualPort">1445</code>.</p>
       </div>
     </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>RaiDrive (recommended for Windows)</h2></div>
+      <div class="panel-body">
+        <p class="hint">Map the NAS as a normal drive letter over public FTP — no VPN required. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
+        <div class="creds">
+          <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
+          <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
+          <div><span class="k">Account</span><span id="ftpUser">admin</span></div>
+          <div><span class="k">Password</span><span>same as above</span></div>
+          <div><span class="k">Drive</span><span>Z:</span></div>
+        </div>
+        <p class="hint">Use <strong>Passive (PASV)</strong> mode. Connect at sign-in if offered.</p>
+      </div>
+    </section>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -154,6 +169,9 @@
         const smbPort = d.smb_port || 1445;
         $("routeHint").textContent = `${host}:${smbPort}`;
         $("manualPort").textContent = String(smbPort);
+        $("ftpHost").textContent = d.ftp_host || host;
+        $("ftpPort").textContent = String(d.ftp_port || 2121);
+        $("ftpUser").textContent = d.username || "admin";
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;

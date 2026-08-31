@@ -39,6 +39,14 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-smb-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-smb-gateway.service",
     ),
+    (
+        ROOT / "scripts/nas/install-nas-ftp-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/nas-ftp-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-ftp-gateway.service",
+    ),
 ]
 
 
@@ -110,6 +118,8 @@ def main() -> int:
                 f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
+        gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
+        _run(client, f"chmod +x {gateway} && bash {gateway}")
         _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
