@@ -1740,7 +1740,8 @@ def build_nas_download_urls(token: str) -> dict[str, str]:
     q = f"?t={quote(token)}"
     return {
         "ps1": f"/api/nas/windows-ps1{q}",
-        "cmd": f"/api/nas/windows-cmd{q}",
+        "cmd": f"/api/nas/windows-setup{q}",
+        "setup": f"/api/nas/windows-setup{q}",
     }
 
 
@@ -2325,31 +2326,30 @@ $Label = "{NAS_DRIVE_LABEL}"
     return b"\xef\xbb\xbf" + text.encode("utf-8")
 
 
-def load_nas_windows_cmd() -> bytes:
-    """CMD launcher for the NAS File Explorer setup script."""
-    if not FTP_PASS:
-        raise RuntimeError("NAS password not configured (set BUFFALO_PASS_B64 on the VPS)")
-    pw_b64 = base64.b64encode(FTP_PASS.encode("utf-8")).decode("ascii")
+def load_nas_windows_bundle_cmd() -> bytes:
+    """Single self-extracting installer: writes PS1 next to itself, then runs elevated."""
+    ps1_bytes = load_nas_windows_ps1()
+    b64 = base64.b64encode(ps1_bytes).decode("ascii")
     body = f"""@echo off
 setlocal
 cd /d "%~dp0"
-set "PS1=%~dp0Setup-ServerManagerNas.ps1"
-if not exist "%PS1%" (
-  echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
-  echo Download both files from the portal into the same folder, then run this .cmd
+echo ServerManager NAS setup - preparing...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{ $ErrorActionPreference='Stop'; $self='%~f0'; $raw=Get-Content -LiteralPath $self -Raw; if ($raw -notmatch '(?s)BEGIN_PS1\\r?\\n([A-Za-z0-9+/=]+)\\r?\\nEND_PS1') {{ Write-Host 'Installer corrupt - download again from the portal.' -ForegroundColor Red; pause; exit 1 }}; $out=Join-Path (Split-Path -Parent $self) 'Setup-ServerManagerNas.ps1'; [IO.File]::WriteAllBytes($out, [Convert]::FromBase64String($Matches[1].Trim())); $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if ($admin) {{ & $out }} else {{ Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $out) -Wait }} }}"
+if errorlevel 1 (
+  echo Setup failed. See %%TEMP%%\\ServerManagerNas-setup.log
   pause
-  exit /b 1
 )
-set "PW_B64={pw_b64}"
-NET SESSION >nul 2>&1
-if %errorLevel%==0 (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PW_B64)); & \"\"%PS1%\"\" -Password $p"
-) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',\"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''{pw_b64}'')); & ''%PS1%'' -Password $p\") -Wait"
-)
-if errorlevel 1 pause
+exit /b 0
+BEGIN_PS1
+{b64}
+END_PS1
 """
     return body.replace("\n", "\r\n").encode("ascii", errors="replace")
+
+
+def load_nas_windows_cmd() -> bytes:
+    """Backward-compatible alias for the single-file installer."""
+    return load_nas_windows_bundle_cmd()
 
 
 def ftp_norm_path(path: str) -> str:
@@ -8409,27 +8409,20 @@ NAS_FILES_SNIPPET = (
     "var txt=String(body.textContent||'').toLowerCase();"
     "return txt.indexOf('display language')>=0||txt.indexOf('select a display language')>=0;"
     "}catch(e){return false;}}"
-    "function smDownloadNasSetup(kind){"
-    "try{"
-    "var base='';"
-    "try{base=(window.top&&window.top.location&&window.top.location.origin)||window.location.origin||'';}catch(e){base=window.location.origin||'';}"
-    "var name=(kind==='cmd')?'Setup-ServerManagerNas.cmd':'Setup-ServerManagerNas.ps1';"
-    "var fail=function(msg){try{alert(msg||'Log in to the portal first, then try Download again.');}catch(e){}};"
-    "var go=function(url){"
-    "try{window.top.location.href=url;}catch(e){try{window.location.href=url;}catch(e2){window.open(url,'_blank','noopener');}}};"
-    "if(window.fetch){"
-    "fetch((base||'')+'/api/nas/download-token',{credentials:'include'})"
-    ".then(function(res){return res.json().then(function(data){return {res:res,data:data};});})"
-    ".then(function(o){"
-    "if(!o.res.ok||!o.data||!o.data.ok||!o.data.token)throw new Error((o.data&&o.data.error)||'login required');"
-    "var path=(kind==='cmd')?(o.data.cmd||('/api/nas/windows-cmd?t='+encodeURIComponent(o.data.token))):(o.data.ps1||('/api/nas/windows-ps1?t='+encodeURIComponent(o.data.token)));"
-    "go((base||'')+path);"
+    "function smSaveDownload(url,filename,onDone){"
+    "var done=onDone||function(){};"
+    "fetch(url,{credentials:'include'})"
+    ".then(function(res){if(!res.ok)throw new Error('download failed ('+res.status+')');return res.blob();})"
+    ".then(function(blob){"
+    "var obj=URL.createObjectURL(blob);"
+    "var a=document.createElement('a');"
+    "a.href=obj;a.download=filename;a.rel='noopener';"
+    "(document.body||document.documentElement).appendChild(a);"
+    "a.click();a.remove();"
+    "setTimeout(function(){try{URL.revokeObjectURL(obj);}catch(e){}},1500);"
+    "done(null);"
     "})"
-    ".catch(function(){fail('Log in to the portal first, then click Download again.');});"
-    "return;}"
-    "fail('Your browser blocked the download. Log in to the portal and try again.');"
-    "}catch(e){fail();}}"
-    "function smDownloadNasPs1(){smDownloadNasSetup('ps1');}"
+    ".catch(function(err){done(err||new Error('download failed'));});}"
     "function smDownloadNasBundle(){"
     "try{"
     "var base='';"
@@ -8438,12 +8431,15 @@ NAS_FILES_SNIPPET = (
     ".then(function(res){return res.json().then(function(data){return {res:res,data:data};});})"
     ".then(function(o){"
     "if(!o.res.ok||!o.data||!o.data.ok||!o.data.token)throw new Error('login required');"
-    "var open=function(path){try{window.top.location.href=(base||'')+path;}catch(e){window.location.href=(base||'')+path;}};"
-    "open(o.data.cmd||('/api/nas/windows-cmd?t='+encodeURIComponent(o.data.token)));"
-    "setTimeout(function(){try{var a=document.createElement('a');a.href=(base||'')+(o.data.ps1||('/api/nas/windows-ps1?t='+encodeURIComponent(o.data.token)));a.download='Setup-ServerManagerNas.ps1';a.rel='noopener';(document.body||document.documentElement).appendChild(a);a.click();a.remove();}catch(e){}},700);"
+    "var path=o.data.setup||o.data.cmd||('/api/nas/windows-setup?t='+encodeURIComponent(o.data.token));"
+    "return smSaveDownload((base||'')+path,'Setup-ServerManagerNas.cmd',function(err){"
+    "if(err)throw err;"
+    "try{alert('Downloaded Setup-ServerManagerNas.cmd\\n\\nOpen your Downloads folder and double-click it. Click Yes on the Windows security prompt.');}catch(e){}"
+    "});"
     "})"
-    ".catch(function(){try{alert('Log in to the portal first, then click Download again.');}catch(e){}});"
-    "}catch(e){}}"
+    ".catch(function(){try{alert('Log in to the portal first, then click Download Setup again.');}catch(e){}});"
+    "}catch(e){try{alert('Download failed. Log in to the portal and try again.');}catch(e2){}}}"
+    "function smDownloadNasPs1(){smDownloadNasBundle();}"
     "function smInjectNasSettingsDownload(winEl){"
     "try{"
     "if(!smIsNasSettingsWindow(winEl))return;"
@@ -8460,7 +8456,7 @@ NAS_FILES_SNIPPET = (
     "btn.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();smDownloadNasBundle();});"
     "var hint=document.createElement('div');"
     "hint.className='sm-settings-nas-hint';"
-    "hint.textContent='Downloads Setup .cmd + .ps1 (log in to the portal first). Run the .cmd as administrator.';"
+    "hint.textContent='Downloads one Setup-ServerManagerNas.cmd file. Double-click it from Downloads (allow admin if asked).';"
     "row.appendChild(label);row.appendChild(btn);row.appendChild(hint);"
     "body.appendChild(row);"
     "}catch(e){}}"
@@ -11311,7 +11307,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
-        if path in ("/api/nas/windows-cmd", "/download/Setup-ServerManagerNas.cmd"):
+        if path in (
+            "/api/nas/windows-setup",
+            "/api/nas/windows-cmd",
+            "/download/Setup-ServerManagerNas.cmd",
+            "/download/Setup-ServerManagerNas-setup.cmd",
+        ):
             query = urlparse(self.path).query
             if not self._nas_download_allowed(query):
                 self._unauthorized(api=True)
@@ -11319,7 +11320,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from urllib.parse import quote
 
-                body = load_nas_windows_cmd()
+                body = load_nas_windows_bundle_cmd()
                 name = "Setup-ServerManagerNas.cmd"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")

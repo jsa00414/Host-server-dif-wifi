@@ -14,6 +14,22 @@ param(
 
 $ErrorActionPreference = "Continue"
 $DriveLetter = ($DriveLetter -replace '[^A-Za-z]', '').Substring(0, 1).ToUpper()
+
+function Test-IsAdmin {
+  return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdmin)) {
+  $elevateArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+  if ($Password -and $Password -ne '@@NAS_PASSWORD@@') {
+    $elevateArgs += '-Password'
+    $elevateArgs += $Password
+  }
+  Start-Process powershell.exe -Verb RunAs -ArgumentList $elevateArgs -Wait
+  exit $LASTEXITCODE
+}
+
 $LogFile = Join-Path $env:TEMP "ServerManagerNas-setup.log"
 $MapServer = "127.0.0.1"
 $script:AddedPortProxy = $false
@@ -42,11 +58,6 @@ function Test-TcpPort {
     $client.Close()
   } catch {}
   return $false
-}
-
-function Test-IsAdmin {
-  return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Ensure-IpHelperService {

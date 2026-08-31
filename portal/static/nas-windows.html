@@ -108,16 +108,16 @@
     <section class="panel">
       <div class="panel-head"><h2>Setup on Windows</h2></div>
       <div class="panel-body">
-        <p class="hint">Download both files into the same folder, then double-click the <strong>.cmd</strong> file. The script maps drive <strong id="driveHint">Z:</strong> and opens File Explorer.</p>
-        <button type="button" class="btn primary" id="dlPs1">Download Setup-ServerManagerNas.ps1</button>
-        <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerNas.cmd</button>
+        <p class="hint">Click download, then open <strong>Setup-ServerManagerNas.cmd</strong> from your Downloads folder. Click <strong>Yes</strong> on the Windows security prompt.</p>
+        <button type="button" class="btn primary" id="dlSetup">Download Setup</button>
         <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Download both files below into the same folder.</li>
-          <li>Right-click <strong>Setup-ServerManagerNas.cmd</strong> → <strong>Run as administrator</strong>.</li>
+          <li>Click <strong>Download Setup</strong> above.</li>
+          <li>Open your <strong>Downloads</strong> folder and double-click <strong>Setup-ServerManagerNas.cmd</strong>.</li>
+          <li>Click <strong>Yes</strong> when Windows asks for administrator permission.</li>
           <li>Use <strong>This PC → Z: (ServerManager NAS)</strong> in File Explorer.</li>
         </ol>
-        <p class="hint">Run <strong>Setup-ServerManagerNas.cmd</strong> as administrator. Windows must switch its SMB client to port <code id="manualPort">1445</code> for the public route.</p>
+        <p class="hint">One installer file maps drive <strong id="driveHint">Z:</strong> via the portal public route on port <code id="manualPort">1445</code>.</p>
       </div>
     </section>
   </div>
@@ -171,21 +171,10 @@
       passVisible = !passVisible;
       $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
     };
-    function download(path, name) {
+    function downloadSetup() {
       const fail = (msg) => {
         $("dlMsg").className = "msg err";
         $("dlMsg").textContent = msg || "Log in to the portal first, then try again.";
-      };
-      const go = (url) => {
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        $("dlMsg").className = "msg ok";
-        $("dlMsg").textContent = "Download started — check your Downloads folder";
       };
       fetch("/api/nas/download-token", { credentials: "same-origin" })
         .then((res) => res.json().then((data) => ({ res, data })))
@@ -193,14 +182,28 @@
           if (!res.ok || !data.ok || !data.token) {
             throw new Error(data.error || "login required");
           }
-          const key = name.endsWith(".cmd") ? "cmd" : "ps1";
-          const rel = data[key] || `${path}?t=${encodeURIComponent(data.token)}`;
-          go(rel);
+          const rel = data.setup || data.cmd || `/api/nas/windows-setup?t=${encodeURIComponent(data.token)}`;
+          return fetch(rel, { credentials: "same-origin" }).then((r) => {
+            if (!r.ok) throw new Error("download failed");
+            return r.blob();
+          });
         })
-        .catch((e) => fail(e.message || "Log in to the portal first, then try again."));
+        .then((blob) => {
+          const obj = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = obj;
+          a.download = "Setup-ServerManagerNas.cmd";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(obj), 1500);
+          $("dlMsg").className = "msg ok";
+          $("dlMsg").textContent = "Downloaded — open Setup-ServerManagerNas.cmd from Downloads and double-click it.";
+        })
+        .catch((e) => fail(e.message));
     }
-    $("dlCmd").onclick = () => download("/api/nas/windows-cmd", "Setup-ServerManagerNas.cmd");
-    $("dlPs1").onclick = () => download("/api/nas/windows-ps1", "Setup-ServerManagerNas.ps1");
+    $("dlSetup").onclick = () => downloadSetup();
     refresh();
   </script>
 </body>
