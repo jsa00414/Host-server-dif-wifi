@@ -2385,6 +2385,7 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('MapAlias = "sm-nas.vpstruelord.com"', f'MapAlias = "sm-nas.{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('NasNetbiosName = "741HOMECLOUDNET"', f'NasNetbiosName = "{NAS_SMB_NETBIOS}"')
+    text = text.replace('NasLanIp = "192.168.8.159"', f'NasLanIp = "{NAS_SMB_HOST}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace(
         "[string]$Password = '@@NAS_PASSWORD@@'",

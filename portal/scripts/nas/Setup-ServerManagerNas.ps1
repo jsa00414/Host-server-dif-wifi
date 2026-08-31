@@ -7,6 +7,7 @@ param(
   [int]$LocalSmbPort = 445,
   [string]$MapAlias = "sm-nas.vpstruelord.com",
   [string]$Share = "share",
+  [string]$NasLanIp = "192.168.8.159",
   [string]$NasNetbiosName = "741HOMECLOUDNET",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
@@ -432,6 +433,7 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 $userCandidates = @(
   $Username,
   "$NasNetbiosName\$Username",
+  "WORKGROUP\$Username",
   "$MapAlias\$Username"
 ) | Select-Object -Unique
 $mapped = $false
@@ -439,39 +441,57 @@ $unc = ""
 $method = ""
 
 try {
-  Write-Step "Removing legacy 127.0.0.1 route (if present) ..."
-  Remove-LegacyNasRoute -Alias $MapAlias
-  Write-Step "Configuring local SMB route via $MapAlias -> $LocalListenIp ..."
-  Enable-LocalListenIp -ListenIp $LocalListenIp
-  Enable-NasHostsAlias -Alias $MapAlias -ListenIp $LocalListenIp
-  Enable-NasPortProxy -ListenIp $LocalListenIp -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Enable-SmbClientCompat
   Enable-NtlmForNas -Alias $MapAlias -ListenIp $LocalListenIp
-  Write-Step "Enabled NTLM compatibility for Windows 11 / SMB"
-  Write-Step "Local proxy ready on ${LocalListenIp}:${LocalSmbPort}"
 
-  $tryUnc = "\\$MapAlias\$Share"
-  Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
-  $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $Password
-  if ($result.ok) {
-    $mapped = $true
-    $unc = $tryUnc
-    $method = $result.method
-  } elseif ($result.error) {
-    Write-Step "  $($result.error)"
+  if (Test-TcpPort -HostName $NasLanIp -Port 445) {
+    $lanUnc = "\\${NasLanIp}\${Share}"
+    Write-Step "VPN/LAN route detected - mapping $lanUnc directly (no proxy) ..."
+    $result = Try-MapShare -Drive $DriveLetter -Unc $lanUnc -Servers @($NasLanIp, $NasNetbiosName) -Users $userCandidates -Pass $Password
+    if ($result.ok) {
+      $mapped = $true
+      $unc = $lanUnc
+      $method = $result.method + " (VPN/LAN)"
+    } elseif ($result.error) {
+      Write-Step "  $($result.error)"
+    }
+  } else {
+    Write-Step "No VPN/LAN route to $NasLanIp - using portal public SMB proxy ..."
   }
 
   if (-not $mapped) {
-    $manual = Read-NasPasswordPrompt
-    if ($manual) {
-      Write-Step "Retrying with manually entered password ..."
-      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $manual
-      if ($result.ok) {
-        $mapped = $true
-        $unc = $tryUnc
-        $method = $result.method
-      } elseif ($result.error) {
-        Write-Step "  $($result.error)"
+    Write-Step "Removing legacy 127.0.0.1 route (if present) ..."
+    Remove-LegacyNasRoute -Alias $MapAlias
+    Write-Step "Configuring local SMB route via $MapAlias -> $LocalListenIp ..."
+    Enable-LocalListenIp -ListenIp $LocalListenIp
+    Enable-NasHostsAlias -Alias $MapAlias -ListenIp $LocalListenIp
+    Enable-NasPortProxy -ListenIp $LocalListenIp -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
+    Write-Step "Enabled NTLM compatibility for Windows 11 / SMB"
+    Write-Step "Local proxy ready on ${LocalListenIp}:${LocalSmbPort}"
+
+    $tryUnc = "\\$MapAlias\$Share"
+    Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
+    $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $Password
+    if ($result.ok) {
+      $mapped = $true
+      $unc = $tryUnc
+      $method = $result.method
+    } elseif ($result.error) {
+      Write-Step "  $($result.error)"
+    }
+
+    if (-not $mapped) {
+      $manual = Read-NasPasswordPrompt
+      if ($manual) {
+        Write-Step "Retrying with manually entered password ..."
+        $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $manual
+        if ($result.ok) {
+          $mapped = $true
+          $unc = $tryUnc
+          $method = $result.method
+        } elseif ($result.error) {
+          Write-Step "  $($result.error)"
+        }
       }
     }
   }
@@ -482,8 +502,8 @@ try {
 if (-not $mapped) {
   Write-Err ""
   Write-Err "ERROR: Could not map any SMB share on $NasHost"
-  Write-Err "Public route is reachable, but login or share access failed."
-  Write-Err "Download a fresh Setup-ServerManagerNas.cmd from the portal, or copy the password from NAS -> Settings."
+  Write-Err "Try connecting OpenVPN from the portal first (VPN page -> Download Setup), then run this again."
+  Write-Err "Or copy the password from NAS -> Settings and map manually: \\192.168.8.159\share"
   Write-Err "The local SMB route was left in place for manual retry in File Explorer."
   Write-Err "See log: $LogFile"
   Write-Err ""

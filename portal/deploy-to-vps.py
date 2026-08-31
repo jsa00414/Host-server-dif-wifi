@@ -20,8 +20,16 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
     (
-        ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
-        f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
+        ROOT / "scripts/nas/install-nas-smb-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-smb-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/smb-gateway.smb.conf",
+        f"{REMOTE_UI}/scripts/nas/smb-gateway.smb.conf",
+    ),
+    (
+        ROOT / "scripts/nas/nas-smb-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-smb-gateway.service",
     ),
 ]
 
