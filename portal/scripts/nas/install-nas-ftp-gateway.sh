@@ -19,7 +19,10 @@ source "$ENV_FILE"
 set +a
 
 NAS_HOST="${NAS_SMB_HOST:-${FTP_HOST:-192.168.8.159}}"
-NAS_USER="${FTP_USER:-${BUFFALO_USER:-admin}}"
+# Backend login to Buffalo FTP
+NAS_BACKEND_USER="${FTP_USER:-${BUFFALO_USER:-admin}}"
+# Public login shown in RaiDrive / Explorer
+NAS_PUBLIC_USER="${NAS_FTP_PUBLIC_USER:-JSA00212}"
 PUBLIC_IP="${NAS_SMB_PUBLIC_IP:-${VPS_PUBLIC_IP:-74.208.76.213}}"
 PUBLIC_PORT="${NAS_FTP_PUBLIC_PORT:-2121}"
 PASV_START="${NAS_FTP_PASV_START:-50100}"
@@ -61,7 +64,7 @@ cat >"$ROOT/rclone.conf" <<EOF
 [buffalo]
 type = ftp
 host = ${NAS_HOST}
-user = ${NAS_USER}
+user = ${NAS_BACKEND_USER}
 pass = ${OBSCURED}
 explicit_tls = false
 EOF
@@ -76,7 +79,8 @@ set -a
 # shellcheck disable=SC1091
 source /opt/wireguard/port-forward-ui.env
 set +a
-NAS_USER="\${FTP_USER:-\${BUFFALO_USER:-admin}}"
+NAS_BACKEND_USER="\${FTP_USER:-\${BUFFALO_USER:-admin}}"
+NAS_PUBLIC_USER="\${NAS_FTP_PUBLIC_USER:-JSA00212}"
 NAS_PASS="\${BUFFALO_PASS:-}"
 if [[ -z "\$NAS_PASS" && -n "\${BUFFALO_PASS_B64:-}" ]]; then
   NAS_PASS="\$(BUFFALO_PASS_B64="\$BUFFALO_PASS_B64" python3 -c 'import os,base64; print(base64.b64decode(os.environ["BUFFALO_PASS_B64"]).decode())')"
@@ -88,7 +92,7 @@ PASV_END="\${NAS_FTP_PASV_END:-50200}"
 exec "\$RCLONE" serve ftp buffalo:disk1 \\
   --config "\$ROOT/rclone.conf" \\
   --addr "0.0.0.0:\${PUBLIC_PORT}" \\
-  --user "\$NAS_USER" \\
+  --user "\$NAS_PUBLIC_USER" \\
   --pass "\$NAS_PASS" \\
   --passive-port "\${PASV_START}-\${PASV_END}" \\
   --public-ip "\$PUBLIC_IP" \\
@@ -114,11 +118,11 @@ if ! systemctl is-active --quiet nas-ftp-gateway.service; then
   exit 1
 fi
 
-export NAS_USER NAS_PASS PUBLIC_PORT
+export NAS_PUBLIC_USER NAS_PASS PUBLIC_PORT
 python3 - <<'PY'
 import ftplib, os
 port = int(os.environ["PUBLIC_PORT"])
-user = os.environ["NAS_USER"]
+user = os.environ["NAS_PUBLIC_USER"]
 pw = os.environ["NAS_PASS"]
 ftp = ftplib.FTP()
 ftp.connect("127.0.0.1", port, timeout=20)
@@ -129,5 +133,5 @@ names = []
 ftp.retrlines("NLST", names.append)
 print("entries", len(names), names[:8])
 ftp.quit()
-print(f"NAS FTP gateway OK on 0.0.0.0:{port}")
+print(f"NAS FTP gateway OK on 0.0.0.0:{port} user={user}")
 PY

@@ -2262,6 +2262,9 @@ NAS_SMB_FORWARD_PUB = int(os.environ.get("NAS_SMB_FORWARD_PUB", str(NAS_SMB_PUBL
 NAS_FTP_PUBLIC_PORT = int(os.environ.get("NAS_FTP_PUBLIC_PORT", "2121"))
 NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
 NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
+NAS_FTP_PUBLIC_USER = (
+    os.environ.get("NAS_FTP_PUBLIC_USER", "JSA00212").strip() or "JSA00212"
+)
 
 
 def _load_nas_smb_pass() -> str:
@@ -2343,6 +2346,7 @@ def build_nas_windows_status() -> dict:
         "share": NAS_SMB_SHARE,
         "netbios": NAS_SMB_NETBIOS,
         "username": FTP_USER,
+        "ftp_username": NAS_FTP_PUBLIC_USER,
         "password": NAS_SMB_PASS,
         "smb_ok": smb.get("ok"),
         "smb_detail": smb.get("detail") or smb.get("error") or "",
