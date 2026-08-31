@@ -187,6 +187,25 @@ function Enable-SmbClientCompat {
   }
 }
 
+function Enable-LoopbackAuth {
+  param([string]$Alias)
+  # Windows blocks SMB auth to hostnames that resolve to 127.0.0.1 (loopback check).
+  # That surfaces as "password is not correct" even when the NAS password is right.
+  $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  if (-not (Test-Path $lsa)) { New-Item -Path $lsa -Force | Out-Null }
+  Set-ItemProperty -Path $lsa -Name 'DisableLoopbackCheck' -Value 1 -Type DWord -Force
+
+  $msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+  if (-not (Test-Path $msv)) { New-Item -Path $msv -Force | Out-Null }
+  $existing = @()
+  try {
+    $existing = @(Get-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -ErrorAction SilentlyContinue).BackConnectionHostNames
+  } catch {}
+  if (-not $existing) { $existing = @() }
+  $merged = @($existing + @($Alias) | Where-Object { $_ } | Select-Object -Unique)
+  New-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -PropertyType MultiString -Value $merged -Force | Out-Null
+}
+
 function Add-NasCredential {
   param([string]$Target, [string]$User, [string]$Pass)
   cmdkey /delete:$Target 2>$null | Out-Null
@@ -344,9 +363,8 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 $userCandidates = @(
   $Username,
   "WORKGROUP\$Username",
-  ".\$Username",
   "$MapAlias\$Username",
-  "127.0.0.1\$Username"
+  ".\$Username"
 ) | Select-Object -Unique
 $mapped = $false
 $unc = ""
@@ -359,6 +377,8 @@ try {
   Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Set-SmbClientPort -Port $LocalSmbPort
   Enable-SmbClientCompat
+  Enable-LoopbackAuth -Alias $MapAlias
+  Write-Step "Enabled Windows loopback SMB auth for $MapAlias"
 
   $tryUnc = "\\$MapAlias\$Share"
   Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
