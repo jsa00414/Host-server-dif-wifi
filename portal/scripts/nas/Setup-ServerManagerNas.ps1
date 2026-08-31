@@ -1,9 +1,10 @@
 # ServerManager - Map Buffalo NAS in Windows File Explorer via portal public route
-# VPS public port forwards to NAS SMB (default portal.vpstruelord.com:1445 -> NAS:445).
+# Uses a local port proxy (127.0.0.1) -> portal public SMB port -> NAS :445.
 param(
   [string]$NasHost = "portal.vpstruelord.com",
   [string]$NasIp = "74.208.76.213",
   [int]$NasPort = 1445,
+  [int]$LocalSmbPort = 14450,
   [string]$Share = "share",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
@@ -13,15 +14,19 @@ param(
 
 $ErrorActionPreference = "Continue"
 $DriveLetter = ($DriveLetter -replace '[^A-Za-z]', '').Substring(0, 1).ToUpper()
+$LogFile = Join-Path $env:TEMP "ServerManagerNas-setup.log"
+$MapServer = "127.0.0.1"
+$script:AddedPortProxy = $false
+$script:ChangedSmbPort = $false
 
-function Write-Step($msg) { Write-Host $msg }
-function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
-function Write-Err($msg) { Write-Host $msg -ForegroundColor Red }
-
-function Get-NasUnc {
-  param([string]$Server, [string]$ShareName)
-  return "\\$Server\$ShareName"
+function Write-Log($msg) {
+  $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
+  try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch {}
 }
+
+function Write-Step($msg) { Write-Host $msg; Write-Log $msg }
+function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow; Write-Log "WARN: $msg" }
+function Write-Err($msg) { Write-Host $msg -ForegroundColor Red; Write-Log "ERROR: $msg" }
 
 function Test-TcpPort {
   param([string]$HostName, [int]$Port, [int]$TimeoutMs = 5000)
@@ -44,53 +49,68 @@ function Test-IsAdmin {
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Ensure-IpHelperService {
+  $svc = Get-Service iphlpsvc -ErrorAction SilentlyContinue
+  if (-not $svc) { return }
+  if ($svc.StartType -eq 'Disabled') {
+    Set-Service iphlpsvc -StartupType Manual
+  }
+  if ($svc.Status -ne 'Running') {
+    Start-Service iphlpsvc
+    Start-Sleep -Seconds 1
+  }
+}
+
+function Enable-NasPortProxy {
+  param([string]$ConnectHost, [int]$ConnectPort, [int]$ListenPort)
+  Ensure-IpHelperService
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
+  $output = & netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 connectport=$ConnectPort connectaddress=$ConnectHost 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "portproxy add failed: $output"
+  }
+  $script:AddedPortProxy = $true
+  if (-not (Test-TcpPort -HostName '127.0.0.1' -Port $ListenPort -TimeoutMs 8000)) {
+    throw "Local SMB proxy 127.0.0.1:$ListenPort did not open."
+  }
+}
+
+function Disable-NasPortProxy {
+  param([int]$ListenPort)
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
+  $script:AddedPortProxy = $false
+}
+
 function Set-SmbClientPort {
   param([int]$Port)
-  if ($Port -eq 445) { return $true }
   $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
   if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
   Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
-  try {
-    Restart-Service LanmanWorkstation -Force -ErrorAction Stop
-    Start-Sleep -Seconds 2
-  } catch {
-    throw "LanmanWorkstation restart failed: $($_.Exception.Message)"
-  }
+  Restart-Service LanmanWorkstation -Force -ErrorAction Stop
+  Start-Sleep -Seconds 2
   $current = (Get-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue).PortNumber
   if ([int]$current -ne [int]$Port) {
     throw "SMB client port is still $current (wanted $Port)."
   }
-  return $true
+  $script:ChangedSmbPort = $true
 }
 
 function Clear-SmbClientPort {
   $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
   Remove-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue
+  $script:ChangedSmbPort = $false
 }
 
 function Clear-StaleNasCreds {
-  param([string[]]$Servers, [string]$User)
-  foreach ($server in ($Servers | Where-Object { $_ } | Select-Object -Unique)) {
-    foreach ($target in @($server, "$server\$User", "\\$server")) {
-      cmdkey /delete:$target 2>$null | Out-Null
-    }
+  param([string]$Server, [string]$User)
+  foreach ($target in @($Server, "$Server\$User", "\\$Server")) {
+    cmdkey /delete:$target 2>$null | Out-Null
   }
 }
 
 function Invoke-NetUseMap {
-  param(
-    [string]$Drive,
-    [string]$Unc,
-    [string]$User,
-    [string]$Pass
-  )
-  $args = @(
-    'use', "${Drive}:",
-    $Unc,
-    $Pass,
-    "/user:$User",
-    '/persistent:yes'
-  )
+  param([string]$Drive, [string]$Unc, [string]$User, [string]$Pass)
+  $args = @('use', "${Drive}:", $Unc, $Pass, "/user:$User", '/persistent:yes')
   $outFile = [System.IO.Path]::GetTempFileName()
   $errFile = [System.IO.Path]::GetTempFileName()
   try {
@@ -99,7 +119,7 @@ function Invoke-NetUseMap {
     $out = ((Get-Content -LiteralPath $outFile -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) -join ' '
     return @{ ok = ($proc.ExitCode -eq 0); output = $out.Trim() }
   } finally {
-    Remove-Item -LiteralPath $outFile,$errFile -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
   }
 }
 
@@ -121,6 +141,15 @@ function Try-MapShare {
     }
   } catch {}
 
+  Clear-StaleNasCreds -Server $Server -User $User
+  $null = Start-Process -FilePath 'cmdkey.exe' -ArgumentList @("/add:$Server", "/user:$User", "/pass:$Pass") -Wait -PassThru -NoNewWindow
+
+  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $User -Pass $Pass
+  if ($net.ok) {
+    return @{ ok = $true; method = 'net use' }
+  }
+  Write-Step "  net use failed: $($net.output)"
+
   if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
     try {
       $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -UserName $User -Password $Pass -Persistent $true -ErrorAction Stop
@@ -137,17 +166,19 @@ function Try-MapShare {
     Write-Step "  New-PSDrive failed: $($_.Exception.Message)"
   }
 
-  $null = Start-Process -FilePath 'cmdkey.exe' -ArgumentList @("/add:$Server", "/user:$User", "/pass:$Pass") -Wait -PassThru -NoNewWindow
-  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $User -Pass $Pass
-  if ($net.ok) {
-    return @{ ok = $true; method = 'net use' }
-  }
   return @{ ok = $false; error = $net.output }
 }
 
+function Cleanup-Setup {
+  if ($script:ChangedSmbPort) { Clear-SmbClientPort }
+  if ($script:AddedPortProxy) { Disable-NasPortProxy -ListenPort $LocalSmbPort }
+}
+
+Write-Log "=== ServerManager NAS setup start ==="
 Write-Step "ServerManager NAS -> ${DriveLetter}: ($Label)"
-Write-Step "Public route: ${NasHost}:${NasPort} -> \\${NasHost}\${Share}"
+Write-Step "Public route: ${NasIp}:${NasPort} -> \\${MapServer}\${Share} (local proxy on ${LocalSmbPort})"
 Write-Step "User: $Username"
+Write-Step "Log file: $LogFile"
 Write-Step ""
 
 if ($Password -eq '@@NAS_PASSWORD@@' -or -not $Password) {
@@ -156,7 +187,24 @@ if ($Password -eq '@@NAS_PASSWORD@@' -or -not $Password) {
   exit 3
 }
 
-if (-not (Test-TcpPort -HostName $NasHost -Port $NasPort) -and -not (Test-TcpPort -HostName $NasIp -Port $NasPort)) {
+if (-not (Test-IsAdmin)) {
+  Write-Err ""
+  Write-Err "ERROR: Administrator rights are required."
+  Write-Err "Right-click Setup-ServerManagerNas.cmd and choose Run as administrator."
+  Write-Err ""
+  Read-Host "Press Enter to close"
+  exit 4
+}
+
+$remoteOk = $false
+foreach ($target in @($NasIp, $NasHost)) {
+  if ($target -and (Test-TcpPort -HostName $target -Port $NasPort)) {
+    $remoteOk = $true
+    if ($target -match '^\d+\.') { $NasIp = $target }
+    break
+  }
+}
+if (-not $remoteOk) {
   Write-Err ""
   Write-Err "ERROR: Cannot reach ${NasHost} or ${NasIp} on TCP port ${NasPort}."
   Write-Err "The portal public NAS route may still be starting. Wait a minute and try again."
@@ -165,70 +213,36 @@ if (-not (Test-TcpPort -HostName $NasHost -Port $NasPort) -and -not (Test-TcpPor
   exit 2
 }
 
-if ($NasPort -ne 445 -and -not (Test-IsAdmin)) {
-  Write-Err ""
-  Write-Err "ERROR: Administrator rights are required to map SMB on port $NasPort."
-  Write-Err "Right-click Setup-ServerManagerNas.cmd and choose Run as administrator."
-  Write-Err "Do not run the .ps1 directly unless you started PowerShell as admin."
-  Write-Err ""
-  Read-Host "Press Enter to close"
-  exit 4
-}
-
-$hadPort = $false
-if ($NasPort -ne 445) {
-  try {
-    Write-Step "Setting Windows SMB client port to $NasPort ..."
-    $hadPort = Set-SmbClientPort -Port $NasPort
-    Write-Step "SMB client port $NasPort is active."
-  } catch {
-    Write-Err ""
-    Write-Err "ERROR: Could not configure Windows SMB port $NasPort."
-    Write-Err $_.Exception.Message
-    Write-Err "Run Setup-ServerManagerNas.cmd as administrator and try again."
-    Write-Err ""
-    Read-Host "Press Enter to close"
-    exit 5
-  }
-}
-
-$serverCandidates = @($NasHost, $NasIp) | Where-Object { $_ } | Select-Object -Unique
-$shareCandidates = @($Share, "share") | Where-Object { $_ } | Select-Object -Unique
-$userCandidates = @($Username, ".\$Username") | Select-Object -Unique
-$secure = ConvertTo-SecureString $Password -AsPlainText -Force
 $mapped = $false
-$unc = ""
+$unc = "\\$MapServer\$Share"
 $method = ""
 
 try {
-  Clear-StaleNasCreds -Servers $serverCandidates -User $Username
-  foreach ($server in $serverCandidates) {
-    foreach ($candidate in $shareCandidates) {
-      $tryUnc = Get-NasUnc -Server $server -ShareName $candidate
-      Write-Step "Trying $tryUnc ..."
-      foreach ($userTry in $userCandidates) {
-        $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
-        $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Server $server -User $userTry -Pass $Password -Cred $cred
-        if ($result.ok) {
-          $mapped = $true
-          $unc = $tryUnc
-          $method = $result.method
-          break
-        }
-        if ($result.error) { Write-Step "  net use failed: $($result.error)" }
-      }
-      if ($mapped) { break }
-    }
-    if ($mapped) { break }
+  Write-Step "Creating local SMB proxy 127.0.0.1:${LocalSmbPort} -> ${NasIp}:${NasPort} ..."
+  Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
+  Write-Step "Setting Windows SMB client port to $LocalSmbPort ..."
+  Set-SmbClientPort -Port $LocalSmbPort
+  Write-Step "Mapping $unc ..."
+  $secure = ConvertTo-SecureString $Password -AsPlainText -Force
+  $cred = New-Object System.Management.Automation.PSCredential($Username, $secure)
+  $result = Try-MapShare -Drive $DriveLetter -Unc $unc -Server $MapServer -User $Username -Pass $Password -Cred $cred
+  if ($result.ok) {
+    $mapped = $true
+    $method = $result.method
+  } elseif ($result.error) {
+    Write-Step "  $($result.error)"
   }
+} catch {
+  Write-Err $_.Exception.Message
 } finally {
-  if ($hadPort -and -not $mapped) { Clear-SmbClientPort }
+  if (-not $mapped) { Cleanup-Setup }
 }
 
 if (-not $mapped) {
   Write-Err ""
   Write-Err "ERROR: Could not map any SMB share on $NasHost"
   Write-Err "Public route is reachable, but login or share access failed."
+  Write-Err "See log: $LogFile"
   Write-Err "Download a fresh setup script from the portal and try again."
   Write-Err ""
   Read-Host "Press Enter to close"
@@ -242,9 +256,7 @@ try {
 
 Write-Host ""
 Write-Host "Mapped ${DriveLetter}: -> $unc ($Label) via $method" -ForegroundColor Green
-if ($hadPort) {
-  Write-Warn "SMB client port $NasPort is enabled for reconnects to the portal public route."
-}
+Write-Warn "Keep this PC's local NAS proxy enabled. Re-run the setup script after reboot if Z: stops working."
 Write-Step "Open File Explorer -> This PC -> ${DriveLetter}:"
 Start-Process explorer.exe "${DriveLetter}:\"
 Read-Host "Press Enter to close"

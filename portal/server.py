@@ -2272,6 +2272,7 @@ $Label = "{NAS_DRIVE_LABEL}"
     text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
     text = text.replace('NasIp = "74.208.76.213"', f'NasIp = "{NAS_SMB_PUBLIC_IP}"')
     text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
+    text = text.replace('LocalSmbPort = 14450', f'LocalSmbPort = {NAS_SMB_PUBLIC_PORT + 13005}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
     text = text.replace("@@NAS_PASSWORD@@", FTP_PASS.replace("'", "''"))
@@ -2284,6 +2285,7 @@ def load_nas_windows_cmd() -> bytes:
     """CMD launcher for the NAS File Explorer setup script."""
     body = """@echo off
 setlocal
+cd /d "%~dp0"
 set "PS1=%~dp0Setup-ServerManagerNas.ps1"
 if not exist "%PS1%" (
   echo ERROR: Setup-ServerManagerNas.ps1 not found next to this .cmd
@@ -2291,7 +2293,12 @@ if not exist "%PS1%" (
   pause
   exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%~dp0Setup-ServerManagerNas.ps1\"\"'"
+NET SESSION >nul 2>&1
+if %errorLevel%==0 (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"\"%PS1%\"\"' -Wait"
+)
 if errorlevel 1 pause
 """
     return body.replace("\n", "\r\n").encode("ascii", errors="replace")
