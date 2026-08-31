@@ -46,6 +46,8 @@ fi
     echo "dhcp-option DNS 1.1.1.1"
     echo "dhcp-option DNS 8.8.8.8"
   fi
+  echo "route 192.168.8.0 255.255.255.0 vpn_gateway"
+  echo "route 10.8.0.0 255.255.255.0 vpn_gateway"
   echo "<ca>"
   cat "$PKI/ca.crt"
   echo "</ca>"

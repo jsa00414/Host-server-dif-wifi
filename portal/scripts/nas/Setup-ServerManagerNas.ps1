@@ -501,11 +501,23 @@ try {
 
 if (-not $mapped) {
   Write-Err ""
-  Write-Err "ERROR: Could not map any SMB share on $NasHost"
-  Write-Err "Try connecting OpenVPN from the portal first (VPN page -> Download Setup), then run this again."
-  Write-Err "Or copy the password from NAS -> Settings and map manually: \\192.168.8.159\share"
-  Write-Err "The local SMB route was left in place for manual retry in File Explorer."
-  Write-Err "See log: $LogFile"
+  Write-Err "ERROR: Could not map NAS drive Z:"
+  Write-Err ""
+  if (-not (Test-TcpPort -HostName $NasLanIp -Port 445)) {
+    Write-Err ">>> VPN is NOT connected (cannot reach $NasLanIp)."
+    Write-Err "    1. Portal -> VPN -> Download Setup -> connect OpenVPN"
+    Write-Err "    2. Run: ping $NasLanIp"
+    Write-Err "    3. Download a NEW Setup-ServerManagerNas.cmd and run again"
+  } else {
+    Write-Err ">>> VPN works but login failed."
+    Write-Err "    Paste password from portal NAS -> Settings (single quotes in PowerShell):"
+    Write-Err "    `$pw = 'your-password'"
+    Write-Err "    Start-Process net.exe -ArgumentList @('use','Z:','\\$NasLanIp\$Share',`$pw,'/user:admin','/persistent:yes') -Wait -NoNewWindow"
+  }
+  Write-Err ""
+  Write-Err "Windows 11 cannot use the public SMB proxy route reliably."
+  Write-Err "Use VPN + direct map, or use NAS Files in the portal browser."
+  Write-Err "Log: $LogFile"
   Write-Err ""
   Read-Host "Press Enter to close"
   exit 1

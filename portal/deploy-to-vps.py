@@ -20,6 +20,14 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
     (
+        ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
+        f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
+    ),
+    (
+        ROOT / "scripts/openvpn/server.conf",
+        "/opt/openvpn/server.conf",
+    ),
+    (
         ROOT / "scripts/nas/install-nas-smb-gateway.sh",
         f"{REMOTE_UI}/scripts/nas/install-nas-smb-gateway.sh",
     ),
@@ -102,6 +110,7 @@ def main() -> int:
                 f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
+        _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
 
