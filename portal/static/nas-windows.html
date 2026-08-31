@@ -113,11 +113,11 @@
         <button type="button" class="btn primary" id="dlCmd">Download Setup-ServerManagerNas.cmd</button>
         <div class="msg" id="dlMsg"></div>
         <ol class="steps">
-          <li>Download the setup script below.</li>
-          <li>Right-click <strong>Setup-ServerManagerNas.ps1</strong> → <strong>Run with PowerShell</strong> (Administrator recommended).</li>
+          <li>Download both files below into the same folder.</li>
+          <li>Right-click <strong>Setup-ServerManagerNas.cmd</strong> → <strong>Run as administrator</strong>.</li>
           <li>Use <strong>This PC → Z: (ServerManager NAS)</strong> in File Explorer.</li>
         </ol>
-        <p class="hint">Public route: <code id="manualCmd">\\portal.vpstruelord.com\share</code> on SMB port <code id="manualPort">1445</code></p>
+        <p class="hint">Run <strong>Setup-ServerManagerNas.cmd</strong> as administrator. Windows must switch its SMB client to port <code id="manualPort">1445</code> for the public route.</p>
       </div>
     </section>
   </div>
@@ -152,9 +152,6 @@
         const smbPort = d.smb_port || 1445;
         $("routeHint").textContent = `${host}:${smbPort}`;
         $("manualPort").textContent = String(smbPort);
-        $("manualCmd").textContent = smbPort === 445
-          ? `\\\\${host}\\${d.share || "share"}`
-          : `\\\\${host}@${smbPort}\\${d.share || "share"}`;
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;

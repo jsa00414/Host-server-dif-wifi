@@ -2212,6 +2212,7 @@ NAS_SMB_SHARE = os.environ.get("NAS_SMB_SHARE", "share").strip() or "share"
 NAS_SMB_PUBLIC_HOST = (
     os.environ.get("NAS_SMB_PUBLIC_HOST", PORTAL_HOST).strip() or PORTAL_HOST
 )
+NAS_SMB_PUBLIC_IP = os.environ.get("NAS_SMB_PUBLIC_IP", "74.208.76.213").strip() or "74.208.76.213"
 NAS_SMB_PUBLIC_PORT = int(os.environ.get("NAS_SMB_PUBLIC_PORT", "1445"))
 NAS_DRIVE_LETTER = (os.environ.get("NAS_DRIVE_LETTER", "Z").strip() or "Z")[:1].upper()
 NAS_DRIVE_LABEL = os.environ.get("NAS_DRIVE_LABEL", "ServerManager NAS").strip() or "ServerManager NAS"
@@ -2232,6 +2233,7 @@ def build_nas_windows_status() -> dict:
     return {
         "ok": bool(st.get("ok")),
         "host": NAS_SMB_PUBLIC_HOST,
+        "public_ip": NAS_SMB_PUBLIC_IP,
         "lan_host": NAS_SMB_HOST,
         "share": NAS_SMB_SHARE,
         "username": FTP_USER,
@@ -2268,6 +2270,7 @@ $Label = "{NAS_DRIVE_LABEL}"
 """
     text = text.replace("192.168.8.159", NAS_SMB_PUBLIC_HOST)
     text = text.replace('NasHost = "192.168.8.159"', f'NasHost = "{NAS_SMB_PUBLIC_HOST}"')
+    text = text.replace('NasIp = "74.208.76.213"', f'NasIp = "{NAS_SMB_PUBLIC_IP}"')
     text = text.replace('NasPort = 1445', f'NasPort = {NAS_SMB_PUBLIC_PORT}')
     text = text.replace('Share = "share"', f'Share = "{NAS_SMB_SHARE}"')
     text = text.replace('Username = "admin"', f'Username = "{FTP_USER}"')
