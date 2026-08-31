@@ -152,7 +152,9 @@
         const smbPort = d.smb_port || 1445;
         $("routeHint").textContent = `${host}:${smbPort}`;
         $("manualPort").textContent = String(smbPort);
-        $("manualCmd").textContent = `\\\\${host}\\${d.share || "share"}`;
+        $("manualCmd").textContent = smbPort === 445
+          ? `\\\\${host}\\${d.share || "share"}`
+          : `\\\\${host}@${smbPort}\\${d.share || "share"}`;
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;

@@ -17,6 +17,18 @@ function Write-Step($msg) { Write-Host $msg }
 function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
 function Write-Err($msg) { Write-Host $msg -ForegroundColor Red }
 
+function Get-SmbServerName {
+  param([string]$HostName, [int]$Port)
+  if ($Port -eq 445) { return $HostName }
+  return "${HostName}@${Port}"
+}
+
+function Get-NasUnc {
+  param([string]$HostName, [int]$Port, [string]$ShareName)
+  $server = Get-SmbServerName -HostName $HostName -Port $Port
+  return "\\$server\$ShareName"
+}
+
 function Test-TcpPort {
   param([string]$HostName, [int]$Port, [int]$TimeoutMs = 5000)
   try {
@@ -35,10 +47,16 @@ function Test-TcpPort {
 
 function Set-SmbClientPort {
   param([int]$Port)
-  if ($Port -eq 445) { return }
+  if ($Port -eq 445) { return $false }
   $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
   if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
   Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
+  try {
+    Restart-Service LanmanWorkstation -Force -ErrorAction Stop
+  } catch {
+    Write-Warn "SMB port set to $Port but LanmanWorkstation could not restart: $($_.Exception.Message)"
+  }
+  return $true
 }
 
 function Clear-SmbClientPort {
@@ -47,16 +65,17 @@ function Clear-SmbClientPort {
 }
 
 function Clear-StaleNasCreds {
-  param([string]$HostName, [string]$User)
-  cmdkey /delete:$HostName 2>$null | Out-Null
-  cmdkey /delete:"$HostName\$User" 2>$null | Out-Null
-  cmdkey /delete:"\\$HostName" 2>$null | Out-Null
+  param([string]$SmbServer, [string]$HostName, [string]$User)
+  foreach ($target in @($SmbServer, $HostName, "$HostName\$User", "\\$HostName", "\\$SmbServer")) {
+    cmdkey /delete:$target 2>$null | Out-Null
+  }
 }
 
 function Try-MapShare {
   param(
     [string]$Drive,
     [string]$Unc,
+    [string]$SmbServer,
     [string]$User,
     [string]$Pass,
     [System.Management.Automation.PSCredential]$Cred
@@ -69,6 +88,14 @@ function Try-MapShare {
       Remove-SmbMapping -LocalPath "${Drive}:" -Force -ErrorAction SilentlyContinue | Out-Null
     }
   } catch {}
+
+  Clear-StaleNasCreds -SmbServer $SmbServer -HostName $NasHost -User $User
+  $null = cmdkey /add:$SmbServer /user:$User /pass:$Pass
+  $out = net use "${Drive}:" $Unc $Pass /user:$User /persistent:yes 2>&1
+  if ($LASTEXITCODE -eq 0) {
+    return @{ ok = $true; method = 'net use' }
+  }
+  Write-Step "  net use failed: $out"
 
   if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
     try {
@@ -86,17 +113,12 @@ function Try-MapShare {
     Write-Step "  New-PSDrive failed: $($_.Exception.Message)"
   }
 
-  Clear-StaleNasCreds -HostName $NasHost -User $User
-  $null = cmdkey /add:$NasHost /user:$User /pass:$Pass
-  $out = net use "${Drive}:" $Unc $Pass /user:$User /persistent:yes 2>&1
-  if ($LASTEXITCODE -eq 0) {
-    return @{ ok = $true; method = 'net use' }
-  }
   return @{ ok = $false; error = "$out" }
 }
 
+$SmbServer = Get-SmbServerName -HostName $NasHost -Port $NasPort
 Write-Step "ServerManager NAS -> ${DriveLetter}: ($Label)"
-Write-Step "Public route: ${NasHost}:${NasPort} -> \\${NasHost}\${Share}"
+Write-Step "Public route: ${NasHost}:${NasPort} -> $(Get-NasUnc -HostName $NasHost -Port $NasPort -ShareName $Share)"
 Write-Step "User: $Username"
 Write-Step ""
 
@@ -104,12 +126,6 @@ if (-not $Password) {
   Write-Err "ERROR: No password in script. Download again from the portal while logged in."
   Read-Host "Press Enter to close"
   exit 3
-}
-
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-  [Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin -and $NasPort -ne 445) {
-  Write-Warn "TIP: Run as Administrator so Windows can use SMB port $NasPort."
 }
 
 if (-not (Test-TcpPort -HostName $NasHost -Port $NasPort)) {
@@ -122,16 +138,6 @@ if (-not (Test-TcpPort -HostName $NasHost -Port $NasPort)) {
 }
 
 $hadPort = $false
-if ($NasPort -ne 445) {
-  try {
-    Set-SmbClientPort -Port $NasPort
-    $hadPort = $true
-    Start-Sleep -Milliseconds 400
-  } catch {
-    Write-Warn "Could not set SMB client port $NasPort (admin required)."
-  }
-}
-
 $shareCandidates = @($Share, "share") | Where-Object { $_ } | Select-Object -Unique
 $userCandidates = @($Username, ".\$Username", "$NasHost\$Username") | Select-Object -Unique
 $secure = ConvertTo-SecureString $Password -AsPlainText -Force
@@ -141,20 +147,49 @@ $method = ""
 
 try {
   foreach ($candidate in $shareCandidates) {
-    $tryUnc = "\\$NasHost\$candidate"
+    $tryUnc = Get-NasUnc -HostName $NasHost -Port $NasPort -ShareName $candidate
     Write-Step "Trying $tryUnc ..."
     foreach ($userTry in $userCandidates) {
       $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
-      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -User $userTry -Pass $Password -Cred $cred
+      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -SmbServer $SmbServer -User $userTry -Pass $Password -Cred $cred
       if ($result.ok) {
         $mapped = $true
         $unc = $tryUnc
         $method = $result.method
         break
       }
-      if ($result.error) { Write-Step "  net use failed: $($result.error)" }
+      if ($result.error) { Write-Step "  $($result.error)" }
     }
     if ($mapped) { break }
+  }
+
+  if (-not $mapped -and $NasPort -ne 445) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+      [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+      Write-Step "Retrying with global SMB port $NasPort (admin fallback) ..."
+      try {
+        $hadPort = Set-SmbClientPort -Port $NasPort
+        Start-Sleep -Milliseconds 400
+        foreach ($candidate in $shareCandidates) {
+          $tryUnc = "\\$NasHost\$candidate"
+          Write-Step "Trying $tryUnc ..."
+          foreach ($userTry in $userCandidates) {
+            $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
+            $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -SmbServer $NasHost -User $userTry -Pass $Password -Cred $cred
+            if ($result.ok) {
+              $mapped = $true
+              $unc = $tryUnc
+              $method = "$($result.method) (registry port)"
+              break
+            }
+          }
+          if ($mapped) { break }
+        }
+      } catch {
+        Write-Warn "Registry SMB port fallback failed: $($_.Exception.Message)"
+      }
+    }
   }
 } finally {
   if ($hadPort -and -not $mapped) { Clear-SmbClientPort }

@@ -2225,7 +2225,10 @@ def _ps_single_quoted(value: str) -> str:
 def build_nas_windows_status() -> dict:
     """SMB mapping info for Windows File Explorer (credentials for authenticated portal users)."""
     st = _FTP.status()
-    unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
+    if NAS_SMB_PUBLIC_PORT != 445:
+        unc = f"\\\\{NAS_SMB_PUBLIC_HOST}@{NAS_SMB_PUBLIC_PORT}\\{NAS_SMB_SHARE}"
+    else:
+        unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
     return {
         "ok": bool(st.get("ok")),
         "host": NAS_SMB_PUBLIC_HOST,
