@@ -4,6 +4,7 @@ param(
   [string]$NasIp = "74.208.76.213",
   [int]$NasPort = 1445,
   [int]$LocalSmbPort = 14450,
+  [string]$MapAlias = "sm-nas.vpstruelord.com",
   [string]$Share = "share",
   [string]$Username = "admin",
   [string]$Password = '@@NAS_PASSWORD@@',
@@ -14,8 +15,10 @@ param(
 $ErrorActionPreference = "Continue"
 $DriveLetter = ($DriveLetter -replace '[^A-Za-z]', '').Substring(0, 1).ToUpper()
 $LogFile = Join-Path $env:TEMP "ServerManagerNas-setup.log"
+$HostsMark = "# servermanager-nas-route"
 $script:ChangedSmbPort = $false
 $script:AddedPortProxy = $false
+$script:AddedHostsEntry = $false
 
 function Write-Log($msg) {
   $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -32,8 +35,7 @@ function Test-IsAdmin {
 }
 
 function Import-NasPassword {
-  param([string]$ScriptPath, [string]$Current)
-  if ($Current -and $Current -ne '@@NAS_PASSWORD@@') { return $Current }
+  param([string]$ScriptPath)
   $dir = Split-Path -Parent $ScriptPath
   $pwFile = Join-Path $dir 'Setup-ServerManagerNas.pw'
   if (Test-Path -LiteralPath $pwFile) {
@@ -44,7 +46,8 @@ function Import-NasPassword {
       return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SM_NAS_PASSWORD_B64))
     } catch {}
   }
-  return $Current
+  if ($Password -and $Password -ne '@@NAS_PASSWORD@@') { return $Password }
+  return ""
 }
 
 if (-not (Test-IsAdmin)) {
@@ -54,7 +57,7 @@ if (-not (Test-IsAdmin)) {
   exit $LASTEXITCODE
 }
 
-$Password = Import-NasPassword -ScriptPath $PSCommandPath -Current $Password
+$Password = Import-NasPassword -ScriptPath $PSCommandPath
 
 function Test-TcpPort {
   param([string]$HostName, [int]$Port, [int]$TimeoutMs = 5000)
@@ -97,6 +100,35 @@ function Disable-NasPortProxy {
   $script:AddedPortProxy = $false
 }
 
+function Enable-NasHostsAlias {
+  param([string]$Alias)
+  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  $content = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
+  if ($content -match [regex]::Escape($Alias)) { return }
+  Add-Content -LiteralPath $hostsFile -Value "`r`n$HostsMark`r`n127.0.0.1 $Alias" -Encoding ASCII
+  $script:AddedHostsEntry = $true
+}
+
+function Disable-NasHostsAlias {
+  param([string]$Alias)
+  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  if (-not (Test-Path -LiteralPath $hostsFile)) { return }
+  $lines = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
+  $out = New-Object System.Collections.Generic.List[string]
+  $skip = $false
+  foreach ($line in $lines) {
+    if ($line -eq $HostsMark) { $skip = $true; continue }
+    if ($skip) {
+      if ($line -match [regex]::Escape($Alias)) { $skip = $false; continue }
+      $skip = $false
+    }
+    if ($line -match [regex]::Escape($Alias)) { continue }
+    $out.Add($line)
+  }
+  Set-Content -LiteralPath $hostsFile -Value $out -Encoding ASCII
+  $script:AddedHostsEntry = $false
+}
+
 function Set-SmbClientPort {
   param([int]$Port)
   if ($Port -eq 445) { return }
@@ -104,7 +136,7 @@ function Set-SmbClientPort {
   if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
   Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
   Restart-Service LanmanWorkstation -Force -ErrorAction Stop
-  Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 3
   $current = (Get-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue).PortNumber
   if ([int]$current -ne [int]$Port) {
     throw "SMB client port is still $current (wanted $Port)."
@@ -119,9 +151,11 @@ function Clear-SmbClientPort {
 }
 
 function Clear-StaleNasCreds {
-  param([string]$Server, [string]$User)
-  foreach ($target in @($Server, "$Server\$User", "\\$Server")) {
-    cmdkey /delete:$target 2>$null | Out-Null
+  param([string[]]$Servers, [string]$User)
+  foreach ($server in ($Servers | Where-Object { $_ } | Select-Object -Unique)) {
+    foreach ($target in @($server, "$server\$User", "\\$server")) {
+      cmdkey /delete:$target 2>$null | Out-Null
+    }
   }
 }
 
@@ -144,8 +178,8 @@ function Try-MapShare {
   param(
     [string]$Drive,
     [string]$Unc,
-    [string]$Server,
-    [string]$User,
+    [string[]]$Servers,
+    [string[]]$Users,
     [string]$Pass
   )
 
@@ -157,79 +191,44 @@ function Try-MapShare {
     }
   } catch {}
 
-  Clear-StaleNasCreds -Server $Server -User $User
-  $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
-  $cred = New-Object System.Management.Automation.PSCredential($User, $secure)
+  Clear-StaleNasCreds -Servers $Servers -User ($Users | Select-Object -First 1)
 
-  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $User -Pass $Pass
+  foreach ($userTry in $Users) {
+    $secure = ConvertTo-SecureString $Pass -AsPlainText -Force
+    $cred = New-Object System.Management.Automation.PSCredential($userTry, $secure)
+  $net = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
   if ($net.ok) {
-    return @{ ok = $true; method = 'net use' }
+    return @{ ok = $true; method = "net use ($userTry)" }
   }
-  Write-Step "  net use failed: $($net.output)"
+  Write-Step "  net use ($userTry) failed: $($net.output)"
 
   if (Get-Command New-SmbMapping -ErrorAction SilentlyContinue) {
     try {
       $null = New-SmbMapping -RemotePath $Unc -LocalPath "${Drive}:" -Credential $cred -Persistent $true -ErrorAction Stop
-      return @{ ok = $true; method = 'New-SmbMapping' }
+      return @{ ok = $true; method = "New-SmbMapping ($userTry)" }
     } catch {
-      Write-Step "  New-SmbMapping failed: $($_.Exception.Message)"
+      Write-Step "  New-SmbMapping ($userTry) failed: $($_.Exception.Message)"
     }
   }
+  }
 
-  return @{ ok = $false; error = $net.output }
+  return @{ ok = $false; error = "all user formats failed" }
 }
 
 function Cleanup-Setup {
   if ($script:ChangedSmbPort) { Clear-SmbClientPort }
   if ($script:AddedPortProxy) { Disable-NasPortProxy -ListenPort $LocalSmbPort }
-}
-
-function Build-MapAttempts {
-  param([string]$Ip, [string]$HostName, [int]$Port, [int]$LocalPort, [string]$ShareName)
-  $list = New-Object System.Collections.Generic.List[object]
-  foreach ($server in @($Ip, $HostName)) {
-    if (-not $server) { continue }
-    $list.Add([pscustomobject]@{
-      Name = 'alt-port UNC'
-      Unc = "\\${server}@${Port}\$ShareName"
-      Server = "${server}@${Port}"
-      Setup = { }
-    })
-  }
-  $list.Add([pscustomobject]@{
-    Name = 'local proxy'
-    Unc = "\\127.0.0.1\$ShareName"
-    Server = '127.0.0.1'
-    Setup = {
-      Write-Step "Creating local SMB proxy 127.0.0.1:${LocalSmbPort} -> ${NasIp}:${NasPort} ..."
-      Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
-      Write-Step "Setting Windows SMB client port to $LocalSmbPort ..."
-      Set-SmbClientPort -Port $LocalSmbPort
-    }
-  })
-  foreach ($server in @($Ip, $HostName)) {
-    if (-not $server) { continue }
-    $list.Add([pscustomobject]@{
-      Name = 'registry port'
-      Unc = "\\$server\$ShareName"
-      Server = $server
-      Setup = {
-        Write-Step "Setting Windows SMB client port to $NasPort ..."
-        Set-SmbClientPort -Port $NasPort
-      }
-    })
-  }
-  return $list
+  if ($script:AddedHostsEntry) { Disable-NasHostsAlias -Alias $MapAlias }
 }
 
 Write-Log "=== ServerManager NAS setup start ==="
 Write-Step "ServerManager NAS -> ${DriveLetter}: ($Label)"
-Write-Step "Public route: ${NasIp}:${NasPort} -> \\server\${Share}"
+Write-Step "Public route: ${NasIp}:${NasPort} -> \\${MapAlias}\${Share}"
 Write-Step "User: $Username"
 Write-Step "Log file: $LogFile"
 Write-Step ""
 
-if ($Password -eq '@@NAS_PASSWORD@@' -or -not $Password) {
+if (-not $Password) {
   Write-Err "ERROR: No password in script."
   Write-Err "Download a fresh Setup-ServerManagerNas.cmd from the portal while logged in."
   Read-Host "Press Enter to close"
@@ -246,29 +245,31 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
   exit 2
 }
 
+$userCandidates = @($Username, "WORKGROUP\$Username", ".\$Username") | Select-Object -Unique
 $mapped = $false
 $unc = ""
 $method = ""
-$attempts = Build-MapAttempts -Ip $NasIp -HostName $NasHost -Port $NasPort -LocalPort $LocalSmbPort -ShareName $Share
 
 try {
-  foreach ($attempt in $attempts) {
-  Cleanup-Setup
-  try {
-    & $attempt.Setup
-  } catch {
-    Write-Step "  setup failed ($($attempt.Name)): $($_.Exception.Message)"
-    continue
+  Write-Step "Configuring local SMB route via $MapAlias ..."
+  Enable-NasHostsAlias -Alias $MapAlias
+  Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
+  Set-SmbClientPort -Port $LocalSmbPort
+  if (Get-Command Set-SmbClientConfiguration -ErrorAction SilentlyContinue) {
+    try {
+      Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
   }
-  Write-Step "Trying $($attempt.Name): $($attempt.Unc) ..."
-  $result = Try-MapShare -Drive $DriveLetter -Unc $attempt.Unc -Server $attempt.Server -User $Username -Pass $Password
+
+  $tryUnc = "\\$MapAlias\$Share"
+  Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
+  $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1') -Users $userCandidates -Pass $Password
   if ($result.ok) {
     $mapped = $true
-    $unc = $attempt.Unc
-    $method = "$($result.method) ($($attempt.Name))"
-    break
-  }
-  if ($result.error) { Write-Step "  $($result.error)" }
+    $unc = $tryUnc
+    $method = $result.method
+  } elseif ($result.error) {
+    Write-Step "  $($result.error)"
   }
 } catch {
   Write-Err $_.Exception.Message
@@ -293,9 +294,7 @@ try {
 
 Write-Host ""
 Write-Host "Mapped ${DriveLetter}: -> $unc ($Label) via $method" -ForegroundColor Green
-if ($script:ChangedSmbPort -or $script:AddedPortProxy) {
-  Write-Warn "Keep this setup PC configured for the portal public NAS route."
-}
+Write-Warn "Keep this PC configured for the portal NAS route (hosts alias + local proxy)."
 Write-Step "Open File Explorer -> This PC -> ${DriveLetter}:"
 Start-Process explorer.exe "${DriveLetter}:\"
 Read-Host "Press Enter to close"
