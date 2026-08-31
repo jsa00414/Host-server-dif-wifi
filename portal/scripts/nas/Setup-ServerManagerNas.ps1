@@ -3,7 +3,8 @@ param(
   [string]$NasHost = "portal.vpstruelord.com",
   [string]$NasIp = "74.208.76.213",
   [int]$NasPort = 1445,
-  [int]$LocalSmbPort = 14450,
+  [string]$LocalListenIp = "10.255.255.1",
+  [int]$LocalSmbPort = 445,
   [string]$MapAlias = "sm-nas.vpstruelord.com",
   [string]$Share = "share",
   [string]$Username = "admin",
@@ -19,6 +20,7 @@ $HostsMark = "# servermanager-nas-route"
 $script:ChangedSmbPort = $false
 $script:AddedPortProxy = $false
 $script:AddedHostsEntry = $false
+$script:AddedListenIp = $false
 
 function Write-Log($msg) {
   $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -90,30 +92,54 @@ function Ensure-IpHelperService {
   if ($svc.Status -ne 'Running') { Start-Service iphlpsvc; Start-Sleep -Seconds 1 }
 }
 
+function Enable-LocalListenIp {
+  param([string]$ListenIp)
+  $existing = Get-NetIPAddress -IPAddress $ListenIp -ErrorAction SilentlyContinue
+  if ($existing) { return }
+  $ifAlias = 'Loopback Pseudo-Interface 1'
+  $output = & netsh interface ipv4 add address "$ifAlias" $ListenIp store=persistent 2>&1
+  if ($LASTEXITCODE -ne 0 -and "$output" -notmatch 'already exists|Object already exists') {
+    throw "Could not add local listen IP ${ListenIp}: $output"
+  }
+  $script:AddedListenIp = $true
+}
+
 function Enable-NasPortProxy {
-  param([string]$ConnectHost, [int]$ConnectPort, [int]$ListenPort)
+  param([string]$ListenIp, [string]$ConnectHost, [int]$ConnectPort, [int]$ListenPort)
   Ensure-IpHelperService
-  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
-  $output = & netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 connectport=$ConnectPort connectaddress=$ConnectHost 2>&1
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=$ListenIp | Out-Null
+  $output = & netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=$ListenIp connectport=$ConnectPort connectaddress=$ConnectHost 2>&1
   if ($LASTEXITCODE -ne 0) { throw "portproxy add failed: $output" }
   $script:AddedPortProxy = $true
-  if (-not (Test-TcpPort -HostName '127.0.0.1' -Port $ListenPort -TimeoutMs 8000)) {
-    throw "Local SMB proxy 127.0.0.1:$ListenPort did not open."
+  if (-not (Test-TcpPort -HostName $ListenIp -Port $ListenPort -TimeoutMs 8000)) {
+    throw "Local SMB proxy ${ListenIp}:$ListenPort did not open."
   }
 }
 
 function Disable-NasPortProxy {
-  param([int]$ListenPort)
-  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 | Out-Null
+  param([string]$ListenIp, [int]$ListenPort)
+  & netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=$ListenIp | Out-Null
   $script:AddedPortProxy = $false
 }
 
 function Enable-NasHostsAlias {
-  param([string]$Alias)
+  param([string]$Alias, [string]$ListenIp)
   $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
-  $content = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
-  if ($content -match [regex]::Escape($Alias)) { return }
-  Add-Content -LiteralPath $hostsFile -Value "`r`n$HostsMark`r`n127.0.0.1 $Alias" -Encoding ASCII
+  $content = @(Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue)
+  $filtered = New-Object System.Collections.Generic.List[string]
+  $skip = $false
+  foreach ($line in $content) {
+    if ($line -eq $HostsMark) { $skip = $true; continue }
+    if ($skip) {
+      if ($line -match [regex]::Escape($Alias)) { $skip = $false; continue }
+      $skip = $false
+    }
+    if ($line -match [regex]::Escape($Alias)) { continue }
+    $filtered.Add($line)
+  }
+  $filtered.Add($HostsMark)
+  $filtered.Add("$ListenIp $Alias")
+  Set-Content -LiteralPath $hostsFile -Value $filtered -Encoding ASCII
   $script:AddedHostsEntry = $true
 }
 
@@ -137,25 +163,25 @@ function Disable-NasHostsAlias {
   $script:AddedHostsEntry = $false
 }
 
-function Set-SmbClientPort {
-  param([int]$Port)
-  if ($Port -eq 445) { return }
-  $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
-  if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-  Set-ItemProperty -Path $path -Name 'PortNumber' -Value $Port -Type DWord -Force
-  Restart-Service LanmanWorkstation -Force -ErrorAction Stop
-  Start-Sleep -Seconds 3
-  $current = (Get-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue).PortNumber
-  if ([int]$current -ne [int]$Port) {
-    throw "SMB client port is still $current (wanted $Port)."
-  }
-  $script:ChangedSmbPort = $true
-}
-
 function Clear-SmbClientPort {
   $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
   Remove-ItemProperty -Path $path -Name 'PortNumber' -ErrorAction SilentlyContinue
   $script:ChangedSmbPort = $false
+}
+
+function Remove-LegacyNasRoute {
+  param([string]$Alias)
+  & netsh interface portproxy delete v4tov4 listenport=14450 listenaddress=127.0.0.1 | Out-Null
+  Clear-SmbClientPort
+  $hostsFile = Join-Path $env:Windir 'System32\drivers\etc\hosts'
+  if (-not (Test-Path -LiteralPath $hostsFile)) { return }
+  $lines = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($line in $lines) {
+    if ($line -match '127\.0\.0\.1\s+' + [regex]::Escape($Alias)) { continue }
+    $out.Add($line)
+  }
+  Set-Content -LiteralPath $hostsFile -Value $out -Encoding ASCII
 }
 
 function Clear-StaleNasCreds {
@@ -185,25 +211,6 @@ function Enable-SmbClientCompat {
       Set-SmbClientConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $false -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
   }
-}
-
-function Enable-LoopbackAuth {
-  param([string]$Alias)
-  # Windows blocks SMB auth to hostnames that resolve to 127.0.0.1 (loopback check).
-  # That surfaces as "password is not correct" even when the NAS password is right.
-  $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-  if (-not (Test-Path $lsa)) { New-Item -Path $lsa -Force | Out-Null }
-  Set-ItemProperty -Path $lsa -Name 'DisableLoopbackCheck' -Value 1 -Type DWord -Force
-
-  $msv = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
-  if (-not (Test-Path $msv)) { New-Item -Path $msv -Force | Out-Null }
-  $existing = @()
-  try {
-    $existing = @(Get-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -ErrorAction SilentlyContinue).BackConnectionHostNames
-  } catch {}
-  if (-not $existing) { $existing = @() }
-  $merged = @($existing + @($Alias) | Where-Object { $_ } | Select-Object -Unique)
-  New-ItemProperty -Path $msv -Name 'BackConnectionHostNames' -PropertyType MultiString -Value $merged -Force | Out-Null
 }
 
 function Add-NasCredential {
@@ -319,26 +326,14 @@ function Try-MapShare {
         Write-Step "  New-SmbMapping ($userTry) failed: $($_.Exception.Message)"
       }
     }
-
-    $netDirect = Invoke-NetUseMap -Drive $Drive -Unc $Unc -User $userTry -Pass $Pass
-    if ($netDirect.ok) {
-      return @{ ok = $true; method = "net use direct ($userTry)" }
-    }
-    Write-Step "  net use direct ($userTry) failed: $($netDirect.output)"
   }
 
   return @{ ok = $false; error = "all user formats failed" }
 }
 
-function Cleanup-Setup {
-  if ($script:ChangedSmbPort) { Clear-SmbClientPort }
-  if ($script:AddedPortProxy) { Disable-NasPortProxy -ListenPort $LocalSmbPort }
-  if ($script:AddedHostsEntry) { Disable-NasHostsAlias -Alias $MapAlias }
-}
-
 Write-Log "=== ServerManager NAS setup start ==="
 Write-Step "ServerManager NAS -> ${DriveLetter}: ($Label)"
-Write-Step "Public route: ${NasIp}:${NasPort} -> \\${MapAlias}\${Share}"
+Write-Step "Public route: ${NasIp}:${NasPort} -> \\${MapAlias}\${Share} via ${LocalListenIp}:${LocalSmbPort}"
 Write-Step "User: $Username"
 Write-Step "Log file: $LogFile"
 Write-Step ""
@@ -362,45 +357,38 @@ if (-not (Test-TcpPort -HostName $NasIp -Port $NasPort) -and -not (Test-TcpPort 
 
 $userCandidates = @(
   $Username,
-  "WORKGROUP\$Username",
   "$MapAlias\$Username",
-  ".\$Username"
+  "WORKGROUP\$Username"
 ) | Select-Object -Unique
 $mapped = $false
 $unc = ""
 $method = ""
-$passwordAttempts = @($Password)
 
 try {
-  Write-Step "Configuring local SMB route via $MapAlias ..."
-  Enable-NasHostsAlias -Alias $MapAlias
-  Enable-NasPortProxy -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
-  Set-SmbClientPort -Port $LocalSmbPort
+  Write-Step "Removing legacy 127.0.0.1 route (if present) ..."
+  Remove-LegacyNasRoute -Alias $MapAlias
+  Write-Step "Configuring local SMB route via $MapAlias -> $LocalListenIp ..."
+  Enable-LocalListenIp -ListenIp $LocalListenIp
+  Enable-NasHostsAlias -Alias $MapAlias -ListenIp $LocalListenIp
+  Enable-NasPortProxy -ListenIp $LocalListenIp -ConnectHost $NasIp -ConnectPort $NasPort -ListenPort $LocalSmbPort
   Enable-SmbClientCompat
-  Enable-LoopbackAuth -Alias $MapAlias
-  Write-Step "Enabled Windows loopback SMB auth for $MapAlias"
 
   $tryUnc = "\\$MapAlias\$Share"
   Write-Step "Mapping $tryUnc (proxy ${NasIp}:${NasPort}) ..."
-  foreach ($passTry in $passwordAttempts) {
-    if (-not $passTry) { continue }
-    $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1', $NasIp) -Users $userCandidates -Pass $passTry
-    if ($result.ok) {
-      $mapped = $true
-      $unc = $tryUnc
-      $method = $result.method
-      break
-    }
-    if ($result.error) {
-      Write-Step "  $($result.error)"
-    }
+  $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $Password
+  if ($result.ok) {
+    $mapped = $true
+    $unc = $tryUnc
+    $method = $result.method
+  } elseif ($result.error) {
+    Write-Step "  $($result.error)"
   }
 
   if (-not $mapped) {
     $manual = Read-NasPasswordPrompt
     if ($manual) {
       Write-Step "Retrying with manually entered password ..."
-      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, '127.0.0.1', $NasIp) -Users $userCandidates -Pass $manual
+      $result = Try-MapShare -Drive $DriveLetter -Unc $tryUnc -Servers @($MapAlias, $LocalListenIp) -Users $userCandidates -Pass $manual
       if ($result.ok) {
         $mapped = $true
         $unc = $tryUnc
