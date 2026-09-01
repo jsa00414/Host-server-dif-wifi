@@ -9,6 +9,7 @@ import http.client
 import io
 import mimetypes
 import base64
+import crypt
 import hashlib
 import hmac
 import json
@@ -1754,7 +1755,10 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
         pass
 
 
-ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.8.1")
+ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
+# LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
+ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
+ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4025,6 +4029,98 @@ def parse_caddy_existing_sites(caddy_text: str) -> list[dict]:
     return sites
 
 
+def _router_hookup_targets() -> list[str]:
+    """Flint admin reachable via OpenVPN, LAN, or WireGuard tunnel IP."""
+    hosts: list[str] = []
+    for h in (OVPN_FLINT_VPN_IP, ROUTER_HOST, "10.8.0.3"):
+        h = str(h or "").strip()
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
+def _normalize_hookup_rule(rule: dict) -> dict:
+    """Apply opinionated defaults for known hookup domains."""
+    out = dict(rule)
+    domain = str(out.get("domain") or "").strip().lower()
+    if domain == "router.vpstruelord.com":
+        out["target_host"] = ROUTER_ADMIN_HOST
+        out["target_port"] = int(out.get("target_port") or 80)
+        out["target_hosts"] = [ROUTER_ADMIN_HOST]
+    return out
+
+
+def _hookup_proxy_upstream(rule: dict) -> str:
+    port = int(rule["target_port"])
+    raw_hosts = rule.get("target_hosts")
+    hosts: list[str] = []
+    if isinstance(raw_hosts, list):
+        for item in raw_hosts:
+            host = str(item or "").strip()
+            if host and host not in hosts:
+                hosts.append(host)
+    if not hosts:
+        host = str(rule.get("target_host") or "").strip()
+        if host:
+            hosts.append(host)
+    return " ".join(f"{host}:{port}" for host in hosts)
+
+
+def _router_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects."""
+    host = ROUTER_ADMIN_HOST
+    port = int(rule.get("target_port") or 80)
+    public = ROUTER_PUBLIC_HOST
+    lines = [
+        f"{public} {{",
+        f"\treverse_proxy {host}:{port} {{",
+        f"\t\theader_up Host {host}",
+        "\t\theader_up X-Forwarded-Host {host}",
+        "\t\theader_up X-Forwarded-Proto https",
+        f"\t\theader_down Location http://{host} https://{public}",
+        f"\t\theader_down Location http://{host}/ https://{public}/",
+        "\t\theader_down -X-Frame-Options",
+        "\t\theader_down -Content-Security-Policy",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
+def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
+    upstream = _hookup_proxy_upstream(rule)
+    multi = len(upstream.split()) > 1
+    lines = [f"{indent}reverse_proxy {upstream} {{"]
+    if multi:
+        lines.extend(
+            [
+                f"{indent}\ttransport http {{",
+                f"{indent}\t\tdial_timeout 4s",
+                f"{indent}\t}}",
+                f"{indent}\tlb_try_duration 8s",
+                f"{indent}\tlb_try_interval 1s",
+            ]
+        )
+    lines.extend(
+        [
+            f"{indent}\theader_up Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto {{scheme}}",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    return lines
+
+
 def default_hookups() -> list[dict]:
     return []
 
@@ -4043,6 +4139,21 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
             name = str(rule.get("name", f"hook{i+1}")).strip() or f"hook{i+1}"
             external = bool(rule.get("external", False))
             vpn_only = _as_bool(rule.get("vpn_only", False))
+            target_hosts_raw = rule.get("target_hosts")
+            target_hosts: list[str] = []
+            if isinstance(target_hosts_raw, list):
+                for item in target_hosts_raw:
+                    host = str(item or "").strip()
+                    if not host:
+                        continue
+                    if (
+                        not IP_RE.match(host)
+                        and not DOMAIN_RE.match(host)
+                        and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$", host)
+                    ):
+                        raise ValueError(f"Hookup {i + 1}: invalid target_hosts entry")
+                    if host not in target_hosts:
+                        target_hosts.append(host)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Hookup {i + 1}: missing/invalid fields") from exc
         if not DOMAIN_RE.match(domain):
@@ -4061,17 +4172,18 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
         seen.add(domain)
         if external and not allow_external:
             continue
-        cleaned.append(
-            {
-                "enabled": enabled,
-                "domain": domain,
-                "target_host": target_host,
-                "target_port": target_port,
-                "name": name,
-                "external": external,
-                "vpn_only": vpn_only,
-            }
-        )
+        entry = {
+            "enabled": enabled,
+            "domain": domain,
+            "target_host": target_host,
+            "target_port": target_port,
+            "name": name,
+            "external": external,
+            "vpn_only": vpn_only,
+        }
+        if target_hosts:
+            entry["target_hosts"] = target_hosts
+        cleaned.append(_normalize_hookup_rule(entry))
     return cleaned
 
 
@@ -4097,6 +4209,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         lines.append("# (no managed domain hookups enabled)")
     for r in active:
         domain = r["domain"]
+        if domain == ROUTER_PUBLIC_HOST.lower():
+            lines.extend(_router_hookup_site_lines(r))
+            continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
         # there so Caddy never buffers an entire movie to compress it.
@@ -4144,26 +4259,14 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
                 lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
                 lines.append("\thandle @vpn_clients {")
-                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-                lines.append("\t\t\theader_up Host {host}")
-                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
-                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-                lines.append("\t\t\theader_down -X-Frame-Options")
-                lines.append("\t\t\theader_down -Content-Security-Policy")
-                lines.append("\t\t}")
+                lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
                 lines.append("\thandle {")
                 lines.append('\t\trespond "Forbidden" 403')
                 lines.append("\t}")
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
-                lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-                lines.append("\t\theader_up Host {host}")
-                lines.append("\t\theader_up X-Forwarded-Host {host}")
-                lines.append("\t\theader_up X-Forwarded-Proto {scheme}")
-                lines.append("\t\theader_down -X-Frame-Options")
-                lines.append("\t\theader_down -Content-Security-Policy")
-                lines.append("\t}")
+                lines.extend(_hookup_reverse_proxy_lines(r, indent="\t"))
         lines.extend(
             [
                 "\theader {",
@@ -5754,11 +5857,7 @@ def buffalo_sso_login(*, scope: str = "all") -> dict:
         if need_files and not webaxs:
             jobs["files"] = pool.submit(_buffalo_files_login)
         for key, fut in jobs.items():
-            try:
-                result = fut.result()
-            except Exception:
-                pool.shutdown(wait=False, cancel_futures=True)
-                raise
+            result = fut.result()
             if key == "admin":
                 admin_sid = str(result)
                 with _buffalo_sso_cache_lock:
@@ -5816,6 +5915,127 @@ def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
         out.extend(_webaxs_clear_cookie_headers())
         out.append(_webaxs_cookie_header(sess))
     return out
+
+
+_router_sso_cache = {"sid": "", "ts": 0.0}
+_router_sso_cache_lock = threading.Lock()
+ROUTER_SSO_CACHE_TTL = int(os.environ.get("ROUTER_SSO_CACHE_TTL", "1800"))
+
+
+def _router_rpc(method: str, params: dict) -> dict:
+    """Call GL.iNet /rpc on the Flint LAN IP (Host must be the router itself)."""
+    url = f"http://{ROUTER_ADMIN_HOST}/rpc"
+    body = {
+        "jsonrpc": "2.0",
+        "id": int(time.time() * 1000),
+        "method": method,
+        "params": params,
+    }
+    req = Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Host": ROUTER_ADMIN_HOST},
+        method="POST",
+    )
+    with urlopen(req, timeout=20) as resp:
+        text = resp.read().decode("utf-8", errors="replace")
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        raise RuntimeError(f"Router RPC invalid JSON: {text[:200]}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"Router RPC unexpected body: {text[:200]}")
+    return parsed
+
+
+def _router_login_hash(username: str, password: str, alg: int, salt: str, nonce: str) -> str:
+    """GL.iNet SDK 4.x: unix crypt(password, salt) then md5(user:cipher:nonce)."""
+    alg = int(alg)
+    if alg == 1:
+        cipher = crypt.crypt(password, f"$1${salt}$")
+    elif alg == 5:
+        cipher = crypt.crypt(password, f"$5$rounds=5000${salt}$")
+    elif alg == 6:
+        cipher = crypt.crypt(password, f"$6$rounds=5000${salt}$")
+    else:
+        raise RuntimeError(f"Unsupported router login alg: {alg}")
+    if not cipher:
+        raise RuntimeError("Router login hash generation failed (crypt unavailable)")
+    return hashlib.md5(f"{username}:{cipher}:{nonce}".encode()).hexdigest()
+
+
+def router_sso_login() -> dict:
+    """Log into GL.iNet admin and return a session for router.vpstruelord.com."""
+    if not ROUTER_PASS:
+        raise RuntimeError("ROUTER_PASS / ROUTER_PASS_B64 not configured")
+
+    try:
+        ensure_ovpn_home_lan_routes()
+    except Exception:
+        pass
+
+    now = time.time()
+    with _router_sso_cache_lock:
+        sid = str(_router_sso_cache.get("sid") or "").strip()
+        if sid and (now - float(_router_sso_cache.get("ts") or 0)) < ROUTER_SSO_CACHE_TTL:
+            return {
+                "ok": True,
+                "user": "root",
+                "url": f"https://{ROUTER_PUBLIC_HOST}/",
+                "sid": sid,
+            }
+
+    ch = _router_rpc("challenge", {"username": "root"})
+    if ch.get("error"):
+        raise RuntimeError(f"Router challenge failed: {ch.get('error')}")
+    result = ch.get("result") or {}
+    nonce = str(result.get("nonce") or "").strip()
+    salt = str(result.get("salt") or "").strip()
+    alg = result.get("alg", 5)
+    if not nonce:
+        raise RuntimeError(f"Router challenge failed: {ch}")
+
+    digest = _router_login_hash("root", ROUTER_PASS, alg, salt, nonce)
+    login = _router_rpc(
+        "login",
+        {"username": "root", "hash": digest, "alg": alg, "salt": salt},
+    )
+    if login.get("error"):
+        err = login.get("error") or {}
+        msg = str(err.get("message") or err)
+        if "over limit" in msg.lower():
+            raise RuntimeError(
+                "Router login is temporarily locked after too many attempts. "
+                "Wait a few minutes or log in from home Wi‑Fi at http://192.168.8.1"
+            )
+        raise RuntimeError(f"Router login failed: {err}")
+    sid = str((login.get("result") or {}).get("sid") or "").strip()
+    if not sid:
+        raise RuntimeError("Router login failed: no session id")
+
+    with _router_sso_cache_lock:
+        _router_sso_cache["sid"] = sid
+        _router_sso_cache["ts"] = now
+
+    return {
+        "ok": True,
+        "user": "root",
+        "url": f"https://{ROUTER_PUBLIC_HOST}/",
+        "sid": sid,
+    }
+
+
+def _router_sso_cookie_headers(data: dict) -> list[str]:
+    sid = str(data.get("sid") or "").strip()
+    if not sid:
+        return []
+    domain = ""
+    if ROUTER_PUBLIC_HOST.count(".") >= 2:
+        domain = "." + ".".join(ROUTER_PUBLIC_HOST.split(".")[-2:])
+    domain_attr = f"; Domain={domain}" if domain else ""
+    return [
+        f"Admin-Token={sid}; Path=/{domain_attr}; SameSite=Lax; Secure; HttpOnly",
+    ]
 
 
 def wg_easy_sso_login() -> dict:
@@ -6053,7 +6273,7 @@ def build_portal_settings() -> dict:
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
-        {"id": "router", "label": "Flint router", "url": "https://router.vpstruelord.com/"},
+        {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/", "sso": True},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
         {"id": "tailscale", "label": "Tailscale admin", "url": "https://login.tailscale.com/admin/machines"},
@@ -6073,6 +6293,8 @@ def build_portal_settings() -> dict:
         "uptime_sec": uptime_sec,
         "buffalo_user": BUFFALO_SSO_USER,
         "buffalo_sso_configured": bool(BUFFALO_SSO_PASS),
+        "router_user": "root",
+        "router_sso_configured": bool(ROUTER_PASS),
         "wg_easy_user": WG_EASY_SSO_USER,
         "wg_easy_sso_configured": bool(WG_EASY_SSO_PASS),
         "wg_ui_prefix": WG_UI_PREFIX,
@@ -11628,6 +11850,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/router-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = router_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"https://{ROUTER_PUBLIC_HOST}/",
+                }
+                self._json(200, safe, extra_cookies=_router_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/wireguard-sso":
             if not self._require_auth(api=True):
                 return
@@ -11950,6 +12186,7 @@ def main() -> None:
     # School OpenVPN: prefer tun0 for home LAN + allow Flint OVPN→LAN (Buffalo).
     try:
         if _ovpn_flint_connected():
+            ensure_ovpn_home_lan_routes()
             threading.Thread(
                 target=lambda: ensure_flint_ovpn_lan_access(force=True),
                 name="flint-ovpn-lan",

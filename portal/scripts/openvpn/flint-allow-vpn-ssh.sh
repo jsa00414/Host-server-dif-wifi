@@ -18,13 +18,19 @@ if uci -q get dropbear.@dropbear[0] >/dev/null 2>&1; then
   /etc/init.d/dropbear reload 2>/dev/null || /etc/init.d/dropbear restart || true
 fi
 
-# --- INPUT: SSH from tunnel ---
+# --- INPUT: SSH + web admin from tunnel ---
 iptables -C INPUT -i tun+ -p tcp --dport 22 -j ACCEPT 2>/dev/null \
   || iptables -I INPUT -i tun+ -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
 iptables -C INPUT -i ovpnclient+ -p tcp --dport 22 -j ACCEPT 2>/dev/null \
   || iptables -I INPUT -i ovpnclient+ -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
 iptables -C INPUT -s 10.9.0.0/24 -p tcp --dport 22 -j ACCEPT 2>/dev/null \
   || iptables -I INPUT -s 10.9.0.0/24 -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
+iptables -C INPUT -i tun+ -p tcp --dport 80 -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT -i tun+ -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+iptables -C INPUT -i ovpnclient+ -p tcp --dport 80 -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT -i ovpnclient+ -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+iptables -C INPUT -s 10.9.0.0/24 -p tcp --dport 80 -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT -s 10.9.0.0/24 -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
 
 # --- FORWARD: VPS (OVPN) ↔ home LAN (Buffalo / NAS) ---
 # Prefer fw3 custom chain so we run before zone reject.
@@ -74,6 +80,9 @@ if [ -e "$USER_FW" ] || touch "$USER_FW" 2>/dev/null; then
 iptables -C INPUT -i tun+ -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I INPUT -i tun+ -p tcp --dport 22 -j ACCEPT
 iptables -C INPUT -i ovpnclient+ -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I INPUT -i ovpnclient+ -p tcp --dport 22 -j ACCEPT
 iptables -C INPUT -s 10.9.0.0/24 -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I INPUT -s 10.9.0.0/24 -p tcp --dport 22 -j ACCEPT
+iptables -C INPUT -i tun+ -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -i tun+ -p tcp --dport 80 -j ACCEPT
+iptables -C INPUT -i ovpnclient+ -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -i ovpnclient+ -p tcp --dport 80 -j ACCEPT
+iptables -C INPUT -s 10.9.0.0/24 -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -s 10.9.0.0/24 -p tcp --dport 80 -j ACCEPT
 iptables -C forwarding_rule -s 10.9.0.0/24 -d 192.168.8.0/24 -j ACCEPT 2>/dev/null || iptables -I forwarding_rule 1 -s 10.9.0.0/24 -d 192.168.8.0/24 -j ACCEPT
 iptables -C forwarding_rule -s 192.168.8.0/24 -d 10.9.0.0/24 -j ACCEPT 2>/dev/null || iptables -I forwarding_rule 1 -s 192.168.8.0/24 -d 10.9.0.0/24 -j ACCEPT
 iptables -C forwarding_rule -i ovpnclient+ -o br-lan -j ACCEPT 2>/dev/null || iptables -I forwarding_rule 1 -i ovpnclient+ -o br-lan -j ACCEPT
@@ -83,5 +92,5 @@ EOF
   fi
 fi
 
-echo "Done. VPS can SSH to 10.9.0.2 and reach Buffalo at 192.168.8.159 over OpenVPN."
+echo "Done. VPS can SSH to 10.9.0.2 and open https://router.vpstruelord.com over OpenVPN."
 echo "Keep OpenVPN connected at school; WireGuard can stay disabled."

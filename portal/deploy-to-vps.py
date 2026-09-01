@@ -28,6 +28,18 @@ UPLOADS: list[tuple[Path, str]] = [
         "/opt/openvpn/server.conf",
     ),
     (
+        ROOT / "scripts/openvpn/client-connect.sh",
+        "/opt/openvpn/scripts/client-connect.sh",
+    ),
+    (
+        ROOT / "scripts/openvpn/client-disconnect.sh",
+        "/opt/openvpn/scripts/client-disconnect.sh",
+    ),
+    (
+        ROOT / "scripts/openvpn/flint-allow-vpn-ssh.sh",
+        "/opt/openvpn/scripts/flint-allow-vpn-ssh.sh",
+    ),
+    (
         ROOT / "scripts/nas/install-nas-smb-gateway.sh",
         f"{REMOTE_UI}/scripts/nas/install-nas-smb-gateway.sh",
     ),
@@ -126,6 +138,14 @@ def main() -> int:
                 f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
+        _run(
+            client,
+            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh",
+        )
+        _run(
+            client,
+            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \"import server; s=server.read_hookups_state(); print(server.write_hookups_state([r for r in s.get('rules', []) if not r.get('external')]))\"",
+        )
         gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
         _run(client, f"chmod +x {gateway} && bash {gateway}")
         dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
