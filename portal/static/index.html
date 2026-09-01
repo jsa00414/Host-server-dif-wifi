@@ -183,7 +183,6 @@
     #view-adguard.active,
     #view-files.active,
     #view-buffalo.active,
-    #view-router.active.router-admin-mode,
     #view-pihole.active,
     #view-wireguard.active,
     #view-openvpn.active {
@@ -196,7 +195,6 @@
     }
     #frameBuffalo,
     #frameFiles,
-    #frameRouter,
     #frameAdguard,
     #framePihole,
     #frameWireguard,
@@ -278,56 +276,6 @@
       margin-bottom: 14px;
     }
     .toolbar .spacer { flex: 1; }
-
-    .router-panels { display: flex; flex-direction: column; gap: 0; min-height: 0; }
-    .router-panel { display: none; }
-    .router-panel.active { display: block; }
-    #routerPanelAdmin.active {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: calc(100dvh - var(--top-h) - 96px);
-    }
-    #view-router.router-admin-mode {
-      display: flex;
-      flex-direction: column;
-      min-height: calc(100dvh - var(--top-h) - 48px);
-    }
-    #view-router.router-admin-mode #routerPanelAdmin.active {
-      min-height: 0;
-      flex: 1;
-    }
-    #frameRouter {
-      flex: 1;
-      width: 100%;
-      min-height: calc(100dvh - var(--top-h) - 120px);
-      height: calc(100dvh - var(--top-h) - 120px);
-      border: 0;
-      border-radius: 12px;
-      background: var(--bg1);
-    }
-    body.embed-mode #view-router.router-admin-mode #routerPanelAdmin.active {
-      min-height: 0;
-      height: 100%;
-    }
-    body.embed-mode #view-router.router-admin-mode #frameRouter {
-      min-height: 0 !important;
-      height: 100% !important;
-      border-radius: 0 !important;
-    }
-    .router-seg {
-      display: inline-flex;
-      gap: 4px;
-      padding: 4px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: rgba(255,255,255,.02);
-    }
-    .router-seg button.active {
-      background: rgba(61,222,160,.14);
-      border-color: rgba(61,222,160,.35);
-      color: var(--text);
-    }
 
     .callout {
       display: flex; gap: 12px; align-items: flex-start;
@@ -864,7 +812,6 @@
       body.embed-mode .embed-view.active,
       body.embed-mode #view-buffalo.active,
       body.embed-mode #view-files.active,
-      body.embed-mode #view-router.active.router-admin-mode,
       body.embed-mode #view-adguard.active,
       body.embed-mode #view-pihole.active,
       body.embed-mode #view-wireguard.active,
@@ -880,7 +827,6 @@
       body.embed-mode .embed-frame,
       body.embed-mode #frameBuffalo,
       body.embed-mode #frameFiles,
-      body.embed-mode #frameRouter,
       body.embed-mode #frameAdguard,
       body.embed-mode #framePihole,
       body.embed-mode #frameWireguard,
@@ -1146,46 +1092,30 @@
       </section>
 
       <section class="view" id="view-router">
+        <div class="page-head">
+          <h2>GL.iNet router</h2>
+          <p id="routerHint" hidden></p>
+        </div>
+        <div class="meta-grid">
+          <div class="meta-box">
+            <label for="dmzIp">DMZ host</label>
+            <div class="ip-pick">
+              <select class="ip-menu" id="dmzMenu" aria-label="DMZ device"></select>
+              <input id="dmzIp" placeholder="192.168.8.x" />
+            </div>
+            <div class="hint" style="margin-top:6px">Pick a computer by name, or type an IP</div>
+          </div>
+          <div class="meta-box">
+            <label>LAN directory</label>
+            <div class="hint" id="lanHint">LAN devices: —</div>
+            <button type="button" class="ghost" id="refreshLanBtn" style="margin-top:8px">Refresh LAN</button>
+          </div>
+        </div>
         <div class="toolbar">
-          <div class="router-seg" role="tablist" aria-label="Router views">
-            <button type="button" class="ghost active" data-router-panel="admin" role="tab" aria-selected="true">Admin panel</button>
-            <button type="button" class="ghost" data-router-panel="redirects" role="tab" aria-selected="false">Port redirects</button>
-          </div>
-          <span class="spacer"></span>
-          <button type="button" class="ghost" id="routerOpenTabBtn">Open in new tab</button>
-          <button type="button" class="ghost" id="routerReloadAdminBtn">Reload admin</button>
+          <button type="button" id="addRouterBtn">Add redirect</button>
         </div>
-        <div class="router-panels">
-          <div class="router-panel active" id="routerPanelAdmin" role="tabpanel">
-            <iframe class="embed-frame" id="frameRouter" title="GL.iNet Flint router" src="about:blank" data-src="/router-frame/" allow="clipboard-read; clipboard-write"></iframe>
-          </div>
-          <div class="router-panel" id="routerPanelRedirects" role="tabpanel" hidden>
-            <div class="page-head">
-              <h2>GL.iNet router</h2>
-              <p id="routerHint" hidden></p>
-            </div>
-            <div class="meta-grid">
-              <div class="meta-box">
-                <label for="dmzIp">DMZ host</label>
-                <div class="ip-pick">
-                  <select class="ip-menu" id="dmzMenu" aria-label="DMZ device"></select>
-                  <input id="dmzIp" placeholder="192.168.8.x" />
-                </div>
-                <div class="hint" style="margin-top:6px">Pick a computer by name, or type an IP</div>
-              </div>
-              <div class="meta-box">
-                <label>LAN directory</label>
-                <div class="hint" id="lanHint">LAN devices: —</div>
-                <button type="button" class="ghost" id="refreshLanBtn" style="margin-top:8px">Refresh LAN</button>
-              </div>
-            </div>
-            <div class="toolbar">
-              <button type="button" id="addRouterBtn">Add redirect</button>
-            </div>
-            <div class="cards" id="routerRows"></div>
-            <div id="routerEmpty" class="empty" hidden>No router redirects.</div>
-          </div>
-        </div>
+        <div class="cards" id="routerRows"></div>
+        <div id="routerEmpty" class="empty" hidden>No router redirects.</div>
       </section>
 
       <section class="view" id="view-bond" hidden>
@@ -1710,80 +1640,6 @@
       }
     }
 
-    async function openRouterAdmin() {
-      setStatus("Opening Flint router…");
-      try {
-        const data = await api("/api/router-sso");
-        const url = (data && data.url) || "/router-frame/";
-        window.open(url.startsWith("/") ? (location.origin + url) : url, "_blank", "noopener");
-        setStatus("Flint router opened (username: root)", "ok");
-      } catch (e) {
-        setStatus(String(e.message || e), "err");
-        showLog(String(e.message || e), true);
-        window.open("https://router.vpstruelord.com/", "_blank", "noopener");
-      }
-    }
-
-    async function loadRouterFrame(force) {
-      const frame = document.getElementById("frameRouter");
-      if (!frame) return;
-      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      const fallback = frame.dataset.src || "/router-frame/";
-      try {
-        frame.dataset.authed = "0";
-        if (force) frame.src = "about:blank";
-        const data = await api("/api/router-sso");
-        const url = (data && data.url) || fallback;
-        frame.src = url + (String(url).includes("?") ? "&" : "?") + "_sm=" + Date.now();
-        frame.dataset.authed = "1";
-        setStatus("Flint router admin loaded", "ok");
-      } catch (e) {
-        frame.src = fallback + (String(fallback).includes("?") ? "&" : "?") + "_sm=" + Date.now();
-        frame.dataset.authed = "0";
-        setStatus(String(e.message || e), "err");
-        showLog(String(e.message || e) + "\n\nYou can still log in manually with the router admin password.", true);
-      }
-    }
-
-    function readRouterPanelPref() {
-      try {
-        return localStorage.getItem("sm_router_panel") || "admin";
-      } catch (e) {
-        return "admin";
-      }
-    }
-
-    function showRouterPanel(panel) {
-      const name = panel === "redirects" ? "redirects" : "admin";
-      const view = document.getElementById("view-router");
-      const adminPanel = document.getElementById("routerPanelAdmin");
-      const redirectsPanel = document.getElementById("routerPanelRedirects");
-      document.querySelectorAll("[data-router-panel]").forEach((btn) => {
-        const active = btn.dataset.routerPanel === name;
-        btn.classList.toggle("active", active);
-        btn.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      if (adminPanel) {
-        adminPanel.classList.toggle("active", name === "admin");
-        adminPanel.hidden = name !== "admin";
-      }
-      if (redirectsPanel) {
-        redirectsPanel.classList.toggle("active", name === "redirects");
-        redirectsPanel.hidden = name !== "redirects";
-      }
-      if (view) view.classList.toggle("router-admin-mode", name === "admin");
-      const embed = name === "admin";
-      document.body.classList.toggle("embed-mode", embed && view && view.classList.contains("active"));
-      if (embed) {
-        try { window.scrollTo(0, 0); } catch (e) {}
-        syncAppHeight();
-        loadRouterFrame();
-      }
-      try {
-        localStorage.setItem("sm_router_panel", name);
-      } catch (e) {}
-    }
-
     async function loadBuffaloFrame(force) {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
@@ -1950,7 +1806,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn" || (name === "router" && readRouterPanelPref() === "admin");
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -1975,9 +1831,6 @@
       }
       if (name === "buffalo") {
         loadBuffaloFrame();
-      }
-      if (name === "router") {
-        showRouterPanel(readRouterPanelPref());
       }
       if (name === "files") {
         loadNasFilesFrame(true);
@@ -2507,11 +2360,6 @@
       routerRules.push({ enabled:true, src:"wgclient1", src_dport:"", proto:"tcp", dest_ip: dmzIpEl.value || "192.168.8.243", dest_port:"", name:"new-rule" });
       renderRouter();
     });
-    document.querySelectorAll("[data-router-panel]").forEach((btn) => {
-      btn.addEventListener("click", () => showRouterPanel(btn.dataset.routerPanel));
-    });
-    document.getElementById("routerOpenTabBtn")?.addEventListener("click", () => openRouterAdmin());
-    document.getElementById("routerReloadAdminBtn")?.addEventListener("click", () => loadRouterFrame(true));
     document.getElementById("addHookupBtn").addEventListener("click", () => {
       hookupRules = readHookupForm();
       hookupRules.push({ enabled:true, vpn_only:false, domain:"", target_host:"192.168.8.1", target_port:"80", name:"new-domain" });
@@ -2922,9 +2770,6 @@
         const sso = data.buffalo_sso_configured
           ? `configured (${data.buffalo_user || "admin"})`
           : "not configured";
-        const routerSso = data.router_sso_configured
-          ? `configured (${data.router_user || "root"})`
-          : "not configured";
         portal.innerHTML = [
           `<div><span class="k">Host</span><span class="v">${esc(data.portal_host || location.host || "—")}</span></div>`,
           `<div><span class="k">Hostname</span><span class="v">${esc(data.hostname || "—")}</span></div>`,
@@ -2932,7 +2777,6 @@
           `<div><span class="k">Egress</span><span class="v">${esc(data.egress_ip || "—")}</span></div>`,
           `<div><span class="k">Uptime</span><span class="v">${esc(fmtUptime(data.uptime_sec))}</span></div>`,
           `<div><span class="k">Buffalo SSO</span><span class="v">${esc(sso)}</span></div>`,
-          `<div><span class="k">Flint router SSO</span><span class="v">${esc(routerSso)}</span></div>`,
         ].join("");
       }
       const titleEl = document.getElementById("settingsTitle");
@@ -2946,19 +2790,8 @@
       if (links) {
         const list = data.links || [];
         links.innerHTML = list.length
-          ? list.map((l) => {
-              if (l.sso || l.id === "router") {
-                return `<a href="#" data-router-sso="1">${esc(l.label)}<span>SSO</span></a>`;
-              }
-              return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span>open</span></a>`;
-            }).join("")
+          ? list.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span>open</span></a>`).join("")
           : `<div class="empty">No links.</div>`;
-        links.querySelectorAll("[data-router-sso]").forEach((a) => {
-          a.addEventListener("click", (ev) => {
-            ev.preventDefault();
-            openRouterAdmin();
-          });
-        });
       }
       const svc = document.getElementById("settingsServices");
       if (svc) {
@@ -3086,7 +2919,6 @@
         await load();
         // Warm Buffalo admin SSO in the background so the NAS tab opens quickly.
         api("/api/buffalo-sso?scope=admin").catch(() => {});
-        api("/api/router-sso").catch(() => {});
         const start = initialViewFromPrefs();
         if (start && start !== "overview") showView(start);
         else lockMobileViewport();
