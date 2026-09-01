@@ -1,0 +1,15 @@
+[Unit]
+Description=ServerManager public FTP gateway (RaiDrive / File Explorer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/opt/wireguard/port-forward-ui.env
+EnvironmentFile=-/opt/wireguard/nas-ftp-gateway/runtime.env
+ExecStart=/opt/wireguard/nas-ftp-gateway/run.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
