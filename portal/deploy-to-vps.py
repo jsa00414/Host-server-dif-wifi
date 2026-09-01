@@ -144,7 +144,7 @@ def main() -> int:
         )
         _run(
             client,
-            "cd /opt/wireguard/port-forward-ui && python3 -c \"import server; s=server.read_hookups_state(); print(server.write_hookups_state([r for r in s.get('rules', []) if not r.get('external')]))\"",
+            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \"import server; s=server.read_hookups_state(); print(server.write_hookups_state([r for r in s.get('rules', []) if not r.get('external')]))\"",
         )
         gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
         _run(client, f"chmod +x {gateway} && bash {gateway}")

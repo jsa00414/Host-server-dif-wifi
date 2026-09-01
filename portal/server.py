@@ -1754,6 +1754,7 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
         pass
 
 
+ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
 ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.8.1")
 ROUTER_HOSTS = [
     h.strip()
@@ -4041,9 +4042,9 @@ def _normalize_hookup_rule(rule: dict) -> dict:
     domain = str(out.get("domain") or "").strip().lower()
     if domain == "router.vpstruelord.com":
         targets = _router_hookup_targets()
-        out["target_host"] = targets[0]
+        out["target_host"] = ROUTER_HOST
         out["target_port"] = int(out.get("target_port") or 80)
-        out["target_hosts"] = targets
+        out["target_hosts"] = [ROUTER_HOST]
     return out
 
 
@@ -4061,6 +4062,34 @@ def _hookup_proxy_upstream(rule: dict) -> str:
         if host:
             hosts.append(host)
     return " ".join(f"{host}:{port}" for host in hosts)
+
+
+def _router_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects."""
+    host = str(rule.get("target_host") or ROUTER_HOST).strip() or ROUTER_HOST
+    port = int(rule.get("target_port") or 80)
+    public = ROUTER_PUBLIC_HOST
+    lines = [
+        f"{public} {{",
+        f"\treverse_proxy {host}:{port} {{",
+        f"\t\theader_up Host {host}",
+        "\t\theader_up X-Forwarded-Host {host}",
+        "\t\theader_up X-Forwarded-Proto https",
+        f"\t\theader_down Location http://{host} https://{public}",
+        f"\t\theader_down Location http://{host}/ https://{public}/",
+        "\t\theader_down -X-Frame-Options",
+        "\t\theader_down -Content-Security-Policy",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
 
 
 def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
@@ -4178,6 +4207,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         lines.append("# (no managed domain hookups enabled)")
     for r in active:
         domain = r["domain"]
+        if domain == ROUTER_PUBLIC_HOST.lower():
+            lines.extend(_router_hookup_site_lines(r))
+            continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
         # there so Caddy never buffers an entire movie to compress it.
@@ -5883,6 +5915,112 @@ def _buffalo_sso_cookie_headers(data: dict) -> list[str]:
     return out
 
 
+_router_sso_cache = {"sid": "", "ts": 0.0}
+_router_sso_cache_lock = threading.Lock()
+ROUTER_SSO_CACHE_TTL = int(os.environ.get("ROUTER_SSO_CACHE_TTL", "1800"))
+
+
+def _router_rpc(method: str, params: dict) -> dict:
+    """Call GL.iNet /rpc on the Flint LAN IP (Host must be the router itself)."""
+    url = f"http://{ROUTER_HOST}/rpc"
+    body = {
+        "jsonrpc": "2.0",
+        "id": int(time.time() * 1000),
+        "method": method,
+        "params": params,
+    }
+    req = Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Host": ROUTER_HOST},
+        method="POST",
+    )
+    with urlopen(req, timeout=20) as resp:
+        text = resp.read().decode("utf-8", errors="replace")
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        raise RuntimeError(f"Router RPC invalid JSON: {text[:200]}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"Router RPC unexpected body: {text[:200]}")
+    return parsed
+
+
+def router_sso_login() -> dict:
+    """Log into GL.iNet admin and return a session for router.vpstruelord.com."""
+    if not ROUTER_PASS:
+        raise RuntimeError("ROUTER_PASS / ROUTER_PASS_B64 not configured")
+
+    try:
+        ensure_ovpn_home_lan_routes()
+    except Exception:
+        pass
+
+    now = time.time()
+    with _router_sso_cache_lock:
+        sid = str(_router_sso_cache.get("sid") or "").strip()
+        if sid and (now - float(_router_sso_cache.get("ts") or 0)) < ROUTER_SSO_CACHE_TTL:
+            return {
+                "ok": True,
+                "user": "root",
+                "url": f"https://{ROUTER_PUBLIC_HOST}/",
+                "sid": sid,
+            }
+
+    ch = _router_rpc("challenge", {"username": "root"})
+    if ch.get("error"):
+        raise RuntimeError(f"Router challenge failed: {ch.get('error')}")
+    result = ch.get("result") or {}
+    nonce = str(result.get("nonce") or "").strip()
+    salt = str(result.get("salt") or "").strip()
+    alg = result.get("alg", 5)
+    if not nonce:
+        raise RuntimeError(f"Router challenge failed: {ch}")
+
+    digest = hashlib.sha256(f"{nonce}{ROUTER_PASS}{salt}".encode()).hexdigest()
+    login = _router_rpc(
+        "login",
+        {"username": "root", "hash": digest, "alg": alg, "nonce": nonce},
+    )
+    if login.get("error"):
+        err = login.get("error") or {}
+        msg = str(err.get("message") or err)
+        if "over limit" in msg.lower():
+            raise RuntimeError(
+                "Router login is temporarily locked after too many attempts. "
+                "Wait a few minutes or log in from home Wi‑Fi at http://192.168.8.1"
+            )
+        raise RuntimeError(f"Router login failed: {err}")
+    sid = str((login.get("result") or {}).get("sid") or "").strip()
+    if not sid:
+        raise RuntimeError("Router login failed: no session id")
+
+    with _router_sso_cache_lock:
+        _router_sso_cache["sid"] = sid
+        _router_sso_cache["ts"] = now
+
+    return {
+        "ok": True,
+        "user": "root",
+        "url": f"https://{ROUTER_PUBLIC_HOST}/",
+        "sid": sid,
+    }
+
+
+def _router_sso_cookie_headers(data: dict) -> list[str]:
+    sid = str(data.get("sid") or "").strip()
+    if not sid:
+        return []
+    # Share across *.vpstruelord.com so portal SSO opens router.vpstruelord.com logged in.
+    domain = ""
+    if ROUTER_PUBLIC_HOST.count(".") >= 2:
+        domain = "." + ".".join(ROUTER_PUBLIC_HOST.split(".")[-2:])
+    domain_attr = f"; Domain={domain}" if domain else ""
+    return [
+        f"Admin-Token={sid}; Path=/{domain_attr}; SameSite=Lax; Secure; HttpOnly",
+    ]
+
+
 def wg_easy_sso_login() -> dict:
     """Log into wg-easy and return the session cookie for /wg-ui/ SSO."""
     user = (WG_EASY_SSO_USER or "admin").strip() or "admin"
@@ -6118,7 +6256,7 @@ def build_portal_settings() -> dict:
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
-        {"id": "router", "label": "Flint router", "url": "https://router.vpstruelord.com/"},
+        {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/", "sso": True},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
         {"id": "tailscale", "label": "Tailscale admin", "url": "https://login.tailscale.com/admin/machines"},
@@ -6138,6 +6276,8 @@ def build_portal_settings() -> dict:
         "uptime_sec": uptime_sec,
         "buffalo_user": BUFFALO_SSO_USER,
         "buffalo_sso_configured": bool(BUFFALO_SSO_PASS),
+        "router_user": "root",
+        "router_sso_configured": bool(ROUTER_PASS),
         "wg_easy_user": WG_EASY_SSO_USER,
         "wg_easy_sso_configured": bool(WG_EASY_SSO_PASS),
         "wg_ui_prefix": WG_UI_PREFIX,
@@ -11690,6 +11830,20 @@ class Handler(BaseHTTPRequestHandler):
                 if files:
                     safe["files"] = {"url": files.get("url")}
                 self._json(200, safe, extra_cookies=_buffalo_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/router-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = router_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"https://{ROUTER_PUBLIC_HOST}/",
+                }
+                self._json(200, safe, extra_cookies=_router_sso_cookie_headers(data))
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return

@@ -1640,6 +1640,20 @@
       }
     }
 
+    async function openRouterAdmin() {
+      setStatus("Opening Flint router…");
+      try {
+        const data = await api("/api/router-sso");
+        const url = (data && data.url) || "https://router.vpstruelord.com/";
+        window.open(url, "_blank", "noopener");
+        setStatus("Flint router opened (username: root)", "ok");
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+        window.open("https://router.vpstruelord.com/", "_blank", "noopener");
+      }
+    }
+
     async function loadBuffaloFrame(force) {
       const frame = document.getElementById("frameBuffalo");
       if (!frame) return;
@@ -2790,8 +2804,19 @@
       if (links) {
         const list = data.links || [];
         links.innerHTML = list.length
-          ? list.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span>open</span></a>`).join("")
+          ? list.map((l) => {
+              if (l.sso || l.id === "router") {
+                return `<a href="#" data-router-sso="1">${esc(l.label)}<span>SSO</span></a>`;
+              }
+              return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span>open</span></a>`;
+            }).join("")
           : `<div class="empty">No links.</div>`;
+        links.querySelectorAll("[data-router-sso]").forEach((a) => {
+          a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            openRouterAdmin();
+          });
+        });
       }
       const svc = document.getElementById("settingsServices");
       if (svc) {
