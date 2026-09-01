@@ -4025,6 +4025,71 @@ def parse_caddy_existing_sites(caddy_text: str) -> list[dict]:
     return sites
 
 
+def _router_hookup_targets() -> list[str]:
+    """Flint admin reachable via OpenVPN, LAN, or WireGuard tunnel IP."""
+    hosts: list[str] = []
+    for h in (OVPN_FLINT_VPN_IP, ROUTER_HOST, "10.8.0.3"):
+        h = str(h or "").strip()
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
+def _normalize_hookup_rule(rule: dict) -> dict:
+    """Apply opinionated defaults for known hookup domains."""
+    out = dict(rule)
+    domain = str(out.get("domain") or "").strip().lower()
+    if domain == "router.vpstruelord.com":
+        targets = _router_hookup_targets()
+        out["target_host"] = targets[0]
+        out["target_port"] = int(out.get("target_port") or 80)
+        out["target_hosts"] = targets
+    return out
+
+
+def _hookup_proxy_upstream(rule: dict) -> str:
+    port = int(rule["target_port"])
+    raw_hosts = rule.get("target_hosts")
+    hosts: list[str] = []
+    if isinstance(raw_hosts, list):
+        for item in raw_hosts:
+            host = str(item or "").strip()
+            if host and host not in hosts:
+                hosts.append(host)
+    if not hosts:
+        host = str(rule.get("target_host") or "").strip()
+        if host:
+            hosts.append(host)
+    return " ".join(f"{host}:{port}" for host in hosts)
+
+
+def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
+    upstream = _hookup_proxy_upstream(rule)
+    multi = len(upstream.split()) > 1
+    lines = [f"{indent}reverse_proxy {upstream} {{"]
+    if multi:
+        lines.extend(
+            [
+                f"{indent}\ttransport http {{",
+                f"{indent}\t\tdial_timeout 4s",
+                f"{indent}\t}}",
+                f"{indent}\tlb_try_duration 8s",
+                f"{indent}\tlb_try_interval 1s",
+            ]
+        )
+    lines.extend(
+        [
+            f"{indent}\theader_up Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto {{scheme}}",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    return lines
+
+
 def default_hookups() -> list[dict]:
     return []
 
@@ -4043,6 +4108,21 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
             name = str(rule.get("name", f"hook{i+1}")).strip() or f"hook{i+1}"
             external = bool(rule.get("external", False))
             vpn_only = _as_bool(rule.get("vpn_only", False))
+            target_hosts_raw = rule.get("target_hosts")
+            target_hosts: list[str] = []
+            if isinstance(target_hosts_raw, list):
+                for item in target_hosts_raw:
+                    host = str(item or "").strip()
+                    if not host:
+                        continue
+                    if (
+                        not IP_RE.match(host)
+                        and not DOMAIN_RE.match(host)
+                        and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$", host)
+                    ):
+                        raise ValueError(f"Hookup {i + 1}: invalid target_hosts entry")
+                    if host not in target_hosts:
+                        target_hosts.append(host)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Hookup {i + 1}: missing/invalid fields") from exc
         if not DOMAIN_RE.match(domain):
@@ -4061,17 +4141,18 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
         seen.add(domain)
         if external and not allow_external:
             continue
-        cleaned.append(
-            {
-                "enabled": enabled,
-                "domain": domain,
-                "target_host": target_host,
-                "target_port": target_port,
-                "name": name,
-                "external": external,
-                "vpn_only": vpn_only,
-            }
-        )
+        entry = {
+            "enabled": enabled,
+            "domain": domain,
+            "target_host": target_host,
+            "target_port": target_port,
+            "name": name,
+            "external": external,
+            "vpn_only": vpn_only,
+        }
+        if target_hosts:
+            entry["target_hosts"] = target_hosts
+        cleaned.append(_normalize_hookup_rule(entry))
     return cleaned
 
 
@@ -4144,26 +4225,14 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
                 lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
                 lines.append("\thandle @vpn_clients {")
-                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-                lines.append("\t\t\theader_up Host {host}")
-                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
-                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-                lines.append("\t\t\theader_down -X-Frame-Options")
-                lines.append("\t\t\theader_down -Content-Security-Policy")
-                lines.append("\t\t}")
+                lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
                 lines.append("\thandle {")
                 lines.append('\t\trespond "Forbidden" 403')
                 lines.append("\t}")
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
-                lines.append(f"\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-                lines.append("\t\theader_up Host {host}")
-                lines.append("\t\theader_up X-Forwarded-Host {host}")
-                lines.append("\t\theader_up X-Forwarded-Proto {scheme}")
-                lines.append("\t\theader_down -X-Frame-Options")
-                lines.append("\t\theader_down -Content-Security-Policy")
-                lines.append("\t}")
+                lines.extend(_hookup_reverse_proxy_lines(r, indent="\t"))
         lines.extend(
             [
                 "\theader {",
@@ -5754,11 +5823,7 @@ def buffalo_sso_login(*, scope: str = "all") -> dict:
         if need_files and not webaxs:
             jobs["files"] = pool.submit(_buffalo_files_login)
         for key, fut in jobs.items():
-            try:
-                result = fut.result()
-            except Exception:
-                pool.shutdown(wait=False, cancel_futures=True)
-                raise
+            result = fut.result()
             if key == "admin":
                 admin_sid = str(result)
                 with _buffalo_sso_cache_lock:
@@ -11950,6 +12015,7 @@ def main() -> None:
     # School OpenVPN: prefer tun0 for home LAN + allow Flint OVPN→LAN (Buffalo).
     try:
         if _ovpn_flint_connected():
+            ensure_ovpn_home_lan_routes()
             threading.Thread(
                 target=lambda: ensure_flint_ovpn_lan_access(force=True),
                 name="flint-ovpn-lan",
