@@ -2784,6 +2784,9 @@
         const sso = data.buffalo_sso_configured
           ? `configured (${data.buffalo_user || "admin"})`
           : "not configured";
+        const routerSso = data.router_sso_configured
+          ? `configured (${data.router_user || "root"})`
+          : "not configured";
         portal.innerHTML = [
           `<div><span class="k">Host</span><span class="v">${esc(data.portal_host || location.host || "—")}</span></div>`,
           `<div><span class="k">Hostname</span><span class="v">${esc(data.hostname || "—")}</span></div>`,
@@ -2791,6 +2794,7 @@
           `<div><span class="k">Egress</span><span class="v">${esc(data.egress_ip || "—")}</span></div>`,
           `<div><span class="k">Uptime</span><span class="v">${esc(fmtUptime(data.uptime_sec))}</span></div>`,
           `<div><span class="k">Buffalo SSO</span><span class="v">${esc(sso)}</span></div>`,
+          `<div><span class="k">Flint router SSO</span><span class="v">${esc(routerSso)}</span></div>`,
         ].join("");
       }
       const titleEl = document.getElementById("settingsTitle");

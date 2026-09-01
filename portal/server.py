@@ -1755,7 +1755,9 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
 
 
 ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
-ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.8.1")
+# LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
+ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
+ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4041,10 +4043,9 @@ def _normalize_hookup_rule(rule: dict) -> dict:
     out = dict(rule)
     domain = str(out.get("domain") or "").strip().lower()
     if domain == "router.vpstruelord.com":
-        targets = _router_hookup_targets()
-        out["target_host"] = ROUTER_HOST
+        out["target_host"] = ROUTER_ADMIN_HOST
         out["target_port"] = int(out.get("target_port") or 80)
-        out["target_hosts"] = [ROUTER_HOST]
+        out["target_hosts"] = [ROUTER_ADMIN_HOST]
     return out
 
 
@@ -4066,7 +4067,7 @@ def _hookup_proxy_upstream(rule: dict) -> str:
 
 def _router_hookup_site_lines(rule: dict) -> list[str]:
     """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects."""
-    host = str(rule.get("target_host") or ROUTER_HOST).strip() or ROUTER_HOST
+    host = ROUTER_ADMIN_HOST
     port = int(rule.get("target_port") or 80)
     public = ROUTER_PUBLIC_HOST
     lines = [
@@ -5922,7 +5923,7 @@ ROUTER_SSO_CACHE_TTL = int(os.environ.get("ROUTER_SSO_CACHE_TTL", "1800"))
 
 def _router_rpc(method: str, params: dict) -> dict:
     """Call GL.iNet /rpc on the Flint LAN IP (Host must be the router itself)."""
-    url = f"http://{ROUTER_HOST}/rpc"
+    url = f"http://{ROUTER_ADMIN_HOST}/rpc"
     body = {
         "jsonrpc": "2.0",
         "id": int(time.time() * 1000),
@@ -5932,7 +5933,7 @@ def _router_rpc(method: str, params: dict) -> dict:
     req = Request(
         url,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Host": ROUTER_HOST},
+        headers={"Content-Type": "application/json", "Host": ROUTER_ADMIN_HOST},
         method="POST",
     )
     with urlopen(req, timeout=20) as resp:
