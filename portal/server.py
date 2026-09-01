@@ -6273,7 +6273,7 @@ def build_portal_settings() -> dict:
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
-        {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/", "sso": True},
+        {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
         {"id": "tailscale", "label": "Tailscale admin", "url": "https://login.tailscale.com/admin/machines"},
@@ -11483,7 +11483,6 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_auth(api=True):
                 return
             try:
-                from urllib.parse import parse_qs
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or ["/"])[0]
                 self._json(200, ftp_list(path_q))
@@ -11494,7 +11493,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_auth(api=True):
                 return
             try:
-                from urllib.parse import parse_qs, quote
+                from urllib.parse import quote
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or [""])[0]
                 inline = (qs.get("inline") or ["0"])[0] in ("1", "true", "yes")
@@ -12038,7 +12037,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/ftp/upload":
             try:
-                from urllib.parse import parse_qs
                 qs = parse_qs(urlparse(self.path).query)
                 path_q = (qs.get("path") or [""])[0]
                 length = int(self.headers.get("Content-Length", "0") or 0)
