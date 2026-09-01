@@ -50,6 +50,7 @@ PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
 BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
 BUFFALO_PREFIX = "/buffalo-frame"
+ROUTER_PREFIX = "/router-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
 NAS_FILES_UPSTREAM = os.environ.get("NAS_FILES_UPSTREAM", "http://192.168.8.159:9000").rstrip("/")
 NAS_FILES_PREFIX = "/nas-files"
@@ -1758,6 +1759,7 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
 ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
 # LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
 ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
+ROUTER_UPSTREAM = os.environ.get("ROUTER_UPSTREAM", "").strip().rstrip("/") or f"http://{ROUTER_ADMIN_HOST}"
 ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
 ROUTER_HOSTS = [
     h.strip()
@@ -5981,7 +5983,7 @@ def router_sso_login() -> dict:
             return {
                 "ok": True,
                 "user": "root",
-                "url": f"https://{ROUTER_PUBLIC_HOST}/",
+                "url": f"{ROUTER_PREFIX}/",
                 "sid": sid,
             }
 
@@ -6020,7 +6022,7 @@ def router_sso_login() -> dict:
     return {
         "ok": True,
         "user": "root",
-        "url": f"https://{ROUTER_PUBLIC_HOST}/",
+        "url": f"{ROUTER_PREFIX}/",
         "sid": sid,
     }
 
@@ -6029,14 +6031,16 @@ def _router_sso_cookie_headers(data: dict) -> list[str]:
     sid = str(data.get("sid") or "").strip()
     if not sid:
         return []
-    # Share across *.vpstruelord.com so portal SSO opens router.vpstruelord.com logged in.
-    domain = ""
+    out = [
+        f"Admin-Token={sid}; Path={ROUTER_PREFIX}/; SameSite=Lax; Secure; HttpOnly",
+    ]
+    # Also set on the public router host for "open in new tab" at router.vpstruelord.com.
     if ROUTER_PUBLIC_HOST.count(".") >= 2:
         domain = "." + ".".join(ROUTER_PUBLIC_HOST.split(".")[-2:])
-    domain_attr = f"; Domain={domain}" if domain else ""
-    return [
-        f"Admin-Token={sid}; Path=/{domain_attr}; SameSite=Lax; Secure; HttpOnly",
-    ]
+        out.append(
+            f"Admin-Token={sid}; Path=/; Domain={domain}; SameSite=Lax; Secure; HttpOnly"
+        )
+    return out
 
 
 def wg_easy_sso_login() -> dict:
@@ -6301,6 +6305,7 @@ def build_portal_settings() -> dict:
         "wg_ui_prefix": WG_UI_PREFIX,
         "nas_files_prefix": NAS_FILES_PREFIX,
         "buffalo_prefix": BUFFALO_PREFIX,
+        "router_prefix": ROUTER_PREFIX,
         "env_file": str(PORTAL_ENV_PATH),
         "env_writable": PORTAL_ENV_PATH.is_file() and os.access(PORTAL_ENV_PATH, os.W_OK),
         "services": services,
@@ -11040,6 +11045,198 @@ def proxy_buffalo_request(handler: "Handler", method: str) -> None:
     handler.wfile.write(body)
 
 
+ROUTER_IFRAME_BUST_RE = re.compile(
+    r'window\.top\s*!==\s*window\.self\s*&&\s*\(\s*alert\s*\(\s*["\']Do not open it inside an iframe!["\']\s*\)\s*,\s*window\.self\.location\s*=\s*["\']/404["\']\s*\)',
+    flags=re.I,
+)
+ROUTER_FIT_SNIPPET = (
+    f"<base href=\"{ROUTER_PREFIX}/\" />"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\" />"
+)
+
+
+def _router_rewrite_location(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith(ROUTER_PREFIX + "/") or raw == ROUTER_PREFIX:
+        return raw
+    lower = raw.lower()
+    for prefix in (
+        ROUTER_UPSTREAM,
+        f"http://{ROUTER_ADMIN_HOST}",
+        f"https://{ROUTER_ADMIN_HOST}",
+        f"https://{ROUTER_PUBLIC_HOST}",
+        f"http://{ROUTER_PUBLIC_HOST}",
+    ):
+        if lower.startswith(prefix.lower()):
+            rest = raw[len(prefix) :]
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            return ROUTER_PREFIX + rest
+    if raw.startswith("/"):
+        return ROUTER_PREFIX + raw
+    return raw
+
+
+def _router_rewrite_set_cookie(value: str) -> str:
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    if not parts:
+        return value
+    out = [parts[0]]
+    saw_path = False
+    for part in parts[1:]:
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={ROUTER_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            continue
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={ROUTER_PREFIX}/")
+    return "; ".join(out)
+
+
+def _router_rewrite_html_paths(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        attr, quote, path = match.group(1), match.group(2), match.group(3)
+        if path.startswith(ROUTER_PREFIX + "/") or path == ROUTER_PREFIX:
+            return match.group(0)
+        return f"{attr}={quote}{ROUTER_PREFIX}{path}{quote}"
+
+    return re.sub(
+        rf"\b(href|src|action)=(['\"])(/(?!/|{re.escape(ROUTER_PREFIX.lstrip('/'))}/)[^'\"]*)\2",
+        repl,
+        text,
+        flags=re.I,
+    )
+
+
+def _router_patch_body(body: bytes, content_type: str, *, rel: str = "") -> bytes:
+    ctype = (content_type or "").lower()
+    rel_l = (rel or "").lower()
+    is_html = "text/html" in ctype
+    is_js = "javascript" in ctype or rel_l.endswith(".js") or rel_l.endswith(".js.gz")
+    if not is_html and not is_js:
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = body.decode("latin-1")
+        except Exception:
+            return body
+    if is_js:
+        text = ROUTER_IFRAME_BUST_RE.sub("!1", text)
+    if is_html:
+        text = _router_rewrite_html_paths(text)
+        if "sm-router-fit" not in text:
+            lower = text.lower()
+            head_idx = lower.find("<head>")
+            if head_idx != -1:
+                insert_at = head_idx + len("<head>")
+                text = text[:insert_at] + ROUTER_FIT_SNIPPET + text[insert_at:]
+            else:
+                idx = lower.find("</head>")
+                if idx != -1:
+                    text = text[:idx] + ROUTER_FIT_SNIPPET + text[idx:]
+                else:
+                    text = ROUTER_FIT_SNIPPET + text
+    return text.encode("utf-8")
+
+
+def proxy_router_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to the Flint admin UI (strips iframe blocking)."""
+    parsed = urlparse(handler.path)
+    rel = parsed.path[len(ROUTER_PREFIX) :] or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    upstream = urljoin(ROUTER_UPSTREAM + "/", rel.lstrip("/"))
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers: dict[str, str] = {}
+    for key in ("Accept", "Accept-Language", "Content-Type", "X-Requested-With", "Referer"):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    headers["Host"] = ROUTER_ADMIN_HOST
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-RouterProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        try:
+            ensure_ovpn_home_lan_routes()
+        except Exception:
+            pass
+        handler._json(502, {"error": f"router proxy failed: {exc}"})
+        return
+
+    content_type = upstream_headers.get("Content-Type") or upstream_headers.get("content-type") or "application/octet-stream"
+    body = _router_patch_body(body, content_type, rel=rel)
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _router_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie_hdr in set_cookies:
+        if cookie_hdr:
+            handler.send_header("Set-Cookie", _router_rewrite_set_cookie(cookie_hdr))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    if method != "HEAD":
+        handler.wfile.write(body)
+
+
 def _wg_ui_rewrite_location(value: str) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -11905,6 +12102,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "GET")
+        if path == ROUTER_PREFIX or path.startswith(ROUTER_PREFIX + "/"):
+            return proxy_router_request(self, "GET")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "GET")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
@@ -11926,6 +12125,8 @@ class Handler(BaseHTTPRequestHandler):
             return proxy_nas_files_request(self, "HEAD")
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "HEAD")
+        if path == ROUTER_PREFIX or path.startswith(ROUTER_PREFIX + "/"):
+            return proxy_router_request(self, "HEAD")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
             return proxy_wg_ui_request(self, "HEAD")
         self.send_response(404)
@@ -12073,6 +12274,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "POST")
+        if path == ROUTER_PREFIX or path.startswith(ROUTER_PREFIX + "/"):
+            return proxy_router_request(self, "POST")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
             return proxy_nas_files_request(self, "POST")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):

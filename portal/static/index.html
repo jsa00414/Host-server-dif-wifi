@@ -1157,7 +1157,7 @@
         </div>
         <div class="router-panels">
           <div class="router-panel active" id="routerPanelAdmin" role="tabpanel">
-            <iframe class="embed-frame" id="frameRouter" title="GL.iNet Flint router" src="about:blank" data-src="https://router.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
+            <iframe class="embed-frame" id="frameRouter" title="GL.iNet Flint router" src="about:blank" data-src="/router-frame/" allow="clipboard-read; clipboard-write"></iframe>
           </div>
           <div class="router-panel" id="routerPanelRedirects" role="tabpanel" hidden>
             <div class="page-head">
@@ -1714,8 +1714,8 @@
       setStatus("Opening Flint router…");
       try {
         const data = await api("/api/router-sso");
-        const url = (data && data.url) || "https://router.vpstruelord.com/";
-        window.open(url, "_blank", "noopener");
+        const url = (data && data.url) || "/router-frame/";
+        window.open(url.startsWith("/") ? (location.origin + url) : url, "_blank", "noopener");
         setStatus("Flint router opened (username: root)", "ok");
       } catch (e) {
         setStatus(String(e.message || e), "err");
@@ -1728,7 +1728,7 @@
       const frame = document.getElementById("frameRouter");
       if (!frame) return;
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      const fallback = frame.dataset.src || "https://router.vpstruelord.com/";
+      const fallback = frame.dataset.src || "/router-frame/";
       try {
         frame.dataset.authed = "0";
         if (force) frame.src = "about:blank";
