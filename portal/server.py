@@ -9,6 +9,7 @@ import http.client
 import io
 import mimetypes
 import base64
+import crypt
 import hashlib
 import hmac
 import json
@@ -5947,6 +5948,22 @@ def _router_rpc(method: str, params: dict) -> dict:
     return parsed
 
 
+def _router_login_hash(username: str, password: str, alg: int, salt: str, nonce: str) -> str:
+    """GL.iNet SDK 4.x: unix crypt(password, salt) then md5(user:cipher:nonce)."""
+    alg = int(alg)
+    if alg == 1:
+        cipher = crypt.crypt(password, f"$1${salt}$")
+    elif alg == 5:
+        cipher = crypt.crypt(password, f"$5$rounds=5000${salt}$")
+    elif alg == 6:
+        cipher = crypt.crypt(password, f"$6$rounds=5000${salt}$")
+    else:
+        raise RuntimeError(f"Unsupported router login alg: {alg}")
+    if not cipher:
+        raise RuntimeError("Router login hash generation failed (crypt unavailable)")
+    return hashlib.md5(f"{username}:{cipher}:{nonce}".encode()).hexdigest()
+
+
 def router_sso_login() -> dict:
     """Log into GL.iNet admin and return a session for router.vpstruelord.com."""
     if not ROUTER_PASS:
@@ -5978,10 +5995,10 @@ def router_sso_login() -> dict:
     if not nonce:
         raise RuntimeError(f"Router challenge failed: {ch}")
 
-    digest = hashlib.sha256(f"{nonce}{ROUTER_PASS}{salt}".encode()).hexdigest()
+    digest = _router_login_hash("root", ROUTER_PASS, alg, salt, nonce)
     login = _router_rpc(
         "login",
-        {"username": "root", "hash": digest, "alg": alg, "nonce": nonce},
+        {"username": "root", "hash": digest, "alg": alg, "salt": salt},
     )
     if login.get("error"):
         err = login.get("error") or {}
