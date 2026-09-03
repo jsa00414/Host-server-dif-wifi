@@ -3597,6 +3597,146 @@ def parse_lan_devices(text: str) -> list[dict]:
 
 
 LAN_ALIASES_PATH = Path(__file__).resolve().parent / "lan_aliases.json"
+CALENDAR_JSON = Path(
+    os.environ.get(
+        "CALENDAR_JSON",
+        str(Path(__file__).resolve().parent / "calendar.json"),
+    )
+)
+_calendar_lock = threading.Lock()
+_CALENDAR_COLORS = ("mint", "sky", "amber", "rose", "violet", "slate")
+
+
+def _calendar_normalize_event(raw: dict, *, require_id: bool = False) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("event must be an object")
+    eid = str(raw.get("id") or "").strip()
+    if require_id and not eid:
+        raise ValueError("event id is required")
+    if not eid:
+        eid = secrets.token_hex(8)
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        raise ValueError("title is required")
+    if len(title) > 120:
+        title = title[:120]
+    date = str(raw.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise ValueError("date must be YYYY-MM-DD")
+    end_date = str(raw.get("end_date") or "").strip()
+    if end_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date):
+        raise ValueError("end_date must be YYYY-MM-DD")
+    if end_date and end_date < date:
+        raise ValueError("end_date must be on or after date")
+    all_day = _as_bool(raw.get("all_day", True))
+    time_s = str(raw.get("time") or "").strip()
+    end_time = str(raw.get("end_time") or "").strip()
+    if time_s and not re.fullmatch(r"\d{2}:\d{2}", time_s):
+        raise ValueError("time must be HH:MM")
+    if end_time and not re.fullmatch(r"\d{2}:\d{2}", end_time):
+        raise ValueError("end_time must be HH:MM")
+    if all_day:
+        time_s = ""
+        end_time = ""
+    color = str(raw.get("color") or "mint").strip().lower()
+    if color not in _CALENDAR_COLORS:
+        color = "mint"
+    notes = str(raw.get("notes") or "").strip()
+    if len(notes) > 2000:
+        notes = notes[:2000]
+    return {
+        "id": eid,
+        "title": title,
+        "date": date,
+        "end_date": end_date or date,
+        "all_day": all_day,
+        "time": time_s,
+        "end_time": end_time,
+        "color": color,
+        "notes": notes,
+    }
+
+
+def load_calendar_events() -> list[dict]:
+    try:
+        data = json.loads(CALENDAR_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        data = data.get("events") or []
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        try:
+            out.append(_calendar_normalize_event(item, require_id=True))
+        except Exception:
+            continue
+    out.sort(key=lambda e: (e["date"], e.get("time") or "", e["title"].lower()))
+    return out
+
+
+def save_calendar_events(events: list[dict]) -> list[dict]:
+    cleaned = [_calendar_normalize_event(e, require_id=True) for e in events]
+    cleaned.sort(key=lambda e: (e["date"], e.get("time") or "", e["title"].lower()))
+    CALENDAR_JSON.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"ok": True, "events": cleaned, "updated_at": int(time.time())}
+    CALENDAR_JSON.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return cleaned
+
+
+def calendar_list(*, year: int | None = None, month: int | None = None) -> dict:
+    with _calendar_lock:
+        events = load_calendar_events()
+    if year and month:
+        prefix = f"{int(year):04d}-{int(month):02d}-"
+        filtered = []
+        for e in events:
+            start = e["date"]
+            end = e.get("end_date") or start
+            # Include multi-day events that overlap this month.
+            month_start = prefix + "01"
+            if int(month) == 12:
+                month_end = f"{int(year) + 1:04d}-01-01"
+            else:
+                month_end = f"{int(year):04d}-{int(month) + 1:02d}-01"
+            if end >= month_start and start < month_end:
+                filtered.append(e)
+        events = filtered
+    return {"ok": True, "events": events, "path": str(CALENDAR_JSON)}
+
+
+def calendar_upsert(payload: dict) -> dict:
+    event = _calendar_normalize_event(payload or {}, require_id=False)
+    with _calendar_lock:
+        events = load_calendar_events()
+        found = False
+        for i, existing in enumerate(events):
+            if existing["id"] == event["id"]:
+                events[i] = event
+                found = True
+                break
+        if not found:
+            events.append(event)
+        events = save_calendar_events(events)
+    return {"ok": True, "event": event, "events": events}
+
+
+def calendar_delete(event_id: str) -> dict:
+    eid = str(event_id or "").strip()
+    if not eid:
+        raise ValueError("event id is required")
+    with _calendar_lock:
+        events = load_calendar_events()
+        next_events = [e for e in events if e["id"] != eid]
+        if len(next_events) == len(events):
+            raise ValueError("event not found")
+        events = save_calendar_events(next_events)
+    return {"ok": True, "deleted": eid, "events": events}
+
 
 _BUILTIN_LAN_NAMES = {
     "192.168.8.1": "GL.iNet Flint",
@@ -11901,6 +12041,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/calendar":
+            if not self._require_auth(api=True):
+                return
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                year = (qs.get("year") or [""])[0]
+                month = (qs.get("month") or [""])[0]
+                y = int(year) if str(year).isdigit() else None
+                m = int(month) if str(month).isdigit() else None
+                if m is not None and not (1 <= m <= 12):
+                    raise ValueError("month must be 1-12")
+                self._json(200, calendar_list(year=y, month=m))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == BUFFALO_PREFIX or path.startswith(BUFFALO_PREFIX + "/"):
             return proxy_buffalo_request(self, "GET")
         if path == NAS_FILES_PREFIX or path.startswith(NAS_FILES_PREFIX + "/"):
@@ -12058,6 +12215,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/calendar":
+            try:
+                payload = self._read_json()
+                self._json(200, calendar_upsert(payload if isinstance(payload, dict) else {}))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/bond":
             try:
                 payload = self._read_json()
@@ -12134,6 +12300,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             return proxy_wg_ui_request(self, "DELETE")
         if not self._require_auth(api=True):
+            return
+        if path == "/api/calendar":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                eid = (qs.get("id") or [""])[0].strip()
+                self._json(200, calendar_delete(eid))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path.startswith("/api/openvpn/clients/"):
             name = path[len("/api/openvpn/clients/") :].strip("/")
