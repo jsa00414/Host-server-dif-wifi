@@ -1759,6 +1759,12 @@ ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.co
 # LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
 ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
 ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
+PROXMOX_PUBLIC_HOST = (
+    os.environ.get("PROXMOX_PUBLIC_HOST", "proxmox.vpstruelord.com").strip()
+    or "proxmox.vpstruelord.com"
+)
+PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
+PROXMOX_PORT = int(os.environ.get("PROXMOX_PORT", "8006") or "8006")
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4047,6 +4053,36 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_host"] = ROUTER_ADMIN_HOST
         out["target_port"] = int(out.get("target_port") or 80)
         out["target_hosts"] = [ROUTER_ADMIN_HOST]
+    elif domain == PROXMOX_PUBLIC_HOST.lower():
+        out["target_host"] = PROXMOX_HOST
+        out["target_port"] = int(out.get("target_port") or PROXMOX_PORT)
+        out["target_hosts"] = [PROXMOX_HOST]
+        out["upstream_https"] = True
+        out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+    return out
+
+
+def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee proxmox.vpstruelord.com is present in managed hookups."""
+    out = [dict(r) for r in (rules or [])]
+    domain = PROXMOX_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": PROXMOX_HOST,
+                "target_port": PROXMOX_PORT,
+                "name": "proxmox",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
     return out
 
 
@@ -4094,20 +4130,64 @@ def _router_hookup_site_lines(rule: dict) -> list[str]:
     return lines
 
 
+def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site for Proxmox VE — HTTPS upstream with self-signed cert."""
+    host = PROXMOX_HOST
+    port = int(rule.get("target_port") or PROXMOX_PORT)
+    public = PROXMOX_PUBLIC_HOST
+    lines = [
+        f"{public} {{",
+        f"\treverse_proxy https://{host}:{port} {{",
+        "\t\ttransport http {",
+        "\t\t\ttls_insecure_skip_verify",
+        "\t\t}",
+        "\t\theader_up Host {host}",
+        "\t\theader_up X-Forwarded-Host {host}",
+        "\t\theader_up X-Forwarded-Proto https",
+        "\t\theader_up X-Forwarded-For {remote_host}",
+        f"\t\theader_down Location https://{host}:{port} https://{public}",
+        f"\t\theader_down Location https://{host}:{port}/ https://{public}/",
+        "\t\theader_down -X-Frame-Options",
+        "\t\theader_down -Content-Security-Policy",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
     upstream = _hookup_proxy_upstream(rule)
+    https = bool(rule.get("upstream_https"))
+    scheme = "https://" if https else ""
     multi = len(upstream.split()) > 1
-    lines = [f"{indent}reverse_proxy {upstream} {{"]
-    if multi:
+    if https:
+        lines = [f"{indent}reverse_proxy {scheme}{upstream} {{"]
         lines.extend(
             [
                 f"{indent}\ttransport http {{",
-                f"{indent}\t\tdial_timeout 4s",
+                f"{indent}\t\ttls_insecure_skip_verify",
                 f"{indent}\t}}",
-                f"{indent}\tlb_try_duration 8s",
-                f"{indent}\tlb_try_interval 1s",
             ]
         )
+    else:
+        lines = [f"{indent}reverse_proxy {upstream} {{"]
+        if multi:
+            lines.extend(
+                [
+                    f"{indent}\ttransport http {{",
+                    f"{indent}\t\tdial_timeout 4s",
+                    f"{indent}\t}}",
+                    f"{indent}\tlb_try_duration 8s",
+                    f"{indent}\tlb_try_interval 1s",
+                ]
+            )
     lines.extend(
         [
             f"{indent}\theader_up Host {{host}}",
@@ -4122,7 +4202,7 @@ def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
 
 
 def default_hookups() -> list[dict]:
-    return []
+    return ensure_proxmox_hookup([])
 
 
 def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[dict]:
@@ -4211,6 +4291,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         domain = r["domain"]
         if domain == ROUTER_PUBLIC_HOST.lower():
             lines.extend(_router_hookup_site_lines(r))
+            continue
+        if domain == PROXMOX_PUBLIC_HOST.lower():
+            lines.extend(_proxmox_hookup_site_lines(r))
             continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
@@ -4315,6 +4398,7 @@ def read_hookups_state() -> dict:
         managed = validate_hookups(data.get("rules", []))
     else:
         managed = default_hookups()
+    managed = ensure_proxmox_hookup(managed)
 
     existing: list[dict] = []
     if str(CADDYFILE_PATH) and CADDYFILE_PATH.is_file():
@@ -4760,7 +4844,7 @@ def _write_text_inplace(path: Path, text: str) -> None:
 
 
 def write_hookups_state(rules: list[dict]) -> dict:
-    cleaned = validate_hookups(rules)
+    cleaned = ensure_proxmox_hookup(validate_hookups(rules))
     # Persist only managed (non-external) rules; external stay in main Caddyfile
     managed = [r for r in cleaned if not r.get("external")]
     prev_domains: set[str] = set()
@@ -6273,6 +6357,7 @@ def build_portal_settings() -> dict:
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
+        {"id": "proxmox", "label": "Proxmox", "url": f"https://{PROXMOX_PUBLIC_HOST}/"},
         {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},

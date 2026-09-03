@@ -183,6 +183,7 @@
     #view-adguard.active,
     #view-files.active,
     #view-buffalo.active,
+    #view-proxmox.active,
     #view-pihole.active,
     #view-wireguard.active,
     #view-openvpn.active {
@@ -195,6 +196,7 @@
     }
     #frameBuffalo,
     #frameFiles,
+    #frameProxmox,
     #frameAdguard,
     #framePihole,
     #frameWireguard,
@@ -811,6 +813,7 @@
       }
       body.embed-mode .embed-view.active,
       body.embed-mode #view-buffalo.active,
+      body.embed-mode #view-proxmox.active,
       body.embed-mode #view-files.active,
       body.embed-mode #view-adguard.active,
       body.embed-mode #view-pihole.active,
@@ -826,6 +829,7 @@
       }
       body.embed-mode .embed-frame,
       body.embed-mode #frameBuffalo,
+      body.embed-mode #frameProxmox,
       body.embed-mode #frameFiles,
       body.embed-mode #frameAdguard,
       body.embed-mode #framePihole,
@@ -896,6 +900,9 @@
     <button type="button" class="nav-btn" data-view="buffalo">
       <span class="nav-copy"><span>Buffalo</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="proxmox">
+      <span class="nav-copy"><span>Proxmox</span></span>
+    </button>
     <button type="button" class="nav-btn" data-view="files">
       <span class="nav-copy"><span>Files</span></span>
     </button>
@@ -959,6 +966,11 @@
             <div class="k">Buffalo</div>
             <div class="v">NAS</div>
             <div class="s">192.168.8.159</div>
+          </button>
+          <button type="button" class="stat" data-go="proxmox">
+            <div class="k">Proxmox</div>
+            <div class="v">VE</div>
+            <div class="s">192.168.8.160</div>
           </button>
           <button type="button" class="stat" data-go="files">
             <div class="k">Files</div>
@@ -1175,6 +1187,10 @@
 
       <section class="view embed-view" id="view-buffalo">
         <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
+
+      <section class="view embed-view" id="view-proxmox">
+        <iframe class="embed-frame" id="frameProxmox" title="Proxmox VE" src="about:blank" data-src="https://proxmox.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
 
@@ -1461,6 +1477,7 @@
                     <option value="vps">Internet</option>
                     <option value="router">Router</option>
                     <option value="buffalo">Buffalo</option>
+                    <option value="proxmox">Proxmox</option>
                     <option value="files">Files</option>
                     <option value="domains">Domains</option>
                     <option value="firewall">Firewall</option>
@@ -1806,7 +1823,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "proxmox" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -1831,6 +1848,12 @@
       }
       if (name === "buffalo") {
         loadBuffaloFrame();
+      }
+      if (name === "proxmox") {
+        const f = document.getElementById("frameProxmox");
+        if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
+          f.src = (f.dataset.src || "https://proxmox.vpstruelord.com/") + "?_sm=" + Date.now();
+        }
       }
       if (name === "files") {
         loadNasFilesFrame(true);
@@ -2662,7 +2685,7 @@
     });
 
     const SETTINGS_VIEWS = new Set([
-      "overview", "backup", "vps", "router", "buffalo", "files",
+      "overview", "backup", "vps", "router", "buffalo", "proxmox", "files",
       "domains", "firewall", "wireguard", "openvpn", "windowsvpn",
       "dnsmap", "adguard", "tailscale", "surfshark", "pihole", "settings",
     ]);
