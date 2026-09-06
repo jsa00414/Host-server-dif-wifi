@@ -6363,22 +6363,39 @@ def proxmox_ssh(remote_cmd: str, timeout: int = 20) -> subprocess.CompletedProce
     )
 
 
+_DEEPCOOL_PUMP_NOTE = (
+    "Alienware Aurora boards use proprietary lighting headers, not standard "
+    "5V ARGB. The DeepCool AIO pump logo runs its own rainbow when it only "
+    "gets power (or a dumb adapter) and cannot be turned off from this portal. "
+    "Unplug the pump’s thin 3-pin ARGB cable to kill the logo (cooling keeps "
+    "working), or move that cable to a USB ARGB controller we can drive."
+)
+
+
 def leds_status() -> dict:
     """Read Alienware/PC chassis LED state from the Proxmox host."""
     proc = proxmox_ssh(f"{PROXMOX_LED_CMD} status")
     out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     state = "unknown"
     device = ""
+    deepcool = "unknown"
     for tok in out.replace("\n", " ").split():
         if tok.startswith("state="):
             state = tok.split("=", 1)[1].strip() or state
         if tok.startswith("device="):
             device = tok.split("=", 1)[1].strip()
+        if tok.startswith("deepcool="):
+            deepcool = tok.split("=", 1)[1].strip() or deepcool
     ok = proc.returncode == 0 and state in ("on", "off")
+    # Aftermarket DeepCool pump is not controllable via AW-ELC on Aurora R14.
+    pump_uncontrolled = deepcool in ("absent", "unknown", "")
     return {
         "ok": ok,
         "state": state if ok else "unknown",
         "device": device,
+        "deepcool": deepcool,
+        "pump_uncontrolled": pump_uncontrolled,
+        "pump_note": _DEEPCOOL_PUMP_NOTE if pump_uncontrolled else None,
         "schedule": {
             "timezone": "America/New_York",
             "on": "07:00",
@@ -6402,6 +6419,8 @@ def leds_set(action: str) -> dict:
     st = leds_status()
     st["action"] = act
     st["detail"] = out
+    if act == "off" and st.get("pump_uncontrolled"):
+        st["warning"] = st.get("pump_note")
     return st
 
 
