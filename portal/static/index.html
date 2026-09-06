@@ -1420,6 +1420,26 @@
           </div>
 
           <div class="panel">
+            <div class="panel-head">
+              <h3>PC chassis LEDs</h3>
+              <button type="button" class="ghost" id="settingsLedsRefreshBtn">Refresh</button>
+            </div>
+            <div class="panel-body">
+              <div class="settings-kv" id="settingsLedsKv">
+                <div><span class="k">Status</span><span class="v" id="settingsLedsState">—</span></div>
+                <div><span class="k">Schedule</span><span class="v" id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</span></div>
+                <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="primary" id="settingsLedsOnBtn">Turn on</button>
+                <button type="button" class="ghost" id="settingsLedsOffBtn">Turn off</button>
+                <button type="button" class="ghost" id="settingsLedsAutoBtn">Apply schedule</button>
+              </div>
+              <p class="hint" style="margin:10px 0 0">Alienware / PC chassis lights. Auto schedule is Eastern (EST/EDT): on at 7 AM, off at 10 PM.</p>
+            </div>
+          </div>
+
+          <div class="panel">
             <div class="panel-head"><h3>Portal</h3></div>
             <div class="panel-body">
               <div class="settings-kv" id="settingsPortalKv">
@@ -2834,6 +2854,7 @@
       } catch (e) {
         setStatus(String(e.message || e), "err");
       }
+      refreshLedsSettings();
     }
     async function saveBrandingSettings() {
       const title = document.getElementById("settingsTitle")?.value || "";
@@ -2890,7 +2911,10 @@
       setStatus("Refreshing NAS login…");
       try {
         await api("/api/buffalo-sso?scope=all");
-        await Promise.all([loadBuffaloFrame(true), loadNasFilesFrame(true)]);
+        await Promise.all([
+          typeof loadBuffaloFrame === "function" ? loadBuffaloFrame(true) : Promise.resolve(),
+          typeof loadNasFilesFrame === "function" ? loadNasFilesFrame(true) : Promise.resolve(),
+        ]);
         setStatus("NAS login refreshed", "ok");
         showLog("Buffalo / Files SSO refreshed.", true);
       } catch (e) {
@@ -2898,15 +2922,44 @@
         showLog(String(e.message || e), true);
       }
     }
-    function initialViewFromPrefs() {
-      const prefs = readSettingsPrefs();
-      if (prefs.remember) {
-        try {
-          const last = localStorage.getItem("sm_last_view");
-          if (last && SETTINGS_VIEWS.has(last)) return last;
-        } catch (e) {}
+    function renderLedsSettings(data) {
+      const stateEl = document.getElementById("settingsLedsState");
+      const schedEl = document.getElementById("settingsLedsSchedule");
+      const hostEl = document.getElementById("settingsLedsHost");
+      if (!stateEl) return;
+      const st = (data && data.state) || "unknown";
+      stateEl.textContent = data && data.ok === false && data.error
+        ? `error (${data.error})`
+        : st;
+      if (schedEl) {
+        schedEl.textContent = (data && data.schedule && data.schedule.label)
+          || "On 7:00 AM · Off 10:00 PM (Eastern)";
       }
-      return prefs.defaultView || "overview";
+      if (hostEl) hostEl.textContent = (data && data.host) || "—";
+    }
+    async function refreshLedsSettings() {
+      try {
+        const data = await api("/api/leds");
+        renderLedsSettings(data);
+      } catch (e) {
+        renderLedsSettings({ ok: false, state: "unknown", error: String(e.message || e) });
+      }
+    }
+    async function setLedsAction(action) {
+      setStatus(`LEDs: ${action}…`);
+      try {
+        const data = await api("/api/leds", {
+          method: "POST",
+          body: JSON.stringify({ action }),
+        });
+        renderLedsSettings(data);
+        setStatus(`Chassis LEDs ${data.state || action}`, "ok");
+        showLog(`LEDs ${action} → ${data.state || "?"}`, true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+        refreshLedsSettings();
+      }
     }
 
     document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
@@ -2915,6 +2968,10 @@
     document.getElementById("settingsReauthNasBtn")?.addEventListener("click", () => reauthNasFromSettings());
     document.getElementById("settingsBrandBtn")?.addEventListener("click", () => saveBrandingSettings());
     document.getElementById("settingsPassBtn")?.addEventListener("click", () => savePasswordSettings());
+    document.getElementById("settingsLedsRefreshBtn")?.addEventListener("click", () => refreshLedsSettings());
+    document.getElementById("settingsLedsOnBtn")?.addEventListener("click", () => setLedsAction("on"));
+    document.getElementById("settingsLedsOffBtn")?.addEventListener("click", () => setLedsAction("off"));
+    document.getElementById("settingsLedsAutoBtn")?.addEventListener("click", () => setLedsAction("auto"));
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
