@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
-"""Control Alienware + DeepCool chassis lighting from the Proxmox host.
+"""Control Alienware chassis lighting from the Proxmox host.
 
-Covers:
-  1) AW-ELC USB HID (187c:0550) — Aurora R14 ~77 zones; ≤25 zone IDs/packet.
-     Dim is inverted: 0=full, 100=off.
-  2) alienware-wmi sysfs — global_brightness + rgb_zones.
-  3) DeepCool USB HID (vid 3633) when present.
+AW-ELC USB HID (187c:0550) — Aurora R14 ~77 zones; ≤25 zone IDs/packet.
+Dim is inverted: 0=full, 100=minimum.
 
-ARGB-safe OFF (critical for DeepCool LS/LE pumps):
-  DeepCool plays a built-in rainbow when the ARGB *data* line goes idle.
-  Dimming to 100 can starve that data line, so the pump stays rainbow even
-  though chassis LEDs look off. Off mode therefore keeps dim=0 and streams a
-  static black animation so ARGB headers keep receiving frames.
+Modes:
+  on / rainbow — spectrum morph through rainbow (factory-style chassis look)
+  off          — ARGB-safe black stream at dim 0 (keeps data line alive)
+  auto         — on 07:00–21:59 America/New_York, else off
+  refresh      — reassert black while state=off
 
-If the pump ARGB cable is on a power-only splitter (not the Alienware
-motherboard ARGB header), software cannot turn it off — reconnect the cable.
-
-Schedule: America/New_York — on 07:00–21:59, off otherwise.
+Also drives alienware-wmi brightness/zones when present.
 """
 from __future__ import annotations
 
@@ -28,10 +22,8 @@ import time
 from typing import Iterable, Sequence
 
 AW_TAG = "0000187C00000550"
-DEEPCOOL_TAG = "00003633"
 MAX_ZONES_PER_PACKET = 25
 STATE_PATH = "/etc/alienware-leds/state"
-DEFAULT_RGB = (0x00, 0xFF, 0x40)
 
 WMI_BRIGHTNESS = "/sys/class/leds/alienware::global_brightness/brightness"
 WMI_ZONE_DIR = "/sys/devices/platform/alienware-wmi/rgb_zones"
@@ -51,6 +43,53 @@ ANIM_FINISH_PLAY = 0x0003
 ANIM_REMOVE = 0x0004
 ANIM_KEYBOARD = 0xFFFF
 ANIM_DEFAULT = 0x0061
+
+MODE_COLOR = 0x00
+MODE_MORPH = 0x02
+
+# OpenRGB / AWCC spectrum defaults
+DURATION_SPECTRUM = 0x01AC
+TEMPO_SPECTRUM = 0x0028  # 40
+
+# OpenRGB rainbow_colors[4][7] — phased for a wave across the chassis
+RAINBOW_PHASES: list[list[tuple[int, int, int]]] = [
+    [
+        (0xFF, 0x00, 0x00),
+        (0xFF, 0xA5, 0x00),
+        (0xFF, 0xFF, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x00, 0xBF, 0xFF),
+        (0x00, 0x00, 0xFF),
+        (0x80, 0x00, 0x80),
+    ],
+    [
+        (0x80, 0x00, 0x80),
+        (0xFF, 0x00, 0x00),
+        (0xFF, 0xA5, 0x00),
+        (0xFF, 0xFF, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x00, 0xBF, 0xFF),
+        (0x00, 0x00, 0xFF),
+    ],
+    [
+        (0x00, 0x00, 0xFF),
+        (0x80, 0x00, 0x80),
+        (0xFF, 0x00, 0x00),
+        (0xFF, 0xA5, 0x00),
+        (0xFF, 0xFF, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x00, 0xBF, 0xFF),
+    ],
+    [
+        (0x00, 0xBF, 0xFF),
+        (0x00, 0x00, 0xFF),
+        (0x80, 0x00, 0x80),
+        (0xFF, 0x00, 0x00),
+        (0xFF, 0xA5, 0x00),
+        (0xFF, 0xFF, 0x00),
+        (0x00, 0x80, 0x00),
+    ],
+]
 
 
 def _ioc(nr: int) -> int:
@@ -77,10 +116,6 @@ def find_aw_hidraw() -> str:
             "AW-ELC (187c:0550) not found on host — is it passed through to a VM?"
         )
     return paths[0]
-
-
-def find_deepcool_hidraw() -> list[str]:
-    return _hidraw_matching(DEEPCOOL_TAG)
 
 
 def aw_cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
@@ -144,21 +179,27 @@ def select_zones(fd: int, zones: Sequence[int]) -> None:
         aw_cmd(fd, CMD_SELECT_ZONES, 0x00, (n >> 8) & 0xFF, n & 0xFF, *group)
 
 
-def add_static_color(fd: int, rgb: tuple[int, int, int]) -> None:
-    r, g, b = rgb
-    aw_cmd(fd, CMD_ADD_ACTION, 0x00, 0x07, 0xD0, 0x00, 0xFA, r, g, b)
-
-
-def play_static(fd: int, zones: Sequence[int], rgb: tuple[int, int, int]) -> None:
-    """Install and play a non-saved static color on all zones."""
-    try:
-        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
-    except OSError:
-        pass
-    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    select_zones(fd, zones)
-    add_static_color(fd, rgb)
-    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+def add_actions(
+    fd: int,
+    actions: Sequence[tuple[int, int, int, int, int, int]],
+) -> None:
+    """Add up to 3 morph/color sub-actions per HID report (OpenRGB layout)."""
+    for group in chunks(list(actions), 3):
+        payload: list[int] = []
+        for mode, duration, tempo, r, g, b in group:
+            payload.extend(
+                [
+                    mode & 0xFF,
+                    (duration >> 8) & 0xFF,
+                    duration & 0xFF,
+                    (tempo >> 8) & 0xFF,
+                    tempo & 0xFF,
+                    r & 0xFF,
+                    g & 0xFF,
+                    b & 0xFF,
+                ]
+            )
+        aw_cmd(fd, CMD_ADD_ACTION, *payload)
 
 
 def write_state(state: str) -> None:
@@ -212,147 +253,104 @@ def wmi_set_zones_rgb(rgb_hex: str) -> str:
     return f"wmi-zones={touched}"
 
 
-def deepcool_send(path: str, report: bytes) -> None:
-    fd = os.open(path, os.O_RDWR)
-    try:
-        try:
-            os.write(fd, report)
-            return
-        except OSError:
-            pass
-        length = len(report)
-        hidocsfeature = (1 << 30) | (length << 16) | (ord("H") << 8) | 0x06
-        buf = bytearray(report)
-        try:
-            fcntl.ioctl(fd, hidocsfeature, buf)
-        except OSError:
-            pass
-    finally:
-        os.close(fd)
-
-
-def deepcool_off(paths: Sequence[str]) -> str:
-    if not paths:
-        return "deepcool=absent"
-    ok = 0
-    patterns = [
-        bytes([0x00] + [0x00] * 64),
-        bytes([0x10, 0x00] + [0x00] * 63),
-        bytes([0x01] + [0x00] * 64),
-        bytes([0xAA, 0x08] + [0x00] * 62),
-    ]
-    for path in paths:
-        for pat in patterns:
-            try:
-                deepcool_send(path, pat[:65])
-                ok += 1
-            except OSError:
-                continue
-        time.sleep(0.05)
-    return f"deepcool=off-attempts:{ok}-devs:{len(paths)}"
-
-
-def deepcool_on(paths: Sequence[str], rgb: tuple[int, int, int] = DEFAULT_RGB) -> str:
-    if not paths:
-        return "deepcool=absent"
-    r, g, b = rgb
-    ok = 0
-    patterns = [
-        bytes([0x10, 0x01, 0x00, r, g, b] + [0x00] * 59),
-        bytes([0x01, r, g, b] + [0x00] * 61),
-    ]
-    for path in paths:
-        for pat in patterns:
-            try:
-                deepcool_send(path, pat[:65])
-                ok += 1
-            except OSError:
-                continue
-    return f"deepcool=on-attempts:{ok}-devs:{len(paths)}"
-
-
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """ARGB-safe off: stream static black at dim 0 (do NOT dim 100).
-
-    Dim 100 can idle the ARGB data line; DeepCool then falls back to its
-    built-in rainbow on the pump logo. Black frames at dim 0 keep the
-    controller "present" while every LED stays dark.
-    """
+    """ARGB-safe off: static black at dim 0 (do not dim 100)."""
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
-
-    # Ensure dim path is fully on so color/anim data reaches ARGB headers.
     dim_zones(fd, 0, zones)
-    play_static(fd, zones, (0, 0, 0))
+    try:
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        select_zones(fd, zones)
+        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
     set_color_direct(fd, (0, 0, 0), zones)
-    # Re-assert black after set_color — some firmwares drop anim on direct set.
-    play_static(fd, zones, (0, 0, 0))
+    try:
+        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        select_zones(fd, zones)
+        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
     set_color_direct(fd, (0, 0, 0), zones)
     dim_zones(fd, 0, zones)
 
 
-def leds_on(fd: int, zones: Sequence[int], rgb: tuple[int, int, int] = DEFAULT_RGB) -> None:
+def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
+    """Factory-style rainbow wave across chassis zones (OpenRGB spectrum/rainbow)."""
     dim_zones(fd, 0, zones)
-    play_static(fd, zones, rgb)
-    set_color_direct(fd, rgb, zones)
+    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
+        try:
+            user_anim(fd, ANIM_REMOVE, slot)
+        except OSError:
+            pass
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    # Four phase groups → moving rainbow across the case
+    for phase in range(4):
+        zgroup = list(zones)[phase::4]
+        if not zgroup:
+            continue
+        select_zones(fd, zgroup)
+        colors = RAINBOW_PHASES[phase]
+        actions = [
+            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
+            for r, g, b in colors
+        ]
+        add_actions(fd, actions)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
     dim_zones(fd, 0, zones)
 
 
 def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
-    """Re-send black frames while state=off (keeps DeepCool ARGB quiet)."""
     set_color_direct(fd, (0, 0, 0), zones)
-    play_static(fd, zones, (0, 0, 0))
+    try:
+        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        select_zones(fd, zones)
+        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
     dim_zones(fd, 0, zones)
 
 
 def apply(action: str) -> None:
     dev = find_aw_hidraw()
-    dc_paths = find_deepcool_hidraw()
     fd = os.open(dev, os.O_RDWR)
     extras: list[str] = []
     try:
         platform, count = probe_zones(fd)
         zones = list(range(count))
-        if action == "on":
-            leds_on(fd, zones)
+        if action in ("on", "rainbow"):
+            leds_rainbow(fd, zones)
             extras.append(wmi_set_brightness(15))
             extras.append(wmi_set_zones_rgb("00FF40"))
-            extras.append(deepcool_on(dc_paths))
             write_state("on")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
-                f"dim=0 black=no (ON); " + "; ".join(extras)
+                f"mode=rainbow (ON); " + "; ".join(extras)
             )
         elif action == "off":
             leds_off(fd, zones)
             extras.append(wmi_set_brightness(0))
             extras.append(wmi_set_zones_rgb("000000"))
-            extras.append(deepcool_off(dc_paths))
             write_state("off")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
-                f"dim=0 black=yes (OFF/ARGB-safe); " + "; ".join(extras)
+                f"mode=black (OFF); " + "; ".join(extras)
             )
-            if not dc_paths:
-                print(
-                    "note: no DeepCool USB (3633:*) — pump is ARGB-only. "
-                    "Off keeps streaming black on the Alienware ARGB header. "
-                    "If the pump still rainbows, its 5V ARGB cable is not on "
-                    "that header (power-only splitter / wrong plug).",
-                    file=sys.stderr,
-                )
         elif action == "refresh":
-            # Used by timer while off — reassert black without flipping state.
             if read_state() != "off":
                 print(f"refresh skipped (state={read_state()})")
                 return
             leds_refresh_black(fd, zones)
             wmi_set_brightness(0)
             wmi_set_zones_rgb("000000")
-            deepcool_off(dc_paths)
             print(f"AW-ELC {dev}: refreshed black on {count} zones")
         else:
             raise SystemExit(f"unknown action: {action}")
@@ -361,9 +359,8 @@ def apply(action: str) -> None:
 
 
 def install_refresh_timer() -> None:
-    """Ensure a systemd timer reasserts black every minute while off."""
     service = """[Unit]
-Description=Reassert Alienware/DeepCool LED blackout (ARGB-safe)
+Description=Reassert Alienware LED blackout (ARGB-safe)
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/alienware-leds refresh
@@ -389,20 +386,15 @@ WantedBy=timers.target
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("Usage: alienware-leds on|off|status|auto|refresh")
+        print("Usage: alienware-leds on|off|rainbow|status|auto|refresh")
         raise SystemExit(2)
     action = sys.argv[1].lower()
-    if action in ("on", "off", "refresh"):
-        apply(action)
+    if action in ("on", "off", "rainbow", "refresh"):
+        apply("on" if action == "rainbow" else action)
         if action == "off":
             install_refresh_timer()
     elif action == "status":
-        st = read_state()
-        dc = find_deepcool_hidraw()
-        print(
-            f"state={st} device={find_aw_hidraw()} "
-            f"deepcool={','.join(dc) if dc else 'absent'}"
-        )
+        print(f"state={read_state()} device={find_aw_hidraw()}")
     elif action == "auto":
         os.environ.setdefault("TZ", "America/New_York")
         time.tzset()

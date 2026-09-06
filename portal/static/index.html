@@ -1431,12 +1431,11 @@
                 <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
               </div>
               <div class="settings-actions">
-                <button type="button" class="primary" id="settingsLedsOnBtn">Turn on</button>
+                <button type="button" class="primary" id="settingsLedsOnBtn">Rainbow</button>
                 <button type="button" class="ghost" id="settingsLedsOffBtn">Turn off</button>
                 <button type="button" class="ghost" id="settingsLedsAutoBtn">Apply schedule</button>
               </div>
-              <p class="hint" style="margin:10px 0 0" id="settingsLedsHint">Turns Alienware chassis lights on/off. Auto schedule is Eastern: on 7 AM, off 10 PM.</p>
-              <p class="hint" style="margin:8px 0 0;color:#b45309" id="settingsLedsPumpNote" hidden></p>
+              <p class="hint" style="margin:10px 0 0" id="settingsLedsHint">Alienware chassis lights. Rainbow is the default on mode. Auto schedule is Eastern: on 7 AM, off 10 PM.</p>
             </div>
           </div>
 
@@ -2927,7 +2926,6 @@
       const stateEl = document.getElementById("settingsLedsState");
       const schedEl = document.getElementById("settingsLedsSchedule");
       const hostEl = document.getElementById("settingsLedsHost");
-      const pumpEl = document.getElementById("settingsLedsPumpNote");
       if (!stateEl) return;
       const st = (data && data.state) || "unknown";
       stateEl.textContent = data && data.ok === false && data.error
@@ -2938,16 +2936,6 @@
           || "On 7:00 AM · Off 10:00 PM (Eastern)";
       }
       if (hostEl) hostEl.textContent = (data && data.host) || "—";
-      if (pumpEl) {
-        const note = (data && (data.warning || data.pump_note)) || "";
-        if (note) {
-          pumpEl.hidden = false;
-          pumpEl.textContent = note;
-        } else {
-          pumpEl.hidden = true;
-          pumpEl.textContent = "";
-        }
-      }
     }
     async function refreshLedsSettings() {
       try {
@@ -2965,13 +2953,8 @@
           body: JSON.stringify({ action }),
         });
         renderLedsSettings(data);
-        if (data.warning) {
-          setStatus(`Chassis LEDs ${data.state || action} — pump logo needs a cable change`, "ok");
-          showLog(data.warning, true);
-        } else {
-          setStatus(`Chassis LEDs ${data.state || action}`, "ok");
-          showLog(`LEDs ${action} → ${data.state || "?"}`, true);
-        }
+        setStatus(`Chassis LEDs ${data.state || action}`, "ok");
+        showLog(`LEDs ${action} → ${data.state || "?"}`, true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);

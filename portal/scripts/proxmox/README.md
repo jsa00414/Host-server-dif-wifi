@@ -24,27 +24,20 @@ After (1), renew DHCP on Proxmox if it uses DHCP. Static DNS to the router is re
 
 See [PXE.md](./PXE.md) and `./install-pxe.sh`.
 
-## Chassis LEDs (Alienware AW-ELC + DeepCool)
+## Chassis LEDs (Alienware AW-ELC)
 
 `alienware-leds` on the Proxmox host drives:
 
 - Alienware AW-ELC USB `187c:0550` (Aurora R14 ≈ **77** zones, ≤25 IDs/packet)
 - `alienware-wmi` global brightness + `rgb_zones`
-- DeepCool USB `3633:*` when present (Digital / LQ / LM)
 
-ARGB-only DeepCool pumps (LS/LE) follow the motherboard 5V ARGB header.
-**Off is ARGB-safe:** it streams static black at dim 0 (dim 100 can idle the
-data line and trigger DeepCool’s built-in rainbow). A one-minute refresh timer
-reasserts black while state=off.
-
-If the pump ARGB cable is on a power-only splitter (not the Alienware header),
-software still cannot turn it off — plug it into the motherboard ARGB header,
-or unplug the ARGB cable (pump cooling still works).
+**On / rainbow** plays an OpenRGB-style spectrum morph (phased wave across zones).
+**Off** is ARGB-safe: static black at dim 0 (keeps the data line alive). A
+one-minute refresh timer reasserts black while state=off.
 
 ```bash
 install -m 755 alienware-leds /usr/local/sbin/alienware-leds
-# also keep /usr/local/sbin/alienware-leds as the path the portal calls
-alienware-leds on|off|auto|status
+alienware-leds on|rainbow|off|auto|status
 ```
 
-Portal Settings calls the same binary over SSH.
+Portal Settings → Chassis LEDs calls the same binary over SSH (`on` = rainbow).
