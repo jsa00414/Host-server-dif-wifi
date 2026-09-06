@@ -19,3 +19,7 @@ ROUTER_HOST=10.9.0.2 ROUTER_PASS='...' ./bypass-pihole-dns.sh
 ```
 
 After (1), renew DHCP on Proxmox if it uses DHCP. Static DNS to the router is rewritten by Flint DNAT either way.
+
+## Network boot (PXE)
+
+See [PXE.md](./PXE.md) and `./install-pxe.sh`.
