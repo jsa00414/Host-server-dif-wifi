@@ -1427,6 +1427,7 @@
             <div class="panel-body">
               <div class="settings-kv" id="settingsLedsKv">
                 <div><span class="k">Status</span><span class="v" id="settingsLedsState">—</span></div>
+                <div><span class="k">Owner</span><span class="v" id="settingsLedsOwner">—</span></div>
                 <div><span class="k">Schedule</span><span class="v" id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</span></div>
                 <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
               </div>
@@ -1434,8 +1435,10 @@
                 <button type="button" class="primary" id="settingsLedsOnBtn">Rainbow</button>
                 <button type="button" class="ghost" id="settingsLedsOffBtn">Turn off</button>
                 <button type="button" class="ghost" id="settingsLedsAutoBtn">Apply schedule</button>
+                <button type="button" class="ghost" id="settingsLedsWindowsBtn">Windows (FX Lighting)</button>
+                <button type="button" class="ghost" id="settingsLedsHostBtn">Return to host</button>
               </div>
-              <p class="hint" style="margin:10px 0 0" id="settingsLedsHint">Alienware chassis lights. Rainbow is the default on mode. Auto schedule is Eastern: on 7 AM, off 10 PM.</p>
+              <p class="hint" style="margin:10px 0 0" id="settingsLedsHint">Alienware chassis lights. Use Windows (FX Lighting) to pass the LED USB to the Windows VM and set effects in Alienware FX — tell me when to copy them back. Rainbow is the host on mode. Auto schedule is Eastern: on 7 AM, off 10 PM.</p>
             </div>
           </div>
 
@@ -2924,18 +2927,27 @@
     }
     function renderLedsSettings(data) {
       const stateEl = document.getElementById("settingsLedsState");
+      const ownerEl = document.getElementById("settingsLedsOwner");
       const schedEl = document.getElementById("settingsLedsSchedule");
       const hostEl = document.getElementById("settingsLedsHost");
+      const hintEl = document.getElementById("settingsLedsHint");
       if (!stateEl) return;
       const st = (data && data.state) || "unknown";
+      const owner = (data && data.owner) || (st === "windows" ? "windows" : "host");
       stateEl.textContent = data && data.ok === false && data.error
         ? `error (${data.error})`
         : st;
+      if (ownerEl) {
+        ownerEl.textContent = owner === "windows"
+          ? `Windows VM ${ (data && data.windows_vmid) || "100" } (FX Lighting)`
+          : (owner === "host" ? "Proxmox host (portal)" : owner);
+      }
       if (schedEl) {
         schedEl.textContent = (data && data.schedule && data.schedule.label)
           || "On 7:00 AM · Off 10:00 PM (Eastern)";
       }
       if (hostEl) hostEl.textContent = (data && data.host) || "—";
+      if (hintEl && data && data.hint) hintEl.textContent = data.hint;
     }
     async function refreshLedsSettings() {
       try {
@@ -2972,6 +2984,8 @@
     document.getElementById("settingsLedsOnBtn")?.addEventListener("click", () => setLedsAction("on"));
     document.getElementById("settingsLedsOffBtn")?.addEventListener("click", () => setLedsAction("off"));
     document.getElementById("settingsLedsAutoBtn")?.addEventListener("click", () => setLedsAction("auto"));
+    document.getElementById("settingsLedsWindowsBtn")?.addEventListener("click", () => setLedsAction("windows"));
+    document.getElementById("settingsLedsHostBtn")?.addEventListener("click", () => setLedsAction("host"));
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());

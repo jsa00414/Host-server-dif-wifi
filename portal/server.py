@@ -1772,6 +1772,11 @@ PROXMOX_SSH_KEY = os.environ.get("PROXMOX_SSH_KEY", "/root/.ssh/id_ed25519").str
 PROXMOX_LED_CMD = os.environ.get(
     "PROXMOX_LED_CMD", "/usr/local/sbin/alienware-leds"
 ).strip() or "/usr/local/sbin/alienware-leds"
+PROXMOX_LED_OWNER_CMD = os.environ.get(
+    "PROXMOX_LED_OWNER_CMD", "/usr/local/sbin/aw-elc-usb-owner"
+).strip() or "/usr/local/sbin/aw-elc-usb-owner"
+# Windows GPU VM that can run Alienware FX Lighting when it owns the AW-ELC USB.
+PROXMOX_LED_WINDOWS_VMID = os.environ.get("PROXMOX_LED_WINDOWS_VMID", "100").strip() or "100"
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -6363,8 +6368,69 @@ def proxmox_ssh(remote_cmd: str, timeout: int = 20) -> subprocess.CompletedProce
     )
 
 
+def _parse_led_owner(out: str) -> dict:
+    owner = "unknown"
+    vmid = PROXMOX_LED_WINDOWS_VMID
+    host_usb = None
+    vm_usb = None
+    for tok in out.replace("\n", " ").split():
+        if tok.startswith("owner="):
+            owner = tok.split("=", 1)[1].strip() or owner
+        elif tok.startswith("vmid="):
+            vmid = tok.split("=", 1)[1].strip() or vmid
+        elif tok.startswith("host_usb="):
+            host_usb = tok.split("=", 1)[1].strip() == "1"
+        elif tok.startswith("vm_usb="):
+            vm_usb = tok.split("=", 1)[1].strip() == "1"
+    return {
+        "owner": owner,
+        "windows_vmid": vmid,
+        "host_usb": host_usb,
+        "vm_usb": vm_usb,
+    }
+
+
+def leds_owner_status() -> dict:
+    """Who currently owns the AW-ELC USB: host (portal) or windows (FX Lighting)."""
+    proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} status")
+    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    info = _parse_led_owner(out)
+    info["ok"] = proc.returncode == 0 and info.get("owner") in ("host", "windows")
+    info["detail"] = out
+    if proc.returncode != 0 and not info.get("owner"):
+        info["error"] = out or f"owner status failed ({proc.returncode})"
+    return info
+
+
 def leds_status() -> dict:
     """Read Alienware/PC chassis LED state from the Proxmox host."""
+    owner_info = leds_owner_status()
+    owner = str(owner_info.get("owner") or "unknown")
+    schedule = {
+        "timezone": "America/New_York",
+        "on": "07:00",
+        "off": "22:00",
+        "label": "On 7:00 AM · Off 10:00 PM (Eastern)",
+    }
+    if owner == "windows":
+        return {
+            "ok": True,
+            "state": "windows",
+            "owner": "windows",
+            "device": "",
+            "windows_vmid": owner_info.get("windows_vmid") or PROXMOX_LED_WINDOWS_VMID,
+            "schedule": schedule,
+            "host": PROXMOX_SSH_HOST,
+            "hint": (
+                "LED controller is in Windows VM "
+                f"{owner_info.get('windows_vmid') or PROXMOX_LED_WINDOWS_VMID}. "
+                "Set effects in Alienware FX Lighting, then tell me when to copy them "
+                "back — or click Return to host."
+            ),
+            "error": None,
+            "owner_detail": owner_info.get("detail"),
+        }
+
     proc = proxmox_ssh(f"{PROXMOX_LED_CMD} status")
     out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     state = "unknown"
@@ -6378,23 +6444,50 @@ def leds_status() -> dict:
     return {
         "ok": ok,
         "state": state if ok else "unknown",
+        "owner": owner if owner in ("host", "windows") else ("host" if ok else "unknown"),
         "device": device,
-        "schedule": {
-            "timezone": "America/New_York",
-            "on": "07:00",
-            "off": "22:00",
-            "label": "On 7:00 AM · Off 10:00 PM (Eastern)",
-        },
+        "windows_vmid": owner_info.get("windows_vmid") or PROXMOX_LED_WINDOWS_VMID,
+        "schedule": schedule,
         "host": PROXMOX_SSH_HOST,
+        "hint": (
+            "Portal controls the chassis on the Proxmox host. "
+            "Click Windows (FX Lighting) to pass the LED USB to the Windows VM."
+        ),
         "error": None if ok else (out or f"ssh exit {proc.returncode}"),
+        "owner_detail": owner_info.get("detail"),
     }
 
 
 def leds_set(action: str) -> dict:
-    """Set chassis LEDs: on | off | rainbow | auto."""
+    """Set chassis LEDs: on | off | rainbow | auto | windows | host."""
     act = str(action or "").strip().lower()
+    if act in ("windows", "to-windows"):
+        proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} to-windows")
+        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if proc.returncode != 0:
+            raise RuntimeError(out or f"LED Windows handoff failed ({proc.returncode})")
+        st = leds_status()
+        st["action"] = "windows"
+        st["detail"] = out
+        return st
+    if act in ("host", "to-host"):
+        proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} to-host")
+        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if proc.returncode != 0:
+            raise RuntimeError(out or f"LED host reclaim failed ({proc.returncode})")
+        st = leds_status()
+        st["action"] = "host"
+        st["detail"] = out
+        return st
     if act not in ("on", "off", "auto", "rainbow"):
-        raise ValueError("action must be on, off, rainbow, or auto")
+        raise ValueError("action must be on, off, rainbow, auto, windows, or host")
+    # Host-side modes need the USB on the Proxmox host.
+    owner = str(leds_owner_status().get("owner") or "")
+    if owner == "windows":
+        raise RuntimeError(
+            "LED controller is in the Windows VM (FX Lighting). "
+            "Click Return to host first, or say when to copy FX settings."
+        )
     proc = proxmox_ssh(f"{PROXMOX_LED_CMD} {act}")
     out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     if proc.returncode != 0:

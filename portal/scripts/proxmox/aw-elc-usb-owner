@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Hand Alienware AW-ELC USB (187c:0550) between the Proxmox host and a Windows VM.
+#
+# Host owns it → portal / alienware-leds control chassis lights.
+# Windows owns it → Alienware FX Lighting / AWCC can configure effects;
+# when you're happy with FX, say so and we can copy those settings back to the host.
+#
+# Usage:
+#   aw-elc-usb-owner status
+#   aw-elc-usb-owner to-windows   # pass LED controller to the Windows VM
+#   aw-elc-usb-owner to-host      # reclaim LED controller for Proxmox/portal
+set -euo pipefail
+
+VENDOR_PRODUCT="187c:0550"
+VMID="${AW_ELC_WINDOWS_VMID:-100}"
+USB_SLOT="${AW_ELC_USB_SLOT:-usb4}"
+OWNER_PATH="/etc/alienware-leds/owner"
+STATE_PATH="/etc/alienware-leds/state"
+LED_CMD="${AW_ELC_LED_CMD:-/usr/local/sbin/alienware-leds}"
+
+mkdir -p "$(dirname "$OWNER_PATH")"
+
+host_has_device() {
+  # Prefer HID visibility: after passthrough lsusb may still list the device,
+  # but /dev/hidraw for AW-ELC is gone — that is what host control needs.
+  if compgen -G "/sys/class/hidraw/hidraw*/device/uevent" >/dev/null 2>&1; then
+    if grep -qi "HID_ID=0000187C:00000550\|187C:0550\|0000187C00000550" \
+         /sys/class/hidraw/hidraw*/device/uevent 2>/dev/null; then
+      return 0
+    fi
+  fi
+  # Fallback: present on USB bus and not mapped into the Windows VM.
+  if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1 && ! vm_has_usb; then
+    return 0
+  fi
+  return 1
+}
+
+vm_has_usb() {
+  qm config "$VMID" 2>/dev/null | grep -qiE "^${USB_SLOT}:.*${VENDOR_PRODUCT}|^${USB_SLOT}:.*187c:0550" \
+    || qm config "$VMID" 2>/dev/null | grep -qiE "host=${VENDOR_PRODUCT}"
+}
+
+read_owner() {
+  if [[ -f "$OWNER_PATH" ]]; then
+    tr -d '[:space:]' <"$OWNER_PATH"
+    return
+  fi
+  if vm_has_usb; then
+    echo windows
+  elif host_has_device; then
+    echo host
+  else
+    echo unknown
+  fi
+}
+
+write_owner() {
+  printf '%s\n' "$1" >"$OWNER_PATH"
+}
+
+stop_host_leds() {
+  systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
+  systemctl stop alienware-leds-refresh.service >/dev/null 2>&1 || true
+  # Best-effort: don't leave host holding the HID while we unplug it into the VM.
+  if [[ -x "$LED_CMD" ]] && host_has_device; then
+    "$LED_CMD" off >/dev/null 2>&1 || true
+  fi
+  systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
+}
+
+cmd_status() {
+  local owner device vm_usb host_usb
+  owner="$(read_owner)"
+  device="missing"
+  host_usb=0
+  vm_usb=0
+  if host_has_device; then
+    host_usb=1
+    device="$(lsusb -d "$VENDOR_PRODUCT" 2>/dev/null | head -1 | sed 's/^Bus/bus/' || echo present)"
+  fi
+  if vm_has_usb; then
+    vm_usb=1
+  fi
+  # Prefer live USB attachment over stale owner file.
+  if [[ "$vm_usb" -eq 1 && "$host_usb" -eq 0 ]]; then
+    owner=windows
+  elif [[ "$host_usb" -eq 1 && "$vm_usb" -eq 0 ]]; then
+    owner=host
+  fi
+  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} device=${device}"
+}
+
+cmd_to_windows() {
+  if ! qm status "$VMID" >/dev/null 2>&1; then
+    echo "VM ${VMID} not found" >&2
+    exit 1
+  fi
+  stop_host_leds
+  # Remove stale mapping first (idempotent).
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  sleep 0.5
+  if ! host_has_device; then
+    # Device may already be in the guest under another slot — clean those too.
+    local line slot
+    while read -r line; do
+      slot="${line%%:*}"
+      [[ -n "$slot" ]] || continue
+      qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+    done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*187c:0550" || true)
+    sleep 1
+  fi
+  if ! host_has_device && ! vm_has_usb; then
+    echo "AW-ELC ${VENDOR_PRODUCT} not found on host or VM ${VMID}" >&2
+    exit 1
+  fi
+  if host_has_device; then
+    qm set "$VMID" -"$USB_SLOT" "host=${VENDOR_PRODUCT},usb3=1"
+  fi
+  write_owner windows
+  printf 'windows\n' >"$STATE_PATH"
+  # Wait briefly for guest attachment.
+  sleep 1
+  cmd_status
+  echo "AW-ELC passed to Windows VM ${VMID} (${USB_SLOT}). Use Alienware FX Lighting there."
+}
+
+cmd_to_host() {
+  local line slot
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*187c:0550" || true)
+  # Also delete configured slot even if grep missed formatting.
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  # Wait for device to reappear on the host.
+  local i
+  for i in $(seq 1 30); do
+    if host_has_device; then
+      break
+    fi
+    sleep 0.5
+  done
+  if ! host_has_device; then
+    write_owner unknown
+    echo "AW-ELC did not reappear on host after reclaim" >&2
+    cmd_status
+    exit 1
+  fi
+  write_owner host
+  if [[ -x "$LED_CMD" ]]; then
+    "$LED_CMD" on || true
+  else
+    printf 'on\n' >"$STATE_PATH"
+  fi
+  cmd_status
+  echo "AW-ELC reclaimed by host. Portal LED controls are active again."
+}
+
+usage() {
+  echo "Usage: aw-elc-usb-owner status|to-windows|to-host"
+  echo "  Windows VMID=${VMID}  USB slot=${USB_SLOT}  device=${VENDOR_PRODUCT}"
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status) cmd_status ;;
+    to-windows|windows) cmd_to_windows ;;
+    to-host|host) cmd_to_host ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown action: $action" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"

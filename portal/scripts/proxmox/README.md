@@ -37,7 +37,25 @@ one-minute refresh timer reasserts black while state=off.
 
 ```bash
 install -m 755 alienware-leds /usr/local/sbin/alienware-leds
+install -m 755 aw-elc-usb-owner /usr/local/sbin/aw-elc-usb-owner
 alienware-leds on|rainbow|off|auto|status
+aw-elc-usb-owner status|to-windows|to-host
 ```
 
-Portal Settings → Chassis LEDs calls the same binary over SSH (`on` = rainbow).
+### Windows FX Lighting handoff
+
+The LED USB can only be owned by **one** side at a time:
+
+- **Host (portal)** — Settings → Rainbow / Off / schedule
+- **Windows VM 100** (`win11-pro-gpu`) — Alienware FX Lighting / AWCC
+
+```bash
+aw-elc-usb-owner to-windows   # pass 187c:0550 into VM 100
+# …set effects in Alienware FX Lighting…
+aw-elc-usb-owner to-host      # reclaim for portal control
+```
+
+Portal Settings has the same actions: **Windows (FX Lighting)** / **Return to host**.
+When FX looks right, say so and we can copy those settings back onto the host script.
+
+Portal Settings → Chassis LEDs calls these binaries over SSH (`on` = rainbow).

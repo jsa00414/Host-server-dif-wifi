@@ -173,10 +173,16 @@ def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> No
     )
 
 
-def select_zones(fd: int, zones: Sequence[int]) -> None:
+def select_zones(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
+    """Select zones for the next action series.
+
+    loop=True (OpenRGB / AWCC default) makes the morph/color series repeat
+    forever so LEDs stay lit and the rainbow keeps rotating.
+    """
+    loop_flag = 0x01 if loop else 0x00
     for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
         n = len(group)
-        aw_cmd(fd, CMD_SELECT_ZONES, 0x00, (n >> 8) & 0xFF, n & 0xFF, *group)
+        aw_cmd(fd, CMD_SELECT_ZONES, loop_flag, (n >> 8) & 0xFF, n & 0xFF, *group)
 
 
 def add_actions(
@@ -282,7 +288,13 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
 
 
 def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
-    """Factory-style rainbow wave across chassis zones (OpenRGB spectrum/rainbow)."""
+    """Factory-style rainbow wave: every zone stays lit and cycles forever.
+
+    Matches OpenRGB Rainbow Wave:
+      - SelectZones with loop=1 so the morph series never stops
+      - 4 phase-shifted color sequences → wave rotates around the chassis
+      - Lead with a COLOR of the phase start so nothing begins dark
+    """
     dim_zones(fd, 0, zones)
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
@@ -290,20 +302,37 @@ def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
         except OSError:
             pass
     user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    # Four phase groups → moving rainbow across the case
+    # Four phase groups → moving rainbow across the case (zone_idx % 4)
     for phase in range(4):
         zgroup = list(zones)[phase::4]
         if not zgroup:
             continue
-        select_zones(fd, zgroup)
+        select_zones(fd, zgroup, loop=True)
         colors = RAINBOW_PHASES[phase]
-        actions = [
-            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
-            for r, g, b in colors
+        r0, g0, b0 = colors[0]
+        # Solid first color so the zone is immediately on, then morph loop
+        actions: list[tuple[int, int, int, int, int, int]] = [
+            (MODE_COLOR, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
         ]
+        actions.extend(
+            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
+            for r, g, b in colors[1:]
+        )
+        # Close the loop back to the first color for a smooth rotate
+        actions.append(
+            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
+        )
         add_actions(fd, actions)
     user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
     dim_zones(fd, 0, zones)
+
+
+def stop_refresh_timer() -> None:
+    """Refresh timer is only for blackout — stop it when lights are on."""
+    try:
+        os.system("systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1")
+    except OSError:
+        pass
 
 
 def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
@@ -327,13 +356,14 @@ def apply(action: str) -> None:
         platform, count = probe_zones(fd)
         zones = list(range(count))
         if action in ("on", "rainbow"):
+            stop_refresh_timer()
             leds_rainbow(fd, zones)
             extras.append(wmi_set_brightness(15))
             extras.append(wmi_set_zones_rgb("00FF40"))
             write_state("on")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
-                f"mode=rainbow (ON); " + "; ".join(extras)
+                f"mode=rainbow-loop (ON); " + "; ".join(extras)
             )
         elif action == "off":
             leds_off(fd, zones)
