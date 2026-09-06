@@ -3010,6 +3010,15 @@
       if (!SETTINGS_VIEWS.has(defaultView)) defaultView = "overview";
       return { defaultView, remember, expandLog, autoRefresh, confirmSave };
     }
+    function initialViewFromPrefs() {
+      const prefs = readSettingsPrefs();
+      if (prefs.remember) {
+        let last = "";
+        try { last = localStorage.getItem("sm_last_view") || ""; } catch (e) {}
+        if (last && SETTINGS_VIEWS.has(last)) return last;
+      }
+      return prefs.defaultView || "overview";
+    }
     function applySettingsPrefsToForm() {
       const prefs = readSettingsPrefs();
       const def = document.getElementById("settingsDefaultView");
