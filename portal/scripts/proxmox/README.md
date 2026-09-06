@@ -24,13 +24,20 @@ After (1), renew DHCP on Proxmox if it uses DHCP. Static DNS to the router is re
 
 See [PXE.md](./PXE.md) and `./install-pxe.sh`.
 
-## Chassis LEDs (Alienware AW-ELC)
+## Chassis LEDs (Alienware AW-ELC + DeepCool)
 
-`alienware-leds` talks to USB `187c:0550` on the Proxmox host (Aurora R14 reports **77** zones). Install on the host:
+`alienware-leds` on the Proxmox host drives:
+
+- Alienware AW-ELC USB `187c:0550` (Aurora R14 ≈ **77** zones, ≤25 IDs/packet)
+- `alienware-wmi` global brightness + `rgb_zones`
+- DeepCool USB `3633:*` when present (Digital / LQ / LM)
+
+ARGB-only DeepCool pumps (LS/LE) follow the motherboard 5V ARGB header. If that cable is on a power-only splitter, the pump stays in auto-rainbow and software cannot turn it off.
 
 ```bash
 install -m 755 alienware-leds /usr/local/sbin/alienware-leds
+# also keep /usr/local/sbin/alienware-leds as the path the portal calls
 alienware-leds on|off|auto|status
 ```
 
-Dim/color updates are split into packets of ≤25 zone IDs. Portal Settings calls the same binary over SSH.
+Portal Settings calls the same binary over SSH.

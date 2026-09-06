@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Control Alienware AW-ELC (187c:0550) chassis LEDs via USB HID control pipe.
+"""Control Alienware + DeepCool chassis lighting from the Proxmox host.
 
-Aurora R14 (and similar desktops) report ~77 zones. The HID report only fits
-25 zone IDs per packet, so dim/color updates are chunked. Brightness is
-inverted: dim 0 = full on, dim 100 = off.
+Covers:
+  1) AW-ELC USB HID (187c:0550) — Aurora R14 reports ~77 zones; HID packets
+     hold ≤25 zone IDs, so updates are chunked. Dim is inverted: 0=on, 100=off.
+  2) alienware-wmi sysfs — global_brightness + rgb_zones.
+  3) DeepCool USB HID (vid 3633) when present — Digital / LQ / LM pumps.
+
+DeepCool ARGB-only pumps (LS/LE without USB) follow the motherboard 5V ARGB
+header. If that cable is unplugged or on a power-only splitter, the pump plays
+its built-in rainbow and no software can turn it off — reconnect ARGB to the
+Alienware-controlled header.
 
 Schedule uses America/New_York (EST/EDT).
 """
@@ -16,12 +23,16 @@ import sys
 import time
 from typing import Iterable, Sequence
 
-VID, PID = 0x187C, 0x0550
+AW_TAG = "0000187C00000550"
+DEEPCOOL_TAG = "00003633"
 MAX_ZONES_PER_PACKET = 25
 STATE_PATH = "/etc/alienware-leds/state"
-DEFAULT_RGB = (0x00, 0xFF, 0x40)  # Alienware-ish green
+DEFAULT_RGB = (0x00, 0xFF, 0x40)
 
-# OpenRGB AlienwareController command opcodes
+WMI_BRIGHTNESS = "/sys/class/leds/alienware::global_brightness/brightness"
+WMI_ZONE_DIR = "/sys/devices/platform/alienware-wmi/rgb_zones"
+WMI_CTRL_STATE = f"{WMI_ZONE_DIR}/lighting_control_state"
+
 CMD_REPORT = 0x20
 CMD_USER_ANIM = 0x21
 CMD_SELECT_ZONES = 0x23
@@ -34,30 +45,41 @@ REPORT_CONFIG = 0x02
 ANIM_NEW = 0x0001
 ANIM_FINISH_PLAY = 0x0003
 ANIM_REMOVE = 0x0004
-ANIM_KEYBOARD = 0xFFFF  # non-saved / temporary slot
+ANIM_KEYBOARD = 0xFFFF
 ANIM_DEFAULT = 0x0061
 
 
 def _ioc(nr: int) -> int:
-    # _IOC(READ|WRITE, 'H', nr, 34)
     return (3 << 30) | (34 << 16) | (ord("H") << 8) | nr
 
 
 HIDIOCGINPUT, HIDIOCSOUTPUT = _ioc(0x0A), _ioc(0x0B)
 
 
-def find_hidraw() -> str:
+def _hidraw_matching(tag_no_colons: str) -> list[str]:
+    paths: list[str] = []
+    needle = tag_no_colons.upper()
     for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
-        txt = open(uevent, encoding="utf-8", errors="ignore").read()
-        if "0000187C:00000550" in txt:
-            name = uevent.split("/")[4]
-            return f"/dev/{name}"
-    raise SystemExit(
-        "AW-ELC (187c:0550) not found on host — is it passed through to a VM?"
-    )
+        txt = open(uevent, encoding="utf-8", errors="ignore").read().upper()
+        if needle in txt.replace(":", ""):
+            paths.append(f"/dev/{uevent.split('/')[4]}")
+    return list(dict.fromkeys(paths))
 
 
-def cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
+def find_aw_hidraw() -> str:
+    paths = _hidraw_matching(AW_TAG)
+    if not paths:
+        raise SystemExit(
+            "AW-ELC (187c:0550) not found on host — is it passed through to a VM?"
+        )
+    return paths[0]
+
+
+def find_deepcool_hidraw() -> list[str]:
+    return _hidraw_matching(DEEPCOOL_TAG)
+
+
+def aw_cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
     buf = bytearray(34)
     data = bytes([0x03, *payload])
     if len(data) > 33:
@@ -76,38 +98,30 @@ def chunks(seq: Sequence[int], size: int) -> Iterable[Sequence[int]]:
 
 
 def probe_zones(fd: int) -> tuple[int, int]:
-    """Return (platform_id, zone_count) from REPORT_CONFIG (OpenRGB layout)."""
-    resp = cmd(fd, CMD_REPORT, REPORT_CONFIG)
-    # hidapi-style buffer: [0]=0, [1]=0x03, [2]=0x20, [3]=sub,
-    # [4]=platform_hi, [5]=platform_lo, [6]=zone_count
+    resp = aw_cmd(fd, CMD_REPORT, REPORT_CONFIG)
     platform = (resp[4] << 8) | resp[5]
     count = resp[6]
     if count <= 0 or count > 200:
-        # Sensible desktop fallback if the controller returns garbage
         count = 77
     return platform, count
-
-
-def all_zone_ids(count: int) -> list[int]:
-    return list(range(count))
 
 
 def dim_zones(fd: int, dim: int, zones: Sequence[int]) -> None:
     dim = max(0, min(100, int(dim)))
     for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
         n = len(group)
-        cmd(fd, CMD_DIM, dim, (n >> 8) & 0xFF, n & 0xFF, *group)
+        aw_cmd(fd, CMD_DIM, dim, (n >> 8) & 0xFF, n & 0xFF, *group)
 
 
 def set_color_direct(fd: int, rgb: tuple[int, int, int], zones: Sequence[int]) -> None:
     r, g, b = rgb
     for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
         n = len(group)
-        cmd(fd, CMD_SET_COLOR, r, g, b, (n >> 8) & 0xFF, n & 0xFF, *group)
+        aw_cmd(fd, CMD_SET_COLOR, r, g, b, (n >> 8) & 0xFF, n & 0xFF, *group)
 
 
 def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> None:
-    cmd(
+    aw_cmd(
         fd,
         CMD_USER_ANIM,
         (subcommand >> 8) & 0xFF,
@@ -123,14 +137,12 @@ def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> No
 def select_zones(fd: int, zones: Sequence[int]) -> None:
     for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
         n = len(group)
-        # OpenRGB: byte3 = 0 for non-power zones, then BE count
-        cmd(fd, CMD_SELECT_ZONES, 0x00, (n >> 8) & 0xFF, n & 0xFF, *group)
+        aw_cmd(fd, CMD_SELECT_ZONES, 0x00, (n >> 8) & 0xFF, n & 0xFF, *group)
 
 
 def add_static_color(fd: int, rgb: tuple[int, int, int]) -> None:
     r, g, b = rgb
-    # mode=color, duration=0x07D0, tempo=0x00FA (OpenRGB / AWCC defaults)
-    cmd(fd, CMD_ADD_ACTION, 0x00, 0x07, 0xD0, 0x00, 0xFA, r, g, b)
+    aw_cmd(fd, CMD_ADD_ACTION, 0x00, 0x07, 0xD0, 0x00, 0xFA, r, g, b)
 
 
 def write_state(state: str) -> None:
@@ -145,50 +157,170 @@ def read_state() -> str:
     return open(STATE_PATH, encoding="utf-8").read().strip() or "unknown"
 
 
+def wmi_set_brightness(value: int) -> str:
+    if not os.path.exists(WMI_BRIGHTNESS):
+        return "wmi-brightness=missing"
+    max_path = WMI_BRIGHTNESS.replace("/brightness", "/max_brightness")
+    max_v = 15
+    if os.path.exists(max_path):
+        try:
+            max_v = int(open(max_path, encoding="utf-8").read().strip() or "15")
+        except ValueError:
+            max_v = 15
+    value = max(0, min(max_v, int(value)))
+    open(WMI_BRIGHTNESS, "w", encoding="utf-8").write(f"{value}\n")
+    return f"wmi-brightness={value}/{max_v}"
+
+
+def wmi_set_zones_rgb(rgb_hex: str) -> str:
+    if not os.path.isdir(WMI_ZONE_DIR):
+        return "wmi-zones=missing"
+    touched = 0
+    for profile in ("running", "booting", "suspend"):
+        try:
+            open(WMI_CTRL_STATE, "w", encoding="utf-8").write(profile + "\n")
+        except OSError:
+            continue
+        for path in sorted(glob.glob(f"{WMI_ZONE_DIR}/zone*")):
+            if not os.path.isfile(path):
+                continue
+            try:
+                open(path, "w", encoding="utf-8").write(rgb_hex + "\n")
+                touched += 1
+            except OSError:
+                pass
+    try:
+        open(WMI_CTRL_STATE, "w", encoding="utf-8").write("running\n")
+    except OSError:
+        pass
+    return f"wmi-zones={touched}"
+
+
+def deepcool_send(path: str, report: bytes) -> None:
+    fd = os.open(path, os.O_RDWR)
+    try:
+        try:
+            os.write(fd, report)
+            return
+        except OSError:
+            pass
+        length = len(report)
+        hidocsfeature = (1 << 30) | (length << 16) | (ord("H") << 8) | 0x06
+        buf = bytearray(report)
+        try:
+            fcntl.ioctl(fd, hidocsfeature, buf)
+        except OSError:
+            pass
+    finally:
+        os.close(fd)
+
+
+def deepcool_off(paths: Sequence[str]) -> str:
+    if not paths:
+        return "deepcool=absent"
+    ok = 0
+    patterns = [
+        bytes([0x00] + [0x00] * 64),
+        bytes([0x10, 0x00] + [0x00] * 63),
+        bytes([0x01] + [0x00] * 64),
+        bytes([0xAA, 0x08] + [0x00] * 62),
+    ]
+    for path in paths:
+        for pat in patterns:
+            try:
+                deepcool_send(path, pat[:65])
+                ok += 1
+            except OSError:
+                continue
+        time.sleep(0.05)
+    return f"deepcool=off-attempts:{ok}-devs:{len(paths)}"
+
+
+def deepcool_on(paths: Sequence[str], rgb: tuple[int, int, int] = DEFAULT_RGB) -> str:
+    if not paths:
+        return "deepcool=absent"
+    r, g, b = rgb
+    ok = 0
+    patterns = [
+        bytes([0x10, 0x01, 0x00, r, g, b] + [0x00] * 59),
+        bytes([0x01, r, g, b] + [0x00] * 61),
+    ]
+    for path in paths:
+        for pat in patterns:
+            try:
+                deepcool_send(path, pat[:65])
+                ok += 1
+            except OSError:
+                continue
+    return f"deepcool=on-attempts:{ok}-devs:{len(paths)}"
+
+
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """Fully extinguish lighting: stop anims, black out, dim 100 on all zones."""
-    # Tear down temporary + default animation slots so leftover morphs stop.
+    """Black static anim (keeps ARGB data alive) + dim 100."""
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
+    # Keep ARGB headers receiving black frames so DeepCool does not fall back
+    # to its built-in auto-rainbow ("no controller detected").
+    try:
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        select_zones(fd, zones)
+        add_static_color(fd, (0, 0, 0))
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
     set_color_direct(fd, (0, 0, 0), zones)
     dim_zones(fd, 100, zones)
 
 
 def leds_on(fd: int, zones: Sequence[int], rgb: tuple[int, int, int] = DEFAULT_RGB) -> None:
-    """Full brightness + static color across every reported zone."""
     dim_zones(fd, 0, zones)
-    # Temporary non-saved animation covering all zones (chunked selects).
     user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
     user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
     select_zones(fd, zones)
     add_static_color(fd, rgb)
     user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
-    # Direct color as a belt-and-suspenders path some firmware prefers.
     set_color_direct(fd, rgb, zones)
     dim_zones(fd, 0, zones)
 
 
 def apply(action: str) -> None:
-    dev = find_hidraw()
+    dev = find_aw_hidraw()
+    dc_paths = find_deepcool_hidraw()
     fd = os.open(dev, os.O_RDWR)
+    extras: list[str] = []
     try:
         platform, count = probe_zones(fd)
-        zones = all_zone_ids(count)
+        zones = list(range(count))
         if action == "on":
             leds_on(fd, zones)
+            extras.append(wmi_set_brightness(15))
+            extras.append(wmi_set_zones_rgb("00FF40"))
+            extras.append(deepcool_on(dc_paths))
             write_state("on")
             print(
-                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=0 (ON)"
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=0 (ON); "
+                + "; ".join(extras)
             )
         elif action == "off":
             leds_off(fd, zones)
+            extras.append(wmi_set_brightness(0))
+            extras.append(wmi_set_zones_rgb("000000"))
+            extras.append(deepcool_off(dc_paths))
             write_state("off")
             print(
-                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=100 (OFF)"
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=100 (OFF); "
+                + "; ".join(extras)
             )
+            if not dc_paths:
+                print(
+                    "note: no DeepCool USB (3633:*) — pump logo is ARGB-only; "
+                    "its 5V ARGB cable must be on the Alienware motherboard header "
+                    "(not a power-only splitter) or it stays in auto-rainbow.",
+                    file=sys.stderr,
+                )
         else:
             raise SystemExit(f"unknown action: {action}")
     finally:
@@ -204,12 +336,15 @@ def main() -> None:
         apply(action)
     elif action == "status":
         st = read_state()
-        print(f"state={st} device={find_hidraw()}")
+        dc = find_deepcool_hidraw()
+        print(
+            f"state={st} device={find_aw_hidraw()} "
+            f"deepcool={','.join(dc) if dc else 'absent'}"
+        )
     elif action == "auto":
         os.environ.setdefault("TZ", "America/New_York")
         time.tzset()
         hour = time.localtime().tm_hour
-        # On from 07:00 inclusive through 21:59; off from 22:00 through 06:59
         apply("on" if 7 <= hour < 22 else "off")
     else:
         raise SystemExit(f"unknown action: {action}")
