@@ -6451,8 +6451,9 @@ def leds_status() -> dict:
         "schedule": schedule,
         "host": PROXMOX_SSH_HOST,
         "hint": (
-            "Portal controls the chassis on the Proxmox host. "
-            "Click Windows (FX Lighting) to pass the LED USB to the Windows VM."
+            "Portal controls chassis lighting on the Proxmox host. "
+            "Spectrum keeps every zone the same color while cycling the rainbow. "
+            "Switch to Windows FX to edit in Alienware Command Center."
         ),
         "error": None if ok else (out or f"ssh exit {proc.returncode}"),
         "owner_detail": owner_info.get("detail"),

@@ -376,6 +376,123 @@
       gap: 8px;
       margin-top: 4px;
     }
+    .leds-panel { display: grid; gap: 14px; }
+    .leds-status {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(120% 90% at 0% 0%, rgba(61,222,160,.08), transparent 55%),
+        var(--bg2);
+    }
+    .leds-status-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .leds-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .leds-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--muted);
+      box-shadow: none;
+      flex: 0 0 auto;
+    }
+    .leds-dot.on {
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(61,222,160,.15);
+      animation: leds-pulse 1.8s ease-in-out infinite;
+    }
+    .leds-dot.off { background: #6b7280; }
+    .leds-dot.windows {
+      background: #60a5fa;
+      box-shadow: 0 0 0 4px rgba(96,165,250,.18);
+    }
+    .leds-dot.err { background: var(--danger); }
+    @keyframes leds-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.15); opacity: .75; }
+    }
+    .leds-live-text { min-width: 0; }
+    .leds-live-text strong {
+      display: block;
+      font-size: .95rem;
+      font-weight: 650;
+      letter-spacing: -.01em;
+    }
+    .leds-live-text span {
+      display: block;
+      color: var(--muted);
+      font-size: .74rem;
+      margin-top: 2px;
+    }
+    .leds-spectrum {
+      height: 6px;
+      border-radius: 999px;
+      background: linear-gradient(90deg,
+        #ff0033, #ff7a00, #ffd400, #00c853, #00b0ff, #3d5afe, #aa00ff, #ff0033);
+      background-size: 200% 100%;
+      opacity: .28;
+      filter: grayscale(.35);
+    }
+    .leds-spectrum.active {
+      opacity: 1;
+      filter: none;
+      animation: leds-flow 6s linear infinite;
+    }
+    @keyframes leds-flow {
+      from { background-position: 0% 50%; }
+      to { background-position: 200% 50%; }
+    }
+    .leds-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    @media (max-width: 720px) {
+      .leds-meta { grid-template-columns: 1fr; }
+    }
+    .leds-meta div {
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--bg1);
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: .74rem;
+    }
+    .leds-meta .k { display: block; color: var(--muted); margin-bottom: 3px; font-size: .68rem; }
+    .leds-meta .v { color: var(--text); word-break: break-word; }
+    .leds-group { display: grid; gap: 8px; }
+    .leds-group-label {
+      font-size: .72rem;
+      font-weight: 650;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .leds-group .settings-actions { margin-top: 0; }
+    .leds-group button.is-active.primary {
+      box-shadow: 0 0 0 1px rgba(61,222,160,.45);
+    }
+    .leds-group button.is-active.ghost {
+      color: var(--accent);
+      border-color: rgba(61,222,160,.35);
+      background: var(--accent-dim);
+    }
+    .leds-hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.4;
+    }
     .settings-form {
       display: grid;
       gap: 10px;
@@ -1419,26 +1536,47 @@
             </div>
           </div>
 
-          <div class="panel">
+          <div class="panel" id="settingsLedsPanel">
             <div class="panel-head">
-              <h3>PC chassis LEDs</h3>
+              <h3>Chassis lighting</h3>
               <button type="button" class="ghost" id="settingsLedsRefreshBtn">Refresh</button>
             </div>
-            <div class="panel-body">
-              <div class="settings-kv" id="settingsLedsKv">
-                <div><span class="k">Status</span><span class="v" id="settingsLedsState">—</span></div>
-                <div><span class="k">Owner</span><span class="v" id="settingsLedsOwner">—</span></div>
-                <div><span class="k">Schedule</span><span class="v" id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</span></div>
-                <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
+            <div class="panel-body leds-panel">
+              <div class="leds-status" id="settingsLedsStatus">
+                <div class="leds-status-top">
+                  <div class="leds-live">
+                    <span class="leds-dot" id="settingsLedsDot" aria-hidden="true"></span>
+                    <div class="leds-live-text">
+                      <strong id="settingsLedsState">—</strong>
+                      <span id="settingsLedsOwner">—</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="leds-spectrum" id="settingsLedsSpectrum" aria-hidden="true"></div>
+                <div class="leds-meta">
+                  <div><span class="k">Schedule</span><span class="v" id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</span></div>
+                  <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
+                </div>
               </div>
-              <div class="settings-actions">
-                <button type="button" class="primary" id="settingsLedsOnBtn">Rainbow</button>
-                <button type="button" class="ghost" id="settingsLedsOffBtn">Turn off</button>
-                <button type="button" class="ghost" id="settingsLedsAutoBtn">Apply schedule</button>
-                <button type="button" class="ghost" id="settingsLedsWindowsBtn">Windows (FX Lighting)</button>
-                <button type="button" class="ghost" id="settingsLedsHostBtn">Return to host</button>
+
+              <div class="leds-group">
+                <div class="leds-group-label">Lighting</div>
+                <div class="settings-actions">
+                  <button type="button" class="primary" id="settingsLedsOnBtn" data-leds-action="on">Spectrum</button>
+                  <button type="button" class="ghost" id="settingsLedsOffBtn" data-leds-action="off">Off</button>
+                  <button type="button" class="ghost" id="settingsLedsAutoBtn" data-leds-action="auto">Apply schedule</button>
+                </div>
               </div>
-              <p class="hint" style="margin:10px 0 0" id="settingsLedsHint">Alienware motherboard / chassis lights. Windows (FX Lighting) gives the VM full lighting control (AW-ELC USB + host WMI released). Set effects in Alienware FX / AWCC, then tell me when to copy them back. Rainbow is the host on mode. Auto schedule is Eastern: on 7 AM, off 10 PM.</p>
+
+              <div class="leds-group">
+                <div class="leds-group-label">Controller</div>
+                <div class="settings-actions">
+                  <button type="button" class="ghost" id="settingsLedsHostBtn" data-leds-action="host">Portal (host)</button>
+                  <button type="button" class="ghost" id="settingsLedsWindowsBtn" data-leds-action="windows">Windows FX</button>
+                </div>
+              </div>
+
+              <p class="leds-hint" id="settingsLedsHint">Spectrum keeps every zone the same color while cycling the rainbow. Hand off to Windows FX to edit in Alienware Command Center, then return control here.</p>
             </div>
           </div>
 
@@ -2931,23 +3069,71 @@
       const schedEl = document.getElementById("settingsLedsSchedule");
       const hostEl = document.getElementById("settingsLedsHost");
       const hintEl = document.getElementById("settingsLedsHint");
+      const dotEl = document.getElementById("settingsLedsDot");
+      const spectrumEl = document.getElementById("settingsLedsSpectrum");
+      const panel = document.getElementById("settingsLedsPanel");
       if (!stateEl) return;
-      const st = (data && data.state) || "unknown";
+
+      const err = data && data.ok === false ? String(data.error || "error") : "";
+      const st = err ? "error" : ((data && data.state) || "unknown");
       const owner = (data && data.owner) || (st === "windows" ? "windows" : "host");
-      stateEl.textContent = data && data.ok === false && data.error
-        ? `error (${data.error})`
-        : st;
-      if (ownerEl) {
-        ownerEl.textContent = owner === "windows"
-          ? `Windows VM ${ (data && data.windows_vmid) || "100" } (FX Lighting)`
-          : (owner === "host" ? "Proxmox host (portal)" : owner);
+      const onHost = owner !== "windows";
+      const isOn = !err && onHost && (st === "on" || st === "rainbow");
+      const isOff = !err && onHost && st === "off";
+      const isWindows = !err && owner === "windows";
+
+      let title = "Unknown";
+      let subtitle = "Waiting for status…";
+      if (err) {
+        title = "Unavailable";
+        subtitle = err;
+      } else if (isWindows) {
+        title = "Windows FX";
+        subtitle = `Controlled by VM ${(data && data.windows_vmid) || "100"}`;
+      } else if (isOn) {
+        title = "Spectrum";
+        subtitle = "Portal · all zones synced rainbow";
+      } else if (isOff) {
+        title = "Off";
+        subtitle = "Portal · ARGB-safe blackout";
+      } else {
+        title = st;
+        subtitle = onHost ? "Portal host" : `Owner: ${owner}`;
       }
+
+      stateEl.textContent = title;
+      if (ownerEl) ownerEl.textContent = subtitle;
       if (schedEl) {
         schedEl.textContent = (data && data.schedule && data.schedule.label)
           || "On 7:00 AM · Off 10:00 PM (Eastern)";
       }
       if (hostEl) hostEl.textContent = (data && data.host) || "—";
-      if (hintEl && data && data.hint) hintEl.textContent = data.hint;
+      if (hintEl) {
+        hintEl.textContent = (data && data.hint) || (
+          isWindows
+            ? "Lighting USB is in Windows. Use Alienware FX / AWCC there, then switch back to Portal."
+            : "Spectrum keeps every zone the same color while cycling the rainbow. Hand off to Windows FX to edit in Alienware Command Center."
+        );
+      }
+      if (dotEl) {
+        dotEl.className = "leds-dot"
+          + (err ? " err" : isWindows ? " windows" : isOn ? " on" : isOff ? " off" : "");
+      }
+      if (spectrumEl) spectrumEl.classList.toggle("active", !!isOn);
+
+      if (panel) {
+        panel.querySelectorAll("[data-leds-action]").forEach((btn) => {
+          const action = btn.getAttribute("data-leds-action");
+          let active = false;
+          if (action === "on") active = isOn;
+          else if (action === "off") active = isOff;
+          else if (action === "host") active = onHost && !err;
+          else if (action === "windows") active = isWindows;
+          btn.classList.toggle("is-active", active);
+          const disableLighting = isWindows && (action === "on" || action === "off" || action === "auto");
+          btn.disabled = !!disableLighting;
+        });
+      }
     }
     async function refreshLedsSettings() {
       try {
