@@ -23,3 +23,14 @@ After (1), renew DHCP on Proxmox if it uses DHCP. Static DNS to the router is re
 ## Network boot (PXE)
 
 See [PXE.md](./PXE.md) and `./install-pxe.sh`.
+
+## Chassis LEDs (Alienware AW-ELC)
+
+`alienware-leds` talks to USB `187c:0550` on the Proxmox host (Aurora R14 reports **77** zones). Install on the host:
+
+```bash
+install -m 755 alienware-leds /usr/local/sbin/alienware-leds
+alienware-leds on|off|auto|status
+```
+
+Dim/color updates are split into packets of ≤25 zone IDs. Portal Settings calls the same binary over SSH.

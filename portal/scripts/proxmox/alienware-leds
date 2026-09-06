@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Control Alienware AW-ELC (187c:0550) chassis LEDs via USB HID control pipe.
+
+Aurora R14 (and similar desktops) report ~77 zones. The HID report only fits
+25 zone IDs per packet, so dim/color updates are chunked. Brightness is
+inverted: dim 0 = full on, dim 100 = off.
+
+Schedule uses America/New_York (EST/EDT).
+"""
+from __future__ import annotations
+
+import fcntl
+import glob
+import os
+import sys
+import time
+from typing import Iterable, Sequence
+
+VID, PID = 0x187C, 0x0550
+MAX_ZONES_PER_PACKET = 25
+STATE_PATH = "/etc/alienware-leds/state"
+DEFAULT_RGB = (0x00, 0xFF, 0x40)  # Alienware-ish green
+
+# OpenRGB AlienwareController command opcodes
+CMD_REPORT = 0x20
+CMD_USER_ANIM = 0x21
+CMD_SELECT_ZONES = 0x23
+CMD_ADD_ACTION = 0x24
+CMD_DIM = 0x26
+CMD_SET_COLOR = 0x27
+
+REPORT_CONFIG = 0x02
+
+ANIM_NEW = 0x0001
+ANIM_FINISH_PLAY = 0x0003
+ANIM_REMOVE = 0x0004
+ANIM_KEYBOARD = 0xFFFF  # non-saved / temporary slot
+ANIM_DEFAULT = 0x0061
+
+
+def _ioc(nr: int) -> int:
+    # _IOC(READ|WRITE, 'H', nr, 34)
+    return (3 << 30) | (34 << 16) | (ord("H") << 8) | nr
+
+
+HIDIOCGINPUT, HIDIOCSOUTPUT = _ioc(0x0A), _ioc(0x0B)
+
+
+def find_hidraw() -> str:
+    for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
+        txt = open(uevent, encoding="utf-8", errors="ignore").read()
+        if "0000187C:00000550" in txt:
+            name = uevent.split("/")[4]
+            return f"/dev/{name}"
+    raise SystemExit(
+        "AW-ELC (187c:0550) not found on host — is it passed through to a VM?"
+    )
+
+
+def cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
+    buf = bytearray(34)
+    data = bytes([0x03, *payload])
+    if len(data) > 33:
+        raise ValueError(f"payload too large for HID report ({len(data)} > 33)")
+    buf[1 : 1 + len(data)] = data
+    fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
+    time.sleep(delay)
+    ack = bytearray(34)
+    fcntl.ioctl(fd, HIDIOCGINPUT, ack)
+    return bytes(ack)
+
+
+def chunks(seq: Sequence[int], size: int) -> Iterable[Sequence[int]]:
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def probe_zones(fd: int) -> tuple[int, int]:
+    """Return (platform_id, zone_count) from REPORT_CONFIG (OpenRGB layout)."""
+    resp = cmd(fd, CMD_REPORT, REPORT_CONFIG)
+    # hidapi-style buffer: [0]=0, [1]=0x03, [2]=0x20, [3]=sub,
+    # [4]=platform_hi, [5]=platform_lo, [6]=zone_count
+    platform = (resp[4] << 8) | resp[5]
+    count = resp[6]
+    if count <= 0 or count > 200:
+        # Sensible desktop fallback if the controller returns garbage
+        count = 77
+    return platform, count
+
+
+def all_zone_ids(count: int) -> list[int]:
+    return list(range(count))
+
+
+def dim_zones(fd: int, dim: int, zones: Sequence[int]) -> None:
+    dim = max(0, min(100, int(dim)))
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        n = len(group)
+        cmd(fd, CMD_DIM, dim, (n >> 8) & 0xFF, n & 0xFF, *group)
+
+
+def set_color_direct(fd: int, rgb: tuple[int, int, int], zones: Sequence[int]) -> None:
+    r, g, b = rgb
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        n = len(group)
+        cmd(fd, CMD_SET_COLOR, r, g, b, (n >> 8) & 0xFF, n & 0xFF, *group)
+
+
+def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> None:
+    cmd(
+        fd,
+        CMD_USER_ANIM,
+        (subcommand >> 8) & 0xFF,
+        subcommand & 0xFF,
+        (animation >> 8) & 0xFF,
+        animation & 0xFF,
+        (duration >> 8) & 0xFF,
+        duration & 0xFF,
+        delay=0.15 if subcommand in (ANIM_FINISH_PLAY, ANIM_REMOVE) else 0.07,
+    )
+
+
+def select_zones(fd: int, zones: Sequence[int]) -> None:
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        n = len(group)
+        # OpenRGB: byte3 = 0 for non-power zones, then BE count
+        cmd(fd, CMD_SELECT_ZONES, 0x00, (n >> 8) & 0xFF, n & 0xFF, *group)
+
+
+def add_static_color(fd: int, rgb: tuple[int, int, int]) -> None:
+    r, g, b = rgb
+    # mode=color, duration=0x07D0, tempo=0x00FA (OpenRGB / AWCC defaults)
+    cmd(fd, CMD_ADD_ACTION, 0x00, 0x07, 0xD0, 0x00, 0xFA, r, g, b)
+
+
+def write_state(state: str) -> None:
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with open(STATE_PATH, "w", encoding="utf-8") as fh:
+        fh.write(state + "\n")
+
+
+def read_state() -> str:
+    if not os.path.exists(STATE_PATH):
+        return "unknown"
+    return open(STATE_PATH, encoding="utf-8").read().strip() or "unknown"
+
+
+def leds_off(fd: int, zones: Sequence[int]) -> None:
+    """Fully extinguish lighting: stop anims, black out, dim 100 on all zones."""
+    # Tear down temporary + default animation slots so leftover morphs stop.
+    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
+        try:
+            user_anim(fd, ANIM_REMOVE, slot)
+        except OSError:
+            pass
+    set_color_direct(fd, (0, 0, 0), zones)
+    dim_zones(fd, 100, zones)
+
+
+def leds_on(fd: int, zones: Sequence[int], rgb: tuple[int, int, int] = DEFAULT_RGB) -> None:
+    """Full brightness + static color across every reported zone."""
+    dim_zones(fd, 0, zones)
+    # Temporary non-saved animation covering all zones (chunked selects).
+    user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    select_zones(fd, zones)
+    add_static_color(fd, rgb)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    # Direct color as a belt-and-suspenders path some firmware prefers.
+    set_color_direct(fd, rgb, zones)
+    dim_zones(fd, 0, zones)
+
+
+def apply(action: str) -> None:
+    dev = find_hidraw()
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        platform, count = probe_zones(fd)
+        zones = all_zone_ids(count)
+        if action == "on":
+            leds_on(fd, zones)
+            write_state("on")
+            print(
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=0 (ON)"
+            )
+        elif action == "off":
+            leds_off(fd, zones)
+            write_state("off")
+            print(
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=100 (OFF)"
+            )
+        else:
+            raise SystemExit(f"unknown action: {action}")
+    finally:
+        os.close(fd)
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: alienware-leds on|off|status|auto")
+        raise SystemExit(2)
+    action = sys.argv[1].lower()
+    if action in ("on", "off"):
+        apply(action)
+    elif action == "status":
+        st = read_state()
+        print(f"state={st} device={find_hidraw()}")
+    elif action == "auto":
+        os.environ.setdefault("TZ", "America/New_York")
+        time.tzset()
+        hour = time.localtime().tm_hour
+        # On from 07:00 inclusive through 21:59; off from 22:00 through 06:59
+        apply("on" if 7 <= hour < 22 else "off")
+    else:
+        raise SystemExit(f"unknown action: {action}")
+
+
+if __name__ == "__main__":
+    main()
