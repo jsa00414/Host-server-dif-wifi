@@ -6422,10 +6422,11 @@ def leds_status() -> dict:
             "schedule": schedule,
             "host": PROXMOX_SSH_HOST,
             "hint": (
-                "LED controller is in Windows VM "
-                f"{owner_info.get('windows_vmid') or PROXMOX_LED_WINDOWS_VMID}. "
-                "Set effects in Alienware FX Lighting, then tell me when to copy them "
-                "back — or click Return to host."
+                "Full motherboard lighting is in Windows VM "
+                f"{owner_info.get('windows_vmid') or PROXMOX_LED_WINDOWS_VMID} "
+                "(AW-ELC USB + host alienware-wmi released). "
+                "Set effects in Alienware FX Lighting / AWCC, then tell me when to "
+                "copy them back — or click Return to host."
             ),
             "error": None,
             "owner_detail": owner_info.get("detail"),

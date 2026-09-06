@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Hand Alienware AW-ELC USB (187c:0550) between the Proxmox host and a Windows VM.
+# Hand Alienware motherboard lighting control between Proxmox host and Windows VM.
 #
-# Host owns it → portal / alienware-leds control chassis lights.
-# Windows owns it → Alienware FX Lighting / AWCC can configure effects;
-# when you're happy with FX, say so and we can copy those settings back to the host.
+# Windows path (Alienware FX Lighting / AWCC) needs exclusive ownership of:
+#   1) AW-ELC USB 187c:0550  (chassis / motherboard LED HID)
+#   2) Host alienware-wmi unbound  (so Linux is not driving rgb_zones)
+#
+# The chipset USB controller cannot be PCI-passed (IOMMU group shares SATA + NIC).
 #
 # Usage:
 #   aw-elc-usb-owner status
-#   aw-elc-usb-owner to-windows   # pass LED controller to the Windows VM
-#   aw-elc-usb-owner to-host      # reclaim LED controller for Proxmox/portal
+#   aw-elc-usb-owner to-windows   # full motherboard lighting → Windows FX
+#   aw-elc-usb-owner to-host      # reclaim for portal / alienware-leds
 set -euo pipefail
 
 VENDOR_PRODUCT="187c:0550"
@@ -17,6 +19,7 @@ USB_SLOT="${AW_ELC_USB_SLOT:-usb4}"
 OWNER_PATH="/etc/alienware-leds/owner"
 STATE_PATH="/etc/alienware-leds/state"
 LED_CMD="${AW_ELC_LED_CMD:-/usr/local/sbin/alienware-leds}"
+WMI_BLACKLIST="/etc/modprobe.d/blacklist-alienware-wmi-fx.conf"
 
 mkdir -p "$(dirname "$OWNER_PATH")"
 
@@ -29,7 +32,6 @@ host_has_device() {
       return 0
     fi
   fi
-  # Fallback: present on USB bus and not mapped into the Windows VM.
   if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1 && ! vm_has_usb; then
     return 0
   fi
@@ -39,6 +41,10 @@ host_has_device() {
 vm_has_usb() {
   qm config "$VMID" 2>/dev/null | grep -qiE "^${USB_SLOT}:.*${VENDOR_PRODUCT}|^${USB_SLOT}:.*187c:0550" \
     || qm config "$VMID" 2>/dev/null | grep -qiE "host=${VENDOR_PRODUCT}"
+}
+
+wmi_loaded() {
+  lsmod 2>/dev/null | grep -qE '^alienware_wmi[[:space:]]'
 }
 
 read_owner() {
@@ -62,19 +68,43 @@ write_owner() {
 stop_host_leds() {
   systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
   systemctl stop alienware-leds-refresh.service >/dev/null 2>&1 || true
-  # Best-effort: don't leave host holding the HID while we unplug it into the VM.
   if [[ -x "$LED_CMD" ]] && host_has_device; then
     "$LED_CMD" off >/dev/null 2>&1 || true
   fi
   systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
 }
 
+release_host_wmi() {
+  # Drop Linux motherboard zone control so Windows FX owns lighting fully.
+  if [[ -e /sys/class/leds/alienware::global_brightness/brightness ]]; then
+    echo 0 >/sys/class/leds/alienware::global_brightness/brightness 2>/dev/null || true
+  fi
+  if [[ -d /sys/devices/platform/alienware-wmi/rgb_zones ]]; then
+    for z in /sys/devices/platform/alienware-wmi/rgb_zones/zone*; do
+      [[ -f "$z" ]] || continue
+      echo "000000" >"$z" 2>/dev/null || true
+    done
+  fi
+  modprobe -r alienware_wmi >/dev/null 2>&1 || true
+  # Persist across reboot while Windows owns FX.
+  cat >"$WMI_BLACKLIST" <<'EOF'
+# Alienware FX Lighting ownership: keep host WMI from reclaiming motherboard LEDs.
+blacklist alienware_wmi
+EOF
+}
+
+restore_host_wmi() {
+  rm -f "$WMI_BLACKLIST"
+  modprobe alienware_wmi >/dev/null 2>&1 || true
+}
+
 cmd_status() {
-  local owner device vm_usb host_usb
+  local owner device vm_usb host_usb wmi
   owner="$(read_owner)"
   device="missing"
   host_usb=0
   vm_usb=0
+  wmi=0
   if host_has_device; then
     host_usb=1
     device="$(lsusb -d "$VENDOR_PRODUCT" 2>/dev/null | head -1 | sed 's/^Bus/bus/' || echo present)"
@@ -82,13 +112,15 @@ cmd_status() {
   if vm_has_usb; then
     vm_usb=1
   fi
-  # Prefer live USB attachment over stale owner file.
+  if wmi_loaded; then
+    wmi=1
+  fi
   if [[ "$vm_usb" -eq 1 && "$host_usb" -eq 0 ]]; then
     owner=windows
   elif [[ "$host_usb" -eq 1 && "$vm_usb" -eq 0 ]]; then
     owner=host
   fi
-  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} device=${device}"
+  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} wmi=${wmi} device=${device}"
 }
 
 cmd_to_windows() {
@@ -97,11 +129,10 @@ cmd_to_windows() {
     exit 1
   fi
   stop_host_leds
-  # Remove stale mapping first (idempotent).
+  release_host_wmi
   qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
   sleep 0.5
   if ! host_has_device; then
-    # Device may already be in the guest under another slot — clean those too.
     local line slot
     while read -r line; do
       slot="${line%%:*}"
@@ -119,10 +150,12 @@ cmd_to_windows() {
   fi
   write_owner windows
   printf 'windows\n' >"$STATE_PATH"
-  # Wait briefly for guest attachment.
   sleep 1
   cmd_status
-  echo "AW-ELC passed to Windows VM ${VMID} (${USB_SLOT}). Use Alienware FX Lighting there."
+  echo "Motherboard lighting handed to Windows VM ${VMID}:"
+  echo "  - AW-ELC USB ${VENDOR_PRODUCT} → ${USB_SLOT}"
+  echo "  - host alienware-wmi unloaded/blacklisted"
+  echo "Open Alienware FX Lighting / AWCC in the VM and set effects."
 }
 
 cmd_to_host() {
@@ -132,9 +165,7 @@ cmd_to_host() {
     [[ -n "$slot" ]] || continue
     qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
   done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*187c:0550" || true)
-  # Also delete configured slot even if grep missed formatting.
   qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
-  # Wait for device to reappear on the host.
   local i
   for i in $(seq 1 30); do
     if host_has_device; then
@@ -148,6 +179,7 @@ cmd_to_host() {
     cmd_status
     exit 1
   fi
+  restore_host_wmi
   write_owner host
   if [[ -x "$LED_CMD" ]]; then
     "$LED_CMD" on || true
@@ -155,12 +187,13 @@ cmd_to_host() {
     printf 'on\n' >"$STATE_PATH"
   fi
   cmd_status
-  echo "AW-ELC reclaimed by host. Portal LED controls are active again."
+  echo "Motherboard lighting reclaimed by host. Portal LED controls are active again."
 }
 
 usage() {
   echo "Usage: aw-elc-usb-owner status|to-windows|to-host"
   echo "  Windows VMID=${VMID}  USB slot=${USB_SLOT}  device=${VENDOR_PRODUCT}"
+  echo "  to-windows also unloads host alienware-wmi (full FX motherboard control)"
 }
 
 main() {

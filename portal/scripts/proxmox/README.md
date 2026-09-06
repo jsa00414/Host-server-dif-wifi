@@ -42,20 +42,27 @@ alienware-leds on|rainbow|off|auto|status
 aw-elc-usb-owner status|to-windows|to-host
 ```
 
-### Windows FX Lighting handoff
+### Windows FX Lighting handoff (full motherboard lighting)
 
-The LED USB can only be owned by **one** side at a time:
+Motherboard lighting can only be owned by **one** side at a time:
 
-- **Host (portal)** — Settings → Rainbow / Off / schedule
+- **Host (portal)** — Settings → Rainbow / Off / schedule (`alienware-leds` + `alienware-wmi`)
 - **Windows VM 100** (`win11-pro-gpu`) — Alienware FX Lighting / AWCC
 
+`to-windows` does both:
+
+1. Pass AW-ELC USB `187c:0550` into VM 100
+2. Unload + blacklist host `alienware-wmi` so Linux is not driving `rgb_zones`
+
+The chipset USB controller is **not** PCI-passed (same IOMMU group as SATA + NIC).
+
 ```bash
-aw-elc-usb-owner to-windows   # pass 187c:0550 into VM 100
-# …set effects in Alienware FX Lighting…
-aw-elc-usb-owner to-host      # reclaim for portal control
+aw-elc-usb-owner to-windows   # full motherboard lighting → Windows FX
+# …set effects in Alienware FX Lighting / AWCC…
+aw-elc-usb-owner to-host      # reclaim USB + reload alienware-wmi
 ```
 
-Portal Settings has the same actions: **Windows (FX Lighting)** / **Return to host**.
-When FX looks right, say so and we can copy those settings back onto the host script.
+Portal Settings: **Windows (FX Lighting)** / **Return to host**.
+When FX looks right, say so and we can copy those settings onto the host script.
 
 Portal Settings → Chassis LEDs calls these binaries over SSH (`on` = rainbow).
