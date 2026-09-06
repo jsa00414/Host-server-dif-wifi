@@ -1765,6 +1765,13 @@ PROXMOX_PUBLIC_HOST = (
 )
 PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
 PROXMOX_PORT = int(os.environ.get("PROXMOX_PORT", "8006") or "8006")
+# SSH used by portal LED controls (AW-ELC on the Proxmox/host PC)
+PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
+PROXMOX_SSH_USER = os.environ.get("PROXMOX_SSH_USER", "root").strip() or "root"
+PROXMOX_SSH_KEY = os.environ.get("PROXMOX_SSH_KEY", "/root/.ssh/id_ed25519").strip() or "/root/.ssh/id_ed25519"
+PROXMOX_LED_CMD = os.environ.get(
+    "PROXMOX_LED_CMD", "/usr/local/sbin/alienware-leds"
+).strip() or "/usr/local/sbin/alienware-leds"
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -6331,6 +6338,71 @@ def _active_session_count() -> int:
     with _sessions_lock:
         _purge_sessions()
         return len(_sessions)
+
+
+def proxmox_ssh(remote_cmd: str, timeout: int = 20) -> subprocess.CompletedProcess:
+    """Run a command on the Proxmox host over SSH (key auth)."""
+    cmd = [
+        "ssh",
+        "-i",
+        PROXMOX_SSH_KEY,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=8",
+        f"{PROXMOX_SSH_USER}@{PROXMOX_SSH_HOST}",
+        remote_cmd,
+    ]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def leds_status() -> dict:
+    """Read Alienware/PC chassis LED state from the Proxmox host."""
+    proc = proxmox_ssh(f"{PROXMOX_LED_CMD} status")
+    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    state = "unknown"
+    device = ""
+    for tok in out.replace("\n", " ").split():
+        if tok.startswith("state="):
+            state = tok.split("=", 1)[1].strip() or state
+        if tok.startswith("device="):
+            device = tok.split("=", 1)[1].strip()
+    ok = proc.returncode == 0 and state in ("on", "off")
+    return {
+        "ok": ok,
+        "state": state if ok else "unknown",
+        "device": device,
+        "schedule": {
+            "timezone": "America/New_York",
+            "on": "07:00",
+            "off": "22:00",
+            "label": "On 7:00 AM · Off 10:00 PM (Eastern)",
+        },
+        "host": PROXMOX_SSH_HOST,
+        "error": None if ok else (out or f"ssh exit {proc.returncode}"),
+    }
+
+
+def leds_set(action: str) -> dict:
+    """Set chassis LEDs: on | off | auto (apply Eastern schedule for current time)."""
+    act = str(action or "").strip().lower()
+    if act not in ("on", "off", "auto"):
+        raise ValueError("action must be on, off, or auto")
+    proc = proxmox_ssh(f"{PROXMOX_LED_CMD} {act}")
+    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        raise RuntimeError(out or f"led command failed ({proc.returncode})")
+    st = leds_status()
+    st["action"] = act
+    st["detail"] = out
+    return st
 
 
 def build_portal_settings() -> dict:
@@ -11479,6 +11551,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/leds":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, leds_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "state": "unknown"})
+            return
         if path == "/api/forwards":
             try:
                 self._json(200, read_state())
@@ -12063,6 +12143,21 @@ class Handler(BaseHTTPRequestHandler):
                     result,
                     clear_cookie=clear,
                 )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/leds":
+            if not self._require_auth(api=True):
+                return
+            try:
+                payload = self._read_json()
+                action = ""
+                if isinstance(payload, dict):
+                    action = str(payload.get("action") or payload.get("state") or "").strip()
+                result = leds_set(action)
+                self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:
