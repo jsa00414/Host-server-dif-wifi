@@ -48,26 +48,19 @@ MODE_COLOR = 0x00
 MODE_MORPH = 0x02
 
 # OpenRGB / AWCC spectrum defaults
-DURATION_SPECTRUM = 0x01AC
-TEMPO_SPECTRUM = 0x0028  # 40
+# AWCC capture for spectrum: morph actions use duration 0x0282, tempo 0x000F
+DURATION_SPECTRUM = 0x0282
+TEMPO_SPECTRUM = 0x000F
 
-# OpenRGB spectrum colors — one shared sequence so every zone matches
+# Synced spectrum — every zone uses this same sequence
 SPECTRUM_COLORS: list[tuple[int, int, int]] = [
     (0xFF, 0x00, 0x00),
     (0xFF, 0xA5, 0x00),
     (0xFF, 0xFF, 0x00),
-    (0x00, 0x80, 0x00),
+    (0x00, 0xFF, 0x00),
     (0x00, 0xBF, 0xFF),
     (0x00, 0x00, 0xFF),
     (0x80, 0x00, 0x80),
-]
-
-# Kept for reference / future wave mode (phased offsets)
-RAINBOW_PHASES: list[list[tuple[int, int, int]]] = [
-    SPECTRUM_COLORS,
-    SPECTRUM_COLORS[6:] + SPECTRUM_COLORS[:6],
-    SPECTRUM_COLORS[5:] + SPECTRUM_COLORS[:5],
-    SPECTRUM_COLORS[4:] + SPECTRUM_COLORS[:4],
 ]
 
 
@@ -152,23 +145,41 @@ def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> No
     )
 
 
-def select_zones(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
-    """Select zones for the next action series.
-
-    loop=True (OpenRGB / AWCC default) makes the morph/color series repeat
-    forever so LEDs stay lit and the rainbow keeps rotating.
-    """
+def select_zones_once(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
+    """Select one series of zones (must be ≤ MAX_ZONES_PER_PACKET)."""
+    zones = list(zones)
+    if not zones:
+        return
+    if len(zones) > MAX_ZONES_PER_PACKET:
+        raise ValueError(f"select_zones_once got {len(zones)} zones (max {MAX_ZONES_PER_PACKET})")
     loop_flag = 0x01 if loop else 0x00
+    n = len(zones)
+    aw_cmd(fd, CMD_SELECT_ZONES, loop_flag, (n >> 8) & 0xFF, n & 0xFF, *zones)
+
+
+def select_zones(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
+    """Select zones for the next action series (chunked). Prefer select+actions per chunk."""
     for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
-        n = len(group)
-        aw_cmd(fd, CMD_SELECT_ZONES, loop_flag, (n >> 8) & 0xFF, n & 0xFF, *group)
+        select_zones_once(fd, group, loop=loop)
+
+
+def spectrum_actions() -> list[tuple[int, int, int, int, int, int]]:
+    """Seven morph steps through the rainbow, then back to the first color."""
+    colors = SPECTRUM_COLORS
+    actions = [
+        (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
+        for r, g, b in colors
+    ]
+    r0, g0, b0 = colors[0]
+    actions.append((MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0))
+    return actions
 
 
 def add_actions(
     fd: int,
     actions: Sequence[tuple[int, int, int, int, int, int]],
 ) -> None:
-    """Add up to 3 morph/color sub-actions per HID report (OpenRGB layout)."""
+    """Add up to 3 morph/color sub-actions per HID report (OpenRGB / AWCC layout)."""
     for group in chunks(list(actions), 3):
         payload: list[int] = []
         for mode, duration, tempo, r, g, b in group:
@@ -185,6 +196,30 @@ def add_actions(
                 ]
             )
         aw_cmd(fd, CMD_ADD_ACTION, *payload)
+
+
+def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
+    """Synced spectrum rainbow: every zone morphs through the same colors together.
+
+    AW-ELC requires SelectZones then AddAction as a pair per series. With 77
+    zones we must repeat that pair per ≤25-zone chunk — each chunk gets the
+    identical morph chain so front/side/top stay in sync.
+    Timing matches AWCC spectrum captures (dur 0x0282, tempo 0x000F).
+    """
+    dim_zones(fd, 0, zones)
+    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
+        try:
+            user_anim(fd, ANIM_REMOVE, slot)
+        except OSError:
+            pass
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    actions = spectrum_actions()
+    # Critical: select + actions for EACH chunk (not one select-all then one add)
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        select_zones_once(fd, group, loop=True)
+        add_actions(fd, actions)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    # Do not re-dim or set_color after play — that freezes the morph.
 
 
 def write_state(state: str) -> None:
@@ -266,37 +301,6 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
     dim_zones(fd, 0, zones)
 
 
-def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
-    """Synced spectrum rainbow: every zone shows the same color at once.
-
-    Front, side Alienware text, and top bar all morph together through the
-    rainbow (OpenRGB Spectrum Cycle) — not a phased wave across zones.
-    """
-    dim_zones(fd, 0, zones)
-    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
-        try:
-            user_anim(fd, ANIM_REMOVE, slot)
-        except OSError:
-            pass
-    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    # One series for ALL zones — same morph timeline everywhere
-    select_zones(fd, zones, loop=True)
-    colors = SPECTRUM_COLORS
-    r0, g0, b0 = colors[0]
-    actions: list[tuple[int, int, int, int, int, int]] = [
-        (MODE_COLOR, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
-    ]
-    actions.extend(
-        (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
-        for r, g, b in colors[1:]
-    )
-    # Close loop back to first color for continuous synced cycle
-    actions.append((MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0))
-    add_actions(fd, actions)
-    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
-    dim_zones(fd, 0, zones)
-
-
 def stop_refresh_timer() -> None:
     """Refresh timer is only for blackout — stop it when lights are on."""
     try:
@@ -329,7 +333,7 @@ def apply(action: str) -> None:
             stop_refresh_timer()
             leds_rainbow(fd, zones)
             extras.append(wmi_set_brightness(15))
-            extras.append(wmi_set_zones_rgb("00FF40"))
+            # Don't force static WMI zone colors — that fights the ELC morph.
             write_state("on")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
