@@ -376,122 +376,243 @@
       gap: 8px;
       margin-top: 4px;
     }
-    .leds-panel { display: grid; gap: 14px; }
-    .leds-status {
+    .leds-panel { display: grid; gap: 16px; }
+    .leds-hero {
+      position: relative;
+      overflow: hidden;
       display: grid;
-      gap: 10px;
-      padding: 12px;
-      border-radius: 12px;
+      gap: 14px;
+      padding: 16px;
+      border-radius: 14px;
       border: 1px solid var(--line);
       background:
-        radial-gradient(120% 90% at 0% 0%, rgba(61,222,160,.08), transparent 55%),
-        var(--bg2);
+        radial-gradient(90% 80% at 10% -10%, rgba(61,222,160,.14), transparent 52%),
+        radial-gradient(70% 70% at 95% 110%, rgba(96,165,250,.08), transparent 48%),
+        linear-gradient(180deg, #15201b, #101814);
     }
+    .leds-hero::before {
+      content: "";
+      position: absolute;
+      inset: auto 12% -40% 12%;
+      height: 70%;
+      background: radial-gradient(ellipse at center, rgba(61,222,160,.16), transparent 70%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .35s ease;
+    }
+    .leds-hero.is-on::before { opacity: 1; }
+    .leds-hero.is-windows {
+      background:
+        radial-gradient(90% 80% at 10% -10%, rgba(96,165,250,.16), transparent 52%),
+        linear-gradient(180deg, #121820, #0e1318);
+    }
+    .leds-hero.is-off::before { opacity: 0; }
     .leds-status-top {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
+      z-index: 1;
     }
     .leds-live {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       min-width: 0;
     }
     .leds-dot {
-      width: 10px; height: 10px; border-radius: 50%;
+      width: 11px; height: 11px; border-radius: 50%;
       background: var(--muted);
       box-shadow: none;
       flex: 0 0 auto;
     }
     .leds-dot.on {
       background: var(--accent);
-      box-shadow: 0 0 0 4px rgba(61,222,160,.15);
+      box-shadow: 0 0 0 4px rgba(61,222,160,.16), 0 0 18px rgba(61,222,160,.45);
       animation: leds-pulse 1.8s ease-in-out infinite;
     }
-    .leds-dot.off { background: #6b7280; }
+    .leds-dot.off { background: #5b675f; }
     .leds-dot.windows {
       background: #60a5fa;
-      box-shadow: 0 0 0 4px rgba(96,165,250,.18);
+      box-shadow: 0 0 0 4px rgba(96,165,250,.18), 0 0 16px rgba(96,165,250,.35);
     }
     .leds-dot.err { background: var(--danger); }
     @keyframes leds-pulse {
       0%, 100% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(1.15); opacity: .75; }
+      50% { transform: scale(1.12); opacity: .78; }
     }
     .leds-live-text { min-width: 0; }
     .leds-live-text strong {
       display: block;
-      font-size: .95rem;
+      font-size: 1.05rem;
       font-weight: 650;
-      letter-spacing: -.01em;
+      letter-spacing: -.02em;
     }
     .leds-live-text span {
       display: block;
       color: var(--muted);
       font-size: .74rem;
-      margin-top: 2px;
+      margin-top: 3px;
+      line-height: 1.35;
+    }
+    .leds-strip-wrap {
+      position: relative;
+      z-index: 1;
+      padding: 2px 0 4px;
     }
     .leds-spectrum {
-      height: 6px;
+      height: 14px;
       border-radius: 999px;
       background: linear-gradient(90deg,
         #ff0033, #ff7a00, #ffd400, #00c853, #00b0ff, #3d5afe, #aa00ff, #ff0033);
-      background-size: 200% 100%;
-      opacity: .28;
-      filter: grayscale(.35);
+      background-size: 220% 100%;
+      opacity: .22;
+      filter: grayscale(.55) brightness(.7);
+      box-shadow: none;
+      transition: opacity .3s ease, filter .3s ease, box-shadow .3s ease;
     }
     .leds-spectrum.active {
       opacity: 1;
       filter: none;
-      animation: leds-flow 6s linear infinite;
+      box-shadow:
+        0 0 18px rgba(255,122,0,.28),
+        0 0 28px rgba(0,176,255,.22),
+        0 8px 24px rgba(0,0,0,.35);
+      animation: leds-flow 5.5s linear infinite;
+    }
+    .leds-hero.is-windows .leds-spectrum {
+      opacity: .45;
+      filter: saturate(.85) brightness(.9);
+      background: linear-gradient(90deg, #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6);
+      background-size: 200% 100%;
+      animation: leds-flow 8s linear infinite;
     }
     @keyframes leds-flow {
       from { background-position: 0% 50%; }
       to { background-position: 200% 50%; }
     }
-    .leds-meta {
+    .leds-meta-row {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: .7rem;
+      color: var(--muted);
+    }
+    .leds-meta-row span strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .leds-controls { display: grid; gap: 14px; }
+    .leds-group { display: grid; gap: 8px; }
+    .leds-group-label {
+      font-size: .7rem;
+      font-weight: 650;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .leds-seg {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--bg1);
+    }
+    .leds-seg button {
+      margin: 0;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: .86rem;
+      font-weight: 600;
+      letter-spacing: -.01em;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+    }
+    .leds-seg button:hover:not(:disabled) { color: var(--text); }
+    .leds-seg button.is-active {
+      background: var(--accent);
+      color: #062016;
+      box-shadow: 0 6px 18px rgba(61,222,160,.22);
+    }
+    .leds-seg button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+    .leds-schedule-btn {
+      justify-self: start;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: .78rem;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      cursor: pointer;
+    }
+    .leds-schedule-btn:hover:not(:disabled) { color: var(--accent); }
+    .leds-schedule-btn:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
+    .leds-owner {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
     }
-    @media (max-width: 720px) {
-      .leds-meta { grid-template-columns: 1fr; }
+    @media (max-width: 560px) {
+      .leds-owner { grid-template-columns: 1fr; }
     }
-    .leds-meta div {
-      padding: 8px 10px;
-      border-radius: 10px;
+    .leds-owner button {
+      display: grid;
+      gap: 4px;
+      text-align: left;
+      margin: 0;
+      padding: 12px 14px;
+      border-radius: 12px;
       border: 1px solid var(--line);
-      background: var(--bg1);
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-      font-size: .74rem;
+      background: var(--bg2);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
     }
-    .leds-meta .k { display: block; color: var(--muted); margin-bottom: 3px; font-size: .68rem; }
-    .leds-meta .v { color: var(--text); word-break: break-word; }
-    .leds-group { display: grid; gap: 8px; }
-    .leds-group-label {
-      font-size: .72rem;
-      font-weight: 650;
-      letter-spacing: .04em;
-      text-transform: uppercase;
+    .leds-owner button small {
       color: var(--muted);
+      font-size: .72rem;
+      font-weight: 400;
+      line-height: 1.35;
     }
-    .leds-group .settings-actions { margin-top: 0; }
-    .leds-group button.is-active.primary {
-      box-shadow: 0 0 0 1px rgba(61,222,160,.45);
-    }
-    .leds-group button.is-active.ghost {
-      color: var(--accent);
-      border-color: rgba(61,222,160,.35);
+    .leds-owner button:hover { border-color: rgba(170,210,185,.28); }
+    .leds-owner button.is-active {
+      border-color: rgba(61,222,160,.45);
       background: var(--accent-dim);
+      box-shadow: inset 0 0 0 1px rgba(61,222,160,.18);
+    }
+    .leds-owner button.is-active[data-leds-action="windows"] {
+      border-color: rgba(96,165,250,.45);
+      background: rgba(96,165,250,.1);
+      box-shadow: inset 0 0 0 1px rgba(96,165,250,.16);
+    }
+    .leds-owner button strong {
+      font-size: .88rem;
+      font-weight: 650;
+      letter-spacing: -.01em;
     }
     .leds-hint {
       margin: 0;
       color: var(--muted);
       font-size: .76rem;
-      line-height: 1.4;
+      line-height: 1.45;
     }
     .settings-form {
       display: grid;
@@ -1542,7 +1663,7 @@
               <button type="button" class="ghost" id="settingsLedsRefreshBtn">Refresh</button>
             </div>
             <div class="panel-body leds-panel">
-              <div class="leds-status" id="settingsLedsStatus">
+              <div class="leds-hero" id="settingsLedsStatus">
                 <div class="leds-status-top">
                   <div class="leds-live">
                     <span class="leds-dot" id="settingsLedsDot" aria-hidden="true"></span>
@@ -1552,27 +1673,37 @@
                     </div>
                   </div>
                 </div>
-                <div class="leds-spectrum" id="settingsLedsSpectrum" aria-hidden="true"></div>
-                <div class="leds-meta">
-                  <div><span class="k">Schedule</span><span class="v" id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</span></div>
-                  <div><span class="k">Host</span><span class="v" id="settingsLedsHost">—</span></div>
+                <div class="leds-strip-wrap">
+                  <div class="leds-spectrum" id="settingsLedsSpectrum" aria-hidden="true"></div>
+                </div>
+                <div class="leds-meta-row">
+                  <span>Schedule <strong id="settingsLedsSchedule">On 7:00 AM · Off 10:00 PM (Eastern)</strong></span>
+                  <span>Host <strong id="settingsLedsHost">—</strong></span>
                 </div>
               </div>
 
-              <div class="leds-group">
-                <div class="leds-group-label">Lighting</div>
-                <div class="settings-actions">
-                  <button type="button" class="primary" id="settingsLedsOnBtn" data-leds-action="on">Spectrum</button>
-                  <button type="button" class="ghost" id="settingsLedsOffBtn" data-leds-action="off">Off</button>
-                  <button type="button" class="ghost" id="settingsLedsAutoBtn" data-leds-action="auto">Apply schedule</button>
+              <div class="leds-controls">
+                <div class="leds-group">
+                  <div class="leds-group-label">Mode</div>
+                  <div class="leds-seg" role="group" aria-label="Lighting mode">
+                    <button type="button" id="settingsLedsOnBtn" data-leds-action="on">Spectrum</button>
+                    <button type="button" id="settingsLedsOffBtn" data-leds-action="off">Off</button>
+                  </div>
+                  <button type="button" class="leds-schedule-btn" id="settingsLedsAutoBtn" data-leds-action="auto">Apply schedule now</button>
                 </div>
-              </div>
 
-              <div class="leds-group">
-                <div class="leds-group-label">Controller</div>
-                <div class="settings-actions">
-                  <button type="button" class="ghost" id="settingsLedsHostBtn" data-leds-action="host">Portal (host)</button>
-                  <button type="button" class="ghost" id="settingsLedsWindowsBtn" data-leds-action="windows">Windows FX</button>
+                <div class="leds-group">
+                  <div class="leds-group-label">Controller</div>
+                  <div class="leds-owner" role="group" aria-label="LED controller">
+                    <button type="button" id="settingsLedsHostBtn" data-leds-action="host">
+                      <strong>Portal</strong>
+                      <small>Host drives synced spectrum</small>
+                    </button>
+                    <button type="button" id="settingsLedsWindowsBtn" data-leds-action="windows">
+                      <strong>Windows FX</strong>
+                      <small>Pass USB to Alienware CC</small>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -3071,6 +3202,7 @@
       const hintEl = document.getElementById("settingsLedsHint");
       const dotEl = document.getElementById("settingsLedsDot");
       const spectrumEl = document.getElementById("settingsLedsSpectrum");
+      const heroEl = document.getElementById("settingsLedsStatus");
       const panel = document.getElementById("settingsLedsPanel");
       if (!stateEl) return;
 
@@ -3120,6 +3252,12 @@
           + (err ? " err" : isWindows ? " windows" : isOn ? " on" : isOff ? " off" : "");
       }
       if (spectrumEl) spectrumEl.classList.toggle("active", !!isOn);
+      if (heroEl) {
+        heroEl.classList.toggle("is-on", !!isOn);
+        heroEl.classList.toggle("is-off", !!isOff);
+        heroEl.classList.toggle("is-windows", !!isWindows);
+        heroEl.classList.toggle("is-err", !!err);
+      }
 
       if (panel) {
         panel.querySelectorAll("[data-leds-action]").forEach((btn) => {
