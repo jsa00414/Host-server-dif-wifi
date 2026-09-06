@@ -5,7 +5,7 @@ AW-ELC USB HID (187c:0550) — Aurora R14 ~77 zones; ≤25 zone IDs/packet.
 Dim is inverted: 0=full, 100=minimum.
 
 Modes:
-  on / rainbow — spectrum morph through rainbow (factory-style chassis look)
+  on / rainbow — synced spectrum: all zones same color, cycling rainbow together
   off          — ARGB-safe black stream at dim 0 (keeps data line alive)
   auto         — on 07:00–21:59 America/New_York, else off
   refresh      — reassert black while state=off
@@ -51,44 +51,23 @@ MODE_MORPH = 0x02
 DURATION_SPECTRUM = 0x01AC
 TEMPO_SPECTRUM = 0x0028  # 40
 
-# OpenRGB rainbow_colors[4][7] — phased for a wave across the chassis
+# OpenRGB spectrum colors — one shared sequence so every zone matches
+SPECTRUM_COLORS: list[tuple[int, int, int]] = [
+    (0xFF, 0x00, 0x00),
+    (0xFF, 0xA5, 0x00),
+    (0xFF, 0xFF, 0x00),
+    (0x00, 0x80, 0x00),
+    (0x00, 0xBF, 0xFF),
+    (0x00, 0x00, 0xFF),
+    (0x80, 0x00, 0x80),
+]
+
+# Kept for reference / future wave mode (phased offsets)
 RAINBOW_PHASES: list[list[tuple[int, int, int]]] = [
-    [
-        (0xFF, 0x00, 0x00),
-        (0xFF, 0xA5, 0x00),
-        (0xFF, 0xFF, 0x00),
-        (0x00, 0x80, 0x00),
-        (0x00, 0xBF, 0xFF),
-        (0x00, 0x00, 0xFF),
-        (0x80, 0x00, 0x80),
-    ],
-    [
-        (0x80, 0x00, 0x80),
-        (0xFF, 0x00, 0x00),
-        (0xFF, 0xA5, 0x00),
-        (0xFF, 0xFF, 0x00),
-        (0x00, 0x80, 0x00),
-        (0x00, 0xBF, 0xFF),
-        (0x00, 0x00, 0xFF),
-    ],
-    [
-        (0x00, 0x00, 0xFF),
-        (0x80, 0x00, 0x80),
-        (0xFF, 0x00, 0x00),
-        (0xFF, 0xA5, 0x00),
-        (0xFF, 0xFF, 0x00),
-        (0x00, 0x80, 0x00),
-        (0x00, 0xBF, 0xFF),
-    ],
-    [
-        (0x00, 0xBF, 0xFF),
-        (0x00, 0x00, 0xFF),
-        (0x80, 0x00, 0x80),
-        (0xFF, 0x00, 0x00),
-        (0xFF, 0xA5, 0x00),
-        (0xFF, 0xFF, 0x00),
-        (0x00, 0x80, 0x00),
-    ],
+    SPECTRUM_COLORS,
+    SPECTRUM_COLORS[6:] + SPECTRUM_COLORS[:6],
+    SPECTRUM_COLORS[5:] + SPECTRUM_COLORS[:5],
+    SPECTRUM_COLORS[4:] + SPECTRUM_COLORS[:4],
 ]
 
 
@@ -288,12 +267,10 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
 
 
 def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
-    """Factory-style rainbow wave: every zone stays lit and cycles forever.
+    """Synced spectrum rainbow: every zone shows the same color at once.
 
-    Matches OpenRGB Rainbow Wave:
-      - SelectZones with loop=1 so the morph series never stops
-      - 4 phase-shifted color sequences → wave rotates around the chassis
-      - Lead with a COLOR of the phase start so nothing begins dark
+    Front, side Alienware text, and top bar all morph together through the
+    rainbow (OpenRGB Spectrum Cycle) — not a phased wave across zones.
     """
     dim_zones(fd, 0, zones)
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
@@ -302,27 +279,20 @@ def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
         except OSError:
             pass
     user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    # Four phase groups → moving rainbow across the case (zone_idx % 4)
-    for phase in range(4):
-        zgroup = list(zones)[phase::4]
-        if not zgroup:
-            continue
-        select_zones(fd, zgroup, loop=True)
-        colors = RAINBOW_PHASES[phase]
-        r0, g0, b0 = colors[0]
-        # Solid first color so the zone is immediately on, then morph loop
-        actions: list[tuple[int, int, int, int, int, int]] = [
-            (MODE_COLOR, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
-        ]
-        actions.extend(
-            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
-            for r, g, b in colors[1:]
-        )
-        # Close the loop back to the first color for a smooth rotate
-        actions.append(
-            (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
-        )
-        add_actions(fd, actions)
+    # One series for ALL zones — same morph timeline everywhere
+    select_zones(fd, zones, loop=True)
+    colors = SPECTRUM_COLORS
+    r0, g0, b0 = colors[0]
+    actions: list[tuple[int, int, int, int, int, int]] = [
+        (MODE_COLOR, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0)
+    ]
+    actions.extend(
+        (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
+        for r, g, b in colors[1:]
+    )
+    # Close loop back to first color for continuous synced cycle
+    actions.append((MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0))
+    add_actions(fd, actions)
     user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
     dim_zones(fd, 0, zones)
 
@@ -363,7 +333,7 @@ def apply(action: str) -> None:
             write_state("on")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
-                f"mode=rainbow-loop (ON); " + "; ".join(extras)
+                f"mode=spectrum-sync (ON); " + "; ".join(extras)
             )
         elif action == "off":
             leds_off(fd, zones)
