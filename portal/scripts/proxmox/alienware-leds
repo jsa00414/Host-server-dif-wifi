@@ -2,17 +2,21 @@
 """Control Alienware + DeepCool chassis lighting from the Proxmox host.
 
 Covers:
-  1) AW-ELC USB HID (187c:0550) — Aurora R14 reports ~77 zones; HID packets
-     hold ≤25 zone IDs, so updates are chunked. Dim is inverted: 0=on, 100=off.
+  1) AW-ELC USB HID (187c:0550) — Aurora R14 ~77 zones; ≤25 zone IDs/packet.
+     Dim is inverted: 0=full, 100=off.
   2) alienware-wmi sysfs — global_brightness + rgb_zones.
-  3) DeepCool USB HID (vid 3633) when present — Digital / LQ / LM pumps.
+  3) DeepCool USB HID (vid 3633) when present.
 
-DeepCool ARGB-only pumps (LS/LE without USB) follow the motherboard 5V ARGB
-header. If that cable is unplugged or on a power-only splitter, the pump plays
-its built-in rainbow and no software can turn it off — reconnect ARGB to the
-Alienware-controlled header.
+ARGB-safe OFF (critical for DeepCool LS/LE pumps):
+  DeepCool plays a built-in rainbow when the ARGB *data* line goes idle.
+  Dimming to 100 can starve that data line, so the pump stays rainbow even
+  though chassis LEDs look off. Off mode therefore keeps dim=0 and streams a
+  static black animation so ARGB headers keep receiving frames.
 
-Schedule uses America/New_York (EST/EDT).
+If the pump ARGB cable is on a power-only splitter (not the Alienware
+motherboard ARGB header), software cannot turn it off — reconnect the cable.
+
+Schedule: America/New_York — on 07:00–21:59, off otherwise.
 """
 from __future__ import annotations
 
@@ -145,6 +149,18 @@ def add_static_color(fd: int, rgb: tuple[int, int, int]) -> None:
     aw_cmd(fd, CMD_ADD_ACTION, 0x00, 0x07, 0xD0, 0x00, 0xFA, r, g, b)
 
 
+def play_static(fd: int, zones: Sequence[int], rgb: tuple[int, int, int]) -> None:
+    """Install and play a non-saved static color on all zones."""
+    try:
+        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
+    except OSError:
+        pass
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    select_zones(fd, zones)
+    add_static_color(fd, rgb)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+
+
 def write_state(state: str) -> None:
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     with open(STATE_PATH, "w", encoding="utf-8") as fh:
@@ -256,33 +272,39 @@ def deepcool_on(paths: Sequence[str], rgb: tuple[int, int, int] = DEFAULT_RGB) -
 
 
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """Black static anim (keeps ARGB data alive) + dim 100."""
+    """ARGB-safe off: stream static black at dim 0 (do NOT dim 100).
+
+    Dim 100 can idle the ARGB data line; DeepCool then falls back to its
+    built-in rainbow on the pump logo. Black frames at dim 0 keep the
+    controller "present" while every LED stays dark.
+    """
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
-    # Keep ARGB headers receiving black frames so DeepCool does not fall back
-    # to its built-in auto-rainbow ("no controller detected").
-    try:
-        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-        select_zones(fd, zones)
-        add_static_color(fd, (0, 0, 0))
-        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
-    except OSError:
-        pass
+
+    # Ensure dim path is fully on so color/anim data reaches ARGB headers.
+    dim_zones(fd, 0, zones)
+    play_static(fd, zones, (0, 0, 0))
     set_color_direct(fd, (0, 0, 0), zones)
-    dim_zones(fd, 100, zones)
+    # Re-assert black after set_color — some firmwares drop anim on direct set.
+    play_static(fd, zones, (0, 0, 0))
+    set_color_direct(fd, (0, 0, 0), zones)
+    dim_zones(fd, 0, zones)
 
 
 def leds_on(fd: int, zones: Sequence[int], rgb: tuple[int, int, int] = DEFAULT_RGB) -> None:
     dim_zones(fd, 0, zones)
-    user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
-    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    select_zones(fd, zones)
-    add_static_color(fd, rgb)
-    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    play_static(fd, zones, rgb)
     set_color_direct(fd, rgb, zones)
+    dim_zones(fd, 0, zones)
+
+
+def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
+    """Re-send black frames while state=off (keeps DeepCool ARGB quiet)."""
+    set_color_direct(fd, (0, 0, 0), zones)
+    play_static(fd, zones, (0, 0, 0))
     dim_zones(fd, 0, zones)
 
 
@@ -301,8 +323,8 @@ def apply(action: str) -> None:
             extras.append(deepcool_on(dc_paths))
             write_state("on")
             print(
-                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=0 (ON); "
-                + "; ".join(extras)
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
+                f"dim=0 black=no (ON); " + "; ".join(extras)
             )
         elif action == "off":
             leds_off(fd, zones)
@@ -311,29 +333,69 @@ def apply(action: str) -> None:
             extras.append(deepcool_off(dc_paths))
             write_state("off")
             print(
-                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} dim=100 (OFF); "
-                + "; ".join(extras)
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
+                f"dim=0 black=yes (OFF/ARGB-safe); " + "; ".join(extras)
             )
             if not dc_paths:
                 print(
-                    "note: no DeepCool USB (3633:*) — pump logo is ARGB-only; "
-                    "its 5V ARGB cable must be on the Alienware motherboard header "
-                    "(not a power-only splitter) or it stays in auto-rainbow.",
+                    "note: no DeepCool USB (3633:*) — pump is ARGB-only. "
+                    "Off keeps streaming black on the Alienware ARGB header. "
+                    "If the pump still rainbows, its 5V ARGB cable is not on "
+                    "that header (power-only splitter / wrong plug).",
                     file=sys.stderr,
                 )
+        elif action == "refresh":
+            # Used by timer while off — reassert black without flipping state.
+            if read_state() != "off":
+                print(f"refresh skipped (state={read_state()})")
+                return
+            leds_refresh_black(fd, zones)
+            wmi_set_brightness(0)
+            wmi_set_zones_rgb("000000")
+            deepcool_off(dc_paths)
+            print(f"AW-ELC {dev}: refreshed black on {count} zones")
         else:
             raise SystemExit(f"unknown action: {action}")
     finally:
         os.close(fd)
 
 
+def install_refresh_timer() -> None:
+    """Ensure a systemd timer reasserts black every minute while off."""
+    service = """[Unit]
+Description=Reassert Alienware/DeepCool LED blackout (ARGB-safe)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/alienware-leds refresh
+"""
+    timer = """[Unit]
+Description=Refresh LED blackout every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=alienware-leds-refresh.service
+[Install]
+WantedBy=timers.target
+"""
+    try:
+        open("/etc/systemd/system/alienware-leds-refresh.service", "w").write(service)
+        open("/etc/systemd/system/alienware-leds-refresh.timer", "w").write(timer)
+        os.system("systemctl daemon-reload >/dev/null 2>&1")
+        os.system("systemctl enable --now alienware-leds-refresh.timer >/dev/null 2>&1")
+    except OSError:
+        pass
+
+
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("Usage: alienware-leds on|off|status|auto")
+        print("Usage: alienware-leds on|off|status|auto|refresh")
         raise SystemExit(2)
     action = sys.argv[1].lower()
-    if action in ("on", "off"):
+    if action in ("on", "off", "refresh"):
         apply(action)
+        if action == "off":
+            install_refresh_timer()
     elif action == "status":
         st = read_state()
         dc = find_deepcool_hidraw()
@@ -346,6 +408,8 @@ def main() -> None:
         time.tzset()
         hour = time.localtime().tm_hour
         apply("on" if 7 <= hour < 22 else "off")
+        if read_state() == "off":
+            install_refresh_timer()
     else:
         raise SystemExit(f"unknown action: {action}")
 

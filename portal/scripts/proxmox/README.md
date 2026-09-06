@@ -32,7 +32,14 @@ See [PXE.md](./PXE.md) and `./install-pxe.sh`.
 - `alienware-wmi` global brightness + `rgb_zones`
 - DeepCool USB `3633:*` when present (Digital / LQ / LM)
 
-ARGB-only DeepCool pumps (LS/LE) follow the motherboard 5V ARGB header. If that cable is on a power-only splitter, the pump stays in auto-rainbow and software cannot turn it off.
+ARGB-only DeepCool pumps (LS/LE) follow the motherboard 5V ARGB header.
+**Off is ARGB-safe:** it streams static black at dim 0 (dim 100 can idle the
+data line and trigger DeepCool’s built-in rainbow). A one-minute refresh timer
+reasserts black while state=off.
+
+If the pump ARGB cable is on a power-only splitter (not the Alienware header),
+software still cannot turn it off — plug it into the motherboard ARGB header,
+or unplug the ARGB cable (pump cooling still works).
 
 ```bash
 install -m 755 alienware-leds /usr/local/sbin/alienware-leds
