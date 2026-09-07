@@ -116,12 +116,10 @@ body = m.group(1).rstrip().rstrip("/")
 existing = dict(re.findall(r'(\\w+)="([^"]*)"', body))
 existing.update({
     "FriendlyName": "Plex Media Server",
-    # Allow first-time claim via https://plex.vpstruelord.com (LAN IP is not
-    # reachable off-home). Turn off after claiming for tighter security.
     "DisableRemoteSecurity": "1",
+    "allowedNetworks": "0.0.0.0/0.0.0.0",
+    "LanNetworksBandwidth": "0.0.0.0/0.0.0.0",
     "customConnections": f"https://{public}:443,http://{ct_ip}:32400",
-    "allowedNetworks": "192.168.8.0/255.255.255.0,10.9.0.0/255.255.255.0,172.16.0.0/255.240.0.0,10.0.0.0/255.0.0.0",
-    "LanNetworksBandwidth": "192.168.8.0/255.255.255.0,10.9.0.0/255.255.255.0",
     "PublishServerOnPlexOnlineKey": "1",
     "ManualPortMappingMode": "1",
     "ManualPortMappingPort": "443",
@@ -153,11 +151,21 @@ systemctl is-active plexmediaserver
 dpkg -l plexmediaserver | tail -1
 curl -s http://127.0.0.1:32400/identity || true
 echo
+# Export LocalAdminToken for reverse-proxy setup URL (on Proxmox host path for VPS copy)
+python3 - <<'PY2'
+from pathlib import Path
+p = Path("/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/.LocalAdminToken")
+print(p.read_text().strip() if p.exists() else "")
+PY2
 INNER
+
+# Prefer copying admin token to a host file the VPS can scp later
+pct exec "$CTID" -- python3 -c "from pathlib import Path; print(Path('/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/.LocalAdminToken').read_text().strip())" > /root/.plex-local-admin.token || true
+chmod 600 /root/.plex-local-admin.token 2>/dev/null || true
 
 echo
 echo "Plex Media Server configured on CT ${CTID}"
-echo "  Claim/setup from LAN/VPN: http://${CT_IP}:32400/web"
-echo "  Public: https://${PUBLIC_HOST}/web"
-echo "  Media path (if mounted): ${CT_MEDIA}"
+echo "  Claim:   https://${PUBLIC_HOST}/claim"
+echo "  Setup:   https://${PUBLIC_HOST}/"
+echo "  Media:   ${CT_MEDIA} (if NAS mounted)"
 pct status "$CTID" || true

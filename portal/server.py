@@ -4223,19 +4223,105 @@ def _plex_machine_identifier() -> str:
     return ""
 
 
+def _plex_local_admin_token() -> str:
+    """LocalAdminToken for unclaimed PMS (authorizes setup through reverse proxy)."""
+    for path in (
+        os.environ.get("PLEX_LOCAL_ADMIN_TOKEN_FILE", "").strip(),
+        "/opt/wireguard/plex-local-admin.token",
+    ):
+        if not path:
+            continue
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+            if raw:
+                return raw
+        except Exception:
+            pass
+    env = os.environ.get("PLEX_LOCAL_ADMIN_TOKEN", "").strip()
+    if env:
+        return env
+    # Live fetch from CT via Proxmox when portal has LAN/VPN route.
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=5",
+                f"root@{os.environ.get('PROXMOX_HOST', '192.168.8.160').strip() or '192.168.8.160'}",
+                "pct",
+                "exec",
+                PLEX_CTID,
+                "--",
+                "python3",
+                "-c",
+                "from pathlib import Path; print(Path('/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/.LocalAdminToken').read_text().strip())",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        tok = (r.stdout or "").strip()
+        if tok and r.returncode == 0:
+            try:
+                Path("/opt/wireguard/plex-local-admin.token").write_text(tok + "\n", encoding="utf-8")
+                os.chmod("/opt/wireguard/plex-local-admin.token", 0o600)
+            except Exception:
+                pass
+            return tok
+    except Exception:
+        pass
+    return ""
+
+
+def _plex_claim_via_token(claim_token: str) -> dict:
+    """Claim unclaimed PMS with a plex.tv claim code (run against LAN upstream)."""
+    import urllib.parse
+    import urllib.request
+
+    token = str(claim_token or "").strip()
+    if token.lower().startswith("claim-"):
+        token = token[6:]
+    if not token or len(token) < 4:
+        raise ValueError("missing plex.tv claim token")
+    url = f"http://{PLEX_HOST}:{PLEX_PORT}/myplex/claim?token={urllib.parse.quote(token)}"
+    req = urllib.request.Request(url, method="POST", data=b"")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+        code = getattr(resp, "status", 200)
+    claimed = "username=" in body and 'username=""' not in body
+    return {"ok": True, "http_status": code, "claimed": claimed, "body": body[:800]}
+
+
 def _plex_hookup_site_lines(rule: dict) -> list[str]:
     """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
     machine = _plex_machine_identifier()
+    admin = _plex_local_admin_token()
     # Unclaimed PMS often serves /web without #!/setup/… so the SPA shows
-    # "Get Plex Media Server". Force the claim/setup wizard when we know the ID.
-    setup_path = (
-        f"/web/index.html#!/setup/{machine}" if machine else "/web/index.html"
-    )
+    # "Get Plex Media Server" or "Not authorized". Force setup + local admin token.
+    if machine and admin:
+        from urllib.parse import quote
+
+        setup_path = (
+            f"/web/index.html?X-Plex-Token={quote(admin)}#!/setup/{machine}"
+        )
+    elif machine:
+        setup_path = f"/web/index.html#!/setup/{machine}"
+    else:
+        setup_path = "/web/index.html"
     lines = [
         f"{public} {{",
+        # Claim helper (plex.tv claim code) — portal serves the form + API.
+        "\thandle /claim* {",
+        "\t\treverse_proxy 127.0.0.1:5002",
+        "\t}",
         # Land on the Media Server setup/claim wizard (not the download-PMS page).
         "\t@plexroot path / /web /web/",
         f"\tredir @plexroot {setup_path} 302",
@@ -11593,11 +11679,57 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             pass  # public
+        elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
+            pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif not self._is_authed():
-            if path.startswith("/api/"):
+            if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
             else:
                 self._unauthorized(api=False)
+            return
+
+        if path in ("/claim", "/claim/"):
+            html = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claim Plex Media Server</title>
+<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:36rem;margin:3rem auto;padding:0 1rem;line-height:1.45}
+input,button{font:inherit;padding:.65rem .8rem;border-radius:8px;border:1px solid #444;background:#222;color:#eee;width:100%;box-sizing:border-box;margin:.4rem 0}
+button{background:#e5a00d;color:#111;border:0;font-weight:700;cursor:pointer}
+a{color:#e5a00d}pre{white-space:pre-wrap;background:#1a1a1a;padding:.75rem;border-radius:8px}</style></head><body>
+<h1>Claim Plex Media Server</h1>
+<p>Your Proxmox container already runs Plex Media Server. The web setup page shows <b>Not authorized</b> over the public URL until the server is claimed to your plex.tv account.</p>
+<ol>
+<li>Open <a href="https://www.plex.tv/claim/" target="_blank" rel="noopener">https://www.plex.tv/claim/</a> while signed in</li>
+<li>Copy the claim code (it expires quickly)</li>
+<li>Paste it below and click <b>Claim server</b></li>
+</ol>
+<form id="f"><input id="t" name="token" placeholder="claim-xxxxxxxx" autocomplete="off" required>
+<button type="submit">Claim server</button></form>
+<pre id="o"></pre>
+<script>
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const o = document.getElementById('o');
+  o.textContent = 'Claiming…';
+  try {
+    const r = await fetch('/claim/api', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: document.getElementById('t').value})
+    });
+    const j = await r.json();
+    o.textContent = JSON.stringify(j, null, 2);
+    if (j.ok) location.href = 'https://plex.vpstruelord.com/web/index.html';
+  } catch (err) {
+    o.textContent = String(err);
+  }
+};
+</script></body></html>"""
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if path == "/api/branding":
@@ -12157,6 +12289,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path in ("/claim/api", "/api/plex/claim"):
+            # Unauthenticated on purpose: used from plex.vpstruelord.com/claim while PMS is unclaimed.
+            try:
+                payload = self._read_json()
+                token = str((payload or {}).get("token") or "").strip()
+                result = _plex_claim_via_token(token)
+                # Refresh identity
+                try:
+                    import urllib.request
+
+                    with urllib.request.urlopen(
+                        f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
+                    ) as resp:
+                        ident = resp.read().decode("utf-8", errors="replace")
+                    result["identity"] = ident[:500]
+                    result["claimed"] = 'claimed="1"' in ident or "claimed=\"1\"" in ident
+                except Exception:
+                    pass
+                self._json(200 if result.get("ok") else 400, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/login":
             try:
                 payload = self._read_json()
