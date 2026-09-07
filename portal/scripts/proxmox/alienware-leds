@@ -6,7 +6,7 @@ Dim is inverted: 0=full, 100=minimum.
 
 Modes:
   on / rainbow — synced spectrum: all zones same color, cycling rainbow together
-  off          — ARGB-safe black stream at dim 0 (keeps data line alive)
+  off          — black on every zone chunk, then dim 100 (minimum / dark)
   auto         — on 07:00–21:59 America/New_York, else off
   refresh      — reassert black while state=off
 
@@ -289,12 +289,18 @@ def _play_static_black(fd: int, zones: Sequence[int]) -> None:
 
 
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """ARGB-safe off: static black at dim 0 (do not dim 100)."""
+    """Night off: kill morph, paint black on every chunk, then dim to minimum.
+
+    Dim is inverted (0=full, 100=minimum). Earlier ARGB-safe off used dim 0 so
+    strips kept a live data line, but residual glow remained on the chassis.
+    Schedule/off now prefers a dark room: black + dim 100.
+    """
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
+    # Start at full dim channel so black morph writes cleanly, then go dark.
     dim_zones(fd, 0, zones)
     try:
         _play_static_black(fd, zones)
@@ -310,7 +316,7 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
-    dim_zones(fd, 0, zones)
+    dim_zones(fd, 100, zones)
 
 
 def stop_refresh_timer() -> None:
@@ -332,7 +338,7 @@ def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
-    dim_zones(fd, 0, zones)
+    dim_zones(fd, 100, zones)
 
 
 def apply(action: str) -> None:
