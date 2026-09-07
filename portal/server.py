@@ -6411,8 +6411,7 @@ def _leds_payload(
         else:
             hint = (
                 "Portal controls chassis lighting on the Proxmox host. "
-                "Spectrum keeps every zone the same color while cycling the rainbow. "
-                "Switch to Windows FX to edit in Alienware Command Center."
+                "Spectrum keeps every zone the same color while cycling the rainbow."
             )
     return {
         "ok": ok,
