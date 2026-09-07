@@ -1772,6 +1772,15 @@ PLEX_PUBLIC_HOST = (
 PLEX_HOST = os.environ.get("PLEX_HOST", "192.168.8.161").strip() or "192.168.8.161"
 PLEX_PORT = int(os.environ.get("PLEX_PORT", "32400") or "32400")
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
+WINDOWS_PUBLIC_HOST = (
+    os.environ.get("WINDOWS_PUBLIC_HOST", "windows.vpstruelord.com").strip()
+    or "windows.vpstruelord.com"
+)
+WINDOWS_VM_IP = os.environ.get("WINDOWS_VM_IP", "192.168.8.181").strip() or "192.168.8.181"
+WINDOWS_RDP_PORT = int(os.environ.get("WINDOWS_RDP_PORT", "3389") or "3389")
+# Guacamole (browser RDP) on the VPS — portal Windows tab embeds this.
+GUACAMOLE_HOST = os.environ.get("GUACAMOLE_HOST", "172.18.0.1").strip() or "172.18.0.1"
+GUACAMOLE_PORT = int(os.environ.get("GUACAMOLE_PORT", "8088") or "8088")
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4071,6 +4080,11 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
+    elif domain == WINDOWS_PUBLIC_HOST.lower():
+        out["target_host"] = GUACAMOLE_HOST
+        out["target_port"] = int(out.get("target_port") or GUACAMOLE_PORT)
+        out["target_hosts"] = [GUACAMOLE_HOST]
+        out["name"] = str(out.get("name") or "windows-rdp").strip() or "windows-rdp"
     return out
 
 
@@ -4122,9 +4136,33 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def ensure_windows_rdp_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee windows.vpstruelord.com → Guacamole (browser RDP to the Windows VM)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = WINDOWS_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": GUACAMOLE_HOST,
+                "target_port": GUACAMOLE_PORT,
+                "name": "windows-rdp",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
-    return ensure_plex_hookup(ensure_proxmox_hookup(rules))
+    return ensure_windows_rdp_hookup(ensure_plex_hookup(ensure_proxmox_hookup(rules)))
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -4299,6 +4337,37 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         "\thandle {",
         f"\t\treverse_proxy {upstream} {{",
         *proxy_common,
+        "\t\t}",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
+def _windows_rdp_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site for Guacamole browser RDP (windows.vpstruelord.com)."""
+    host = str(rule.get("target_host") or GUACAMOLE_HOST).strip() or GUACAMOLE_HOST
+    port = int(rule.get("target_port") or GUACAMOLE_PORT)
+    public = WINDOWS_PUBLIC_HOST
+    lines = [
+        f"{public} {{",
+        "\t@root path /",
+        "\tredir @root /guacamole/ 302",
+        "\thandle {",
+        f"\t\treverse_proxy {host}:{port} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_down -X-Frame-Options",
+        "\t\t\theader_down -Content-Security-Policy",
+        "\t\t\tflush_interval -1",
         "\t\t}",
         "\t}",
         "\theader {",
@@ -4640,6 +4709,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             continue
         if domain == PLEX_PUBLIC_HOST.lower():
             lines.extend(_plex_hookup_site_lines(r))
+            continue
+        if domain == WINDOWS_PUBLIC_HOST.lower():
+            lines.extend(_windows_rdp_hookup_site_lines(r))
             continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
@@ -6726,8 +6798,8 @@ def build_portal_settings() -> dict:
         {"id": "proxmox", "label": "Proxmox", "url": f"https://{PROXMOX_PUBLIC_HOST}/"},
         {
             "id": "windows-vm",
-            "label": "Windows VM (100)",
-            "url": f"https://{PROXMOX_PUBLIC_HOST}/#vmid=100&node=pve",
+            "label": "Windows remote desktop",
+            "url": f"https://{WINDOWS_PUBLIC_HOST}/guacamole/",
         },
         {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
