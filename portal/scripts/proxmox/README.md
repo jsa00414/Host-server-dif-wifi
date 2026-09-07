@@ -35,4 +35,6 @@ scp install-plex-lxc.sh root@192.168.8.160:/tmp/
 ssh root@192.168.8.160 bash /tmp/install-plex-lxc.sh
 ```
 
-Portal exposes it as **https://plex.vpstruelord.com/web** (Network → Plex tab).
+Portal does **not** embed Plex (cross-origin iframe is unreliable). Use the domain directly:
+
+**https://plex.vpstruelord.com/web**
