@@ -4775,7 +4775,8 @@ def ensure_hookup_certificates(domains: list[str]) -> tuple[bool, str, str]:
         return True, msg, "\n".join(warnings)
 
     logs.append(f"Requesting certificates for: {', '.join(need)}")
-    # Reload first (picks up new site blocks), then restart if certs still missing.
+    # Reload only — never docker-restart Caddy here. A container restart drops the
+    # portal HTTPS session mid-Save (BrokenPipe), which makes Add domain look broken.
     subprocess.run(
         [
             "docker",
@@ -4792,38 +4793,30 @@ def ensure_hookup_certificates(domains: list[str]) -> tuple[bool, str, str]:
         check=False,
     )
     time.sleep(2)
-    still = [d for d in need if not _caddy_domain_has_cert(d)]
-    if still:
-        logs.append(f"Restarting {CADDY_CONTAINER} to force ACME for: {', '.join(still)}")
-        subprocess.run(
-            ["docker", "restart", CADDY_CONTAINER],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        time.sleep(3)
 
-    deadline = time.time() + 90
+    # Short wait for ACME; incomplete certs are warnings, not hard failures.
+    deadline = time.time() + 25
     pending = list(need)
     while pending and time.time() < deadline:
         pending = [d for d in pending if not _caddy_domain_has_cert(d)]
         if not pending:
             break
-        time.sleep(3)
+        time.sleep(2)
 
-    ok = True
     for domain in need:
         if _caddy_domain_has_cert(domain):
             probe = "https ok" if _https_probe_ok(domain) else "cert present (https still warming)"
             logs.append(f"{domain}: {probe}")
         else:
-            ok = False
-            logs.append(f"{domain}: certificate not issued yet — check DNS and Caddy logs")
+            warnings.append(
+                f"{domain}: certificate not issued yet — check DNS and Caddy logs"
+            )
+            logs.append(f"{domain}: certificate pending")
 
     if warnings:
         logs.extend(f"WARN: {w}" for w in warnings)
-    return ok, "\n".join(logs), "\n".join(warnings)
+    # Always ok=True once Caddy accepted the site block; cert lag should not fail Save.
+    return True, "\n".join(logs), "\n".join(warnings)
 
 
 def _write_text_inplace(path: Path, text: str) -> None:
@@ -4926,9 +4919,11 @@ def write_hookups_state(rules: list[dict]) -> dict:
         check=False,
     )
     restart_out = ""
-    # VPN on/off and enable toggles must not leave stale client_ip routes.
-    # Restart whenever the managed block changed, or whenever reload failed.
-    if block_changed or reload.returncode != 0:
+    # Prefer reload. A full `docker restart` of the Caddy container drops the
+    # portal HTTPS connection mid-request (BrokenPipe), so Add domain / Save
+    # looked broken even when hookups.json was written successfully.
+    # Restart only when reload fails — config is already on the bind-mounted file.
+    if reload.returncode != 0:
         rst = subprocess.run(
             ["docker", "restart", CADDY_CONTAINER],
             capture_output=True,
@@ -4938,7 +4933,6 @@ def write_hookups_state(rules: list[dict]) -> dict:
         )
         restart_out = (rst.stdout or "") + (rst.stderr or "")
         time.sleep(3)
-        # Confirm container is up; reload is optional after restart (config loaded at start)
         alive = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Running}}", CADDY_CONTAINER],
             capture_output=True,
@@ -4950,7 +4944,9 @@ def write_hookups_state(rules: list[dict]) -> dict:
             reload = subprocess.CompletedProcess(
                 args=reload.args,
                 returncode=0,
-                stdout=(reload.stdout or "") + "\nCaddy restarted to apply VPN/public mode\n",
+                stdout=(reload.stdout or "")
+                + "\nCaddy restarted after reload failed\n"
+                + restart_out,
                 stderr=reload.stderr or "",
             )
         else:
@@ -4960,8 +4956,15 @@ def write_hookups_state(rules: list[dict]) -> dict:
                 stdout=reload.stdout or "",
                 stderr=(reload.stderr or "") + "\nCaddy restart failed\n" + restart_out,
             )
+    elif block_changed:
+        reload = subprocess.CompletedProcess(
+            args=reload.args,
+            returncode=0,
+            stdout=(reload.stdout or "") + "\nCaddy reloaded (no container restart)\n",
+            stderr=reload.stderr or "",
+        )
 
-    # Persist JSON only after Caddy accepted the new config (keeps UI in sync)
+    # Persist JSON as soon as Caddy accepted the config (before DNS/TLS waits).
     if reload.returncode == 0:
         HOOKUPS_JSON.parent.mkdir(parents=True, exist_ok=True)
         HOOKUPS_JSON.write_text(
@@ -5005,7 +5008,23 @@ def write_hookups_state(rules: list[dict]) -> dict:
         cert_ok, cert_out, cert_err = ensure_hookup_certificates(ordered)
 
     merged = merge_hookup_lists(managed, parse_caddy_existing_sites(updated if reload.returncode == 0 else original))
-    ok = reload.returncode == 0 and cert_ok and dns_ok and coredns_ok
+    # Caddy + JSON persistence is the hard requirement. DNS/CoreDNS/TLS issues are
+    # surfaced in stderr but must not undo a successful domain add.
+    ok = reload.returncode == 0
+    warn_bits = []
+    if not dns_ok:
+        warn_bits.append("cloudflare DNS")
+    if not coredns_ok:
+        warn_bits.append("CoreDNS")
+    if not cert_ok:
+        warn_bits.append("TLS certs")
+    if warn_bits and ok:
+        cert_err = (
+            (cert_err or "")
+            + ("\n" if cert_err else "")
+            + "Applied with warnings: "
+            + ", ".join(warn_bits)
+        )
     return {
         "ok": ok,
         "returncode": 0 if ok else (reload.returncode or 1),
@@ -5023,6 +5042,7 @@ def write_hookups_state(rules: list[dict]) -> dict:
         "stderr": ((reload.stderr or "") + "\n" + dns_err + "\n" + cert_err)[-2000:],
         "rules": merged,
         "dns_hint": dns_hint,
+        "warnings": warn_bits,
     }
 
 
