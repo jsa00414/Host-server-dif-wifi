@@ -4113,7 +4113,7 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
                 "domain": domain,
                 "target_host": PLEX_HOST,
                 "target_port": PLEX_PORT,
-                "name": "plex",
+                "name": "plex-server",
                 "external": False,
                 "vpn_only": False,
             }
