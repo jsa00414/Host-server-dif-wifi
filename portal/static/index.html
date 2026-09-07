@@ -3203,7 +3203,9 @@
         showLog(String(e.message || e), true);
       }
     }
-    function renderLedsSettings(data) {
+    let ledsBusy = false;
+    let ledsLastData = null;
+    function renderLedsSettings(data, opts = {}) {
       const stateEl = document.getElementById("settingsLedsState");
       const ownerEl = document.getElementById("settingsLedsOwner");
       const schedEl = document.getElementById("settingsLedsSchedule");
@@ -3214,7 +3216,10 @@
       const heroEl = document.getElementById("settingsLedsStatus");
       const panel = document.getElementById("settingsLedsPanel");
       if (!stateEl) return;
+      if (data) ledsLastData = data;
 
+      const busy = !!opts.busy || ledsBusy;
+      const pending = String(opts.pendingAction || "");
       const err = data && data.ok === false ? String(data.error || "error") : "";
       const st = err ? "error" : ((data && data.state) || "unknown");
       const owner = (data && data.owner) || (st === "windows" ? "windows" : "host");
@@ -3225,7 +3230,11 @@
 
       let title = "Unknown";
       let subtitle = "Waiting for status…";
-      if (err) {
+      if (busy && pending) {
+        const labels = { on: "Spectrum", off: "Off", auto: "Schedule", windows: "Windows FX", host: "Portal" };
+        title = "Applying…";
+        subtitle = `${labels[pending] || pending} · host SSH can take up to ~90s`;
+      } else if (err) {
         title = "Unavailable";
         subtitle = err;
       } else if (isWindows) {
@@ -3258,52 +3267,80 @@
       }
       if (dotEl) {
         dotEl.className = "leds-dot"
-          + (err ? " err" : isWindows ? " windows" : isOn ? " on" : isOff ? " off" : "");
+          + (busy ? "" : err ? " err" : isWindows ? " windows" : isOn ? " on" : isOff ? " off" : "");
       }
-      if (spectrumEl) spectrumEl.classList.toggle("active", !!isOn);
+      if (spectrumEl) spectrumEl.classList.toggle("active", !busy && !!isOn);
       if (heroEl) {
-        heroEl.classList.toggle("is-on", !!isOn);
-        heroEl.classList.toggle("is-off", !!isOff);
-        heroEl.classList.toggle("is-windows", !!isWindows);
-        heroEl.classList.toggle("is-err", !!err);
+        heroEl.classList.toggle("is-on", !busy && !!isOn);
+        heroEl.classList.toggle("is-off", !busy && !!isOff);
+        heroEl.classList.toggle("is-windows", !busy && !!isWindows);
+        heroEl.classList.toggle("is-err", !busy && !!err);
       }
 
       if (panel) {
         panel.querySelectorAll("[data-leds-action]").forEach((btn) => {
           const action = btn.getAttribute("data-leds-action");
           let active = false;
-          if (action === "on") active = isOn;
-          else if (action === "off") active = isOff;
-          else if (action === "host") active = onHost && !err;
-          else if (action === "windows") active = isWindows;
+          if (!busy) {
+            if (action === "on") active = isOn;
+            else if (action === "off") active = isOff;
+            else if (action === "host") active = onHost && !err;
+            else if (action === "windows") active = isWindows;
+          } else {
+            active = action === pending;
+          }
           btn.classList.toggle("is-active", active);
           const disableLighting = isWindows && (action === "on" || action === "off" || action === "auto");
-          btn.disabled = !!disableLighting;
+          btn.disabled = !!busy || !!disableLighting;
         });
       }
     }
     async function refreshLedsSettings() {
+      if (ledsBusy) return;
       try {
-        const data = await api("/api/leds");
+        const data = await api("/api/leds", { timeoutMs: 100000 });
         renderLedsSettings(data);
       } catch (e) {
-        renderLedsSettings({ ok: false, state: "unknown", error: String(e.message || e) });
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? "SSH to Proxmox timed out while reading LED status"
+          : msg;
+        renderLedsSettings({ ok: false, state: "unknown", error: friendly });
       }
     }
     async function setLedsAction(action) {
+      if (ledsBusy) return;
+      ledsBusy = true;
+      renderLedsSettings(ledsLastData || { ok: true, state: "unknown", owner: "host" }, {
+        busy: true,
+        pendingAction: action,
+      });
       setStatus(`LEDs: ${action}…`);
       try {
         const data = await api("/api/leds", {
           method: "POST",
           body: JSON.stringify({ action }),
+          timeoutMs: 100000,
         });
+        ledsBusy = false;
         renderLedsSettings(data);
         setStatus(`Chassis LEDs ${data.state || action}`, "ok");
         showLog(`LEDs ${action} → ${data.state || "?"}`, true);
       } catch (e) {
-        setStatus(String(e.message || e), "err");
-        showLog(String(e.message || e), true);
-        refreshLedsSettings();
+        ledsBusy = false;
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? `SSH timed out setting LEDs to ${action}. Try again — blackout can take ~30s.`
+          : msg;
+        setStatus(friendly, "err");
+        showLog(friendly, true);
+        renderLedsSettings({
+          ...(ledsLastData || {}),
+          ok: false,
+          error: friendly,
+        });
+        // Refresh after a short delay so a late host success can still update UI.
+        setTimeout(() => { if (!ledsBusy) refreshLedsSettings(); }, 2500);
       }
     }
 

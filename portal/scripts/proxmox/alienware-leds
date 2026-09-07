@@ -483,7 +483,20 @@ def main() -> None:
         if action == "off":
             install_refresh_timer()
     elif action == "status":
-        print(f"state={read_state()} device={find_aw_hidraw()}")
+        state = read_state()
+        try:
+            device = find_aw_hidraw()
+        except SystemExit:
+            device = "missing"
+            # Keep exit 0 so the portal can show last-known state instead of Unavailable.
+            print(f"state={state} device={device}")
+            print(
+                "warning=AW-ELC hidraw missing (USB wedged?). "
+                "Reboot Proxmox host to recover.",
+                file=sys.stderr,
+            )
+            return
+        print(f"state={state} device={device}")
     elif action == "auto":
         os.environ.setdefault("TZ", "America/New_York")
         time.tzset()

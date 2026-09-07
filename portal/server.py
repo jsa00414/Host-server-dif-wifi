@@ -6368,6 +6368,66 @@ def proxmox_ssh(remote_cmd: str, timeout: int = 20) -> subprocess.CompletedProce
     )
 
 
+def _parse_led_status_line(out: str) -> tuple[str, str]:
+    state = "unknown"
+    device = ""
+    for tok in out.replace("\n", " ").split():
+        if tok.startswith("state="):
+            state = tok.split("=", 1)[1].strip() or state
+        if tok.startswith("device="):
+            device = tok.split("=", 1)[1].strip()
+    return state, device
+
+
+def _leds_schedule() -> dict:
+    return {
+        "timezone": "America/New_York",
+        "on": "07:00",
+        "off": "22:00",
+        "label": "On 7:00 AM · Off 10:00 PM (Eastern)",
+    }
+
+
+def _leds_payload(
+    *,
+    ok: bool,
+    state: str,
+    owner: str,
+    device: str = "",
+    error: str | None = None,
+    owner_detail: str | None = None,
+    hint: str | None = None,
+) -> dict:
+    schedule = _leds_schedule()
+    if hint is None:
+        if owner == "windows":
+            hint = (
+                "Full motherboard lighting is in Windows VM "
+                f"{PROXMOX_LED_WINDOWS_VMID} "
+                "(AW-ELC USB + host alienware-wmi released). "
+                "Set effects in Alienware FX Lighting / AWCC, then tell me when to "
+                "copy them back — or click Return to host."
+            )
+        else:
+            hint = (
+                "Portal controls chassis lighting on the Proxmox host. "
+                "Spectrum keeps every zone the same color while cycling the rainbow. "
+                "Switch to Windows FX to edit in Alienware Command Center."
+            )
+    return {
+        "ok": ok,
+        "state": state,
+        "owner": owner,
+        "device": device,
+        "windows_vmid": PROXMOX_LED_WINDOWS_VMID,
+        "schedule": schedule,
+        "host": PROXMOX_SSH_HOST,
+        "hint": hint,
+        "error": error,
+        "owner_detail": owner_detail,
+    }
+
+
 def _parse_led_owner(out: str) -> dict:
     owner = "unknown"
     vmid = PROXMOX_LED_WINDOWS_VMID
@@ -6390,10 +6450,66 @@ def _parse_led_owner(out: str) -> dict:
     }
 
 
+# LED USB blackout / spectrum can take ~15–30s. Stacked 20s SSH calls made the
+# Spectrum/Off switch fail with Unavailable even when the host command succeeded.
+_LEDS_SSH_TIMEOUT = 90
+
+
+def _leds_ssh(remote_cmd: str) -> subprocess.CompletedProcess:
+    """SSH helper for LED control with a longer command budget."""
+    return proxmox_ssh(remote_cmd, timeout=_LEDS_SSH_TIMEOUT)
+
+
+def _leds_ssh_out(proc: subprocess.CompletedProcess) -> str:
+    return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+
+
+def _leds_from_combined_out(out: str, *, require_state: bool = True) -> dict:
+    """Build a portal LED payload from one SSH session's stdout/stderr."""
+    owner_info = _parse_led_owner(out)
+    owner = str(owner_info.get("owner") or "unknown")
+    vmid = str(owner_info.get("windows_vmid") or PROXMOX_LED_WINDOWS_VMID)
+    if owner == "windows":
+        payload = _leds_payload(
+            ok=True,
+            state="windows",
+            owner="windows",
+            device="",
+            owner_detail=out,
+        )
+        payload["windows_vmid"] = vmid
+        return payload
+
+    state, device = _parse_led_status_line(out)
+    ok = (not require_state) or state in ("on", "off", "rainbow")
+    # Prefer last-known on/off even if hidraw is missing (device=missing).
+    if state in ("on", "off", "rainbow"):
+        ok = True
+    payload = _leds_payload(
+        ok=ok,
+        state=state if state in ("on", "off", "rainbow", "windows") else "unknown",
+        owner=owner if owner in ("host", "windows") else ("host" if ok else "unknown"),
+        device=device,
+        error=None if ok else (out or "LED status unavailable"),
+        owner_detail=out,
+    )
+    payload["windows_vmid"] = vmid
+    return payload
+
+
 def leds_owner_status() -> dict:
     """Who currently owns the AW-ELC USB: host (portal) or windows (FX Lighting)."""
-    proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} status")
-    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    try:
+        proc = _leds_ssh(f"{PROXMOX_LED_OWNER_CMD} status")
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "owner": "unknown",
+            "windows_vmid": PROXMOX_LED_WINDOWS_VMID,
+            "detail": "",
+            "error": "SSH to Proxmox timed out while reading LED owner",
+        }
+    out = _leds_ssh_out(proc)
     info = _parse_led_owner(out)
     info["ok"] = proc.returncode == 0 and info.get("owner") in ("host", "windows")
     info["detail"] = out
@@ -6403,98 +6519,105 @@ def leds_owner_status() -> dict:
 
 
 def leds_status() -> dict:
-    """Read Alienware/PC chassis LED state from the Proxmox host."""
-    owner_info = leds_owner_status()
-    owner = str(owner_info.get("owner") or "unknown")
-    schedule = {
-        "timezone": "America/New_York",
-        "on": "07:00",
-        "off": "22:00",
-        "label": "On 7:00 AM · Off 10:00 PM (Eastern)",
-    }
-    if owner == "windows":
-        return {
-            "ok": True,
-            "state": "windows",
-            "owner": "windows",
-            "device": "",
-            "windows_vmid": owner_info.get("windows_vmid") or PROXMOX_LED_WINDOWS_VMID,
-            "schedule": schedule,
-            "host": PROXMOX_SSH_HOST,
-            "hint": (
-                "Full motherboard lighting is in Windows VM "
-                f"{owner_info.get('windows_vmid') or PROXMOX_LED_WINDOWS_VMID} "
-                "(AW-ELC USB + host alienware-wmi released). "
-                "Set effects in Alienware FX Lighting / AWCC, then tell me when to "
-                "copy them back — or click Return to host."
-            ),
-            "error": None,
-            "owner_detail": owner_info.get("detail"),
-        }
-
-    proc = proxmox_ssh(f"{PROXMOX_LED_CMD} status")
-    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-    state = "unknown"
-    device = ""
-    for tok in out.replace("\n", " ").split():
-        if tok.startswith("state="):
-            state = tok.split("=", 1)[1].strip() or state
-        if tok.startswith("device="):
-            device = tok.split("=", 1)[1].strip()
-    ok = proc.returncode == 0 and state in ("on", "off")
-    return {
-        "ok": ok,
-        "state": state if ok else "unknown",
-        "owner": owner if owner in ("host", "windows") else ("host" if ok else "unknown"),
-        "device": device,
-        "windows_vmid": owner_info.get("windows_vmid") or PROXMOX_LED_WINDOWS_VMID,
-        "schedule": schedule,
-        "host": PROXMOX_SSH_HOST,
-        "hint": (
-            "Portal controls chassis lighting on the Proxmox host. "
-            "Spectrum keeps every zone the same color while cycling the rainbow. "
-            "Switch to Windows FX to edit in Alienware Command Center."
-        ),
-        "error": None if ok else (out or f"ssh exit {proc.returncode}"),
-        "owner_detail": owner_info.get("detail"),
-    }
+    """Read Alienware/PC chassis LED state from the Proxmox host (one SSH)."""
+    # Skip LED status when Windows owns USB — hidraw is gone from the host.
+    remote = (
+        f'o=$({PROXMOX_LED_OWNER_CMD} status 2>&1); echo "$o"; '
+        f'case "$o" in *owner=windows*) ;; '
+        f'*) {PROXMOX_LED_CMD} status 2>&1 ;; esac'
+    )
+    try:
+        proc = _leds_ssh(remote)
+    except subprocess.TimeoutExpired:
+        return _leds_payload(
+            ok=False,
+            state="unknown",
+            owner="unknown",
+            error="SSH to Proxmox timed out while reading LED status",
+        )
+    except Exception as exc:
+        return _leds_payload(
+            ok=False,
+            state="unknown",
+            owner="unknown",
+            error=str(exc),
+        )
+    return _leds_from_combined_out(_leds_ssh_out(proc))
 
 
 def leds_set(action: str) -> dict:
-    """Set chassis LEDs: on | off | rainbow | auto | windows | host."""
+    """Set chassis LEDs: on | off | rainbow | auto | windows | host.
+
+    Uses a single SSH session for the action plus status so the portal switch
+    does not stack multiple short SSH timeouts.
+    """
     act = str(action or "").strip().lower()
     if act in ("windows", "to-windows"):
-        proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} to-windows")
-        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        remote = (
+            f"{PROXMOX_LED_OWNER_CMD} to-windows; ec=$?; "
+            f"{PROXMOX_LED_OWNER_CMD} status; "
+            f"exit $ec"
+        )
+        try:
+            proc = _leds_ssh(remote)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "SSH to Proxmox timed out while handing LEDs to Windows"
+            ) from exc
+        out = _leds_ssh_out(proc)
         if proc.returncode != 0:
             raise RuntimeError(out or f"LED Windows handoff failed ({proc.returncode})")
-        st = leds_status()
+        st = _leds_from_combined_out(out, require_state=False)
         st["action"] = "windows"
         st["detail"] = out
         return st
     if act in ("host", "to-host"):
-        proc = proxmox_ssh(f"{PROXMOX_LED_OWNER_CMD} to-host")
-        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        remote = (
+            f"{PROXMOX_LED_OWNER_CMD} to-host; ec=$?; "
+            f"{PROXMOX_LED_OWNER_CMD} status; "
+            f"{PROXMOX_LED_CMD} status; "
+            f"exit $ec"
+        )
+        try:
+            proc = _leds_ssh(remote)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "SSH to Proxmox timed out while reclaiming LEDs for the host"
+            ) from exc
+        out = _leds_ssh_out(proc)
         if proc.returncode != 0:
             raise RuntimeError(out or f"LED host reclaim failed ({proc.returncode})")
-        st = leds_status()
+        st = _leds_from_combined_out(out)
         st["action"] = "host"
         st["detail"] = out
         return st
     if act not in ("on", "off", "auto", "rainbow"):
         raise ValueError("action must be on, off, rainbow, auto, windows, or host")
-    # Host-side modes need the USB on the Proxmox host.
-    owner = str(leds_owner_status().get("owner") or "")
-    if owner == "windows":
+    # Host-side modes need the USB on the Proxmox host — check + set + status
+    # in one SSH so Spectrum/Off does not burn the whole timeout on owner alone.
+    remote = (
+        f'o=$({PROXMOX_LED_OWNER_CMD} status 2>&1); echo "$o"; '
+        f'case "$o" in *owner=windows*) '
+        f'echo error=windows_owns_usb; exit 2;; esac; '
+        f"{PROXMOX_LED_CMD} {act}; ec=$?; "
+        f"{PROXMOX_LED_CMD} status; "
+        f"exit $ec"
+    )
+    try:
+        proc = _leds_ssh(remote)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"SSH to Proxmox timed out while setting LEDs to {act}"
+        ) from exc
+    out = _leds_ssh_out(proc)
+    if "error=windows_owns_usb" in out or proc.returncode == 2:
         raise RuntimeError(
             "LED controller is in the Windows VM (FX Lighting). "
             "Click Return to host first, or say when to copy FX settings."
         )
-    proc = proxmox_ssh(f"{PROXMOX_LED_CMD} {act}")
-    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     if proc.returncode != 0:
         raise RuntimeError(out or f"led command failed ({proc.returncode})")
-    st = leds_status()
+    st = _leds_from_combined_out(out)
     st["action"] = act
     st["detail"] = out
     return st
