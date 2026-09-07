@@ -1765,6 +1765,13 @@ PROXMOX_PUBLIC_HOST = (
 )
 PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
 PROXMOX_PORT = int(os.environ.get("PROXMOX_PORT", "8006") or "8006")
+PLEX_PUBLIC_HOST = (
+    os.environ.get("PLEX_PUBLIC_HOST", "plex.vpstruelord.com").strip()
+    or "plex.vpstruelord.com"
+)
+PLEX_HOST = os.environ.get("PLEX_HOST", "192.168.8.161").strip() or "192.168.8.161"
+PLEX_PORT = int(os.environ.get("PLEX_PORT", "32400") or "32400")
+PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4059,6 +4066,11 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_hosts"] = [PROXMOX_HOST]
         out["upstream_https"] = True
         out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+    elif domain == PLEX_PUBLIC_HOST.lower():
+        out["target_host"] = PLEX_HOST
+        out["target_port"] = int(out.get("target_port") or PLEX_PORT)
+        out["target_hosts"] = [PLEX_HOST]
+        out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
     return out
 
 
@@ -4084,6 +4096,35 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
         )
     )
     return out
+
+
+def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = PLEX_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": PLEX_HOST,
+                "target_port": PLEX_PORT,
+                "name": "plex-server",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
+def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
+    """Keep always-on portal services present in managed hookups."""
+    return ensure_plex_hookup(ensure_proxmox_hookup(rules))
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -4162,6 +4203,308 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     return lines
 
 
+def _plex_identity_xml() -> str:
+    """Fetch /identity over HTTP, then HTTPS (claimed PMS often requires TLS)."""
+    import ssl
+    import urllib.request
+
+    ctx = ssl._create_unverified_context()
+    attempts = (
+        (f"http://{PLEX_HOST}:{PLEX_PORT}/identity", None),
+        (f"https://{PLEX_HOST}:{PLEX_PORT}/identity", ctx),
+    )
+    for url, context in attempts:
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/xml"})
+            kwargs = {"timeout": 4}
+            if context is not None:
+                kwargs["context"] = context
+            with urllib.request.urlopen(req, **kwargs) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            continue
+    return ""
+
+
+def _plex_machine_identifier() -> str:
+    """Best-effort machineIdentifier from the running PMS (for setup URL)."""
+    import re
+
+    xml = _plex_identity_xml()
+    m = re.search(r'machineIdentifier="([^"]+)"', xml)
+    return m.group(1).strip() if m else ""
+
+
+def _plex_is_claimed() -> bool:
+    return 'claimed="1"' in _plex_identity_xml()
+
+
+def _plex_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
+    host = PLEX_HOST
+    port = int(rule.get("target_port") or PLEX_PORT)
+    public = PLEX_PUBLIC_HOST
+    machine = _plex_machine_identifier()
+    admin = _plex_local_admin_token()
+    claimed = _plex_is_claimed()
+    # Unclaimed: force setup wizard + local admin token.
+    # Claimed: send users to the normal web app (not #!/setup).
+    if claimed:
+        setup_path = "/web/index.html"
+    elif machine and admin:
+        from urllib.parse import quote
+
+        setup_path = (
+            f"/web/index.html?X-Plex-Token={quote(admin)}#!/setup/{machine}"
+        )
+    elif machine:
+        setup_path = f"/web/index.html#!/setup/{machine}"
+    else:
+        setup_path = "/web/index.html"
+    # After claim, PMS often requires TLS on :32400 ("secure connections required").
+    upstream = f"https://{host}:{port}"
+    proxy_common = [
+        "\t\t\ttransport http {",
+        "\t\t\t\ttls_insecure_skip_verify",
+        "\t\t\t}",
+        f"\t\t\theader_up Host {host}:{port}",
+        f"\t\t\theader_up X-Forwarded-Host {public}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
+        f"\t\t\theader_down Location http://{public} https://{public}",
+        f"\t\t\theader_down Location https://{public} https://{public}",
+        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
+        f"\t\t\theader_down Location https://{host}:{port} https://{public}",
+        f"\t\t\theader_down Location http://{host} https://{public}",
+        "\t\t\theader_down -X-Frame-Options",
+        "\t\t\theader_down -Content-Security-Policy",
+    ]
+    lines = [
+        f"{public} {{",
+        # Claim helper (plex.tv claim code) — portal serves the form + API.
+        "\thandle /claim* {",
+        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
+        "\t}",
+        # Land on web UI (setup only while unclaimed).
+        "\t@plexroot path / /web /web/",
+        f"\tredir @plexroot {setup_path} 302",
+        # Media streams should not be gzip-buffered.
+        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+        "\thandle @plexmedia {",
+        f"\t\treverse_proxy {upstream} {{",
+        *proxy_common,
+        "\t\t\tflush_interval -1",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        f"\t\treverse_proxy {upstream} {{",
+        *proxy_common,
+        "\t\t}",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
+def _plex_local_admin_token() -> str:
+    """LocalAdminToken for unclaimed PMS (authorizes setup through reverse proxy)."""
+    for path in (
+        os.environ.get("PLEX_LOCAL_ADMIN_TOKEN_FILE", "").strip(),
+        "/opt/wireguard/plex-local-admin.token",
+    ):
+        if not path:
+            continue
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+            if raw:
+                return raw
+        except Exception:
+            pass
+    env = os.environ.get("PLEX_LOCAL_ADMIN_TOKEN", "").strip()
+    if env:
+        return env
+    # Live fetch from CT via Proxmox when portal has LAN/VPN route.
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=5",
+                f"root@{os.environ.get('PROXMOX_HOST', '192.168.8.160').strip() or '192.168.8.160'}",
+                "pct",
+                "exec",
+                PLEX_CTID,
+                "--",
+                "python3",
+                "-c",
+                "from pathlib import Path; print(Path('/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/.LocalAdminToken').read_text().strip())",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        tok = (r.stdout or "").strip()
+        if tok and r.returncode == 0:
+            try:
+                Path("/opt/wireguard/plex-local-admin.token").write_text(tok + "\n", encoding="utf-8")
+                os.chmod("/opt/wireguard/plex-local-admin.token", 0o600)
+            except Exception:
+                pass
+            return tok
+    except Exception:
+        pass
+    return ""
+
+
+def _plex_claim_via_token(claim_token: str) -> dict:
+    """Claim unclaimed PMS with a plex.tv claim code (against LAN PMS)."""
+    import subprocess
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    raw = str(claim_token or "").strip()
+    if not raw:
+        raise ValueError("missing plex.tv claim token")
+    # plex.tv codes are claim-XXXXXXXX — keep the prefix.
+    token = raw if raw.lower().startswith("claim-") else f"claim-{raw}"
+    if len(token) < 12:
+        raise ValueError("claim token looks too short")
+
+    url = f"http://{PLEX_HOST}:{PLEX_PORT}/myplex/claim?token={urllib.parse.quote(token, safe='')}"
+    # Prefer claiming from inside the CT (loopback), then fall back to LAN.
+    body = ""
+    http_status = 0
+    via = "lan"
+    try:
+        prox = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
+        r = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=8",
+                f"root@{prox}",
+                "pct",
+                "exec",
+                PLEX_CTID,
+                "--",
+                "curl",
+                "-sS",
+                "-X",
+                "POST",
+                "-w",
+                "\n__HTTP__:%{http_code}",
+                f"http://127.0.0.1:{PLEX_PORT}/myplex/claim?token={token}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "__HTTP__:" in out:
+            body, _, code_s = out.rpartition("__HTTP__:")
+            http_status = int(code_s.strip() or "0")
+            via = "ct-loopback"
+        elif r.returncode == 0 and out.strip():
+            body = out
+            http_status = 200
+            via = "ct-loopback"
+    except Exception:
+        body = ""
+        http_status = 0
+
+    if http_status == 0:
+        via = "lan"
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                http_status = int(getattr(resp, "status", 200) or 200)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            http_status = int(exc.code)
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
+            # PMS often closes the socket after a successful claim while restarting.
+            body = str(exc)
+            http_status = 0
+            via = "lan-closed"
+
+    # Confirm claim state (authoritative)
+    claimed = False
+    identity = ""
+    try:
+        import time
+
+        for _ in range(8):
+            try:
+                with urllib.request.urlopen(
+                    f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
+                ) as resp:
+                    identity = resp.read().decode("utf-8", errors="replace")
+                claimed = 'claimed="1"' in identity
+                if claimed or identity:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+    except Exception:
+        pass
+    if not claimed and body:
+        claimed = "username=" in body and 'username=""' not in body
+
+    if claimed:
+        return {
+            "ok": True,
+            "http_status": http_status or 200,
+            "claimed": True,
+            "via": via,
+            "identity": identity[:500],
+            "body": body[:800],
+            "next": "https://plex.vpstruelord.com/web/index.html",
+            "note": "Server is claimed. Sign in at plex.vpstruelord.com with your plex.tv account.",
+        }
+
+    if http_status in (400, 401, 403, 500):
+        raise ValueError(
+            "Claim code rejected by plex.tv (expired or already used). "
+            "Open https://www.plex.tv/claim/ for a fresh code and paste it within ~1 minute."
+        )
+    if http_status == 0:
+        raise ValueError(
+            "Plex closed the connection during claim and the server still looks unclaimed. "
+            "Get a fresh code at https://www.plex.tv/claim/ and try again immediately."
+        )
+    if http_status >= 400:
+        raise ValueError(
+            f"claim failed (HTTP {http_status}). Get a fresh code at https://www.plex.tv/claim/"
+        )
+
+    return {
+        "ok": True,
+        "http_status": http_status,
+        "claimed": claimed,
+        "via": via,
+        "identity": identity[:500],
+        "body": body[:800],
+        "next": "https://plex.vpstruelord.com/web/index.html",
+    }
+
+
 def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
     upstream = _hookup_proxy_upstream(rule)
     https = bool(rule.get("upstream_https"))
@@ -4202,7 +4545,7 @@ def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
 
 
 def default_hookups() -> list[dict]:
-    return ensure_proxmox_hookup([])
+    return ensure_managed_hookups([])
 
 
 def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[dict]:
@@ -4294,6 +4637,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             continue
         if domain == PROXMOX_PUBLIC_HOST.lower():
             lines.extend(_proxmox_hookup_site_lines(r))
+            continue
+        if domain == PLEX_PUBLIC_HOST.lower():
+            lines.extend(_plex_hookup_site_lines(r))
             continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
@@ -4398,7 +4744,7 @@ def read_hookups_state() -> dict:
         managed = validate_hookups(data.get("rules", []))
     else:
         managed = default_hookups()
-    managed = ensure_proxmox_hookup(managed)
+    managed = ensure_managed_hookups(managed)
 
     existing: list[dict] = []
     if str(CADDYFILE_PATH) and CADDYFILE_PATH.is_file():
@@ -4837,7 +5183,7 @@ def _write_text_inplace(path: Path, text: str) -> None:
 
 
 def write_hookups_state(rules: list[dict]) -> dict:
-    cleaned = ensure_proxmox_hookup(validate_hookups(rules))
+    cleaned = ensure_managed_hookups(validate_hookups(rules))
     # Persist only managed (non-external) rules; external stay in main Caddyfile
     managed = [r for r in cleaned if not r.get("external")]
     prev_domains: set[str] = set()
@@ -11472,11 +11818,58 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             pass  # public
+        elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
+            pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif not self._is_authed():
-            if path.startswith("/api/"):
+            if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
             else:
                 self._unauthorized(api=False)
+            return
+
+        if path in ("/claim", "/claim/"):
+            html = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claim Plex Media Server</title>
+<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:36rem;margin:3rem auto;padding:0 1rem;line-height:1.45}
+input,button{font:inherit;padding:.65rem .8rem;border-radius:8px;border:1px solid #444;background:#222;color:#eee;width:100%;box-sizing:border-box;margin:.4rem 0}
+button{background:#e5a00d;color:#111;border:0;font-weight:700;cursor:pointer}
+a{color:#e5a00d}pre{white-space:pre-wrap;background:#1a1a1a;padding:.75rem;border-radius:8px}</style></head><body>
+<h1>Claim Plex Media Server</h1>
+<p>Your Proxmox container already runs Plex Media Server. The web setup page shows <b>Not authorized</b> over the public URL until the server is claimed to your plex.tv account.</p>
+<p><b>Codes expire in about 4 minutes</b> — copy a fresh one and paste it here immediately.</p>
+<ol>
+<li>Open <a href="https://www.plex.tv/claim/" target="_blank" rel="noopener">https://www.plex.tv/claim/</a> while signed in</li>
+<li>Copy the claim code (starts with <code>claim-</code>)</li>
+<li>Paste it below within one minute and click <b>Claim server</b></li>
+</ol>
+<form id="f"><input id="t" name="token" placeholder="claim-xxxxxxxx" autocomplete="off" required>
+<button type="submit">Claim server</button></form>
+<pre id="o"></pre>
+<script>
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const o = document.getElementById('o');
+  o.textContent = 'Claiming…';
+  try {
+    const r = await fetch('/claim/api', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: document.getElementById('t').value})
+    });
+    const j = await r.json();
+    o.textContent = JSON.stringify(j, null, 2);
+    if (j.ok) location.href = 'https://plex.vpstruelord.com/web/index.html';
+  } catch (err) {
+    o.textContent = String(err);
+  }
+};
+</script></body></html>"""
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if path == "/api/branding":
@@ -12019,8 +12412,10 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             return self.do_GET()
+        if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
+            return self.do_GET()
         if not self._is_authed():
-            if path.startswith("/api/"):
+            if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
             else:
                 self._unauthorized(api=False)
@@ -12036,6 +12431,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path in ("/claim/api", "/api/plex/claim"):
+            # Unauthenticated on purpose: used from plex.vpstruelord.com/claim while PMS is unclaimed.
+            try:
+                payload = self._read_json()
+                token = str((payload or {}).get("token") or "").strip()
+                result = _plex_claim_via_token(token)
+                # Refresh identity
+                try:
+                    import urllib.request
+
+                    with urllib.request.urlopen(
+                        f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
+                    ) as resp:
+                        ident = resp.read().decode("utf-8", errors="replace")
+                    result["identity"] = ident[:500]
+                    result["claimed"] = 'claimed="1"' in ident or "claimed=\"1\"" in ident
+                except Exception:
+                    pass
+                self._json(200 if result.get("ok") else 400, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/login":
             try:
                 payload = self._read_json()
