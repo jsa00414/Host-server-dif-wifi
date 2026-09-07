@@ -4,7 +4,7 @@
 set -euo pipefail
 
 CTID="${CTID:-101}"
-CT_HOSTNAME="${CT_HOSTNAME:-plex}"
+CT_HOSTNAME="${CT_HOSTNAME:-plex-server}"
 CT_IP="${CT_IP:-192.168.8.161}"
 CT_CIDR="${CT_CIDR:-24}"
 CT_GW="${CT_GW:-192.168.8.1}"
@@ -65,7 +65,7 @@ pct set "$CTID" \
   --net0 "name=eth0,bridge=${BRIDGE},ip=${CT_IP}/${CT_CIDR},gw=${CT_GW}" \
   --nameserver 1.1.1.1 \
   --features nesting=1,keyctl=1 \
-  --description "Plex Media Server for portal.vpstruelord.com (plex.vpstruelord.com)" >/dev/null
+  --description "Plex Media Server LXC (plex.vpstruelord.com) — not embedded in portal" >/dev/null
 
 if ! pct status "$CTID" 2>/dev/null | grep -qi running; then
   echo "==> Starting CT ${CTID}…"
@@ -103,7 +103,7 @@ echo
 echo "Plex LXC ready:"
 echo "  CTID     ${CTID}"
 echo "  LAN URL  http://${CT_IP}:32400/web"
-echo "  Portal   https://plex.vpstruelord.com/web (after portal hookup deploy)"
+echo "  Public   https://plex.vpstruelord.com/web (Caddy hookup; not in portal UI)"
 echo
 pct status "$CTID" || true
 pct config "$CTID" | sed -n '1,40p'

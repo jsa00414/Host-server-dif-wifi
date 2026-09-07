@@ -4070,7 +4070,7 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_host"] = PLEX_HOST
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
-        out["name"] = str(out.get("name") or "plex").strip() or "plex"
+        out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
     return out
 
 
@@ -4204,7 +4204,7 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
 
 
 def _plex_hookup_site_lines(rule: dict) -> list[str]:
-    """Caddy site for Plex LXC — strip frame blockers so portal can embed /web."""
+    """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST

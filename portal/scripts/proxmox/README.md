@@ -24,7 +24,9 @@ After (1), renew DHCP on Proxmox if it uses DHCP. Static DNS to the router is re
 
 ## Plex LXC
 
-`install-plex-lxc.sh` creates **CT 101** (`plex` @ `192.168.8.161`) with Plex Media Server on `:32400`.
+`install-plex-lxc.sh` creates **CT 101** (`plex-server` @ `192.168.8.161`) with Plex Media Server on `:32400`.
+
+Plex is **not** embedded in the portal. Use the Proxmox container (and optional public URL).
 
 ```bash
 # On Proxmox host:
@@ -35,6 +37,5 @@ scp install-plex-lxc.sh root@192.168.8.160:/tmp/
 ssh root@192.168.8.160 bash /tmp/install-plex-lxc.sh
 ```
 
-Portal does **not** embed Plex (cross-origin iframe is unreliable). Use the domain directly:
-
-**https://plex.vpstruelord.com/web**
+- LAN: `http://192.168.8.161:32400/web`
+- Public: **https://plex.vpstruelord.com/web** (portal Caddy hookup only — no portal tab)
