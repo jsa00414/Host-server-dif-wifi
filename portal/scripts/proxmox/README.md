@@ -40,6 +40,8 @@ ssh root@192.168.8.160 bash /tmp/install-plex-lxc.sh
 ssh root@192.168.8.160 bash /tmp/configure-plex-server.sh
 ```
 
-- LAN/VPN claim/setup: `http://192.168.8.161:32400/web`
-- Public: **https://plex.vpstruelord.com/web** (Caddy hookup only — no portal tab)
+- **Claim/setup (use this):** **https://plex.vpstruelord.com/web**
+- LAN IP `http://192.168.8.161:32400/web` only works on **home Wi‑Fi** or **home VPN** (not from the public internet)
 - Media (if NAS mounted): `/mnt/media` inside the CT
+
+`DisableRemoteSecurity=1` is set until first claim so the public URL can finish setup.

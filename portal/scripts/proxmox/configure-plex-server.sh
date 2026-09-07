@@ -116,13 +116,16 @@ body = m.group(1).rstrip().rstrip("/")
 existing = dict(re.findall(r'(\\w+)="([^"]*)"', body))
 existing.update({
     "FriendlyName": "Plex Media Server",
+    # Allow first-time claim via https://plex.vpstruelord.com (LAN IP is not
+    # reachable off-home). Turn off after claiming for tighter security.
+    "DisableRemoteSecurity": "1",
     "customConnections": f"https://{public}:443,http://{ct_ip}:32400",
     "allowedNetworks": "192.168.8.0/255.255.255.0,10.9.0.0/255.255.255.0,172.16.0.0/255.240.0.0,10.0.0.0/255.0.0.0",
     "LanNetworksBandwidth": "192.168.8.0/255.255.255.0,10.9.0.0/255.255.255.0",
     "PublishServerOnPlexOnlineKey": "1",
     "ManualPortMappingMode": "1",
     "ManualPortMappingPort": "443",
-    "secureConnections": "1",
+    "secureConnections": "0",
     "AcceptedEULA": "1",
 })
 attr_str = " ".join(f'{k}="{v}"' for k, v in existing.items())
