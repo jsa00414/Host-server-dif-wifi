@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Hand Alienware motherboard lighting control between Proxmox host and Windows VM.
+#
+# Windows path (Alienware FX Lighting / AWCC) needs exclusive ownership of:
+#   1) AW-ELC USB 187c:0550  (chassis / motherboard LED HID)
+#   2) Host alienware-wmi unbound  (so Linux is not driving rgb_zones)
+#
+# The chipset USB controller cannot be PCI-passed (IOMMU group shares SATA + NIC).
+#
+# Usage:
+#   aw-elc-usb-owner status
+#   aw-elc-usb-owner to-windows   # full motherboard lighting → Windows FX
+#   aw-elc-usb-owner to-host      # reclaim for portal / alienware-leds
+set -euo pipefail
+
+VENDOR_PRODUCT="187c:0550"
+VMID="${AW_ELC_WINDOWS_VMID:-100}"
+USB_SLOT="${AW_ELC_USB_SLOT:-usb4}"
+OWNER_PATH="/etc/alienware-leds/owner"
+STATE_PATH="/etc/alienware-leds/state"
+LED_CMD="${AW_ELC_LED_CMD:-/usr/local/sbin/alienware-leds}"
+WMI_BLACKLIST="/etc/modprobe.d/blacklist-alienware-wmi-fx.conf"
+
+mkdir -p "$(dirname "$OWNER_PATH")"
+
+host_has_device() {
+  # Prefer HID visibility: after passthrough lsusb may still list the device,
+  # but /dev/hidraw for AW-ELC is gone — that is what host control needs.
+  if compgen -G "/sys/class/hidraw/hidraw*/device/uevent" >/dev/null 2>&1; then
+    if grep -qi "HID_ID=0000187C:00000550\|187C:0550\|0000187C00000550" \
+         /sys/class/hidraw/hidraw*/device/uevent 2>/dev/null; then
+      return 0
+    fi
+  fi
+  if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1 && ! vm_has_usb; then
+    return 0
+  fi
+  return 1
+}
+
+vm_has_usb() {
+  qm config "$VMID" 2>/dev/null | grep -qiE "^${USB_SLOT}:.*${VENDOR_PRODUCT}|^${USB_SLOT}:.*187c:0550" \
+    || qm config "$VMID" 2>/dev/null | grep -qiE "host=${VENDOR_PRODUCT}"
+}
+
+wmi_loaded() {
+  lsmod 2>/dev/null | grep -qE '^alienware_wmi[[:space:]]'
+}
+
+read_owner() {
+  if [[ -f "$OWNER_PATH" ]]; then
+    tr -d '[:space:]' <"$OWNER_PATH"
+    return
+  fi
+  if vm_has_usb; then
+    echo windows
+  elif host_has_device; then
+    echo host
+  else
+    echo unknown
+  fi
+}
+
+write_owner() {
+  printf '%s\n' "$1" >"$OWNER_PATH"
+}
+
+stop_host_leds() {
+  systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
+  systemctl stop alienware-leds-refresh.service >/dev/null 2>&1 || true
+  if [[ -x "$LED_CMD" ]] && host_has_device; then
+    "$LED_CMD" off >/dev/null 2>&1 || true
+  fi
+  systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1 || true
+}
+
+release_host_wmi() {
+  # Drop Linux motherboard zone control so Windows FX owns lighting fully.
+  if [[ -e /sys/class/leds/alienware::global_brightness/brightness ]]; then
+    echo 0 >/sys/class/leds/alienware::global_brightness/brightness 2>/dev/null || true
+  fi
+  if [[ -d /sys/devices/platform/alienware-wmi/rgb_zones ]]; then
+    for z in /sys/devices/platform/alienware-wmi/rgb_zones/zone*; do
+      [[ -f "$z" ]] || continue
+      echo "000000" >"$z" 2>/dev/null || true
+    done
+  fi
+  modprobe -r alienware_wmi >/dev/null 2>&1 || true
+  # Persist across reboot while Windows owns FX.
+  cat >"$WMI_BLACKLIST" <<'EOF'
+# Alienware FX Lighting ownership: keep host WMI from reclaiming motherboard LEDs.
+blacklist alienware_wmi
+EOF
+}
+
+restore_host_wmi() {
+  rm -f "$WMI_BLACKLIST"
+  modprobe alienware_wmi >/dev/null 2>&1 || true
+}
+
+cmd_status() {
+  local owner device vm_usb host_usb wmi
+  owner="$(read_owner)"
+  device="missing"
+  host_usb=0
+  vm_usb=0
+  wmi=0
+  if host_has_device; then
+    host_usb=1
+    device="$(lsusb -d "$VENDOR_PRODUCT" 2>/dev/null | head -1 | sed 's/^Bus/bus/' || echo present)"
+  fi
+  if vm_has_usb; then
+    vm_usb=1
+  fi
+  if wmi_loaded; then
+    wmi=1
+  fi
+  if [[ "$vm_usb" -eq 1 && "$host_usb" -eq 0 ]]; then
+    owner=windows
+  elif [[ "$host_usb" -eq 1 && "$vm_usb" -eq 0 ]]; then
+    owner=host
+  fi
+  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} wmi=${wmi} device=${device}"
+}
+
+cmd_to_windows() {
+  if ! qm status "$VMID" >/dev/null 2>&1; then
+    echo "VM ${VMID} not found" >&2
+    exit 1
+  fi
+  stop_host_leds
+  release_host_wmi
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  sleep 0.5
+  if ! host_has_device; then
+    local line slot
+    while read -r line; do
+      slot="${line%%:*}"
+      [[ -n "$slot" ]] || continue
+      qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+    done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*187c:0550" || true)
+    sleep 1
+  fi
+  if ! host_has_device && ! vm_has_usb; then
+    echo "AW-ELC ${VENDOR_PRODUCT} not found on host or VM ${VMID}" >&2
+    exit 1
+  fi
+  if host_has_device; then
+    qm set "$VMID" -"$USB_SLOT" "host=${VENDOR_PRODUCT},usb3=1"
+  fi
+  write_owner windows
+  printf 'windows\n' >"$STATE_PATH"
+  sleep 1
+  cmd_status
+  echo "Motherboard lighting handed to Windows VM ${VMID}:"
+  echo "  - AW-ELC USB ${VENDOR_PRODUCT} → ${USB_SLOT}"
+  echo "  - host alienware-wmi unloaded/blacklisted"
+  echo "Open Alienware FX Lighting / AWCC in the VM and set effects."
+}
+
+cmd_to_host() {
+  local line slot
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*187c:0550" || true)
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 30); do
+    if host_has_device; then
+      break
+    fi
+    sleep 0.5
+  done
+  if ! host_has_device; then
+    write_owner unknown
+    echo "AW-ELC did not reappear on host after reclaim" >&2
+    cmd_status
+    exit 1
+  fi
+  restore_host_wmi
+  write_owner host
+  if [[ -x "$LED_CMD" ]]; then
+    "$LED_CMD" on || true
+  else
+    printf 'on\n' >"$STATE_PATH"
+  fi
+  cmd_status
+  echo "Motherboard lighting reclaimed by host. Portal LED controls are active again."
+}
+
+usage() {
+  echo "Usage: aw-elc-usb-owner status|to-windows|to-host"
+  echo "  Windows VMID=${VMID}  USB slot=${USB_SLOT}  device=${VENDOR_PRODUCT}"
+  echo "  to-windows also unloads host alienware-wmi (full FX motherboard control)"
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status) cmd_status ;;
+    to-windows|windows) cmd_to_windows ;;
+    to-host|host) cmd_to_host ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown action: $action" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
