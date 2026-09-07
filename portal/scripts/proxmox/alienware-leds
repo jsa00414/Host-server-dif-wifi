@@ -355,18 +355,42 @@ def fans_auto_all() -> str:
 
 
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """Night off: kill morph, static black every zone, dim 100, quiet chassis fans."""
+    """Night off for AW-ELC stock zones.
+
+    Desktop AW-ELC (and custom builds) respond more reliably to SET_COLOR + DIM
+    than to morph/play teardown. We still try to erase running animations, then
+    hammer black via SET_COLOR across the reported zones and a wider ID range
+    (some boards use non-dense zone IDs), dim to 100, and RESET.
+    """
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
-    dim_zones(fd, 0, zones)
+
+    # Wide ID sweep — probe count can under-report / use sparse IDs.
+    wide = list(dict.fromkeys([*zones, *range(0x00, 0x80)]))
+
+    dim_zones(fd, 0, wide)
     try:
         _play_static_black(fd, zones, anim_slot=ANIM_KEYBOARD, save=False)
     except OSError:
         pass
-    # Persist black as default/startup so reboot / controller defaults stay dark.
+
+    # Primary blackout path (alienware-rgb-native: SET_COLOR is reliable).
+    for _ in range(4):
+        set_color_direct(fd, (0, 0, 0), wide)
+        dim_zones(fd, 100, wide)
+        time.sleep(0.12)
+
+    try:
+        aw_cmd(fd, 0x28, delay=0.3)  # RESET
+    except OSError:
+        pass
+    set_color_direct(fd, (0, 0, 0), wide)
+    dim_zones(fd, 100, wide)
+
+    # Persist black default so stock zones don't revive spectrum after reboot.
     try:
         user_anim(fd, ANIM_REMOVE, ANIM_DEFAULT)
         _play_static_black(fd, zones, anim_slot=ANIM_DEFAULT, save=True)
@@ -374,8 +398,8 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
         user_anim(fd, ANIM_SET_STARTUP, ANIM_DEFAULT)
     except OSError:
         pass
-    set_color_direct(fd, (0, 0, 0), zones)
-    dim_zones(fd, 100, zones)
+    set_color_direct(fd, (0, 0, 0), wide)
+    dim_zones(fd, 100, wide)
 
 
 def stop_refresh_timer() -> None:
