@@ -4279,22 +4279,116 @@ def _plex_local_admin_token() -> str:
 
 
 def _plex_claim_via_token(claim_token: str) -> dict:
-    """Claim unclaimed PMS with a plex.tv claim code (run against LAN upstream)."""
+    """Claim unclaimed PMS with a plex.tv claim code (against LAN PMS)."""
+    import subprocess
+    import urllib.error
     import urllib.parse
     import urllib.request
 
-    token = str(claim_token or "").strip()
-    if token.lower().startswith("claim-"):
-        token = token[6:]
-    if not token or len(token) < 4:
+    raw = str(claim_token or "").strip()
+    if not raw:
         raise ValueError("missing plex.tv claim token")
-    url = f"http://{PLEX_HOST}:{PLEX_PORT}/myplex/claim?token={urllib.parse.quote(token)}"
-    req = urllib.request.Request(url, method="POST", data=b"")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-        code = getattr(resp, "status", 200)
-    claimed = "username=" in body and 'username=""' not in body
-    return {"ok": True, "http_status": code, "claimed": claimed, "body": body[:800]}
+    # plex.tv codes are claim-XXXXXXXX — keep the prefix.
+    token = raw if raw.lower().startswith("claim-") else f"claim-{raw}"
+    if len(token) < 12:
+        raise ValueError("claim token looks too short")
+
+    url = f"http://{PLEX_HOST}:{PLEX_PORT}/myplex/claim?token={urllib.parse.quote(token, safe='')}"
+    # Prefer claiming from inside the CT (loopback), then fall back to LAN.
+    body = ""
+    http_status = 0
+    via = "lan"
+    try:
+        prox = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
+        r = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=8",
+                f"root@{prox}",
+                "pct",
+                "exec",
+                PLEX_CTID,
+                "--",
+                "curl",
+                "-sS",
+                "-X",
+                "POST",
+                "-w",
+                "\n__HTTP__:%{http_code}",
+                f"http://127.0.0.1:{PLEX_PORT}/myplex/claim?token={token}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "__HTTP__:" in out:
+            body, _, code_s = out.rpartition("__HTTP__:")
+            http_status = int(code_s.strip() or "0")
+            via = "ct-loopback"
+        elif r.returncode == 0 and out.strip():
+            body = out
+            http_status = 200
+            via = "ct-loopback"
+    except Exception:
+        body = ""
+        http_status = 0
+
+    if http_status == 0:
+        via = "lan"
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                http_status = int(getattr(resp, "status", 200) or 200)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            http_status = int(exc.code)
+            if http_status in (400, 401, 403, 500):
+                raise ValueError(
+                    "Claim code rejected by plex.tv (expired or already used). "
+                    "Open https://www.plex.tv/claim/ for a fresh code and paste it within ~1 minute."
+                ) from exc
+            raise
+
+    if http_status in (400, 401, 403, 500):
+        raise ValueError(
+            "Claim code rejected by plex.tv (expired or already used). "
+            "Open https://www.plex.tv/claim/ for a fresh code and paste it within ~1 minute."
+        )
+
+    # Confirm claim state
+    claimed = False
+    identity = ""
+    try:
+        with urllib.request.urlopen(
+            f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
+        ) as resp:
+            identity = resp.read().decode("utf-8", errors="replace")
+        claimed = 'claimed="1"' in identity
+    except Exception:
+        pass
+    if not claimed and body:
+        claimed = "username=" in body and 'username=""' not in body
+
+    if not claimed and http_status >= 400:
+        raise ValueError(
+            f"claim failed (HTTP {http_status}). Get a fresh code at https://www.plex.tv/claim/"
+        )
+
+    return {
+        "ok": True,
+        "http_status": http_status,
+        "claimed": claimed,
+        "via": via,
+        "identity": identity[:500],
+        "body": body[:800],
+        "next": "https://plex.vpstruelord.com/web/index.html",
+    }
 
 
 def _plex_hookup_site_lines(rule: dict) -> list[str]:
@@ -11696,10 +11790,11 @@ button{background:#e5a00d;color:#111;border:0;font-weight:700;cursor:pointer}
 a{color:#e5a00d}pre{white-space:pre-wrap;background:#1a1a1a;padding:.75rem;border-radius:8px}</style></head><body>
 <h1>Claim Plex Media Server</h1>
 <p>Your Proxmox container already runs Plex Media Server. The web setup page shows <b>Not authorized</b> over the public URL until the server is claimed to your plex.tv account.</p>
+<p><b>Codes expire in about 4 minutes</b> — copy a fresh one and paste it here immediately.</p>
 <ol>
 <li>Open <a href="https://www.plex.tv/claim/" target="_blank" rel="noopener">https://www.plex.tv/claim/</a> while signed in</li>
-<li>Copy the claim code (it expires quickly)</li>
-<li>Paste it below and click <b>Claim server</b></li>
+<li>Copy the claim code (starts with <code>claim-</code>)</li>
+<li>Paste it below within one minute and click <b>Claim server</b></li>
 </ol>
 <form id="f"><input id="t" name="token" placeholder="claim-xxxxxxxx" autocomplete="off" required>
 <button type="submit">Claim server</button></form>
