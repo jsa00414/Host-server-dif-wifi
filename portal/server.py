@@ -1765,6 +1765,13 @@ PROXMOX_PUBLIC_HOST = (
 )
 PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
 PROXMOX_PORT = int(os.environ.get("PROXMOX_PORT", "8006") or "8006")
+PLEX_PUBLIC_HOST = (
+    os.environ.get("PLEX_PUBLIC_HOST", "plex.vpstruelord.com").strip()
+    or "plex.vpstruelord.com"
+)
+PLEX_HOST = os.environ.get("PLEX_HOST", "192.168.8.161").strip() or "192.168.8.161"
+PLEX_PORT = int(os.environ.get("PLEX_PORT", "32400") or "32400")
+PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 ROUTER_HOSTS = [
     h.strip()
     for h in os.environ.get("ROUTER_HOSTS", "10.9.0.2,192.168.8.1,10.8.0.3").split(",")
@@ -4059,6 +4066,11 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_hosts"] = [PROXMOX_HOST]
         out["upstream_https"] = True
         out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+    elif domain == PLEX_PUBLIC_HOST.lower():
+        out["target_host"] = PLEX_HOST
+        out["target_port"] = int(out.get("target_port") or PLEX_PORT)
+        out["target_hosts"] = [PLEX_HOST]
+        out["name"] = str(out.get("name") or "plex").strip() or "plex"
     return out
 
 
@@ -4084,6 +4096,35 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
         )
     )
     return out
+
+
+def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = PLEX_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": PLEX_HOST,
+                "target_port": PLEX_PORT,
+                "name": "plex",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
+def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
+    """Keep always-on portal services present in managed hookups."""
+    return ensure_plex_hookup(ensure_proxmox_hookup(rules))
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -4162,6 +4203,47 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     return lines
 
 
+def _plex_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site for Plex LXC — strip frame blockers so portal can embed /web."""
+    host = PLEX_HOST
+    port = int(rule.get("target_port") or PLEX_PORT)
+    public = PLEX_PUBLIC_HOST
+    lines = [
+        f"{public} {{",
+        # Media streams should not be gzip-buffered.
+        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+        "\thandle @plexmedia {",
+        f"\t\treverse_proxy {host}:{port} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
+        "\t\t\theader_down -X-Frame-Options",
+        "\t\t\theader_down -Content-Security-Policy",
+        "\t\t\tflush_interval -1",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        f"\t\treverse_proxy {host}:{port} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_down -X-Frame-Options",
+        "\t\t\theader_down -Content-Security-Policy",
+        "\t\t}",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
     upstream = _hookup_proxy_upstream(rule)
     https = bool(rule.get("upstream_https"))
@@ -4202,7 +4284,7 @@ def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
 
 
 def default_hookups() -> list[dict]:
-    return ensure_proxmox_hookup([])
+    return ensure_managed_hookups([])
 
 
 def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[dict]:
@@ -4294,6 +4376,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             continue
         if domain == PROXMOX_PUBLIC_HOST.lower():
             lines.extend(_proxmox_hookup_site_lines(r))
+            continue
+        if domain == PLEX_PUBLIC_HOST.lower():
+            lines.extend(_plex_hookup_site_lines(r))
             continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
@@ -4398,7 +4483,7 @@ def read_hookups_state() -> dict:
         managed = validate_hookups(data.get("rules", []))
     else:
         managed = default_hookups()
-    managed = ensure_proxmox_hookup(managed)
+    managed = ensure_managed_hookups(managed)
 
     existing: list[dict] = []
     if str(CADDYFILE_PATH) and CADDYFILE_PATH.is_file():
@@ -4837,7 +4922,7 @@ def _write_text_inplace(path: Path, text: str) -> None:
 
 
 def write_hookups_state(rules: list[dict]) -> dict:
-    cleaned = ensure_proxmox_hookup(validate_hookups(rules))
+    cleaned = ensure_managed_hookups(validate_hookups(rules))
     # Persist only managed (non-external) rules; external stay in main Caddyfile
     managed = [r for r in cleaned if not r.get("external")]
     prev_domains: set[str] = set()
@@ -6378,6 +6463,7 @@ def build_portal_settings() -> dict:
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
         {"id": "proxmox", "label": "Proxmox", "url": f"https://{PROXMOX_PUBLIC_HOST}/"},
+        {"id": "plex", "label": "Plex", "url": f"https://{PLEX_PUBLIC_HOST}/web"},
         {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
