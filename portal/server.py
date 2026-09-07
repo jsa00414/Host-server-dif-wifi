@@ -4243,8 +4243,8 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
         "\thandle @plexmedia {",
         f"\t\treverse_proxy {host}:{port} {{",
-        # Keep browser Host so the web client attaches to this origin's server.
-        f"\t\t\theader_up Host {public}",
+        # LAN Host keeps unclaimed setup APIs authorized (public Host → 401).
+        f"\t\t\theader_up Host {host}:{port}",
         f"\t\t\theader_up X-Forwarded-Host {public}",
         "\t\t\theader_up X-Forwarded-Proto {scheme}",
         "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
@@ -4258,7 +4258,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         "\t}",
         "\thandle {",
         f"\t\treverse_proxy {host}:{port} {{",
-        f"\t\t\theader_up Host {public}",
+        f"\t\t\theader_up Host {host}:{port}",
         f"\t\t\theader_up X-Forwarded-Host {public}",
         "\t\t\theader_up X-Forwarded-Proto {scheme}",
         f"\t\t\theader_down Location http://{public} https://{public}",
