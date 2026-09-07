@@ -4348,34 +4348,58 @@ def _plex_claim_via_token(claim_token: str) -> dict:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
             http_status = int(exc.code)
-            if http_status in (400, 401, 403, 500):
-                raise ValueError(
-                    "Claim code rejected by plex.tv (expired or already used). "
-                    "Open https://www.plex.tv/claim/ for a fresh code and paste it within ~1 minute."
-                ) from exc
-            raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
+            # PMS often closes the socket after a successful claim while restarting.
+            body = str(exc)
+            http_status = 0
+            via = "lan-closed"
+
+    # Confirm claim state (authoritative)
+    claimed = False
+    identity = ""
+    try:
+        import time
+
+        for _ in range(8):
+            try:
+                with urllib.request.urlopen(
+                    f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
+                ) as resp:
+                    identity = resp.read().decode("utf-8", errors="replace")
+                claimed = 'claimed="1"' in identity
+                if claimed or identity:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+    except Exception:
+        pass
+    if not claimed and body:
+        claimed = "username=" in body and 'username=""' not in body
+
+    if claimed:
+        return {
+            "ok": True,
+            "http_status": http_status or 200,
+            "claimed": True,
+            "via": via,
+            "identity": identity[:500],
+            "body": body[:800],
+            "next": "https://plex.vpstruelord.com/web/index.html",
+            "note": "Server is claimed. Sign in at plex.vpstruelord.com with your plex.tv account.",
+        }
 
     if http_status in (400, 401, 403, 500):
         raise ValueError(
             "Claim code rejected by plex.tv (expired or already used). "
             "Open https://www.plex.tv/claim/ for a fresh code and paste it within ~1 minute."
         )
-
-    # Confirm claim state
-    claimed = False
-    identity = ""
-    try:
-        with urllib.request.urlopen(
-            f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=5
-        ) as resp:
-            identity = resp.read().decode("utf-8", errors="replace")
-        claimed = 'claimed="1"' in identity
-    except Exception:
-        pass
-    if not claimed and body:
-        claimed = "username=" in body and 'username=""' not in body
-
-    if not claimed and http_status >= 400:
+    if http_status == 0:
+        raise ValueError(
+            "Plex closed the connection during claim and the server still looks unclaimed. "
+            "Get a fresh code at https://www.plex.tv/claim/ and try again immediately."
+        )
+    if http_status >= 400:
         raise ValueError(
             f"claim failed (HTTP {http_status}). Get a fresh code at https://www.plex.tv/claim/"
         )
@@ -4391,6 +4415,19 @@ def _plex_claim_via_token(claim_token: str) -> dict:
     }
 
 
+def _plex_is_claimed() -> bool:
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=4
+        ) as resp:
+            xml = resp.read().decode("utf-8", errors="replace")
+        return 'claimed="1"' in xml
+    except Exception:
+        return False
+
+
 def _plex_hookup_site_lines(rule: dict) -> list[str]:
     """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
     host = PLEX_HOST
@@ -4398,9 +4435,12 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     public = PLEX_PUBLIC_HOST
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
-    # Unclaimed PMS often serves /web without #!/setup/… so the SPA shows
-    # "Get Plex Media Server" or "Not authorized". Force setup + local admin token.
-    if machine and admin:
+    claimed = _plex_is_claimed()
+    # Unclaimed: force setup wizard + local admin token.
+    # Claimed: send users to the normal web app (not #!/setup).
+    if claimed:
+        setup_path = "/web/index.html"
+    elif machine and admin:
         from urllib.parse import quote
 
         setup_path = (
@@ -4416,7 +4456,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         "\thandle /claim* {",
         f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
         "\t}",
-        # Land on the Media Server setup/claim wizard (not the download-PMS page).
+        # Land on web UI (setup only while unclaimed).
         "\t@plexroot path / /web /web/",
         f"\tredir @plexroot {setup_path} 302",
         # Media streams should not be gzip-buffered.
