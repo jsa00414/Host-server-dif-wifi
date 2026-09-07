@@ -349,12 +349,11 @@ def fans_auto_all() -> str:
 
 
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """Night off for AW-ELC stock zones.
+    """Night off for stock AW-ELC zones only.
 
-    Desktop AW-ELC (and custom builds) respond more reliably to SET_COLOR + DIM
-    than to morph/play teardown. We still try to erase running animations, then
-    hammer black via SET_COLOR across the reported zones and a wider ID range
-    (some boards use non-dense zone IDs), dim to 100, and RESET.
+    Keep this short and gentle: long zone-ID sweeps / RESET have wedged the
+    Aurora USB controller (portal then shows Unavailable). Custom ARGB fans
+    are out of band for this path.
     """
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
@@ -362,38 +361,25 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
         except OSError:
             pass
 
-    # Wide ID sweep — probe count can under-report / use sparse IDs.
-    wide = list(dict.fromkeys([*zones, *range(0x00, 0x80)]))
-
-    dim_zones(fd, 0, wide)
     try:
-        _play_static_black(fd, zones, anim_slot=ANIM_KEYBOARD, save=False)
+        dim_zones(fd, 0, zones)
     except OSError:
         pass
-
-    # Primary blackout path (alienware-rgb-native: SET_COLOR is reliable).
-    for _ in range(4):
-        set_color_direct(fd, (0, 0, 0), wide)
-        dim_zones(fd, 100, wide)
-        time.sleep(0.12)
-
     try:
-        aw_cmd(fd, 0x28, delay=0.3)  # RESET
+        # Chunked select+black (paired), not a 128-ID sweep.
+        black = [(MODE_COLOR, DURATION_STATIC, TEMPO_MAX, 0, 0, 0)]
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+            select_zones_once(fd, group, loop=True)
+            add_actions(fd, black)
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
     except OSError:
         pass
-    set_color_direct(fd, (0, 0, 0), wide)
-    dim_zones(fd, 100, wide)
-
-    # Persist black default so stock zones don't revive spectrum after reboot.
     try:
-        user_anim(fd, ANIM_REMOVE, ANIM_DEFAULT)
-        _play_static_black(fd, zones, anim_slot=ANIM_DEFAULT, save=True)
-        user_anim(fd, ANIM_SET_DEFAULT, ANIM_DEFAULT)
-        user_anim(fd, ANIM_SET_STARTUP, ANIM_DEFAULT)
+        set_color_direct(fd, (0, 0, 0), zones)
+        dim_zones(fd, 100, zones)
     except OSError:
         pass
-    set_color_direct(fd, (0, 0, 0), wide)
-    dim_zones(fd, 100, wide)
 
 
 def stop_refresh_timer() -> None:
@@ -405,17 +391,11 @@ def stop_refresh_timer() -> None:
 
 
 def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
-    set_color_direct(fd, (0, 0, 0), zones)
     try:
-        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
+        set_color_direct(fd, (0, 0, 0), zones)
+        dim_zones(fd, 100, zones)
     except OSError:
         pass
-    try:
-        _play_static_black(fd, zones, anim_slot=ANIM_KEYBOARD, save=False)
-    except OSError:
-        pass
-    set_color_direct(fd, (0, 0, 0), zones)
-    dim_zones(fd, 100, zones)
     fans_quiet_chassis()
 
 
@@ -438,9 +418,15 @@ def apply(action: str) -> None:
                 f"mode=spectrum-sync (ON); " + "; ".join(extras)
             )
         elif action == "off":
-            leds_off(fd, zones)
-            extras.append(wmi_set_brightness(0))
-            extras.append(wmi_set_zones_rgb("000000"))
+            try:
+                leds_off(fd, zones)
+            except (OSError, TimeoutError) as exc:
+                extras.append(f"off-partial={exc}")
+            try:
+                extras.append(wmi_set_brightness(0))
+                extras.append(wmi_set_zones_rgb("000000"))
+            except OSError:
+                pass
             extras.append(fans_quiet_chassis())
             write_state("off")
             print(
