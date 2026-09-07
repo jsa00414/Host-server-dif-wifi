@@ -39,8 +39,12 @@ CMD_SET_COLOR = 0x27
 REPORT_CONFIG = 0x02
 
 ANIM_NEW = 0x0001
+ANIM_FINISH_SAVE = 0x0002
 ANIM_FINISH_PLAY = 0x0003
 ANIM_REMOVE = 0x0004
+ANIM_PLAY = 0x0005
+ANIM_SET_DEFAULT = 0x0006
+ANIM_SET_STARTUP = 0x0007
 ANIM_KEYBOARD = 0xFFFF
 ANIM_DEFAULT = 0x0061
 
@@ -51,6 +55,8 @@ MODE_MORPH = 0x02
 # AWCC capture for spectrum: morph actions use duration 0x0282, tempo 0x000F
 DURATION_SPECTRUM = 0x0282
 TEMPO_SPECTRUM = 0x000F
+DURATION_STATIC = 0x07D0  # 2000ms — AWCC / OpenRGB static color
+TEMPO_MAX = 0x00FA
 
 # Synced spectrum — every zone uses this same sequence
 SPECTRUM_COLORS: list[tuple[int, int, int]] = [
@@ -63,11 +69,17 @@ SPECTRUM_COLORS: list[tuple[int, int, int]] = [
     (0x80, 0x00, 0x80),
 ]
 
+DELL_SMM_HWMON = "/sys/class/hwmon/hwmon4"
+# Motherboard chassis fans (not CPU). Quiet these overnight with LED off.
+CHASSIS_FAN_PWM_IDS = (2, 3, 4)
+CHASSIS_FAN_QUIET_PWM = 40  # ~15% — still spins, much quieter
+
 
 def _ioc(nr: int) -> int:
     return (3 << 30) | (34 << 16) | (ord("H") << 8) | nr
 
 
+HIDIOCSFEATURE, HIDIOCGFEATURE = _ioc(0x06), _ioc(0x07)
 HIDIOCGINPUT, HIDIOCSOUTPUT = _ioc(0x0A), _ioc(0x0B)
 
 
@@ -91,16 +103,28 @@ def find_aw_hidraw() -> str:
 
 
 def aw_cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
+    """Send an AW-ELC command.
+
+    OpenRGB uses HID *feature* reports; interrupt OUTPUT often works too but
+    feature is the documented path — try feature first, fall back to OUTPUT.
+    """
     buf = bytearray(34)
     data = bytes([0x03, *payload])
     if len(data) > 33:
         raise ValueError(f"payload too large for HID report ({len(data)} > 33)")
     buf[1 : 1 + len(data)] = data
-    fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
-    time.sleep(delay)
-    ack = bytearray(34)
-    fcntl.ioctl(fd, HIDIOCGINPUT, ack)
-    return bytes(ack)
+    try:
+        fcntl.ioctl(fd, HIDIOCSFEATURE, buf, True)
+        time.sleep(delay)
+        ack = bytearray(34)
+        fcntl.ioctl(fd, HIDIOCGFEATURE, ack, True)
+        return bytes(ack)
+    except OSError:
+        fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
+        time.sleep(delay)
+        ack = bytearray(34)
+        fcntl.ioctl(fd, HIDIOCGINPUT, ack)
+        return bytes(ack)
 
 
 def chunks(seq: Sequence[int], size: int) -> Iterable[Sequence[int]]:
@@ -132,6 +156,14 @@ def set_color_direct(fd: int, rgb: tuple[int, int, int], zones: Sequence[int]) -
 
 
 def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> None:
+    # OpenRGB sleeps ~1s after FINISH_PLAY / FINISH_SAVE — the controller
+    # drops commands if animation state changes are spammed.
+    if subcommand in (ANIM_FINISH_PLAY, ANIM_FINISH_SAVE):
+        delay = 1.0
+    elif subcommand == ANIM_REMOVE:
+        delay = 0.2
+    else:
+        delay = 0.07
     aw_cmd(
         fd,
         CMD_USER_ANIM,
@@ -141,7 +173,7 @@ def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> No
         animation & 0xFF,
         (duration >> 8) & 0xFF,
         duration & 0xFF,
-        delay=0.15 if subcommand in (ANIM_FINISH_PLAY, ANIM_REMOVE) else 0.07,
+        delay=delay,
     )
 
 
@@ -273,46 +305,73 @@ def wmi_set_zones_rgb(rgb_hex: str) -> str:
     return f"wmi-zones={touched}"
 
 
-def _play_static_black(fd: int, zones: Sequence[int]) -> None:
-    """Apply static black to every zone chunk (SelectZones+AddAction paired).
+def _play_static_black(fd: int, zones: Sequence[int], *, anim_slot: int = ANIM_KEYBOARD, save: bool = False) -> None:
+    """OpenRGB-style static black: SelectZones(loop=1)+COLOR per zone, then finish.
 
-    AW-ELC only applies AddAction to the most recent SelectZones series. With
-    77 zones that means each ≤25-zone chunk needs its own select+black pair,
-    same as spectrum-sync — otherwise most zones keep the previous morph.
+    Chunked select+one AddAction left front-panel morph running. AWCC/OpenRGB
+    apply COLOR per zone (or tightly paired select+action). Saving into the
+    default slot stops the controller from resurrecting the old spectrum.
     """
-    black = [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)]
-    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
-        select_zones_once(fd, group, loop=False)
+    black = [(MODE_COLOR, DURATION_STATIC, TEMPO_MAX, 0, 0, 0)]
+    user_anim(fd, ANIM_NEW, anim_slot)
+    for zone in zones:
+        select_zones_once(fd, [zone], loop=True)
         add_actions(fd, black)
-    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    if save:
+        user_anim(fd, ANIM_FINISH_SAVE, anim_slot)
+    else:
+        user_anim(fd, ANIM_FINISH_PLAY, anim_slot)
+
+
+def fans_quiet_chassis() -> str:
+    """Lower motherboard/chassis fans overnight. Leave CPU fan on auto."""
+    if not os.path.isdir(DELL_SMM_HWMON):
+        return "fans=no-dell-smm"
+    touched = 0
+    for i in CHASSIS_FAN_PWM_IDS:
+        en = f"{DELL_SMM_HWMON}/pwm{i}_enable"
+        pwm = f"{DELL_SMM_HWMON}/pwm{i}"
+        try:
+            open(en, "w", encoding="utf-8").write("1\n")
+            open(pwm, "w", encoding="utf-8").write(f"{CHASSIS_FAN_QUIET_PWM}\n")
+            touched += 1
+        except OSError:
+            pass
+    return f"fans-quiet={touched}"
+
+
+def fans_auto_all() -> str:
+    if not os.path.isdir(DELL_SMM_HWMON):
+        return "fans=no-dell-smm"
+    touched = 0
+    for i in (1, 2, 3, 4):
+        en = f"{DELL_SMM_HWMON}/pwm{i}_enable"
+        try:
+            open(en, "w", encoding="utf-8").write("2\n")
+            touched += 1
+        except OSError:
+            pass
+    return f"fans-auto={touched}"
 
 
 def leds_off(fd: int, zones: Sequence[int]) -> None:
-    """Night off: kill morph, paint black on every chunk, then dim to minimum.
-
-    Dim is inverted (0=full, 100=minimum). Earlier ARGB-safe off used dim 0 so
-    strips kept a live data line, but residual glow remained on the chassis.
-    Schedule/off now prefers a dark room: black + dim 100.
-    """
+    """Night off: kill morph, static black every zone, dim 100, quiet chassis fans."""
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
         try:
             user_anim(fd, ANIM_REMOVE, slot)
         except OSError:
             pass
-    # Start at full dim channel so black morph writes cleanly, then go dark.
     dim_zones(fd, 0, zones)
     try:
-        _play_static_black(fd, zones)
+        _play_static_black(fd, zones, anim_slot=ANIM_KEYBOARD, save=False)
     except OSError:
         pass
-    set_color_direct(fd, (0, 0, 0), zones)
+    # Persist black as default/startup so reboot / controller defaults stay dark.
     try:
-        user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
-    except OSError:
-        pass
-    try:
-        _play_static_black(fd, zones)
+        user_anim(fd, ANIM_REMOVE, ANIM_DEFAULT)
+        _play_static_black(fd, zones, anim_slot=ANIM_DEFAULT, save=True)
+        user_anim(fd, ANIM_SET_DEFAULT, ANIM_DEFAULT)
+        user_anim(fd, ANIM_SET_STARTUP, ANIM_DEFAULT)
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
@@ -334,11 +393,12 @@ def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
     except OSError:
         pass
     try:
-        _play_static_black(fd, zones)
+        _play_static_black(fd, zones, anim_slot=ANIM_KEYBOARD, save=False)
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
     dim_zones(fd, 100, zones)
+    fans_quiet_chassis()
 
 
 def apply(action: str) -> None:
@@ -350,6 +410,7 @@ def apply(action: str) -> None:
         zones = list(range(count))
         if action in ("on", "rainbow"):
             stop_refresh_timer()
+            fans_auto_all()
             leds_rainbow(fd, zones)
             extras.append(wmi_set_brightness(15))
             # Don't force static WMI zone colors — that fights the ELC morph.
@@ -362,6 +423,7 @@ def apply(action: str) -> None:
             leds_off(fd, zones)
             extras.append(wmi_set_brightness(0))
             extras.append(wmi_set_zones_rgb("000000"))
+            extras.append(fans_quiet_chassis())
             write_state("off")
             print(
                 f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
