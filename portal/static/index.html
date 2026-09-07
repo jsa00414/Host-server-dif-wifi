@@ -564,50 +564,6 @@
     }
     .leds-schedule-btn:hover:not(:disabled) { color: var(--accent); }
     .leds-schedule-btn:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
-    .leds-owner {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-    @media (max-width: 560px) {
-      .leds-owner { grid-template-columns: 1fr; }
-    }
-    .leds-owner button {
-      display: grid;
-      gap: 4px;
-      text-align: left;
-      margin: 0;
-      padding: 12px 14px;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: var(--bg2);
-      color: var(--text);
-      font: inherit;
-      cursor: pointer;
-      transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
-    }
-    .leds-owner button small {
-      color: var(--muted);
-      font-size: .72rem;
-      font-weight: 400;
-      line-height: 1.35;
-    }
-    .leds-owner button:hover { border-color: rgba(170,210,185,.28); }
-    .leds-owner button.is-active {
-      border-color: rgba(61,222,160,.45);
-      background: var(--accent-dim);
-      box-shadow: inset 0 0 0 1px rgba(61,222,160,.18);
-    }
-    .leds-owner button.is-active[data-leds-action="windows"] {
-      border-color: rgba(96,165,250,.45);
-      background: rgba(96,165,250,.1);
-      box-shadow: inset 0 0 0 1px rgba(96,165,250,.16);
-    }
-    .leds-owner button strong {
-      font-size: .88rem;
-      font-weight: 650;
-      letter-spacing: -.01em;
-    }
     .leds-hint {
       margin: 0;
       color: var(--muted);
@@ -1691,23 +1647,9 @@
                   </div>
                   <button type="button" class="leds-schedule-btn" id="settingsLedsAutoBtn" data-leds-action="auto">Apply schedule now</button>
                 </div>
-
-                <div class="leds-group">
-                  <div class="leds-group-label">Controller</div>
-                  <div class="leds-owner" role="group" aria-label="LED controller">
-                    <button type="button" id="settingsLedsHostBtn" data-leds-action="host">
-                      <strong>Portal</strong>
-                      <small>Host drives synced spectrum</small>
-                    </button>
-                    <button type="button" id="settingsLedsWindowsBtn" data-leds-action="windows">
-                      <strong>Windows FX</strong>
-                      <small>Pass USB to Alienware CC</small>
-                    </button>
-                  </div>
-                </div>
               </div>
 
-              <p class="leds-hint" id="settingsLedsHint">Spectrum keeps every zone the same color while cycling the rainbow. Hand off to Windows FX to edit in Alienware Command Center, then return control here.</p>
+              <p class="leds-hint" id="settingsLedsHint">Spectrum keeps every zone the same color while cycling the rainbow. Off applies an ARGB-safe blackout on the Proxmox host.</p>
             </div>
           </div>
 
@@ -3231,24 +3173,24 @@
       let title = "Unknown";
       let subtitle = "Waiting for status…";
       if (busy && pending) {
-        const labels = { on: "Spectrum", off: "Off", auto: "Schedule", windows: "Windows FX", host: "Portal" };
+        const labels = { on: "Spectrum", off: "Off", auto: "Schedule" };
         title = "Applying…";
         subtitle = `${labels[pending] || pending} · host SSH can take up to ~90s`;
       } else if (err) {
         title = "Unavailable";
         subtitle = err;
       } else if (isWindows) {
-        title = "Windows FX";
-        subtitle = `Controlled by VM ${(data && data.windows_vmid) || "100"}`;
+        title = "In Windows";
+        subtitle = `USB in VM ${(data && data.windows_vmid) || "100"} — reclaim on host to control here`;
       } else if (isOn) {
         title = "Spectrum";
-        subtitle = "Portal · all zones synced rainbow";
+        subtitle = "All zones synced rainbow";
       } else if (isOff) {
         title = "Off";
-        subtitle = "Portal · ARGB-safe blackout";
+        subtitle = "ARGB-safe blackout";
       } else {
         title = st;
-        subtitle = onHost ? "Portal host" : `Owner: ${owner}`;
+        subtitle = onHost ? "Proxmox host" : `Owner: ${owner}`;
       }
 
       stateEl.textContent = title;
@@ -3261,8 +3203,8 @@
       if (hintEl) {
         hintEl.textContent = (data && data.hint) || (
           isWindows
-            ? "Lighting USB is in Windows. Use Alienware FX / AWCC there, then switch back to Portal."
-            : "Spectrum keeps every zone the same color while cycling the rainbow. Hand off to Windows FX to edit in Alienware Command Center."
+            ? "Lighting USB is currently in the Windows VM. Reclaim it on the Proxmox host to control Spectrum/Off here."
+            : "Spectrum keeps every zone the same color while cycling the rainbow. Off applies an ARGB-safe blackout on the Proxmox host."
         );
       }
       if (dotEl) {
@@ -3284,8 +3226,6 @@
           if (!busy) {
             if (action === "on") active = isOn;
             else if (action === "off") active = isOff;
-            else if (action === "host") active = onHost && !err;
-            else if (action === "windows") active = isWindows;
           } else {
             active = action === pending;
           }
@@ -3354,8 +3294,6 @@
     document.getElementById("settingsLedsOnBtn")?.addEventListener("click", () => setLedsAction("on"));
     document.getElementById("settingsLedsOffBtn")?.addEventListener("click", () => setLedsAction("off"));
     document.getElementById("settingsLedsAutoBtn")?.addEventListener("click", () => setLedsAction("auto"));
-    document.getElementById("settingsLedsWindowsBtn")?.addEventListener("click", () => setLedsAction("windows"));
-    document.getElementById("settingsLedsHostBtn")?.addEventListener("click", () => setLedsAction("host"));
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
