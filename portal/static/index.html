@@ -2184,11 +2184,12 @@
       updateCounts();
     }
 
-    function renderHookups() {
+    function renderHookups(opts = {}) {
       const mine = document.getElementById("hookupMine");
       const sys = document.getElementById("hookupSystem");
       mine.innerHTML = ""; sys.innerHTML = "";
       let mineN = 0;
+      let focusCard = null;
       hookupRules.forEach((rule, idx) => {
         const locked = !!rule.external;
         const el = document.createElement("div");
@@ -2211,7 +2212,11 @@
             <div class="field"><span>Port</span><input data-k="target_port" inputmode="numeric" value="${esc(rule.target_port)}" ${locked ? "readonly" : ""} /></div>
           </div>`;
         if (locked) sys.appendChild(el);
-        else { mine.appendChild(el); mineN += 1; }
+        else {
+          mine.appendChild(el);
+          mineN += 1;
+          if (opts.focusIdx === idx) focusCard = el;
+        }
       });
       document.getElementById("hookupEmpty").hidden = mineN > 0;
       sys.parentElement.hidden = sys.children.length === 0;
@@ -2223,6 +2228,14 @@
       });
       bindIpPickers();
       updateCounts();
+      if (focusCard) {
+        focusCard.scrollIntoView({ behavior: "smooth", block: "center" });
+        const domainInput = focusCard.querySelector('[data-k="domain"]');
+        if (domainInput) {
+          domainInput.focus();
+          domainInput.select();
+        }
+      }
     }
 
     function renderFirewall() {
@@ -2328,6 +2341,23 @@
       routerRules = readRouterForm();
       hookupRules = readHookupForm();
       fwRules = readFwForm();
+      const domainRe = /^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$/;
+      const badDomains = hookupRules
+        .filter((r) => !r.external)
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => !domainRe.test(String(r.domain || "").trim()));
+      if (badDomains.length) {
+        const first = badDomains[0].r;
+        setStatus("Enter a valid domain before saving", "err");
+        showLog(
+          `Domain row "${first.name || "new-domain"}" needs a full hostname (e.g. app.vpstruelord.com).`,
+          true
+        );
+        showView("domains");
+        const idx = hookupRules.findIndex((r) => r === first);
+        renderHookups({ focusIdx: idx >= 0 ? idx : undefined });
+        return;
+      }
       [saveBtn, reloadBtn].forEach((b) => (b.disabled = true));
       setStatus("Applying…");
       showLog("Applying VPS, router, domains, and firewall…", true);
@@ -2340,6 +2370,7 @@
             hookups: { rules: hookupRules },
             firewall: { rules: fwRules },
           }),
+          timeoutMs: 180000,
         });
         vpsRules = result.vps?.rules || vpsRules;
         routerRules = result.router?.rules || routerRules;
@@ -2357,8 +2388,27 @@
         showLog(log || "Applied.", true);
         setStatus(result.ok ? "Applied" : "Apply errors", result.ok ? "ok" : "err");
       } catch (err) {
-        setStatus(err.message || "Save failed", "err");
-        showLog(String(err.message || err), true);
+        const msg = String(err.message || err);
+        // Caddy reload/restart used to drop the HTTPS session mid-save. Recover by
+        // reloading state so a successful apply is not shown as a hard failure.
+        if (/abort|timeout|failed to fetch|network|disconnect|load failed/i.test(msg)) {
+          try {
+            await new Promise((r) => setTimeout(r, 1500));
+            await load();
+            setStatus("Apply finished (connection dropped during Caddy reload — state refreshed)", "ok");
+            showLog(
+              msg + "\n\nReloaded current config after a dropped proxy connection. Verify Domains list.",
+              true
+            );
+            return;
+          } catch (e2) {
+            setStatus(msg, "err");
+            showLog(msg + "\n\nReload also failed: " + String(e2.message || e2), true);
+            return;
+          }
+        }
+        setStatus(msg || "Save failed", "err");
+        showLog(msg, true);
       } finally {
         [saveBtn, reloadBtn].forEach((b) => (b.disabled = false));
       }
@@ -2385,8 +2435,17 @@
     });
     document.getElementById("addHookupBtn").addEventListener("click", () => {
       hookupRules = readHookupForm();
-      hookupRules.push({ enabled:true, vpn_only:false, domain:"", target_host:"192.168.8.1", target_port:"80", name:"new-domain" });
-      renderHookups();
+      hookupRules.push({
+        enabled: true,
+        vpn_only: false,
+        domain: "",
+        target_host: dmzIpEl.value || "192.168.8.159",
+        target_port: "80",
+        name: "new-domain",
+      });
+      showView("domains");
+      renderHookups({ focusIdx: hookupRules.length - 1 });
+      setStatus("New domain row added — fill Domain then Save & Apply");
     });
     document.getElementById("addFwBtn").addEventListener("click", () => {
       fwRules = readFwForm();
