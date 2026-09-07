@@ -12272,8 +12272,10 @@ document.getElementById('f').onsubmit = async (e) => {
         path = urlparse(self.path).path
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             return self.do_GET()
+        if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
+            return self.do_GET()
         if not self._is_authed():
-            if path.startswith("/api/"):
+            if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
             else:
                 self._unauthorized(api=False)
