@@ -103,7 +103,8 @@ echo
 echo "Plex LXC ready:"
 echo "  CTID     ${CTID}"
 echo "  LAN URL  http://${CT_IP}:32400/web"
-echo "  Public   https://plex.vpstruelord.com/web (Caddy hookup; not in portal UI)"
+echo "  Public   https://plex.vpstruelord.com/web (Caddy; claim from LAN/VPN first)"
+echo "  Next     bash configure-plex-server.sh  # prefs + optional NAS /mnt/media"
 echo
 pct status "$CTID" || true
 pct config "$CTID" | sed -n '1,40p'
