@@ -4203,24 +4203,114 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     return lines
 
 
+def _plex_identity_xml() -> str:
+    """Fetch /identity over HTTP, then HTTPS (claimed PMS often requires TLS)."""
+    import ssl
+    import urllib.request
+
+    ctx = ssl._create_unverified_context()
+    attempts = (
+        (f"http://{PLEX_HOST}:{PLEX_PORT}/identity", None),
+        (f"https://{PLEX_HOST}:{PLEX_PORT}/identity", ctx),
+    )
+    for url, context in attempts:
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/xml"})
+            kwargs = {"timeout": 4}
+            if context is not None:
+                kwargs["context"] = context
+            with urllib.request.urlopen(req, **kwargs) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            continue
+    return ""
+
+
 def _plex_machine_identifier() -> str:
     """Best-effort machineIdentifier from the running PMS (for setup URL)."""
-    try:
-        import re
-        import urllib.request
+    import re
 
-        req = urllib.request.Request(
-            f"http://{PLEX_HOST}:{PLEX_PORT}/identity",
-            headers={"Accept": "application/xml"},
+    xml = _plex_identity_xml()
+    m = re.search(r'machineIdentifier="([^"]+)"', xml)
+    return m.group(1).strip() if m else ""
+
+
+def _plex_is_claimed() -> bool:
+    return 'claimed="1"' in _plex_identity_xml()
+
+
+def _plex_hookup_site_lines(rule: dict) -> list[str]:
+    """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
+    host = PLEX_HOST
+    port = int(rule.get("target_port") or PLEX_PORT)
+    public = PLEX_PUBLIC_HOST
+    machine = _plex_machine_identifier()
+    admin = _plex_local_admin_token()
+    claimed = _plex_is_claimed()
+    # Unclaimed: force setup wizard + local admin token.
+    # Claimed: send users to the normal web app (not #!/setup).
+    if claimed:
+        setup_path = "/web/index.html"
+    elif machine and admin:
+        from urllib.parse import quote
+
+        setup_path = (
+            f"/web/index.html?X-Plex-Token={quote(admin)}#!/setup/{machine}"
         )
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            xml = resp.read().decode("utf-8", errors="replace")
-        m = re.search(r'machineIdentifier="([^"]+)"', xml)
-        if m:
-            return m.group(1).strip()
-    except Exception:
-        pass
-    return ""
+    elif machine:
+        setup_path = f"/web/index.html#!/setup/{machine}"
+    else:
+        setup_path = "/web/index.html"
+    # After claim, PMS often requires TLS on :32400 ("secure connections required").
+    upstream = f"https://{host}:{port}"
+    proxy_common = [
+        "\t\t\ttransport http {",
+        "\t\t\t\ttls_insecure_skip_verify",
+        "\t\t\t}",
+        f"\t\t\theader_up Host {host}:{port}",
+        f"\t\t\theader_up X-Forwarded-Host {public}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
+        f"\t\t\theader_down Location http://{public} https://{public}",
+        f"\t\t\theader_down Location https://{public} https://{public}",
+        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
+        f"\t\t\theader_down Location https://{host}:{port} https://{public}",
+        f"\t\t\theader_down Location http://{host} https://{public}",
+        "\t\t\theader_down -X-Frame-Options",
+        "\t\t\theader_down -Content-Security-Policy",
+    ]
+    lines = [
+        f"{public} {{",
+        # Claim helper (plex.tv claim code) — portal serves the form + API.
+        "\thandle /claim* {",
+        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
+        "\t}",
+        # Land on web UI (setup only while unclaimed).
+        "\t@plexroot path / /web /web/",
+        f"\tredir @plexroot {setup_path} 302",
+        # Media streams should not be gzip-buffered.
+        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+        "\thandle @plexmedia {",
+        f"\t\treverse_proxy {upstream} {{",
+        *proxy_common,
+        "\t\t\tflush_interval -1",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        f"\t\treverse_proxy {upstream} {{",
+        *proxy_common,
+        "\t\t}",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors *"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
 
 
 def _plex_local_admin_token() -> str:
@@ -4413,91 +4503,6 @@ def _plex_claim_via_token(claim_token: str) -> dict:
         "body": body[:800],
         "next": "https://plex.vpstruelord.com/web/index.html",
     }
-
-
-def _plex_is_claimed() -> bool:
-    try:
-        import urllib.request
-
-        with urllib.request.urlopen(
-            f"http://{PLEX_HOST}:{PLEX_PORT}/identity", timeout=4
-        ) as resp:
-            xml = resp.read().decode("utf-8", errors="replace")
-        return 'claimed="1"' in xml
-    except Exception:
-        return False
-
-
-def _plex_hookup_site_lines(rule: dict) -> list[str]:
-    """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
-    host = PLEX_HOST
-    port = int(rule.get("target_port") or PLEX_PORT)
-    public = PLEX_PUBLIC_HOST
-    machine = _plex_machine_identifier()
-    admin = _plex_local_admin_token()
-    claimed = _plex_is_claimed()
-    # Unclaimed: force setup wizard + local admin token.
-    # Claimed: send users to the normal web app (not #!/setup).
-    if claimed:
-        setup_path = "/web/index.html"
-    elif machine and admin:
-        from urllib.parse import quote
-
-        setup_path = (
-            f"/web/index.html?X-Plex-Token={quote(admin)}#!/setup/{machine}"
-        )
-    elif machine:
-        setup_path = f"/web/index.html#!/setup/{machine}"
-    else:
-        setup_path = "/web/index.html"
-    lines = [
-        f"{public} {{",
-        # Claim helper (plex.tv claim code) — portal serves the form + API.
-        "\thandle /claim* {",
-        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
-        "\t}",
-        # Land on web UI (setup only while unclaimed).
-        "\t@plexroot path / /web /web/",
-        f"\tredir @plexroot {setup_path} 302",
-        # Media streams should not be gzip-buffered.
-        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
-        "\thandle @plexmedia {",
-        f"\t\treverse_proxy {host}:{port} {{",
-        # LAN Host keeps unclaimed setup APIs authorized (public Host → 401).
-        f"\t\t\theader_up Host {host}:{port}",
-        f"\t\t\theader_up X-Forwarded-Host {public}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
-        f"\t\t\theader_down Location http://{public} https://{public}",
-        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location http://{host} https://{public}",
-        "\t\t\theader_down -X-Frame-Options",
-        "\t\t\theader_down -Content-Security-Policy",
-        "\t\t\tflush_interval -1",
-        "\t\t}",
-        "\t}",
-        "\thandle {",
-        f"\t\treverse_proxy {host}:{port} {{",
-        f"\t\t\theader_up Host {host}:{port}",
-        f"\t\t\theader_up X-Forwarded-Host {public}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        f"\t\t\theader_down Location http://{public} https://{public}",
-        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location http://{host} https://{public}",
-        "\t\t\theader_down -X-Frame-Options",
-        "\t\t\theader_down -Content-Security-Policy",
-        "\t\t}",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
-    ]
-    return lines
 
 
 def _hookup_reverse_proxy_lines(rule: dict, *, indent: str) -> list[str]:
