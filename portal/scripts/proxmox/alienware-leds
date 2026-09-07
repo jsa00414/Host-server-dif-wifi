@@ -103,28 +103,22 @@ def find_aw_hidraw() -> str:
 
 
 def aw_cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
-    """Send an AW-ELC command.
+    """Send an AW-ELC command via HID interrupt OUTPUT (stable on this host).
 
-    OpenRGB uses HID *feature* reports; interrupt OUTPUT often works too but
-    feature is the documented path — try feature first, fall back to OUTPUT.
+    Feature reports match OpenRGB on paper but have wedged this Aurora's
+    controller (EPROTO/timeouts). Prefer OUTPUT/INPUT, which successfully
+    drove spectrum and blackout here.
     """
     buf = bytearray(34)
     data = bytes([0x03, *payload])
     if len(data) > 33:
         raise ValueError(f"payload too large for HID report ({len(data)} > 33)")
     buf[1 : 1 + len(data)] = data
-    try:
-        fcntl.ioctl(fd, HIDIOCSFEATURE, buf, True)
-        time.sleep(delay)
-        ack = bytearray(34)
-        fcntl.ioctl(fd, HIDIOCGFEATURE, ack, True)
-        return bytes(ack)
-    except OSError:
-        fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
-        time.sleep(delay)
-        ack = bytearray(34)
-        fcntl.ioctl(fd, HIDIOCGINPUT, ack)
-        return bytes(ack)
+    fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
+    time.sleep(delay)
+    ack = bytearray(34)
+    fcntl.ioctl(fd, HIDIOCGINPUT, ack)
+    return bytes(ack)
 
 
 def chunks(seq: Sequence[int], size: int) -> Iterable[Sequence[int]]:
