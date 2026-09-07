@@ -273,6 +273,21 @@ def wmi_set_zones_rgb(rgb_hex: str) -> str:
     return f"wmi-zones={touched}"
 
 
+def _play_static_black(fd: int, zones: Sequence[int]) -> None:
+    """Apply static black to every zone chunk (SelectZones+AddAction paired).
+
+    AW-ELC only applies AddAction to the most recent SelectZones series. With
+    77 zones that means each ≤25-zone chunk needs its own select+black pair,
+    same as spectrum-sync — otherwise most zones keep the previous morph.
+    """
+    black = [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)]
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        select_zones_once(fd, group, loop=False)
+        add_actions(fd, black)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+
+
 def leds_off(fd: int, zones: Sequence[int]) -> None:
     """ARGB-safe off: static black at dim 0 (do not dim 100)."""
     for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
@@ -282,19 +297,16 @@ def leds_off(fd: int, zones: Sequence[int]) -> None:
             pass
     dim_zones(fd, 0, zones)
     try:
-        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-        select_zones(fd, zones)
-        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
-        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+        _play_static_black(fd, zones)
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
     try:
         user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
-        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-        select_zones(fd, zones)
-        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
-        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
+    try:
+        _play_static_black(fd, zones)
     except OSError:
         pass
     set_color_direct(fd, (0, 0, 0), zones)
@@ -313,12 +325,13 @@ def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
     set_color_direct(fd, (0, 0, 0), zones)
     try:
         user_anim(fd, ANIM_REMOVE, ANIM_KEYBOARD)
-        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
-        select_zones(fd, zones)
-        add_actions(fd, [(MODE_COLOR, 0x07D0, 0x00FA, 0, 0, 0)])
-        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
     except OSError:
         pass
+    try:
+        _play_static_black(fd, zones)
+    except OSError:
+        pass
+    set_color_direct(fd, (0, 0, 0), zones)
     dim_zones(fd, 0, zones)
 
 
