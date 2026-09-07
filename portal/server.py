@@ -4203,19 +4203,48 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     return lines
 
 
+def _plex_machine_identifier() -> str:
+    """Best-effort machineIdentifier from the running PMS (for setup URL)."""
+    try:
+        import re
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://{PLEX_HOST}:{PLEX_PORT}/identity",
+            headers={"Accept": "application/xml"},
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            xml = resp.read().decode("utf-8", errors="replace")
+        m = re.search(r'machineIdentifier="([^"]+)"', xml)
+        if m:
+            return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _plex_hookup_site_lines(rule: dict) -> list[str]:
     """Caddy site for the Proxmox Plex LXC at plex.vpstruelord.com (not a portal tab)."""
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
+    machine = _plex_machine_identifier()
+    # Unclaimed PMS often serves /web without #!/setup/… so the SPA shows
+    # "Get Plex Media Server". Force the claim/setup wizard when we know the ID.
+    setup_path = (
+        f"/web/index.html#!/setup/{machine}" if machine else "/web/index.html"
+    )
     lines = [
         f"{public} {{",
+        # Land on the Media Server setup/claim wizard (not the download-PMS page).
+        "\t@plexroot path / /web /web/",
+        f"\tredir @plexroot {setup_path} 302",
         # Media streams should not be gzip-buffered.
         "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
         "\thandle @plexmedia {",
         f"\t\treverse_proxy {host}:{port} {{",
-        # Pass LAN Host so PMS treats the proxy as local (public host is in customConnections).
-        f"\t\t\theader_up Host {host}:{port}",
+        # Keep browser Host so the web client attaches to this origin's server.
+        f"\t\t\theader_up Host {public}",
         f"\t\t\theader_up X-Forwarded-Host {public}",
         "\t\t\theader_up X-Forwarded-Proto {scheme}",
         "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
@@ -4229,7 +4258,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         "\t}",
         "\thandle {",
         f"\t\treverse_proxy {host}:{port} {{",
-        f"\t\t\theader_up Host {host}:{port}",
+        f"\t\t\theader_up Host {public}",
         f"\t\t\theader_up X-Forwarded-Host {public}",
         "\t\t\theader_up X-Forwarded-Proto {scheme}",
         f"\t\t\theader_down Location http://{public} https://{public}",
