@@ -6724,6 +6724,11 @@ def build_portal_settings() -> dict:
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
         {"id": "proxmox", "label": "Proxmox", "url": f"https://{PROXMOX_PUBLIC_HOST}/"},
+        {
+            "id": "windows-vm",
+            "label": "Windows VM (100)",
+            "url": f"https://{PROXMOX_PUBLIC_HOST}/#vmid=100&node=pve",
+        },
         {"id": "router", "label": "Flint router", "url": f"https://{ROUTER_PUBLIC_HOST}/"},
         {"id": "adguard", "label": "AdGuard", "url": "https://dns.vpstruelord.com/?lng=en"},
         {"id": "pihole", "label": "Pi-hole", "url": "https://pihole.vpstruelord.com/admin/"},
