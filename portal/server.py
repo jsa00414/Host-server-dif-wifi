@@ -4320,7 +4320,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         f"{public} {{",
         # Claim helper (plex.tv claim code) — portal serves the form + API.
         "\thandle /claim* {",
-        "\t\treverse_proxy 127.0.0.1:5002",
+        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
         "\t}",
         # Land on the Media Server setup/claim wizard (not the download-PMS page).
         "\t@plexroot path / /web /web/",
