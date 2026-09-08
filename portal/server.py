@@ -4124,7 +4124,14 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
 
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
-    return ensure_plex_hookup(ensure_proxmox_hookup(rules))
+    # Drop retired Windows Guacamole hookup if present.
+    out = [
+        r
+        for r in (rules or [])
+        if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
+        and str(r.get("name") or "").strip().lower() != "windows-rdp"
+    ]
+    return ensure_plex_hookup(ensure_proxmox_hookup(out))
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
