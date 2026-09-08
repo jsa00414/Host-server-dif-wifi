@@ -55,3 +55,22 @@ python3 portal/scripts/proxmox/run-mount-plex-usb-via-vps.py
 Creates Plex libraries **USB Movies** / **USB TV** from folders like `Movies`, `New Movies`, `Kids Movies`, `TV Shows`, etc.
 
 `DisableRemoteSecurity=1` is set until first claim so the public URL can finish setup.
+
+## Chassis LEDs (Alienware AW-ELC)
+
+`alienware-leds` on the Proxmox host drives:
+
+- Alienware AW-ELC USB `187c:0550` (Aurora R14 ≈ **77** zones, ≤25 IDs/packet)
+- `alienware-wmi` global brightness + `rgb_zones`
+
+**Spectrum / on** plays a synced rainbow across all zones.
+**Off** is ARGB-safe: static black at dim 0 (keeps the data line alive).
+
+```bash
+install -m 755 alienware-leds /usr/local/sbin/alienware-leds
+install -m 755 aw-elc-usb-owner /usr/local/sbin/aw-elc-usb-owner
+alienware-leds on|rainbow|off|auto|status
+aw-elc-usb-owner status|to-windows|to-host
+```
+
+Motherboard lighting can only be owned by **one** side at a time (host script vs Windows VM FX Lighting). Portal **Settings → Chassis lighting** calls these binaries over SSH (`on` = spectrum).

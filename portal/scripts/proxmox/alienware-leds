@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Control Alienware chassis lighting from the Proxmox host.
+
+AW-ELC USB HID (187c:0550) — Aurora R14 ~77 zones; ≤25 zone IDs/packet.
+Dim is inverted: 0=full, 100=minimum.
+
+Modes:
+  on / rainbow — synced spectrum: all zones same color, cycling rainbow together
+  off          — black on every zone chunk, then dim 100 (minimum / dark)
+  auto         — on 07:00–21:59 America/New_York, else off
+  refresh      — reassert black while state=off
+
+Also drives alienware-wmi brightness/zones when present.
+"""
+from __future__ import annotations
+
+import fcntl
+import glob
+import os
+import sys
+import time
+from typing import Iterable, Sequence
+
+AW_TAG = "0000187C00000550"
+MAX_ZONES_PER_PACKET = 25
+STATE_PATH = "/etc/alienware-leds/state"
+
+WMI_BRIGHTNESS = "/sys/class/leds/alienware::global_brightness/brightness"
+WMI_ZONE_DIR = "/sys/devices/platform/alienware-wmi/rgb_zones"
+WMI_CTRL_STATE = f"{WMI_ZONE_DIR}/lighting_control_state"
+
+CMD_REPORT = 0x20
+CMD_USER_ANIM = 0x21
+CMD_SELECT_ZONES = 0x23
+CMD_ADD_ACTION = 0x24
+CMD_DIM = 0x26
+CMD_SET_COLOR = 0x27
+
+REPORT_CONFIG = 0x02
+
+ANIM_NEW = 0x0001
+ANIM_FINISH_SAVE = 0x0002
+ANIM_FINISH_PLAY = 0x0003
+ANIM_REMOVE = 0x0004
+ANIM_PLAY = 0x0005
+ANIM_SET_DEFAULT = 0x0006
+ANIM_SET_STARTUP = 0x0007
+ANIM_KEYBOARD = 0xFFFF
+ANIM_DEFAULT = 0x0061
+
+MODE_COLOR = 0x00
+MODE_MORPH = 0x02
+
+# OpenRGB / AWCC spectrum defaults
+# AWCC capture for spectrum: morph actions use duration 0x0282, tempo 0x000F
+DURATION_SPECTRUM = 0x0282
+TEMPO_SPECTRUM = 0x000F
+DURATION_STATIC = 0x07D0  # 2000ms — AWCC / OpenRGB static color
+TEMPO_MAX = 0x00FA
+
+# Synced spectrum — every zone uses this same sequence
+SPECTRUM_COLORS: list[tuple[int, int, int]] = [
+    (0xFF, 0x00, 0x00),
+    (0xFF, 0xA5, 0x00),
+    (0xFF, 0xFF, 0x00),
+    (0x00, 0xFF, 0x00),
+    (0x00, 0xBF, 0xFF),
+    (0x00, 0x00, 0xFF),
+    (0x80, 0x00, 0x80),
+]
+
+DELL_SMM_HWMON = "/sys/class/hwmon/hwmon4"
+# Motherboard chassis fans (not CPU). Quiet these overnight with LED off.
+CHASSIS_FAN_PWM_IDS = (2, 3, 4)
+CHASSIS_FAN_QUIET_PWM = 40  # ~15% — still spins, much quieter
+
+
+def _ioc(nr: int) -> int:
+    return (3 << 30) | (34 << 16) | (ord("H") << 8) | nr
+
+
+HIDIOCSFEATURE, HIDIOCGFEATURE = _ioc(0x06), _ioc(0x07)
+HIDIOCGINPUT, HIDIOCSOUTPUT = _ioc(0x0A), _ioc(0x0B)
+
+
+def _hidraw_matching(tag_no_colons: str) -> list[str]:
+    paths: list[str] = []
+    needle = tag_no_colons.upper()
+    for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
+        txt = open(uevent, encoding="utf-8", errors="ignore").read().upper()
+        if needle in txt.replace(":", ""):
+            paths.append(f"/dev/{uevent.split('/')[4]}")
+    return list(dict.fromkeys(paths))
+
+
+def find_aw_hidraw() -> str:
+    paths = _hidraw_matching(AW_TAG)
+    if not paths:
+        raise SystemExit(
+            "AW-ELC (187c:0550) not found on host — is it passed through to a VM?"
+        )
+    return paths[0]
+
+
+def aw_cmd(fd: int, *payload: int, delay: float = 0.07) -> bytes:
+    """Send an AW-ELC command via HID interrupt OUTPUT (stable on this host).
+
+    Feature reports match OpenRGB on paper but have wedged this Aurora's
+    controller (EPROTO/timeouts). Prefer OUTPUT/INPUT, which successfully
+    drove spectrum and blackout here.
+    """
+    buf = bytearray(34)
+    data = bytes([0x03, *payload])
+    if len(data) > 33:
+        raise ValueError(f"payload too large for HID report ({len(data)} > 33)")
+    buf[1 : 1 + len(data)] = data
+    fcntl.ioctl(fd, HIDIOCSOUTPUT, buf)
+    time.sleep(delay)
+    ack = bytearray(34)
+    fcntl.ioctl(fd, HIDIOCGINPUT, ack)
+    return bytes(ack)
+
+
+def chunks(seq: Sequence[int], size: int) -> Iterable[Sequence[int]]:
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def probe_zones(fd: int) -> tuple[int, int]:
+    resp = aw_cmd(fd, CMD_REPORT, REPORT_CONFIG)
+    platform = (resp[4] << 8) | resp[5]
+    count = resp[6]
+    if count <= 0 or count > 200:
+        count = 77
+    return platform, count
+
+
+def dim_zones(fd: int, dim: int, zones: Sequence[int]) -> None:
+    dim = max(0, min(100, int(dim)))
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        n = len(group)
+        aw_cmd(fd, CMD_DIM, dim, (n >> 8) & 0xFF, n & 0xFF, *group)
+
+
+def set_color_direct(fd: int, rgb: tuple[int, int, int], zones: Sequence[int]) -> None:
+    r, g, b = rgb
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        n = len(group)
+        aw_cmd(fd, CMD_SET_COLOR, r, g, b, (n >> 8) & 0xFF, n & 0xFF, *group)
+
+
+def user_anim(fd: int, subcommand: int, animation: int, duration: int = 0) -> None:
+    # OpenRGB sleeps ~1s after FINISH_PLAY / FINISH_SAVE — the controller
+    # drops commands if animation state changes are spammed.
+    if subcommand in (ANIM_FINISH_PLAY, ANIM_FINISH_SAVE):
+        delay = 1.0
+    elif subcommand == ANIM_REMOVE:
+        delay = 0.2
+    else:
+        delay = 0.07
+    aw_cmd(
+        fd,
+        CMD_USER_ANIM,
+        (subcommand >> 8) & 0xFF,
+        subcommand & 0xFF,
+        (animation >> 8) & 0xFF,
+        animation & 0xFF,
+        (duration >> 8) & 0xFF,
+        duration & 0xFF,
+        delay=delay,
+    )
+
+
+def select_zones_once(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
+    """Select one series of zones (must be ≤ MAX_ZONES_PER_PACKET)."""
+    zones = list(zones)
+    if not zones:
+        return
+    if len(zones) > MAX_ZONES_PER_PACKET:
+        raise ValueError(f"select_zones_once got {len(zones)} zones (max {MAX_ZONES_PER_PACKET})")
+    loop_flag = 0x01 if loop else 0x00
+    n = len(zones)
+    aw_cmd(fd, CMD_SELECT_ZONES, loop_flag, (n >> 8) & 0xFF, n & 0xFF, *zones)
+
+
+def select_zones(fd: int, zones: Sequence[int], *, loop: bool = True) -> None:
+    """Select zones for the next action series (chunked). Prefer select+actions per chunk."""
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        select_zones_once(fd, group, loop=loop)
+
+
+def spectrum_actions() -> list[tuple[int, int, int, int, int, int]]:
+    """Seven morph steps through the rainbow, then back to the first color."""
+    colors = SPECTRUM_COLORS
+    actions = [
+        (MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r, g, b)
+        for r, g, b in colors
+    ]
+    r0, g0, b0 = colors[0]
+    actions.append((MODE_MORPH, DURATION_SPECTRUM, TEMPO_SPECTRUM, r0, g0, b0))
+    return actions
+
+
+def add_actions(
+    fd: int,
+    actions: Sequence[tuple[int, int, int, int, int, int]],
+) -> None:
+    """Add up to 3 morph/color sub-actions per HID report (OpenRGB / AWCC layout)."""
+    for group in chunks(list(actions), 3):
+        payload: list[int] = []
+        for mode, duration, tempo, r, g, b in group:
+            payload.extend(
+                [
+                    mode & 0xFF,
+                    (duration >> 8) & 0xFF,
+                    duration & 0xFF,
+                    (tempo >> 8) & 0xFF,
+                    tempo & 0xFF,
+                    r & 0xFF,
+                    g & 0xFF,
+                    b & 0xFF,
+                ]
+            )
+        aw_cmd(fd, CMD_ADD_ACTION, *payload)
+
+
+def leds_rainbow(fd: int, zones: Sequence[int]) -> None:
+    """Synced spectrum rainbow: every zone morphs through the same colors together.
+
+    AW-ELC requires SelectZones then AddAction as a pair per series. With 77
+    zones we must repeat that pair per ≤25-zone chunk — each chunk gets the
+    identical morph chain so front/side/top stay in sync.
+    Timing matches AWCC spectrum captures (dur 0x0282, tempo 0x000F).
+    """
+    dim_zones(fd, 0, zones)
+    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
+        try:
+            user_anim(fd, ANIM_REMOVE, slot)
+        except OSError:
+            pass
+    user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+    actions = spectrum_actions()
+    # Critical: select + actions for EACH chunk (not one select-all then one add)
+    for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+        select_zones_once(fd, group, loop=True)
+        add_actions(fd, actions)
+    user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    # Do not re-dim or set_color after play — that freezes the morph.
+
+
+def write_state(state: str) -> None:
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with open(STATE_PATH, "w", encoding="utf-8") as fh:
+        fh.write(state + "\n")
+
+
+def read_state() -> str:
+    if not os.path.exists(STATE_PATH):
+        return "unknown"
+    return open(STATE_PATH, encoding="utf-8").read().strip() or "unknown"
+
+
+def wmi_set_brightness(value: int) -> str:
+    if not os.path.exists(WMI_BRIGHTNESS):
+        return "wmi-brightness=missing"
+    max_path = WMI_BRIGHTNESS.replace("/brightness", "/max_brightness")
+    max_v = 15
+    if os.path.exists(max_path):
+        try:
+            max_v = int(open(max_path, encoding="utf-8").read().strip() or "15")
+        except ValueError:
+            max_v = 15
+    value = max(0, min(max_v, int(value)))
+    open(WMI_BRIGHTNESS, "w", encoding="utf-8").write(f"{value}\n")
+    return f"wmi-brightness={value}/{max_v}"
+
+
+def wmi_set_zones_rgb(rgb_hex: str) -> str:
+    if not os.path.isdir(WMI_ZONE_DIR):
+        return "wmi-zones=missing"
+    touched = 0
+    for profile in ("running", "booting", "suspend"):
+        try:
+            open(WMI_CTRL_STATE, "w", encoding="utf-8").write(profile + "\n")
+        except OSError:
+            continue
+        for path in sorted(glob.glob(f"{WMI_ZONE_DIR}/zone*")):
+            if not os.path.isfile(path):
+                continue
+            try:
+                open(path, "w", encoding="utf-8").write(rgb_hex + "\n")
+                touched += 1
+            except OSError:
+                pass
+    try:
+        open(WMI_CTRL_STATE, "w", encoding="utf-8").write("running\n")
+    except OSError:
+        pass
+    return f"wmi-zones={touched}"
+
+
+def _play_static_black(fd: int, zones: Sequence[int], *, anim_slot: int = ANIM_KEYBOARD, save: bool = False) -> None:
+    """OpenRGB-style static black: SelectZones(loop=1)+COLOR per zone, then finish.
+
+    Chunked select+one AddAction left front-panel morph running. AWCC/OpenRGB
+    apply COLOR per zone (or tightly paired select+action). Saving into the
+    default slot stops the controller from resurrecting the old spectrum.
+    """
+    black = [(MODE_COLOR, DURATION_STATIC, TEMPO_MAX, 0, 0, 0)]
+    user_anim(fd, ANIM_NEW, anim_slot)
+    for zone in zones:
+        select_zones_once(fd, [zone], loop=True)
+        add_actions(fd, black)
+    if save:
+        user_anim(fd, ANIM_FINISH_SAVE, anim_slot)
+    else:
+        user_anim(fd, ANIM_FINISH_PLAY, anim_slot)
+
+
+def fans_quiet_chassis() -> str:
+    """Lower motherboard/chassis fans overnight. Leave CPU fan on auto."""
+    if not os.path.isdir(DELL_SMM_HWMON):
+        return "fans=no-dell-smm"
+    touched = 0
+    for i in CHASSIS_FAN_PWM_IDS:
+        en = f"{DELL_SMM_HWMON}/pwm{i}_enable"
+        pwm = f"{DELL_SMM_HWMON}/pwm{i}"
+        try:
+            open(en, "w", encoding="utf-8").write("1\n")
+            open(pwm, "w", encoding="utf-8").write(f"{CHASSIS_FAN_QUIET_PWM}\n")
+            touched += 1
+        except OSError:
+            pass
+    return f"fans-quiet={touched}"
+
+
+def fans_auto_all() -> str:
+    if not os.path.isdir(DELL_SMM_HWMON):
+        return "fans=no-dell-smm"
+    touched = 0
+    for i in (1, 2, 3, 4):
+        en = f"{DELL_SMM_HWMON}/pwm{i}_enable"
+        try:
+            open(en, "w", encoding="utf-8").write("2\n")
+            touched += 1
+        except OSError:
+            pass
+    return f"fans-auto={touched}"
+
+
+def leds_off(fd: int, zones: Sequence[int]) -> None:
+    """Night off for stock AW-ELC zones only.
+
+    Keep this short and gentle: long zone-ID sweeps / RESET have wedged the
+    Aurora USB controller (portal then shows Unavailable). Custom ARGB fans
+    are out of band for this path.
+    """
+    for slot in (ANIM_KEYBOARD, ANIM_DEFAULT):
+        try:
+            user_anim(fd, ANIM_REMOVE, slot)
+        except OSError:
+            pass
+
+    try:
+        dim_zones(fd, 0, zones)
+    except OSError:
+        pass
+    try:
+        # Chunked select+black (paired), not a 128-ID sweep.
+        black = [(MODE_COLOR, DURATION_STATIC, TEMPO_MAX, 0, 0, 0)]
+        user_anim(fd, ANIM_NEW, ANIM_KEYBOARD)
+        for group in chunks(list(zones), MAX_ZONES_PER_PACKET):
+            select_zones_once(fd, group, loop=True)
+            add_actions(fd, black)
+        user_anim(fd, ANIM_FINISH_PLAY, ANIM_KEYBOARD)
+    except OSError:
+        pass
+    try:
+        set_color_direct(fd, (0, 0, 0), zones)
+        dim_zones(fd, 100, zones)
+    except OSError:
+        pass
+
+
+def stop_refresh_timer() -> None:
+    """Refresh timer is only for blackout — stop it when lights are on."""
+    try:
+        os.system("systemctl stop alienware-leds-refresh.timer >/dev/null 2>&1")
+    except OSError:
+        pass
+
+
+def leds_refresh_black(fd: int, zones: Sequence[int]) -> None:
+    try:
+        set_color_direct(fd, (0, 0, 0), zones)
+        dim_zones(fd, 100, zones)
+    except OSError:
+        pass
+    fans_quiet_chassis()
+
+
+def apply(action: str) -> None:
+    dev = find_aw_hidraw()
+    fd = os.open(dev, os.O_RDWR)
+    extras: list[str] = []
+    try:
+        platform, count = probe_zones(fd)
+        zones = list(range(count))
+        if action in ("on", "rainbow"):
+            stop_refresh_timer()
+            fans_auto_all()
+            leds_rainbow(fd, zones)
+            extras.append(wmi_set_brightness(15))
+            # Don't force static WMI zone colors — that fights the ELC morph.
+            write_state("on")
+            print(
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
+                f"mode=spectrum-sync (ON); " + "; ".join(extras)
+            )
+        elif action == "off":
+            try:
+                leds_off(fd, zones)
+            except (OSError, TimeoutError) as exc:
+                extras.append(f"off-partial={exc}")
+            try:
+                extras.append(wmi_set_brightness(0))
+                extras.append(wmi_set_zones_rgb("000000"))
+            except OSError:
+                pass
+            extras.append(fans_quiet_chassis())
+            write_state("off")
+            print(
+                f"AW-ELC {dev}: platform=0x{platform:04x} zones={count} "
+                f"mode=black (OFF); " + "; ".join(extras)
+            )
+        elif action == "refresh":
+            if read_state() != "off":
+                print(f"refresh skipped (state={read_state()})")
+                return
+            leds_refresh_black(fd, zones)
+            wmi_set_brightness(0)
+            wmi_set_zones_rgb("000000")
+            print(f"AW-ELC {dev}: refreshed black on {count} zones")
+        else:
+            raise SystemExit(f"unknown action: {action}")
+    finally:
+        os.close(fd)
+
+
+def install_refresh_timer() -> None:
+    service = """[Unit]
+Description=Reassert Alienware LED blackout (ARGB-safe)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/alienware-leds refresh
+"""
+    timer = """[Unit]
+Description=Refresh LED blackout every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=alienware-leds-refresh.service
+[Install]
+WantedBy=timers.target
+"""
+    try:
+        open("/etc/systemd/system/alienware-leds-refresh.service", "w").write(service)
+        open("/etc/systemd/system/alienware-leds-refresh.timer", "w").write(timer)
+        os.system("systemctl daemon-reload >/dev/null 2>&1")
+        os.system("systemctl enable --now alienware-leds-refresh.timer >/dev/null 2>&1")
+    except OSError:
+        pass
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: alienware-leds on|off|rainbow|status|auto|refresh")
+        raise SystemExit(2)
+    action = sys.argv[1].lower()
+    if action in ("on", "off", "rainbow", "refresh"):
+        apply("on" if action == "rainbow" else action)
+        if action == "off":
+            install_refresh_timer()
+    elif action == "status":
+        state = read_state()
+        try:
+            device = find_aw_hidraw()
+        except SystemExit:
+            device = "missing"
+            # Keep exit 0 so the portal can show last-known state instead of Unavailable.
+            print(f"state={state} device={device}")
+            print(
+                "warning=AW-ELC hidraw missing (USB wedged?). "
+                "Reboot Proxmox host to recover.",
+                file=sys.stderr,
+            )
+            return
+        print(f"state={state} device={device}")
+    elif action == "auto":
+        os.environ.setdefault("TZ", "America/New_York")
+        time.tzset()
+        hour = time.localtime().tm_hour
+        apply("on" if 7 <= hour < 22 else "off")
+        if read_state() == "off":
+            install_refresh_timer()
+    else:
+        raise SystemExit(f"unknown action: {action}")
+
+
+if __name__ == "__main__":
+    main()
