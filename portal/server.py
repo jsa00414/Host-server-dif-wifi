@@ -1791,6 +1791,13 @@ PROXMOX_BT_WINDOWS_VMID = os.environ.get(
     "PROXMOX_BT_WINDOWS_VMID", PROXMOX_LED_WINDOWS_VMID
 ).strip() or PROXMOX_LED_WINDOWS_VMID
 PROXMOX_BT_USB_ID = os.environ.get("PROXMOX_BT_USB_ID", "0bda:2852").strip() or "0bda:2852"
+PROXMOX_XBOX_OWNER_CMD = os.environ.get(
+    "PROXMOX_XBOX_OWNER_CMD", "/usr/local/sbin/xbox-usb-owner"
+).strip() or "/usr/local/sbin/xbox-usb-owner"
+PROXMOX_XBOX_WINDOWS_VMID = os.environ.get(
+    "PROXMOX_XBOX_WINDOWS_VMID", PROXMOX_LED_WINDOWS_VMID
+).strip() or PROXMOX_LED_WINDOWS_VMID
+PROXMOX_XBOX_USB_ID = os.environ.get("PROXMOX_XBOX_USB_ID", "045e:0b12").strip() or "045e:0b12"
 
 ROUTER_HOSTS = [
     h.strip()
@@ -7147,6 +7154,155 @@ def bluetooth_set(action: str) -> dict:
     return st
 
 
+_XBOX_SSH_TIMEOUT = 60
+
+
+def _xbox_ssh(remote_cmd: str) -> subprocess.CompletedProcess:
+    return proxmox_ssh(remote_cmd, timeout=_XBOX_SSH_TIMEOUT)
+
+
+def _xbox_ssh_out(proc: subprocess.CompletedProcess) -> str:
+    return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+
+
+def _parse_xbox_owner(out: str) -> dict:
+    owner = "unknown"
+    vmid = PROXMOX_XBOX_WINDOWS_VMID
+    host_usb = None
+    vm_usb = None
+    device = ""
+    usb_id = PROXMOX_XBOX_USB_ID
+    for tok in out.replace("\n", " ").split():
+        if tok.startswith("owner="):
+            owner = tok.split("=", 1)[1].strip() or owner
+        elif tok.startswith("vmid="):
+            vmid = tok.split("=", 1)[1].strip() or vmid
+        elif tok.startswith("host_usb="):
+            host_usb = tok.split("=", 1)[1].strip() == "1"
+        elif tok.startswith("vm_usb="):
+            vm_usb = tok.split("=", 1)[1].strip() == "1"
+        elif tok.startswith("device="):
+            device = tok.split("=", 1)[1].strip()
+        elif tok.startswith("id="):
+            usb_id = tok.split("=", 1)[1].strip() or usb_id
+    return {
+        "owner": owner,
+        "windows_vmid": vmid,
+        "host_usb": host_usb,
+        "vm_usb": vm_usb,
+        "device": device,
+        "usb_id": usb_id,
+    }
+
+
+def _xbox_payload(
+    *,
+    ok: bool,
+    owner: str,
+    device: str = "",
+    usb_id: str | None = None,
+    error: str | None = None,
+    detail: str | None = None,
+    hint: str | None = None,
+) -> dict:
+    if hint is None:
+        if owner == "windows":
+            hint = (
+                f"Xbox USB controller is in Windows VM {PROXMOX_XBOX_WINDOWS_VMID}. "
+                "Check Windows Game Controllers (joy.cpl) or Xbox Game Bar. "
+                "Keep it plugged into the same USB port on the Proxmox PC."
+            )
+        elif owner == "host":
+            hint = (
+                "Xbox controller is on the Proxmox host. "
+                "Click Windows VM to pass it into win11-pro-gpu."
+            )
+        else:
+            hint = (
+                "Xbox controller not detected — plug it into the Proxmox PC via USB, "
+                "then click Windows VM."
+            )
+    return {
+        "ok": ok,
+        "owner": owner,
+        "state": owner if owner in ("host", "windows") else "unknown",
+        "device": device,
+        "usb_id": usb_id or PROXMOX_XBOX_USB_ID,
+        "windows_vmid": PROXMOX_XBOX_WINDOWS_VMID,
+        "host": PROXMOX_SSH_HOST,
+        "hint": hint,
+        "error": error,
+        "detail": detail,
+    }
+
+
+def xbox_status() -> dict:
+    """Who owns the Xbox USB controller: host or Windows VM."""
+    try:
+        proc = _xbox_ssh(f"{PROXMOX_XBOX_OWNER_CMD} status")
+    except subprocess.TimeoutExpired:
+        return _xbox_payload(
+            ok=False,
+            owner="unknown",
+            error="SSH to Proxmox timed out while reading Xbox controller owner",
+        )
+    except Exception as exc:
+        return _xbox_payload(ok=False, owner="unknown", error=str(exc))
+    out = _xbox_ssh_out(proc)
+    info = _parse_xbox_owner(out)
+    owner = str(info.get("owner") or "unknown")
+    ok = proc.returncode == 0 and owner in ("host", "windows")
+    return _xbox_payload(
+        ok=ok,
+        owner=owner if ok else "unknown",
+        device=str(info.get("device") or ""),
+        usb_id=str(info.get("usb_id") or PROXMOX_XBOX_USB_ID),
+        error=None if ok else (out or f"Xbox status failed ({proc.returncode})"),
+        detail=out,
+    )
+
+
+def xbox_set(action: str) -> dict:
+    """Hand Xbox USB controller to Windows or reclaim for the Proxmox host."""
+    act = str(action or "").strip().lower()
+    if act in ("windows", "to-windows", "vm"):
+        remote = (
+            f"{PROXMOX_XBOX_OWNER_CMD} to-windows; ec=$?; "
+            f"{PROXMOX_XBOX_OWNER_CMD} status; "
+            f"exit $ec"
+        )
+        label = "Windows"
+    elif act in ("host", "to-host", "proxmox"):
+        remote = (
+            f"{PROXMOX_XBOX_OWNER_CMD} to-host; ec=$?; "
+            f"{PROXMOX_XBOX_OWNER_CMD} status; "
+            f"exit $ec"
+        )
+        label = "host"
+    else:
+        raise ValueError("action must be windows or host")
+    try:
+        proc = _xbox_ssh(remote)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"SSH to Proxmox timed out while moving Xbox controller to {label}"
+        ) from exc
+    out = _xbox_ssh_out(proc)
+    if proc.returncode != 0:
+        raise RuntimeError(out or f"Xbox {label} handoff failed ({proc.returncode})")
+    info = _parse_xbox_owner(out)
+    owner = str(info.get("owner") or "unknown")
+    st = _xbox_payload(
+        ok=owner in ("host", "windows"),
+        owner=owner if owner in ("host", "windows") else "unknown",
+        device=str(info.get("device") or ""),
+        usb_id=str(info.get("usb_id") or PROXMOX_XBOX_USB_ID),
+        detail=out,
+    )
+    st["action"] = "windows" if label == "Windows" else "host"
+    return st
+
+
 def _active_session_count() -> int:
     with _sessions_lock:
         _purge_sessions()
@@ -12362,6 +12518,14 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc), "owner": "unknown"})
             return
+        if path == "/api/xbox":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, xbox_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "owner": "unknown"})
+            return
         if path == "/api/forwards":
             try:
                 self._json(200, read_state())
@@ -12983,6 +13147,21 @@ document.getElementById('f').onsubmit = async (e) => {
                 if isinstance(payload, dict):
                     action = str(payload.get("action") or payload.get("owner") or "").strip()
                 result = bluetooth_set(action)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/xbox":
+            if not self._require_auth(api=True):
+                return
+            try:
+                payload = self._read_json()
+                action = ""
+                if isinstance(payload, dict):
+                    action = str(payload.get("action") or payload.get("owner") or "").strip()
+                result = xbox_set(action)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})

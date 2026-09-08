@@ -1688,6 +1688,41 @@
             </div>
           </div>
 
+          <div class="panel" id="settingsXboxPanel">
+            <div class="panel-head">
+              <h3>Xbox controller</h3>
+              <button type="button" class="ghost" id="settingsXboxRefreshBtn">Refresh</button>
+            </div>
+            <div class="panel-body leds-panel">
+              <div class="leds-hero" id="settingsXboxStatus">
+                <div class="leds-status-top">
+                  <div class="leds-live">
+                    <span class="leds-dot" id="settingsXboxDot" aria-hidden="true"></span>
+                    <div class="leds-live-text">
+                      <strong id="settingsXboxState">—</strong>
+                      <span id="settingsXboxOwner">—</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="leds-meta-row">
+                  <span>USB <strong id="settingsXboxUsbId">045e:0b12</strong></span>
+                  <span>VM <strong id="settingsXboxVmid">100</strong></span>
+                  <span>Host <strong id="settingsXboxHost">—</strong></span>
+                </div>
+              </div>
+              <div class="leds-controls">
+                <div class="leds-group">
+                  <div class="leds-group-label">Owner</div>
+                  <div class="leds-seg" role="group" aria-label="Xbox controller owner">
+                    <button type="button" id="settingsXboxWindowsBtn" data-xbox-action="windows">Windows VM</button>
+                    <button type="button" id="settingsXboxHostBtn" data-xbox-action="host">Proxmox host</button>
+                  </div>
+                </div>
+              </div>
+              <p class="leds-hint" id="settingsXboxHint">Pass the wired Xbox Series controller into Windows. Unplug/replug once after moving if Windows does not see it.</p>
+            </div>
+          </div>
+
           <div class="panel">
             <div class="panel-head"><h3>Portal</h3></div>
             <div class="panel-body">
@@ -3164,6 +3199,7 @@
       }
       refreshLedsSettings();
       refreshBtSettings();
+      refreshXboxSettings();
     }
     async function saveBrandingSettings() {
       const title = document.getElementById("settingsTitle")?.value || "";
@@ -3506,6 +3542,134 @@
       }
     }
 
+    let xboxBusy = false;
+    let xboxLastData = null;
+    function renderXboxSettings(data, opts = {}) {
+      const stateEl = document.getElementById("settingsXboxState");
+      const ownerEl = document.getElementById("settingsXboxOwner");
+      const hostEl = document.getElementById("settingsXboxHost");
+      const hintEl = document.getElementById("settingsXboxHint");
+      const dotEl = document.getElementById("settingsXboxDot");
+      const heroEl = document.getElementById("settingsXboxStatus");
+      const usbEl = document.getElementById("settingsXboxUsbId");
+      const vmidEl = document.getElementById("settingsXboxVmid");
+      const panel = document.getElementById("settingsXboxPanel");
+      if (!stateEl) return;
+      if (data) xboxLastData = data;
+
+      const busy = !!opts.busy || xboxBusy;
+      const pending = String(opts.pendingAction || "");
+      const err = data && data.ok === false ? String(data.error || "error") : "";
+      const owner = err ? "unknown" : ((data && data.owner) || "unknown");
+      const isWindows = !err && owner === "windows";
+      const isHost = !err && owner === "host";
+
+      let title = "Unknown";
+      let subtitle = "Waiting for status…";
+      if (busy && pending) {
+        title = "Moving…";
+        subtitle = pending === "windows"
+          ? "Handing Xbox controller to Windows VM…"
+          : "Reclaiming Xbox controller for Proxmox…";
+      } else if (err) {
+        title = "Unavailable";
+        subtitle = err;
+      } else if (isWindows) {
+        title = "In Windows VM";
+        subtitle = `USB in VM ${(data && data.windows_vmid) || "100"} — use joy.cpl / Game Bar`;
+      } else if (isHost) {
+        title = "On Proxmox host";
+        subtitle = "Pass to Windows so games in the VM can use it";
+      } else {
+        title = owner;
+        subtitle = "Plug the controller into the Proxmox PC via USB";
+      }
+
+      stateEl.textContent = title;
+      if (ownerEl) ownerEl.textContent = subtitle;
+      if (hostEl) hostEl.textContent = (data && data.host) || "—";
+      if (usbEl) usbEl.textContent = (data && data.usb_id) || "045e:0b12";
+      if (vmidEl) vmidEl.textContent = (data && data.windows_vmid) || "100";
+      if (hintEl) {
+        hintEl.textContent = (data && data.hint) || (
+          isWindows
+            ? "Xbox USB is in the Windows VM. Unplug/replug once if Windows does not list it."
+            : "Pass the wired Xbox Series controller into Windows for games over VPN / remote."
+        );
+      }
+      if (dotEl) {
+        dotEl.className = "leds-dot"
+          + (busy ? "" : err ? " err" : isWindows ? " windows" : isHost ? " on" : "");
+      }
+      if (heroEl) {
+        heroEl.classList.toggle("is-on", !busy && !!isHost);
+        heroEl.classList.toggle("is-off", false);
+        heroEl.classList.toggle("is-windows", !busy && !!isWindows);
+        heroEl.classList.toggle("is-err", !busy && !!err);
+      }
+      if (panel) {
+        panel.querySelectorAll("[data-xbox-action]").forEach((btn) => {
+          const action = btn.getAttribute("data-xbox-action");
+          let active = false;
+          if (!busy) {
+            if (action === "windows") active = isWindows;
+            else if (action === "host") active = isHost;
+          } else {
+            active = action === pending;
+          }
+          btn.classList.toggle("is-active", active);
+          btn.disabled = !!busy;
+        });
+      }
+    }
+    async function refreshXboxSettings() {
+      if (xboxBusy) return;
+      try {
+        const data = await api("/api/xbox", { timeoutMs: 70000 });
+        renderXboxSettings(data);
+      } catch (e) {
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? "SSH to Proxmox timed out while reading Xbox controller status"
+          : msg;
+        renderXboxSettings({ ok: false, owner: "unknown", error: friendly });
+      }
+    }
+    async function setXboxAction(action) {
+      if (xboxBusy) return;
+      xboxBusy = true;
+      renderXboxSettings(xboxLastData || { ok: true, owner: "unknown" }, {
+        busy: true,
+        pendingAction: action,
+      });
+      setStatus(`Xbox controller → ${action}…`);
+      try {
+        const data = await api("/api/xbox", {
+          method: "POST",
+          body: JSON.stringify({ action }),
+          timeoutMs: 70000,
+        });
+        xboxBusy = false;
+        renderXboxSettings(data);
+        setStatus(`Xbox ${data.owner || action}`, "ok");
+        showLog(`Xbox ${action} → ${data.owner || "?"}`, true);
+      } catch (e) {
+        xboxBusy = false;
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? `SSH timed out moving Xbox controller to ${action}. Try again.`
+          : msg;
+        setStatus(friendly, "err");
+        showLog(friendly, true);
+        renderXboxSettings({
+          ...(xboxLastData || {}),
+          ok: false,
+          error: friendly,
+        });
+        setTimeout(() => { if (!xboxBusy) refreshXboxSettings(); }, 2500);
+      }
+    }
+
 
     document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
     document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
@@ -3520,6 +3684,9 @@
     document.getElementById("settingsBtRefreshBtn")?.addEventListener("click", () => refreshBtSettings());
     document.getElementById("settingsBtWindowsBtn")?.addEventListener("click", () => setBtAction("windows"));
     document.getElementById("settingsBtHostBtn")?.addEventListener("click", () => setBtAction("host"));
+    document.getElementById("settingsXboxRefreshBtn")?.addEventListener("click", () => refreshXboxSettings());
+    document.getElementById("settingsXboxWindowsBtn")?.addEventListener("click", () => setXboxAction("windows"));
+    document.getElementById("settingsXboxHostBtn")?.addEventListener("click", () => setXboxAction("host"));
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());

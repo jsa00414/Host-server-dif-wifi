@@ -87,3 +87,16 @@ bt-usb-owner status|to-windows|to-host
 ```
 
 Portal **Settings → Bluetooth** calls this over SSH. Default slot is **`usb4`** (`host=0bda:2852,usb3=1`).
+
+## Xbox controller (Windows VM)
+
+`xbox-usb-owner` hands the Microsoft Xbox Series USB controller `045e:0b12` between the Proxmox host and **Windows VM 100**.
+
+Do **not** map the same port twice (e.g. both `usb2: host=1-1` and `usb5: host=1-1`) — that makes the pad reconnect in a loop and fail in Windows.
+
+```bash
+install -m 755 xbox-usb-owner /usr/local/sbin/xbox-usb-owner
+xbox-usb-owner status|to-windows|to-host
+```
+
+Portal **Settings → Xbox controller** calls this over SSH. Default slot is **`usb2`** (`host=045e:0b12,usb3=1`). Host `xpad` is blacklisted while Windows owns it.
