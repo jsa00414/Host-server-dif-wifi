@@ -74,3 +74,16 @@ aw-elc-usb-owner status|to-windows|to-host
 ```
 
 Motherboard lighting can only be owned by **one** side at a time (host script vs Windows VM FX Lighting). Portal **Settings → Chassis lighting** calls these binaries over SSH (`on` = spectrum).
+
+AW-ELC uses USB slot **`usb5`** by default (Bluetooth occupies **`usb4`**).
+
+## Bluetooth (Windows VM)
+
+`bt-usb-owner` hands the Realtek Bluetooth Radio USB `0bda:2852` (RTL8852 companion) between the Proxmox host and **Windows VM 100**, so controllers / headsets work in Windows when you use the PC over VPN / remote.
+
+```bash
+install -m 755 bt-usb-owner /usr/local/sbin/bt-usb-owner
+bt-usb-owner status|to-windows|to-host
+```
+
+Portal **Settings → Bluetooth** calls this over SSH. Default slot is **`usb4`** (`host=0bda:2852,usb3=1`).

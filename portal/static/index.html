@@ -1653,6 +1653,41 @@
             </div>
           </div>
 
+          <div class="panel" id="settingsBtPanel">
+            <div class="panel-head">
+              <h3>Bluetooth</h3>
+              <button type="button" class="ghost" id="settingsBtRefreshBtn">Refresh</button>
+            </div>
+            <div class="panel-body leds-panel">
+              <div class="leds-hero" id="settingsBtStatus">
+                <div class="leds-status-top">
+                  <div class="leds-live">
+                    <span class="leds-dot" id="settingsBtDot" aria-hidden="true"></span>
+                    <div class="leds-live-text">
+                      <strong id="settingsBtState">—</strong>
+                      <span id="settingsBtOwner">—</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="leds-meta-row">
+                  <span>USB <strong id="settingsBtUsbId">0bda:2852</strong></span>
+                  <span>VM <strong id="settingsBtVmid">100</strong></span>
+                  <span>Host <strong id="settingsBtHost">—</strong></span>
+                </div>
+              </div>
+              <div class="leds-controls">
+                <div class="leds-group">
+                  <div class="leds-group-label">Owner</div>
+                  <div class="leds-seg" role="group" aria-label="Bluetooth owner">
+                    <button type="button" id="settingsBtWindowsBtn" data-bt-action="windows">Windows VM</button>
+                    <button type="button" id="settingsBtHostBtn" data-bt-action="host">Proxmox host</button>
+                  </div>
+                </div>
+              </div>
+              <p class="leds-hint" id="settingsBtHint">Pass the Realtek Bluetooth radio into Windows so controllers and headsets work when you use the PC over VPN.</p>
+            </div>
+          </div>
+
           <div class="panel">
             <div class="panel-head"><h3>Portal</h3></div>
             <div class="panel-body">
@@ -3128,6 +3163,7 @@
         setStatus(String(e.message || e), "err");
       }
       refreshLedsSettings();
+      refreshBtSettings();
     }
     async function saveBrandingSettings() {
       const title = document.getElementById("settingsTitle")?.value || "";
@@ -3342,6 +3378,134 @@
       }
     }
 
+    let btBusy = false;
+    let btLastData = null;
+    function renderBtSettings(data, opts = {}) {
+      const stateEl = document.getElementById("settingsBtState");
+      const ownerEl = document.getElementById("settingsBtOwner");
+      const hostEl = document.getElementById("settingsBtHost");
+      const hintEl = document.getElementById("settingsBtHint");
+      const dotEl = document.getElementById("settingsBtDot");
+      const heroEl = document.getElementById("settingsBtStatus");
+      const usbEl = document.getElementById("settingsBtUsbId");
+      const vmidEl = document.getElementById("settingsBtVmid");
+      const panel = document.getElementById("settingsBtPanel");
+      if (!stateEl) return;
+      if (data) btLastData = data;
+
+      const busy = !!opts.busy || btBusy;
+      const pending = String(opts.pendingAction || "");
+      const err = data && data.ok === false ? String(data.error || "error") : "";
+      const owner = err ? "unknown" : ((data && data.owner) || "unknown");
+      const isWindows = !err && owner === "windows";
+      const isHost = !err && owner === "host";
+
+      let title = "Unknown";
+      let subtitle = "Waiting for status…";
+      if (busy && pending) {
+        title = "Moving…";
+        subtitle = pending === "windows"
+          ? "Handing Bluetooth to Windows VM…"
+          : "Reclaiming Bluetooth for Proxmox…";
+      } else if (err) {
+        title = "Unavailable";
+        subtitle = err;
+      } else if (isWindows) {
+        title = "In Windows VM";
+        subtitle = `USB in VM ${(data && data.windows_vmid) || "100"} — pair devices in Windows`;
+      } else if (isHost) {
+        title = "On Proxmox host";
+        subtitle = "Pass to Windows to use controllers / headsets remotely";
+      } else {
+        title = owner;
+        subtitle = "Bluetooth ownership unclear";
+      }
+
+      stateEl.textContent = title;
+      if (ownerEl) ownerEl.textContent = subtitle;
+      if (hostEl) hostEl.textContent = (data && data.host) || "—";
+      if (usbEl) usbEl.textContent = (data && data.usb_id) || "0bda:2852";
+      if (vmidEl) vmidEl.textContent = (data && data.windows_vmid) || "100";
+      if (hintEl) {
+        hintEl.textContent = (data && data.hint) || (
+          isWindows
+            ? "Bluetooth USB is in the Windows VM. Pair devices there, or reclaim for the Proxmox host."
+            : "Pass the Realtek Bluetooth radio into Windows so controllers and headsets work when you use the PC over VPN."
+        );
+      }
+      if (dotEl) {
+        dotEl.className = "leds-dot"
+          + (busy ? "" : err ? " err" : isWindows ? " windows" : isHost ? " on" : "");
+      }
+      if (heroEl) {
+        heroEl.classList.toggle("is-on", !busy && !!isHost);
+        heroEl.classList.toggle("is-off", false);
+        heroEl.classList.toggle("is-windows", !busy && !!isWindows);
+        heroEl.classList.toggle("is-err", !busy && !!err);
+      }
+      if (panel) {
+        panel.querySelectorAll("[data-bt-action]").forEach((btn) => {
+          const action = btn.getAttribute("data-bt-action");
+          let active = false;
+          if (!busy) {
+            if (action === "windows") active = isWindows;
+            else if (action === "host") active = isHost;
+          } else {
+            active = action === pending;
+          }
+          btn.classList.toggle("is-active", active);
+          btn.disabled = !!busy;
+        });
+      }
+    }
+    async function refreshBtSettings() {
+      if (btBusy) return;
+      try {
+        const data = await api("/api/bluetooth", { timeoutMs: 70000 });
+        renderBtSettings(data);
+      } catch (e) {
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? "SSH to Proxmox timed out while reading Bluetooth status"
+          : msg;
+        renderBtSettings({ ok: false, owner: "unknown", error: friendly });
+      }
+    }
+    async function setBtAction(action) {
+      if (btBusy) return;
+      btBusy = true;
+      renderBtSettings(btLastData || { ok: true, owner: "unknown" }, {
+        busy: true,
+        pendingAction: action,
+      });
+      setStatus(`Bluetooth → ${action}…`);
+      try {
+        const data = await api("/api/bluetooth", {
+          method: "POST",
+          body: JSON.stringify({ action }),
+          timeoutMs: 70000,
+        });
+        btBusy = false;
+        renderBtSettings(data);
+        setStatus(`Bluetooth ${data.owner || action}`, "ok");
+        showLog(`Bluetooth ${action} → ${data.owner || "?"}`, true);
+      } catch (e) {
+        btBusy = false;
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? `SSH timed out moving Bluetooth to ${action}. Try again.`
+          : msg;
+        setStatus(friendly, "err");
+        showLog(friendly, true);
+        renderBtSettings({
+          ...(btLastData || {}),
+          ok: false,
+          error: friendly,
+        });
+        setTimeout(() => { if (!btBusy) refreshBtSettings(); }, 2500);
+      }
+    }
+
 
     document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
     document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
@@ -3353,6 +3517,9 @@
     document.getElementById("settingsLedsOnBtn")?.addEventListener("click", () => setLedsAction("on"));
     document.getElementById("settingsLedsOffBtn")?.addEventListener("click", () => setLedsAction("off"));
     document.getElementById("settingsLedsAutoBtn")?.addEventListener("click", () => setLedsAction("auto"));
+    document.getElementById("settingsBtRefreshBtn")?.addEventListener("click", () => refreshBtSettings());
+    document.getElementById("settingsBtWindowsBtn")?.addEventListener("click", () => setBtAction("windows"));
+    document.getElementById("settingsBtHostBtn")?.addEventListener("click", () => setBtAction("host"));
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());

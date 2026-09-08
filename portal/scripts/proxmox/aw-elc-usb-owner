@@ -15,7 +15,8 @@ set -euo pipefail
 
 VENDOR_PRODUCT="187c:0550"
 VMID="${AW_ELC_WINDOWS_VMID:-100}"
-USB_SLOT="${AW_ELC_USB_SLOT:-usb4}"
+# usb4 is reserved for Realtek Bluetooth (bt-usb-owner); LEDs use usb5.
+USB_SLOT="${AW_ELC_USB_SLOT:-usb5}"
 OWNER_PATH="/etc/alienware-leds/owner"
 STATE_PATH="/etc/alienware-leds/state"
 LED_CMD="${AW_ELC_LED_CMD:-/usr/local/sbin/alienware-leds}"
