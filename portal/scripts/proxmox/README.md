@@ -113,3 +113,15 @@ elements-plex-hookup status|attach|auto-on|auto-off
 ```
 
 Portal **Settings → Elements USB (Plex)** shows status, **Attach to Plex**, and an **Auto-hookup** switch.
+
+## Seagate 8TB → Windows VM (1TB slice)
+
+`attach-tu-1tb-to-vm.sh` registers LVM storage `tu-hdd` on VG `tu` (Seagate ST8000DM004 `/dev/sda`) and attaches a **1TB** LV to VM **100** as `sata2`. Remaining ~6.28T stays free on the VG.
+
+```bash
+# On Proxmox:
+./attach-tu-1tb-to-vm.sh attach
+./attach-tu-1tb-to-vm.sh status
+```
+
+In Windows: Disk Management → Rescan Disks → Initialize/format the new disk.
