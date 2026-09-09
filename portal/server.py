@@ -4300,14 +4300,18 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         setup_path = "/web/index.html"
     # After claim, PMS often requires TLS on :32400 ("secure connections required").
     upstream = f"https://{host}:{port}"
+    # Pass through client headers (especially X-Plex-*). Do NOT rewrite
+    # X-Plex-Client-Identifier to empty — that breaks PlayQueue ("loading items").
     proxy_common = [
         "\t\t\ttransport http {",
         "\t\t\t\ttls_insecure_skip_verify",
         "\t\t\t}",
-        f"\t\t\theader_up Host {host}:{port}",
+        # Keep public Host so PMS/web client stay aligned with plex.vpstruelord.com
+        "\t\t\theader_up Host {host}",
         f"\t\t\theader_up X-Forwarded-Host {public}",
         "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Plex-Client-Identifier {http.request.header.X-Plex-Client-Identifier}",
+        "\t\t\theader_up X-Real-IP {remote_host}",
+        "\t\t\theader_up X-Forwarded-For {remote_host}",
         f"\t\t\theader_down Location http://{public} https://{public}",
         f"\t\t\theader_down Location https://{public} https://{public}",
         f"\t\t\theader_down Location http://{host}:{port} https://{public}",
