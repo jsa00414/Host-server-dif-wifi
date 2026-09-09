@@ -23,20 +23,23 @@ done
 echo "==> Waiting for block device…"
 dev=""
 for i in $(seq 1 30); do
-  if [[ -b /dev/sdb ]]; then
-    dev=/dev/sdb
-    break
-  fi
-  # Prefer by-id if present
+  # Prefer WD Elements by-id (never guess /dev/sdX — that can be the system disk)
   for cand in /dev/disk/by-id/usb-WD_Elements*; do
     if [[ -e "$cand" && ! "$cand" =~ part ]]; then
       dev=$(readlink -f "$cand")
       break 2
     fi
   done
+  # Fallback: partition/label Elements
+  if [[ -e /dev/disk/by-label/Elements ]]; then
+    part=$(readlink -f /dev/disk/by-label/Elements)
+    # parent disk of the partition
+    dev="/dev/$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)"
+    [[ -b "$dev" ]] && break
+  fi
   sleep 1
 done
-if [[ -z "$dev" ]]; then
+if [[ -z "$dev" || ! -b "$dev" ]]; then
   echo "USB block device not found after detach. lsblk:" >&2
   lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,TRAN,MODEL
   lsusb | grep -i western || true
@@ -47,6 +50,8 @@ lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$dev"
 part=""
 if [[ -b "${dev}1" ]]; then
   part="${dev}1"
+elif [[ -e /dev/disk/by-label/Elements ]]; then
+  part=$(readlink -f /dev/disk/by-label/Elements)
 elif lsblk -nr -o NAME,TYPE "$dev" | awk '$2=="part"{print; exit}' | grep -q .; then
   part="/dev/$(lsblk -nr -o NAME,TYPE "$dev" | awk '$2=="part"{print $1; exit}')"
 else
