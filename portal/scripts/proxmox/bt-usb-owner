@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Hand Realtek Bluetooth USB between Proxmox host and Windows VM.
+#
+# Device: Realtek Bluetooth Radio 0bda:2852 (RTL8852 companion BT)
+# Default Windows VM: 100 (win11-pro-gpu)
+# Default USB slot: usb4  (keep AW-ELC LED owner on usb5+)
+#
+# Usage:
+#   bt-usb-owner status
+#   bt-usb-owner to-windows   # Bluetooth → Windows VM (for controllers / headsets over remote/VPN)
+#   bt-usb-owner to-host      # reclaim for Proxmox host BlueZ
+set -euo pipefail
+
+VENDOR_PRODUCT="${BT_USB_ID:-0bda:2852}"
+VMID="${BT_WINDOWS_VMID:-100}"
+USB_SLOT="${BT_USB_SLOT:-usb4}"
+OWNER_PATH="/etc/proxmox-bluetooth/owner"
+STATE_PATH="/etc/proxmox-bluetooth/state"
+
+mkdir -p "$(dirname "$OWNER_PATH")"
+
+_vendor() { echo "${VENDOR_PRODUCT%%:*}"; }
+_product() { echo "${VENDOR_PRODUCT##*:}"; }
+
+host_has_device() {
+  # Prefer USB sysfs + lsusb. After passthrough, kvm holds the node but
+  # lsusb may still list it — treat "passed to VM" as not host-owned.
+  if vm_has_usb; then
+    return 1
+  fi
+  if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    return 0
+  fi
+  local v p
+  v="$(_vendor)"
+  p="$(_product)"
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    if [[ "$(cat "$d/idVendor" 2>/dev/null)" == "$v" && "$(cat "$d/idProduct" 2>/dev/null)" == "$p" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+vm_has_usb() {
+  local cfg
+  cfg="$(qm config "$VMID" 2>/dev/null || true)"
+  [[ -n "$cfg" ]] || return 1
+  if echo "$cfg" | grep -qiE "^${USB_SLOT}:.*${VENDOR_PRODUCT}|^usb[0-9]+:.*${VENDOR_PRODUCT}|host=${VENDOR_PRODUCT}"; then
+    return 0
+  fi
+  # Legacy bus-path mapping (e.g. usb4: host=1-10) when sysfs still knows the device.
+  if echo "$cfg" | grep -qiE "^${USB_SLOT}:[[:space:]]*host="; then
+    local val path v p
+    val="$(echo "$cfg" | awk -F': ' -v s="$USB_SLOT" 'tolower($1)==tolower(s){print $2; exit}')"
+    path="${val#host=}"
+    path="${path%%,*}"
+    if [[ -f "/sys/bus/usb/devices/${path}/idVendor" ]]; then
+      v="$(cat "/sys/bus/usb/devices/${path}/idVendor" 2>/dev/null || true)"
+      p="$(cat "/sys/bus/usb/devices/${path}/idProduct" 2>/dev/null || true)"
+      [[ "$v:$p" == "$VENDOR_PRODUCT" ]] && return 0
+    fi
+    # Path may be gone while QEMU still holds Bluetooth on this slot.
+    if [[ "$path" == "1-10" ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+unbind_host_btusb() {
+  # Release kernel btusb claim so QEMU can take the device cleanly.
+  local v p d iface
+  v="$(_vendor)"
+  p="$(_product)"
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    [[ "$(cat "$d/idVendor" 2>/dev/null)" == "$v" && "$(cat "$d/idProduct" 2>/dev/null)" == "$p" ]] || continue
+    for iface in "$d"/$v* "$d"/*:*; do
+      [[ -e "$iface" ]] || continue
+      [[ -e "$iface/driver" ]] || continue
+      local name
+      name="$(basename "$iface")"
+      if [[ -e /sys/bus/usb/drivers/btusb/unbind ]]; then
+        echo "$name" >/sys/bus/usb/drivers/btusb/unbind 2>/dev/null || true
+      fi
+    done
+  done
+  modprobe -r btusb >/dev/null 2>&1 || true
+}
+
+rebind_host_btusb() {
+  modprobe btusb >/dev/null 2>&1 || true
+}
+
+read_owner() {
+  if [[ -f "$OWNER_PATH" ]]; then
+    tr -d '[:space:]' <"$OWNER_PATH"
+    return
+  fi
+  if vm_has_usb; then
+    echo windows
+  elif host_has_device; then
+    echo host
+  else
+    echo unknown
+  fi
+}
+
+write_owner() {
+  printf '%s\n' "$1" >"$OWNER_PATH"
+}
+
+cmd_status() {
+  local owner device host_usb vm_usb hci
+  owner="$(read_owner)"
+  device="missing"
+  host_usb=0
+  vm_usb=0
+  hci=0
+  if host_has_device; then
+    host_usb=1
+    device="$(lsusb -d "$VENDOR_PRODUCT" 2>/dev/null | head -1 | sed 's/^Bus/bus/' || echo present)"
+  fi
+  if vm_has_usb; then
+    vm_usb=1
+    if [[ "$host_usb" -eq 0 ]]; then
+      owner=windows
+    fi
+  fi
+  if [[ "$host_usb" -eq 1 && "$vm_usb" -eq 0 ]]; then
+    owner=host
+  fi
+  if [[ -d /sys/class/bluetooth/hci0 ]]; then
+    hci=1
+  fi
+  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} hci=${hci} device=${device} id=${VENDOR_PRODUCT}"
+}
+
+cmd_to_windows() {
+  if ! qm status "$VMID" >/dev/null 2>&1; then
+    echo "VM ${VMID} not found" >&2
+    exit 1
+  fi
+
+  # Drop any prior BT / legacy bus-path mappings on this slot and elsewhere.
+  local line slot
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*(${VENDOR_PRODUCT}|host=1-10\b)" || true)
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  sleep 0.8
+
+  if ! host_has_device && ! lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    echo "Bluetooth ${VENDOR_PRODUCT} not found on host" >&2
+    exit 1
+  fi
+
+  unbind_host_btusb
+  sleep 0.3
+  qm set "$VMID" -"$USB_SLOT" "host=${VENDOR_PRODUCT},usb3=1"
+  write_owner windows
+  printf 'windows\n' >"$STATE_PATH"
+  sleep 1
+  cmd_status
+  echo "Bluetooth ${VENDOR_PRODUCT} handed to Windows VM ${VMID} on ${USB_SLOT}."
+  echo "In Windows: Settings → Bluetooth & devices (pair controllers / headsets)."
+}
+
+cmd_to_host() {
+  local line slot
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*(${VENDOR_PRODUCT}|host=1-10\b)" || true)
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+
+  local i
+  for i in $(seq 1 40); do
+    if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+  rebind_host_btusb
+  sleep 0.5
+  if ! lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    write_owner unknown
+    echo "Bluetooth did not reappear on host after reclaim" >&2
+    cmd_status
+    exit 1
+  fi
+  write_owner host
+  printf 'host\n' >"$STATE_PATH"
+  cmd_status
+  echo "Bluetooth reclaimed by Proxmox host."
+}
+
+usage() {
+  echo "Usage: bt-usb-owner status|to-windows|to-host"
+  echo "  Windows VMID=${VMID}  USB slot=${USB_SLOT}  device=${VENDOR_PRODUCT}"
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status) cmd_status ;;
+    to-windows|windows) cmd_to_windows ;;
+    to-host|host) cmd_to_host ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown action: $action" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"

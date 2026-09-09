@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# Hand Xbox Series USB controller between Proxmox host and Windows VM.
+#
+# Device: Microsoft Xbox Controller 045e:0b12 (Series S|X / USB)
+# Default Windows VM: 100 (win11-pro-gpu)
+# Default USB slot: usb2
+#
+# Usage:
+#   xbox-usb-owner status
+#   xbox-usb-owner to-windows
+#   xbox-usb-owner to-host
+set -euo pipefail
+
+VENDOR_PRODUCT="${XBOX_USB_ID:-045e:0b12}"
+VMID="${XBOX_WINDOWS_VMID:-100}"
+USB_SLOT="${XBOX_USB_SLOT:-usb2}"
+OWNER_PATH="/etc/proxmox-xbox/owner"
+STATE_PATH="/etc/proxmox-xbox/state"
+XPAD_BLACKLIST="/etc/modprobe.d/blacklist-xpad-windows.conf"
+
+mkdir -p "$(dirname "$OWNER_PATH")"
+
+_vendor() { echo "${VENDOR_PRODUCT%%:*}"; }
+_product() { echo "${VENDOR_PRODUCT##*:}"; }
+
+host_has_device() {
+  if vm_has_usb; then
+    return 1
+  fi
+  if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    return 0
+  fi
+  local v p
+  v="$(_vendor)"
+  p="$(_product)"
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    if [[ "$(cat "$d/idVendor" 2>/dev/null)" == "$v" && "$(cat "$d/idProduct" 2>/dev/null)" == "$p" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+vm_has_usb() {
+  local cfg
+  cfg="$(qm config "$VMID" 2>/dev/null || true)"
+  [[ -n "$cfg" ]] || return 1
+  if echo "$cfg" | grep -qiE "^${USB_SLOT}:.*${VENDOR_PRODUCT}|^usb[0-9]+:.*${VENDOR_PRODUCT}|host=${VENDOR_PRODUCT}"; then
+    return 0
+  fi
+  # Legacy bus-path (usb2/usb5: host=1-1) when sysfs still knows the device.
+  if echo "$cfg" | grep -qiE "^usb[0-9]+:[[:space:]]*host=1-1\b"; then
+    local val path v p line slot
+    while read -r line; do
+      slot="${line%%:*}"
+      val="${line#*: }"
+      path="${val#host=}"
+      path="${path%%,*}"
+      if [[ -f "/sys/bus/usb/devices/${path}/idVendor" ]]; then
+        v="$(cat "/sys/bus/usb/devices/${path}/idVendor" 2>/dev/null || true)"
+        p="$(cat "/sys/bus/usb/devices/${path}/idProduct" 2>/dev/null || true)"
+        [[ "$v:$p" == "$VENDOR_PRODUCT" ]] && return 0
+      fi
+      # Known Xbox port on this host
+      [[ "$path" == "1-1" ]] && return 0
+    done < <(echo "$cfg" | grep -iE "^usb[0-9]+:[[:space:]]*host=1-1\b" || true)
+  fi
+  return 1
+}
+
+unbind_host_xpad() {
+  local v p d iface name drv
+  v="$(_vendor)"
+  p="$(_product)"
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    [[ "$(cat "$d/idVendor" 2>/dev/null)" == "$v" && "$(cat "$d/idProduct" 2>/dev/null)" == "$p" ]] || continue
+    for iface in "$d":*; do
+      [[ -e "$iface/driver" ]] || continue
+      name="$(basename "$iface")"
+      drv="$(basename "$(readlink -f "$iface/driver")")"
+      echo "$name" >"$iface/driver/unbind" 2>/dev/null || true
+    done
+  done
+  modprobe -r xpad >/dev/null 2>&1 || true
+  cat >"$XPAD_BLACKLIST" <<'EOF'
+# Xbox controller owned by Windows VM — keep host xpad from reclaiming USB.
+blacklist xpad
+EOF
+}
+
+restore_host_xpad() {
+  rm -f "$XPAD_BLACKLIST"
+  modprobe xpad >/dev/null 2>&1 || true
+}
+
+read_owner() {
+  if [[ -f "$OWNER_PATH" ]]; then
+    tr -d '[:space:]' <"$OWNER_PATH"
+    return
+  fi
+  if vm_has_usb; then
+    echo windows
+  elif host_has_device; then
+    echo host
+  else
+    echo unknown
+  fi
+}
+
+write_owner() {
+  printf '%s\n' "$1" >"$OWNER_PATH"
+}
+
+cmd_status() {
+  local owner device host_usb vm_usb
+  owner="$(read_owner)"
+  device="missing"
+  host_usb=0
+  vm_usb=0
+  if host_has_device; then
+    host_usb=1
+    device="$(lsusb -d "$VENDOR_PRODUCT" 2>/dev/null | head -1 | sed 's/^Bus/bus/' || echo present)"
+  fi
+  if vm_has_usb; then
+    vm_usb=1
+    if [[ "$host_usb" -eq 0 ]]; then
+      owner=windows
+    fi
+  fi
+  if [[ "$host_usb" -eq 1 && "$vm_usb" -eq 0 ]]; then
+    owner=host
+  fi
+  echo "owner=${owner} vmid=${VMID} slot=${USB_SLOT} host_usb=${host_usb} vm_usb=${vm_usb} device=${device} id=${VENDOR_PRODUCT}"
+}
+
+cmd_to_windows() {
+  if ! qm status "$VMID" >/dev/null 2>&1; then
+    echo "VM ${VMID} not found" >&2
+    exit 1
+  fi
+
+  local line slot
+  # Drop vendor-id and legacy bus-path mappings for this controller.
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*(${VENDOR_PRODUCT}|host=1-1\b)" || true)
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+  sleep 0.8
+
+  if ! lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    echo "Xbox controller ${VENDOR_PRODUCT} not found on host — plug it in via USB" >&2
+    exit 1
+  fi
+
+  unbind_host_xpad
+  sleep 0.3
+  qm set "$VMID" -"$USB_SLOT" "host=${VENDOR_PRODUCT},usb3=1"
+  write_owner windows
+  printf 'windows\n' >"$STATE_PATH"
+  sleep 1
+  cmd_status
+  echo "Xbox controller ${VENDOR_PRODUCT} handed to Windows VM ${VMID} on ${USB_SLOT}."
+  echo "In Windows: Settings → Bluetooth & devices → Devices, or joy.cpl / game bar."
+}
+
+cmd_to_host() {
+  local line slot
+  while read -r line; do
+    slot="${line%%:*}"
+    [[ -n "$slot" ]] || continue
+    qm set "$VMID" --delete "$slot" >/dev/null 2>&1 || true
+  done < <(qm config "$VMID" | grep -iE "^usb[0-9]+:.*(${VENDOR_PRODUCT}|host=1-1\b)" || true)
+  qm set "$VMID" --delete "$USB_SLOT" >/dev/null 2>&1 || true
+
+  local i
+  for i in $(seq 1 40); do
+    if lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+  restore_host_xpad
+  sleep 0.5
+  if ! lsusb -d "$VENDOR_PRODUCT" >/dev/null 2>&1; then
+    write_owner unknown
+    echo "Xbox controller did not reappear on host after reclaim — is it plugged in?" >&2
+    cmd_status
+    exit 1
+  fi
+  write_owner host
+  printf 'host\n' >"$STATE_PATH"
+  cmd_status
+  echo "Xbox controller reclaimed by Proxmox host."
+}
+
+usage() {
+  echo "Usage: xbox-usb-owner status|to-windows|to-host"
+  echo "  Windows VMID=${VMID}  USB slot=${USB_SLOT}  device=${VENDOR_PRODUCT}"
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status) cmd_status ;;
+    to-windows|windows) cmd_to_windows ;;
+    to-host|host) cmd_to_host ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown action: $action" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
