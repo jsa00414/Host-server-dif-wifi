@@ -182,7 +182,6 @@
     .embed-frame::-webkit-scrollbar { width: 0; height: 0; display: none; }
     #view-adguard.active,
     #view-files.active,
-    #view-buffalo.active,
     #view-proxmox.active,
     #view-pihole.active,
     #view-wireguard.active,
@@ -194,7 +193,6 @@
       display: block !important;
       background: #0a0f0d;
     }
-    #frameBuffalo,
     #frameFiles,
     #frameProxmox,
     #frameAdguard,
@@ -1006,7 +1004,6 @@
         overflow: hidden !important;
       }
       body.embed-mode .embed-view.active,
-      body.embed-mode #view-buffalo.active,
       body.embed-mode #view-proxmox.active,
       body.embed-mode #view-files.active,
       body.embed-mode #view-adguard.active,
@@ -1022,7 +1019,6 @@
         overflow: hidden !important;
       }
       body.embed-mode .embed-frame,
-      body.embed-mode #frameBuffalo,
       body.embed-mode #frameProxmox,
       body.embed-mode #frameFiles,
       body.embed-mode #frameAdguard,
@@ -1091,9 +1087,6 @@
       <span class="nav-copy"><span>Router</span></span>
       <span class="count" id="routerCount">0</span>
     </button>
-    <button type="button" class="nav-btn" data-view="buffalo">
-      <span class="nav-copy"><span>Buffalo</span></span>
-    </button>
     <button type="button" class="nav-btn" data-view="proxmox">
       <span class="nav-copy"><span>Proxmox</span></span>
     </button>
@@ -1155,11 +1148,6 @@
             <div class="k">Router</div>
             <div class="v" id="ovRouter">0</div>
             <div class="s">Flint redirects</div>
-          </button>
-          <button type="button" class="stat" data-go="buffalo">
-            <div class="k">Buffalo</div>
-            <div class="v">NAS</div>
-            <div class="s">192.168.8.159</div>
           </button>
           <button type="button" class="stat" data-go="proxmox">
             <div class="k">Proxmox</div>
@@ -1377,10 +1365,6 @@
 
       <section class="view embed-view" id="view-adguard">
         <iframe class="embed-frame" id="frameAdguard" title="AdGuard Home" src="about:blank" data-src="https://dns.vpstruelord.com/?lng=en" allow="clipboard-read; clipboard-write"></iframe>
-      </section>
-
-      <section class="view embed-view" id="view-buffalo">
-        <iframe class="embed-frame" id="frameBuffalo" title="Buffalo NAS" src="about:blank" data-src="/buffalo-frame/root.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view embed-view" id="view-proxmox">
@@ -1770,12 +1754,12 @@
               <div class="settings-kv" id="settingsPortalKv">
                 <div><span class="k">Host</span><span class="v">—</span></div>
                 <div><span class="k">VPS IP</span><span class="v">—</span></div>
-                <div><span class="k">Buffalo SSO</span><span class="v">—</span></div>
+                <div><span class="k">NAS SSO</span><span class="v">—</span></div>
               </div>
               <div class="settings-actions">
                 <button type="button" id="settingsReauthNasBtn">Refresh NAS login</button>
               </div>
-              <p class="hint" style="margin:10px 0 0">Re-runs Buffalo / Files SSO and reloads those embeds.</p>
+              <p class="hint" style="margin:10px 0 0">Re-runs Files SSO and reloads the Files embed.</p>
             </div>
           </div>
 
@@ -1821,7 +1805,6 @@
                     <option value="backup">Backup</option>
                     <option value="vps">Internet</option>
                     <option value="router">Router</option>
-                    <option value="buffalo">Buffalo</option>
                     <option value="proxmox">Proxmox</option>
                     <option value="files">Files</option>
                     <option value="domains">Domains</option>
@@ -2002,21 +1985,6 @@
       }
     }
 
-    async function loadBuffaloFrame(force) {
-      const frame = document.getElementById("frameBuffalo");
-      if (!frame) return;
-      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      const fallback = frame.dataset.src || "/buffalo-frame/root.html";
-      try {
-        const data = await api("/api/buffalo-sso?scope=admin");
-        frame.src = (data.admin && data.admin.url) || fallback;
-        frame.dataset.authed = "1";
-      } catch (e) {
-        frame.src = fallback;
-        frame.dataset.authed = "0";
-        showLog(String(e.message || e), true);
-      }
-    }
     async function loadWireguardFrame(force) {
       const frame = document.getElementById("frameWireguard");
       if (!frame) return;
@@ -2168,7 +2136,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "proxmox" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
+      const embed = name === "adguard" || name === "pihole" || name === "proxmox" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -2190,9 +2158,6 @@
       if (name === "windowsvpn") {
         const f = document.getElementById("frameWindowsVpn");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
-      }
-      if (name === "buffalo") {
-        loadBuffaloFrame();
       }
       if (name === "proxmox") {
         const f = document.getElementById("frameProxmox");
@@ -3089,7 +3054,7 @@
     });
 
     const SETTINGS_VIEWS = new Set([
-      "overview", "backup", "vps", "router", "buffalo", "proxmox", "files",
+      "overview", "backup", "vps", "router", "proxmox", "files",
       "domains", "firewall", "wireguard", "openvpn", "windowsvpn",
       "dnsmap", "adguard", "tailscale", "surfshark", "pihole", "settings",
     ]);
@@ -3203,7 +3168,7 @@
           `<div><span class="k">VPS IP</span><span class="v">${esc(data.vps_public_ip || "—")}</span></div>`,
           `<div><span class="k">Egress</span><span class="v">${esc(data.egress_ip || "—")}</span></div>`,
           `<div><span class="k">Uptime</span><span class="v">${esc(fmtUptime(data.uptime_sec))}</span></div>`,
-          `<div><span class="k">Buffalo SSO</span><span class="v">${esc(sso)}</span></div>`,
+          `<div><span class="k">NAS SSO</span><span class="v">${esc(sso)}</span></div>`,
         ].join("");
       }
       const titleEl = document.getElementById("settingsTitle");
@@ -3297,10 +3262,10 @@
     async function reauthNasFromSettings() {
       setStatus("Refreshing NAS login…");
       try {
-        await api("/api/buffalo-sso?scope=all");
-        await Promise.all([loadBuffaloFrame(true), loadNasFilesFrame(true)]);
+        await api("/api/buffalo-sso?scope=files");
+        await loadNasFilesFrame(true);
         setStatus("NAS login refreshed", "ok");
-        showLog("Buffalo / Files SSO refreshed.", true);
+        showLog("Files SSO refreshed.", true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);
@@ -3888,8 +3853,8 @@
         const prefs = readSettingsPrefs();
         if (prefs.expandLog) drawer.classList.remove("collapsed");
         await load();
-        // Warm Buffalo admin SSO in the background so the NAS tab opens quickly.
-        api("/api/buffalo-sso?scope=admin").catch(() => {});
+        // Warm Files SSO in the background so the Files tab opens quickly.
+        api("/api/buffalo-sso?scope=files").catch(() => {});
         const start = initialViewFromPrefs();
         if (start && start !== "overview") showView(start);
         else lockMobileViewport();
