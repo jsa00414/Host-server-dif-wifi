@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore Surfshark VPN exit for WireGuard clients
+After=network-online.target docker.service wg-easy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/surfshark/ss-vpn-exit.sh protect-only
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

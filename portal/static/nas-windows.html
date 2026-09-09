@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>NAS in File Explorer — ServerManager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #07110e; --bg1: #0e1a15; --bg2: #15241d;
+      --line: rgba(170, 210, 185, 0.14); --text: #e8f2ec; --muted: #84998c;
+      --accent: #3ddea0; --accent-dim: rgba(61, 222, 160, 0.14); --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Sora", system-ui, sans-serif; color: var(--text);
+      background:
+        radial-gradient(900px 420px at 10% -10%, rgba(61,222,160,.16), transparent 55%),
+        linear-gradient(180deg, #0a1511 0%, var(--bg0) 45%, #050a08 100%);
+      padding: 28px 22px 40px;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    .eyebrow { color: var(--muted); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; margin: 0 0 8px; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -.04em; font-weight: 700; }
+    .sub { margin: 10px 0 22px; color: var(--muted); font-size: .92rem; max-width: 42rem; line-height: 1.45; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+      background: var(--bg1); border-radius: 999px; padding: 8px 14px;
+      font-family: "IBM Plex Mono", monospace; font-size: .75rem; margin-bottom: 18px;
+    }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .pill.ok { border-color: rgba(61,222,160,.35); background: var(--accent-dim); color: var(--accent); }
+    .pill.ok .dot { background: var(--accent); }
+    .pill.err { border-color: rgba(255,107,107,.35); color: var(--danger); }
+    .pill.err .dot { background: var(--danger); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 16px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .metric {
+      background: color-mix(in srgb, var(--bg1) 88%, black);
+      border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+    }
+    .metric .k { color: var(--muted); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; }
+    .metric .v { margin-top: 6px; font-size: 1.05rem; font-weight: 650; word-break: break-all; font-family: "IBM Plex Mono", monospace; }
+    .panel {
+      background: color-mix(in srgb, var(--bg1) 90%, black);
+      border: 1px solid var(--line); border-radius: 16px; margin-bottom: 14px; overflow: hidden;
+    }
+    .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { margin: 0; font-size: .95rem; }
+    .panel-body { padding: 14px 16px 16px; }
+    .hint { color: var(--muted); font-size: .82rem; line-height: 1.5; margin: 0 0 12px; }
+    ol.steps { margin: 0; padding-left: 1.2rem; font-size: .88rem; line-height: 1.55; }
+    ol.steps li { margin: 0 0 8px; }
+    code, pre {
+      font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+      background: var(--bg0); border: 1px solid var(--line); border-radius: 8px;
+    }
+    code { padding: 2px 6px; }
+    pre { padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; margin: 0 0 12px; }
+    .creds { display: grid; gap: 8px; margin: 12px 0; font-family: "IBM Plex Mono", monospace; font-size: .82rem; }
+    .creds div {
+      display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg0);
+    }
+    .creds span.k { color: var(--muted); }
+    a.btn, button.btn {
+      appearance: none; border: 1px solid var(--line); background: var(--bg2); color: var(--text);
+      border-radius: 10px; padding: 10px 14px; font: inherit; font-size: .84rem; font-weight: 600;
+      text-decoration: none; cursor: pointer; display: inline-block; margin: 4px 6px 4px 0;
+    }
+    a.btn.primary, button.btn.primary {
+      background: var(--accent-dim); border-color: rgba(61,222,160,.35); color: var(--accent);
+    }
+    .msg { margin-top: 10px; font-size: .8rem; color: var(--muted); min-height: 1.2em; }
+    .msg.err { color: var(--danger); }
+    .msg.ok { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="eyebrow">ServerManager</p>
+    <h1>NAS in File Explorer</h1>
+    <p class="sub">Map your Buffalo NAS as a network drive in Windows via the portal public route (<code id="routeHint">portal.vpstruelord.com:1445</code> → NAS SMB). No home LAN VPN required.</p>
+    <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
+
+    <div class="grid">
+      <div class="metric"><div class="k">UNC path</div><div class="v" id="mUnc">—</div></div>
+      <div class="metric"><div class="k">Drive</div><div class="v" id="mDrive">—</div></div>
+      <div class="metric"><div class="k">NAS status</div><div class="v" id="mNas">—</div></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Credentials</h2></div>
+      <div class="panel-body">
+        <div class="creds">
+          <div><span class="k">Username</span><span id="cUser">—</span></div>
+          <div><span class="k">Password</span><span id="cPass">—</span></div>
+        </div>
+        <button type="button" class="btn" id="copyPass">Copy password</button>
+        <button type="button" class="btn" id="revealPass">Show / hide</button>
+        <div class="msg" id="credMsg"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Setup on Windows</h2></div>
+      <div class="panel-body">
+        <p class="hint">Click download, then open <strong>Setup-ServerManagerNas.cmd</strong> from your Downloads folder. Click <strong>Yes</strong> on the Windows security prompt.</p>
+        <button type="button" class="btn primary" id="dlSetup">Download Setup</button>
+        <div class="msg" id="dlMsg"></div>
+        <ol class="steps">
+          <li>Click <strong>Download Setup</strong> above.</li>
+          <li>Open your <strong>Downloads</strong> folder and double-click <strong>Setup-ServerManagerNas.cmd</strong>.</li>
+          <li>Click <strong>Yes</strong> when Windows asks for administrator permission.</li>
+          <li>Use <strong>This PC → Z: (ServerManager NAS)</strong> in File Explorer.</li>
+        </ol>
+        <p class="hint">One installer file maps drive <strong id="driveHint">Z:</strong> via the portal public route on port <code id="manualPort">1445</code>.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>RaiDrive (recommended for Windows)</h2></div>
+      <div class="panel-body">
+        <p class="hint">Map the NAS as a normal drive letter over public FTP — no VPN required. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
+        <div class="creds">
+          <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
+          <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
+          <div><span class="k">Account</span><span id="ftpUser">admin</span></div>
+          <div><span class="k">Password</span><span>same as above</span></div>
+          <div><span class="k">Drive</span><span>Z:</span></div>
+        </div>
+        <p class="hint">Use <strong>Passive (PASV)</strong> mode. Connect at sign-in if offered. For File Explorer FTP use <code>ftp://admin@portal.vpstruelord.com:2121/disk1</code> (browse only — opening files in Explorer FTP is limited).</p>
+        <p class="hint"><strong>Better for Explorer:</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
+      </div>
+    </section>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let passVisible = false;
+    let rawPass = "";
+    function esc(v) {
+      return String(v ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;");
+    }
+    async function api(path) {
+      const res = await fetch(path, { credentials: "same-origin" });
+      if (res.status === 401) { location.href = "/login.html"; throw new Error("unauthorized"); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      return data;
+    }
+    async function refresh() {
+      try {
+        const d = await api("/api/nas/status");
+        const ok = !!d.ok;
+        const smbOk = d.smb_ok;
+        const smbLabel = smbOk === true ? "SMB login ok" : (smbOk === false ? "SMB login failed" : "SMB not tested");
+        $("statusPill").className = "pill " + (ok && smbOk !== false ? "ok" : "err");
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${ok ? "NAS reachable from VPS" : "NAS unreachable from VPS"} · ${smbLabel}</span>`;
+        $("mUnc").textContent = d.unc || "—";
+        $("mDrive").textContent = (d.drive || "Z") + ": · " + (d.label || "ServerManager NAS");
+        $("mNas").textContent = ok ? "Online" : "Offline";
+        $("cUser").textContent = d.username || "—";
+        rawPass = d.password || "";
+        $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
+        $("driveHint").textContent = (d.drive || "Z") + ":";
+        const host = d.host || "portal.vpstruelord.com";
+        const smbPort = d.smb_port || 1445;
+        $("routeHint").textContent = `${host}:${smbPort}`;
+        $("manualPort").textContent = String(smbPort);
+        $("ftpHost").textContent = d.ftp_host || host;
+        $("ftpPort").textContent = String(d.ftp_port || 2121);
+        $("ftpUser").textContent = d.ftp_username || "admin";
+      } catch (e) {
+        $("statusPill").className = "pill err";
+        $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;
+      }
+    }
+    $("copyPass").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(rawPass);
+        $("credMsg").className = "msg ok";
+        $("credMsg").textContent = "Password copied";
+      } catch (e) {
+        $("credMsg").className = "msg err";
+        $("credMsg").textContent = "Copy failed";
+      }
+    };
+    $("revealPass").onclick = () => {
+      passVisible = !passVisible;
+      $("cPass").textContent = passVisible ? (rawPass || "—") : (rawPass ? "••••••••••••" : "—");
+    };
+    function downloadSetup() {
+      const fail = (msg) => {
+        $("dlMsg").className = "msg err";
+        $("dlMsg").textContent = msg || "Log in to the portal first, then try again.";
+      };
+      fetch("/api/nas/download-token", { credentials: "same-origin" })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (!res.ok || !data.ok || !data.token) {
+            throw new Error(data.error || "login required");
+          }
+          const rel = data.setup || data.cmd || `/api/nas/windows-setup?t=${encodeURIComponent(data.token)}`;
+          return fetch(rel, { credentials: "same-origin" }).then((r) => {
+            if (!r.ok) throw new Error("download failed");
+            return r.blob();
+          });
+        })
+        .then((blob) => {
+          const obj = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = obj;
+          a.download = "Setup-ServerManagerNas.cmd";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(obj), 1500);
+          $("dlMsg").className = "msg ok";
+          $("dlMsg").textContent = "Downloaded — open Setup-ServerManagerNas.cmd from Downloads and double-click it.";
+        })
+        .catch((e) => fail(e.message));
+    }
+    $("dlSetup").onclick = () => downloadSetup();
+    refresh();
+  </script>
+</body>
+</html>
