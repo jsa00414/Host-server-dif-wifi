@@ -1723,6 +1723,47 @@
             </div>
           </div>
 
+          <div class="panel" id="settingsElementsPanel">
+            <div class="panel-head">
+              <h3>Elements USB (Plex)</h3>
+              <button type="button" class="ghost" id="settingsElementsRefreshBtn">Refresh</button>
+            </div>
+            <div class="panel-body leds-panel">
+              <div class="leds-hero" id="settingsElementsStatus">
+                <div class="leds-status-top">
+                  <div class="leds-live">
+                    <span class="leds-dot" id="settingsElementsDot" aria-hidden="true"></span>
+                    <div class="leds-live-text">
+                      <strong id="settingsElementsState">—</strong>
+                      <span id="settingsElementsOwner">—</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="leds-meta-row">
+                  <span>USB <strong id="settingsElementsUsbId">1058:25a3</strong></span>
+                  <span>CT <strong id="settingsElementsCtid">101</strong></span>
+                  <span>Host <strong id="settingsElementsHost">—</strong></span>
+                </div>
+              </div>
+              <div class="leds-controls">
+                <div class="leds-group">
+                  <div class="leds-group-label">Hookup</div>
+                  <div class="leds-seg" role="group" aria-label="Elements USB actions">
+                    <button type="button" id="settingsElementsAttachBtn" data-elements-action="attach">Attach to Plex</button>
+                  </div>
+                </div>
+                <div class="settings-row" style="padding-top:4px">
+                  <div class="meta">
+                    <strong>Auto-hookup</strong>
+                    <small>Reattach when the drive is plugged in or the Plex bind breaks</small>
+                  </div>
+                  <label class="switch"><input type="checkbox" id="settingsElementsAuto" /><span></span></label>
+                </div>
+              </div>
+              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb.</p>
+            </div>
+          </div>
+
           <div class="panel">
             <div class="panel-head"><h3>Portal</h3></div>
             <div class="panel-body">
@@ -3200,6 +3241,7 @@
       refreshLedsSettings();
       refreshBtSettings();
       refreshXboxSettings();
+      refreshElementsSettings();
     }
     async function saveBrandingSettings() {
       const title = document.getElementById("settingsTitle")?.value || "";
@@ -3670,6 +3712,135 @@
       }
     }
 
+    let elementsBusy = false;
+    let elementsLastData = null;
+    function renderElementsSettings(data, opts = {}) {
+      const stateEl = document.getElementById("settingsElementsState");
+      const ownerEl = document.getElementById("settingsElementsOwner");
+      const hostEl = document.getElementById("settingsElementsHost");
+      const hintEl = document.getElementById("settingsElementsHint");
+      const dotEl = document.getElementById("settingsElementsDot");
+      const heroEl = document.getElementById("settingsElementsStatus");
+      const usbEl = document.getElementById("settingsElementsUsbId");
+      const ctidEl = document.getElementById("settingsElementsCtid");
+      const autoEl = document.getElementById("settingsElementsAuto");
+      const panel = document.getElementById("settingsElementsPanel");
+      if (!stateEl) return;
+      if (data) elementsLastData = data;
+
+      const busy = !!opts.busy || elementsBusy;
+      const pending = String(opts.pendingAction || "");
+      const err = data && data.ok === false ? String(data.error || "error") : "";
+      const readable = !err && !!(data && data.ct_readable);
+      const present = !err && !!(data && data.present);
+      const auto = !err && !!(data && data.auto);
+
+      let title = "Unknown";
+      let subtitle = "Waiting for status…";
+      if (busy && pending === "attach") {
+        title = "Attaching…";
+        subtitle = "Mounting Elements and binding into Plex…";
+      } else if (busy && pending.startsWith("auto")) {
+        title = "Saving…";
+        subtitle = "Updating auto-hookup…";
+      } else if (err) {
+        title = "Unavailable";
+        subtitle = err;
+      } else if (readable) {
+        title = "Attached to Plex";
+        subtitle = `${(data && data.host_mnt) || "/mnt/plex-usb"} → CT ${(data && data.ctid) || "101"} ${(data && data.ct_mnt) || "/mnt/usb"}`;
+      } else if (present) {
+        title = "Drive present";
+        subtitle = "Not readable in Plex — click Attach to Plex";
+      } else {
+        title = "Not plugged in";
+        subtitle = "Connect WD Elements to the Proxmox PC";
+      }
+
+      stateEl.textContent = title;
+      if (ownerEl) ownerEl.textContent = subtitle;
+      if (hostEl) hostEl.textContent = (data && data.host) || "—";
+      if (usbEl) usbEl.textContent = (data && data.usb_id) || "1058:25a3";
+      if (ctidEl) ctidEl.textContent = (data && data.ctid) || "101";
+      if (hintEl) {
+        hintEl.textContent = (data && data.hint) || (
+          readable
+            ? "Elements is mounted for Plex. Auto-hookup reattaches it if the bind mount breaks."
+            : "Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb."
+        );
+      }
+      if (autoEl && !busy) autoEl.checked = !!auto;
+      if (dotEl) {
+        dotEl.className = "leds-dot"
+          + (busy ? "" : err ? " err" : readable ? " on" : present ? " windows" : " off");
+      }
+      if (heroEl) {
+        heroEl.classList.toggle("is-on", !busy && !!readable);
+        heroEl.classList.toggle("is-off", !busy && !readable && !present);
+        heroEl.classList.toggle("is-windows", !busy && !!present && !readable);
+        heroEl.classList.toggle("is-err", !busy && !!err);
+      }
+      if (panel) {
+        panel.querySelectorAll("[data-elements-action]").forEach((btn) => {
+          btn.disabled = !!busy;
+          btn.classList.toggle("is-active", !busy && !!readable && btn.getAttribute("data-elements-action") === "attach");
+        });
+        if (autoEl) autoEl.disabled = !!busy;
+      }
+    }
+    async function refreshElementsSettings() {
+      if (elementsBusy) return;
+      try {
+        const data = await api("/api/elements", { timeoutMs: 90000 });
+        renderElementsSettings(data);
+      } catch (e) {
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? "SSH to Proxmox timed out while reading Elements status"
+          : msg;
+        renderElementsSettings({ ok: false, error: friendly });
+      }
+    }
+    async function setElementsAction(action) {
+      if (elementsBusy) return;
+      elementsBusy = true;
+      renderElementsSettings(elementsLastData || { ok: true }, {
+        busy: true,
+        pendingAction: action,
+      });
+      setStatus(`Elements → ${action}…`);
+      try {
+        const data = await api("/api/elements", {
+          method: "POST",
+          body: JSON.stringify({ action }),
+          timeoutMs: 180000,
+        });
+        elementsBusy = false;
+        renderElementsSettings(data);
+        setStatus(
+          action.startsWith("auto")
+            ? `Elements auto-hookup ${data.auto ? "on" : "off"}`
+            : (data.ct_readable ? "Elements attached to Plex" : "Elements updated"),
+          "ok"
+        );
+        showLog(`Elements ${action} → ${data.state || "?"}`, true);
+      } catch (e) {
+        elementsBusy = false;
+        const msg = String(e.message || e);
+        const friendly = /abort|timeout/i.test(msg)
+          ? `SSH timed out during Elements ${action}. Try again.`
+          : msg;
+        setStatus(friendly, "err");
+        showLog(friendly, true);
+        renderElementsSettings({
+          ...(elementsLastData || {}),
+          ok: false,
+          error: friendly,
+        });
+        setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
+      }
+    }
+
 
     document.getElementById("settingsRefreshBtn")?.addEventListener("click", () => refreshSettings());
     document.getElementById("settingsLogoutBtn")?.addEventListener("click", () => { location.href = "/logout"; });
@@ -3687,6 +3858,11 @@
     document.getElementById("settingsXboxRefreshBtn")?.addEventListener("click", () => refreshXboxSettings());
     document.getElementById("settingsXboxWindowsBtn")?.addEventListener("click", () => setXboxAction("windows"));
     document.getElementById("settingsXboxHostBtn")?.addEventListener("click", () => setXboxAction("host"));
+    document.getElementById("settingsElementsRefreshBtn")?.addEventListener("click", () => refreshElementsSettings());
+    document.getElementById("settingsElementsAttachBtn")?.addEventListener("click", () => setElementsAction("attach"));
+    document.getElementById("settingsElementsAuto")?.addEventListener("change", (ev) => {
+      setElementsAction(ev.target.checked ? "auto-on" : "auto-off");
+    });
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());

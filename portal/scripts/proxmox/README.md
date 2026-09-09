@@ -100,3 +100,16 @@ xbox-usb-owner status|to-windows|to-host
 ```
 
 Portal **Settings → Xbox controller** calls this over SSH. Default slot is **`usb2`** (`host=045e:0b12,usb3=1`). Host `xpad` is blacklisted while Windows owns it.
+
+## Elements USB → Plex
+
+`elements-plex-hookup` mounts WD Elements (`1058:25a3`) at `/mnt/plex-usb` and binds it into **Plex CT 101** at `/mnt/usb`.
+
+```bash
+install -m 755 elements-plex-hookup /usr/local/sbin/elements-plex-hookup
+install -m 755 mount-plex-usb.sh /usr/local/sbin/mount-plex-usb
+elements-plex-hookup install          # udev + timer + auto-on
+elements-plex-hookup status|attach|auto-on|auto-off
+```
+
+Portal **Settings → Elements USB (Plex)** shows status, **Attach to Plex**, and an **Auto-hookup** switch.

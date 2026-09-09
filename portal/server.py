@@ -1798,6 +1798,9 @@ PROXMOX_XBOX_WINDOWS_VMID = os.environ.get(
     "PROXMOX_XBOX_WINDOWS_VMID", PROXMOX_LED_WINDOWS_VMID
 ).strip() or PROXMOX_LED_WINDOWS_VMID
 PROXMOX_XBOX_USB_ID = os.environ.get("PROXMOX_XBOX_USB_ID", "045e:0b12").strip() or "045e:0b12"
+PROXMOX_ELEMENTS_CMD = os.environ.get(
+    "PROXMOX_ELEMENTS_CMD", "/usr/local/sbin/elements-plex-hookup"
+).strip() or "/usr/local/sbin/elements-plex-hookup"
 
 ROUTER_HOSTS = [
     h.strip()
@@ -7303,6 +7306,147 @@ def xbox_set(action: str) -> dict:
     return st
 
 
+_ELEMENTS_SSH_TIMEOUT = 120
+
+
+def _elements_ssh(remote_cmd: str) -> subprocess.CompletedProcess:
+    return proxmox_ssh(remote_cmd, timeout=_ELEMENTS_SSH_TIMEOUT)
+
+
+def _elements_ssh_out(proc: subprocess.CompletedProcess) -> str:
+    return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+
+
+def _parse_elements_status(out: str) -> dict:
+    info = {
+        "ok": False,
+        "present": False,
+        "host_mounted": False,
+        "ct_mounted": False,
+        "ct_readable": False,
+        "auto": False,
+        "usb_id": "1058:25a3",
+        "host_mnt": "/mnt/plex-usb",
+        "ct_mnt": "/mnt/usb",
+        "ctid": "101",
+    }
+    for tok in out.replace("\n", " ").split():
+        if "=" not in tok:
+            continue
+        k, v = tok.split("=", 1)
+        if k in ("ok", "present", "host_mounted", "ct_mounted", "ct_readable", "auto"):
+            info[k] = v in ("1", "true", "True", "yes")
+        elif k in ("id", "usb_id"):
+            info["usb_id"] = v
+        elif k == "host_mnt":
+            info["host_mnt"] = v
+        elif k == "ct_mnt":
+            info["ct_mnt"] = v
+        elif k == "ctid":
+            info["ctid"] = v
+    return info
+
+
+def _elements_payload(
+    *,
+    ok: bool,
+    info: dict | None = None,
+    error: str | None = None,
+    detail: str | None = None,
+    hint: str | None = None,
+    action: str | None = None,
+) -> dict:
+    info = info or {}
+    present = bool(info.get("present"))
+    readable = bool(info.get("ct_readable"))
+    auto = bool(info.get("auto"))
+    if hint is None:
+        if not present:
+            hint = "Plug the WD Elements drive into the Proxmox PC, then click Attach to Plex."
+        elif readable:
+            hint = (
+                "Elements is mounted for Plex. Auto-hookup reattaches it on plug-in / every few minutes "
+                "if the bind mount breaks."
+            )
+        else:
+            hint = "Drive is present but not readable in Plex — click Attach to Plex to remount."
+    state = "attached" if readable else ("present" if present else "missing")
+    return {
+        "ok": ok,
+        "state": state,
+        "present": present,
+        "host_mounted": bool(info.get("host_mounted")),
+        "ct_mounted": bool(info.get("ct_mounted")),
+        "ct_readable": readable,
+        "auto": auto,
+        "usb_id": info.get("usb_id") or "1058:25a3",
+        "host_mnt": info.get("host_mnt") or "/mnt/plex-usb",
+        "ct_mnt": info.get("ct_mnt") or "/mnt/usb",
+        "ctid": info.get("ctid") or "101",
+        "host": PROXMOX_SSH_HOST,
+        "hint": hint,
+        "error": error,
+        "detail": detail,
+        "action": action,
+    }
+
+
+def elements_status() -> dict:
+    """WD Elements USB mount status for Plex CT."""
+    try:
+        proc = _elements_ssh(f"{PROXMOX_ELEMENTS_CMD} status")
+    except subprocess.TimeoutExpired:
+        return _elements_payload(
+            ok=False,
+            error="SSH to Proxmox timed out while reading Elements status",
+        )
+    except Exception as exc:
+        return _elements_payload(ok=False, error=str(exc))
+    out = _elements_ssh_out(proc)
+    info = _parse_elements_status(out)
+    ok = proc.returncode == 0
+    return _elements_payload(ok=ok, info=info, detail=out, error=None if ok else out)
+
+
+def elements_set(action: str) -> dict:
+    """Attach Elements to Plex, or toggle auto-hookup."""
+    act = str(action or "").strip().lower()
+    if act in ("attach", "reattach", "mount", "hookup"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_CMD} attach; ec=$?; "
+            f"{PROXMOX_ELEMENTS_CMD} status; "
+            f"exit $ec"
+        )
+        label = "attach"
+    elif act in ("auto-on", "auto_on", "enable-auto", "auto"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_CMD} auto-on; "
+            f"{PROXMOX_ELEMENTS_CMD} status; "
+            f"exit 0"
+        )
+        label = "auto-on"
+    elif act in ("auto-off", "auto_off", "disable-auto"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_CMD} auto-off; "
+            f"{PROXMOX_ELEMENTS_CMD} status; "
+            f"exit 0"
+        )
+        label = "auto-off"
+    else:
+        raise ValueError("action must be attach, auto-on, or auto-off")
+    try:
+        proc = _elements_ssh(remote)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"SSH to Proxmox timed out during Elements {label}"
+        ) from exc
+    out = _elements_ssh_out(proc)
+    if proc.returncode != 0:
+        raise RuntimeError(out or f"Elements {label} failed ({proc.returncode})")
+    info = _parse_elements_status(out)
+    return _elements_payload(ok=True, info=info, detail=out, action=label)
+
+
 def _active_session_count() -> int:
     with _sessions_lock:
         _purge_sessions()
@@ -12526,6 +12670,14 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc), "owner": "unknown"})
             return
+        if path == "/api/elements":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, elements_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "state": "unknown"})
+            return
         if path == "/api/forwards":
             try:
                 self._json(200, read_state())
@@ -13162,6 +13314,23 @@ document.getElementById('f').onsubmit = async (e) => {
                 if isinstance(payload, dict):
                     action = str(payload.get("action") or payload.get("owner") or "").strip()
                 result = xbox_set(action)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/elements":
+            if not self._require_auth(api=True):
+                return
+            try:
+                payload = self._read_json()
+                action = ""
+                if isinstance(payload, dict):
+                    action = str(
+                        payload.get("action") or payload.get("state") or ""
+                    ).strip()
+                result = elements_set(action)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})

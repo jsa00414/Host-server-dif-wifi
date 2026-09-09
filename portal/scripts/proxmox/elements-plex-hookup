@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# WD Elements USB ↔ Plex CT hookup on the Proxmox host.
+#
+# Device: Western Digital Elements 1058:25a3
+# Host mount: /mnt/plex-usb → CT 101 /mnt/usb
+#
+# Usage:
+#   elements-plex-hookup status
+#   elements-plex-hookup attach     # mount + bind into Plex (reattach)
+#   elements-plex-hookup auto-status
+#   elements-plex-hookup auto-on|auto-off
+#   elements-plex-hookup install    # udev + timer for auto-reattach
+set -euo pipefail
+
+WD_ID="${WD_USB_ID:-1058:25a3}"
+CTID="${CTID:-101}"
+HOST_MNT="${HOST_MNT:-/mnt/plex-usb}"
+CT_MNT="${CT_MNT:-/mnt/usb}"
+USB_HOST_PATH="${USB_HOST_PATH:-4-3.1.4}"
+VMID="${VMID:-100}"
+CONF_DIR="/etc/proxmox-elements"
+CONF_PATH="${CONF_DIR}/auto.json"
+MOUNT_HELPER="${MOUNT_HELPER:-/usr/local/sbin/mount-plex-usb}"
+
+mkdir -p "$CONF_DIR"
+
+device_present() {
+  lsusb -d "$WD_ID" >/dev/null 2>&1
+}
+
+auto_enabled() {
+  [[ -f "$CONF_PATH" ]] || return 1
+  python3 - "$CONF_PATH" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if d.get("enabled") in (True, 1, "1", "true", "yes", "on") else 1)
+PY
+}
+
+set_auto() {
+  local on="$1"
+  python3 - "$CONF_PATH" "$on" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+enabled = sys.argv[2] in ("1", "on", "true", "yes")
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({"enabled": enabled}, indent=2) + "\n")
+print(json.dumps({"enabled": enabled}))
+PY
+}
+
+detach_from_windows() {
+  local line key val
+  mapfile -t usb_lines < <(qm config "$VMID" 2>/dev/null | grep -E '^usb[0-9]+:' || true)
+  for line in "${usb_lines[@]}"; do
+    key="${line%%:*}"
+    val="${line#*: }"
+    if [[ "$val" == *"$USB_HOST_PATH"* ]] || [[ "$val" == *"$WD_ID"* ]] || [[ "$val" == *"1058:25a3"* ]]; then
+      echo "detach $key ($val) from VM ${VMID}"
+      qm set "$VMID" --delete "$key" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+find_partition() {
+  local part="" cand
+  for cand in /dev/disk/by-id/usb-WD_Elements*-part1 /dev/disk/by-label/Elements; do
+    if [[ -e "$cand" ]]; then
+      readlink -f "$cand"
+      return 0
+    fi
+  done
+  part=$(lsblk -nr -o NAME,LABEL,TYPE,TRAN 2>/dev/null | awk '$2=="Elements" && $3=="part"{print "/dev/"$1; exit}')
+  if [[ -n "$part" ]]; then
+    echo "$part"
+    return 0
+  fi
+  return 1
+}
+
+ensure_host_mount() {
+  if mountpoint -q "$HOST_MNT" 2>/dev/null; then
+    if ls "$HOST_MNT" >/dev/null 2>&1; then
+      echo "host: already mounted readable at $HOST_MNT"
+      return 0
+    fi
+    echo "host: mount stale — umount and remount"
+    umount -l "$HOST_MNT" 2>/dev/null || true
+    sleep 1
+  fi
+  local part
+  part="$(find_partition)" || {
+    echo "Elements partition not found (is the drive plugged in?)" >&2
+    lsblk -o NAME,SIZE,LABEL,TRAN,MODEL,MOUNTPOINT | head -30 >&2
+    return 1
+  }
+  echo "host: mounting $part -> $HOST_MNT"
+  mkdir -p "$HOST_MNT"
+  apt-get install -y -qq ntfs-3g 2>/dev/null || true
+  mount -t ntfs3 "$part" "$HOST_MNT" -o rw,nosuid,nodev,noatime,uid=0,gid=0,umask=0022 \
+    || mount -t ntfs-3g "$part" "$HOST_MNT" -o rw,nosuid,nodev,noatime,uid=0,gid=0,umask=0022
+  df -h "$HOST_MNT"
+}
+
+ensure_ct_bind() {
+  pct set "$CTID" -mp1 "${HOST_MNT},mp=${CT_MNT}" >/dev/null || true
+  if pct status "$CTID" 2>/dev/null | grep -q running \
+    && pct exec "$CTID" -- bash -lc "ls '$CT_MNT' >/dev/null 2>&1"; then
+    echo "ct: /mnt/usb already readable"
+    return 0
+  fi
+  echo "ct: restarting CT ${CTID} to remount mp1"
+  pct stop "$CTID" || true
+  sleep 2
+  pct start "$CTID"
+  local i
+  for i in $(seq 1 40); do
+    pct status "$CTID" 2>/dev/null | grep -q running && break
+    sleep 1
+  done
+  sleep 5
+  pct exec "$CTID" -- bash -lc "df -h '$CT_MNT'; ls '$CT_MNT' | head -12"
+}
+
+cmd_status() {
+  local present=0 host=0 ct=0 readable=0 auto=0
+  device_present && present=1
+  mountpoint -q "$HOST_MNT" 2>/dev/null && host=1
+  if pct status "$CTID" 2>/dev/null | grep -q running; then
+    if pct exec "$CTID" -- mountpoint -q "$CT_MNT" 2>/dev/null; then
+      ct=1
+      if pct exec "$CTID" -- bash -lc "ls '$CT_MNT' >/dev/null 2>&1"; then
+        readable=1
+      fi
+    fi
+  fi
+  auto_enabled && auto=1
+  local ok=0
+  [[ "$present" -eq 1 && "$host" -eq 1 && "$readable" -eq 1 ]] && ok=1
+  echo "ok=${ok} present=${present} host_mounted=${host} ct_mounted=${ct} ct_readable=${readable} auto=${auto} id=${WD_ID} host_mnt=${HOST_MNT} ct_mnt=${CT_MNT} ctid=${CTID}"
+}
+
+cmd_attach() {
+  if ! device_present; then
+    echo "WD Elements ${WD_ID} not plugged into Proxmox" >&2
+    cmd_status
+    exit 1
+  fi
+  detach_from_windows
+  sleep 1
+  if [[ -x "$MOUNT_HELPER" ]]; then
+    echo "using $MOUNT_HELPER"
+    "$MOUNT_HELPER" || true
+  fi
+  ensure_host_mount
+  ensure_ct_bind
+  cmd_status
+  echo "Elements attached for Plex (CT ${CTID} ${CT_MNT})."
+}
+
+cmd_auto_status() {
+  if auto_enabled; then
+    echo "auto=1"
+  else
+    echo "auto=0"
+  fi
+}
+
+cmd_install() {
+  set_auto on >/dev/null
+  # Keep mount-plex-usb available under stable name if shipped as .sh
+  if [[ -f /usr/local/sbin/mount-plex-usb.sh && ! -x /usr/local/sbin/mount-plex-usb ]]; then
+    install -m 755 /usr/local/sbin/mount-plex-usb.sh /usr/local/sbin/mount-plex-usb
+  fi
+  cat >/etc/systemd/system/elements-plex-hookup.service <<'EOF'
+[Unit]
+Description=Attach WD Elements USB to Plex CT
+After=network-online.target pve-guests.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/elements-plex-hookup auto-apply
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat >/etc/systemd/system/elements-plex-hookup.timer <<'EOF'
+[Unit]
+Description=Periodic Elements→Plex attach check
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  cat >/etc/udev/rules.d/99-elements-plex-hookup.rules <<'EOF'
+# WD Elements Desktop — auto-attach to Plex when plugged in
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1058", ATTR{idProduct}=="25a3", TAG+="systemd", ENV{SYSTEMD_WANTS}="elements-plex-hookup.service"
+EOF
+  systemctl daemon-reload
+  systemctl enable --now elements-plex-hookup.timer
+  udevadm control --reload-rules || true
+  echo "installed Elements→Plex auto-hookup (timer + udev)"
+  cmd_attach || true
+}
+
+cmd_auto_apply() {
+  if ! auto_enabled; then
+    echo "auto=0 — skip"
+    exit 0
+  fi
+  if ! device_present; then
+    echo "Elements not present — skip"
+    exit 0
+  fi
+  # Only act if not already healthy
+  local st
+  st="$(cmd_status)"
+  if [[ "$st" == *"ok=1"* ]]; then
+    echo "already healthy: $st"
+    exit 0
+  fi
+  cmd_attach
+}
+
+usage() {
+  echo "Usage: elements-plex-hookup status|attach|auto-status|auto-on|auto-off|auto-apply|install"
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status) cmd_status ;;
+    attach|reattach) cmd_attach ;;
+    auto-status) cmd_auto_status ;;
+    auto-on) set_auto on; echo "auto=1" ;;
+    auto-off) set_auto off; echo "auto=0" ;;
+    auto-apply) cmd_auto_apply ;;
+    install) cmd_install ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown: $action" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
