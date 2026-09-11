@@ -113,3 +113,15 @@ elements-plex-hookup status|attach|auto-on|auto-off
 ```
 
 Portal **Settings → Elements USB (Plex)** shows status, **Attach to Plex**, and an **Auto-hookup** switch.
+
+## Fortnite / Easy Anti-Cheat (VM 100)
+
+`fortnite-vm-harden.sh` spoofs SMBIOS, sets `hv_vendor_id=AuthenticAMD`, disables KVM/hypervisor CPUID bits, and uses `ostype: l26` so Proxmox does not inject `hv_vendor_id=proxmox`.
+
+```bash
+# On Proxmox:
+./fortnite-vm-harden.sh apply
+./fortnite-vm-harden.sh status
+```
+
+After apply, in Windows (admin): `bcdedit /set hypervisorlaunchtype off`, then reboot and repair EAC.
