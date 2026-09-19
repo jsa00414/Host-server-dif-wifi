@@ -99,9 +99,10 @@ css_text = re.sub(
     r"min-height: calc\(100vh - var\(--header\)\);\s*"
     r"min-height: calc\(100dvh - var\(--header\)\);\s*"
     r"min-height: calc\(100svh - var\(--header\)\);",
-    r"\1/* TROOP3-STABLE-HERO */\n  height: calc(100svh - var(--header));\n"
-    r"  min-height: calc(100svh - var(--header));\n"
-    r"  max-height: calc(100svh - var(--header));",
+    r"\1/* TROOP3-STABLE-HERO */\n"
+    r"  height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n"
+    r"  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n"
+    r"  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));",
     css_text,
     count=1,
     flags=re.S,
@@ -122,9 +123,9 @@ new_mobile_hero = """  .hero {
     display: flex;
     flex-direction: column;
     /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
-    height: calc(100svh - var(--header));
-    min-height: calc(100svh - var(--header));
-    max-height: calc(100svh - var(--header));
+    height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+    min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+    max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
     overflow: hidden;
   }"""
 if old_mobile_hero in css_text:
@@ -179,21 +180,10 @@ elif "grid-auto-rows: max-content" in css_text:
 else:
     print("WARN: mobile .hero .stats block not found")
 
-# Keep fixed header height constant (no safe-area-driven stretch on scroll)
+# Header must clear the iPhone Dynamic Island / status bar.
+# With viewport-fit=cover, a plain top:0;height:78px header draws UNDER the
+# notch and the logo looks vertically "stretched" / too low in empty cream space.
 old_header = """.site-header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  height: var(--header);
-  display: flex;
-  align-items: center;
-  background: rgba(246, 241, 228, 0.96);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--line);
-}"""
-new_header = """.site-header {
   position: fixed;
   top: 0;
   left: 0;
@@ -208,11 +198,93 @@ new_header = """.site-header {
   border-bottom: 1px solid var(--line);
   /* keep height fixed — do not add safe-area padding here (it changes on scroll) */
 }"""
+new_header = """.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  height: calc(var(--header) + env(safe-area-inset-top, 0px));
+  max-height: calc(var(--header) + env(safe-area-inset-top, 0px));
+  display: flex;
+  align-items: center;
+  background: rgba(246, 241, 228, 0.96);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}"""
+# Also match upstream without our prior max-height comment patch
+old_header_upstream = """.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  height: var(--header);
+  display: flex;
+  align-items: center;
+  background: rgba(246, 241, 228, 0.96);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}"""
 if old_header in css_text:
     css_text = css_text.replace(old_header, new_header)
-    print("patched .site-header")
-elif "keep height fixed" in css_text:
-    print(".site-header already patched")
+    print("patched .site-header (from prior patch)")
+elif old_header_upstream in css_text:
+    css_text = css_text.replace(old_header_upstream, new_header)
+    print("patched .site-header (upstream)")
+elif "safe-area-inset-top" in css_text and ".site-header" in css_text:
+    print(".site-header already has safe-area")
+else:
+    print("WARN: .site-header block not found")
+
+# Keep page content below the taller safe-area header
+old_shell = """.site-shell {
+  padding-top: var(--header);
+  container-type: inline-size;
+  container-name: site;
+}"""
+new_shell = """.site-shell {
+  padding-top: calc(var(--header) + env(safe-area-inset-top, 0px));
+  container-type: inline-size;
+  container-name: site;
+}"""
+if old_shell in css_text:
+    css_text = css_text.replace(old_shell, new_shell)
+    print("patched .site-shell")
+elif "padding-top: calc(var(--header) + env(safe-area-inset-top" in css_text:
+    print(".site-shell already patched")
+else:
+    print("WARN: .site-shell block not found")
+
+# Hero heights must subtract the same safe-area so the first screen still fits
+css_text = css_text.replace(
+    "height: calc(100svh - var(--header));\n  min-height: calc(100svh - var(--header));\n  max-height: calc(100svh - var(--header));",
+    "height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));",
+)
+# mobile hero block comment variant
+css_text = css_text.replace(
+    """    /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
+    height: calc(100svh - var(--header));
+    min-height: calc(100svh - var(--header));
+    max-height: calc(100svh - var(--header));""",
+    """    /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
+    height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+    min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+    max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));""",
+)
+# TroOP3-STABLE-HERO block
+css_text = css_text.replace(
+    """  /* TROOP3-STABLE-HERO */
+  height: calc(100svh - var(--header));
+  min-height: calc(100svh - var(--header));
+  max-height: calc(100svh - var(--header));""",
+    """  /* TROOP3-STABLE-HERO */
+  height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));""",
+)
 
 css.write_text(css_text, encoding="utf-8")
 print(f"updated {css}")
