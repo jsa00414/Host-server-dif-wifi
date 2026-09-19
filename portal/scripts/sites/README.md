@@ -1,6 +1,6 @@
 # Troop 3 site (`troop3.vpstruelord.com`)
 
-Deploys [jsa00414/troop-3-test-site](https://github.com/jsa00414/troop-3-test-site) on the VPS behind Caddy.
+Deploys [jsa00414/Troop-3-Site-V2](https://github.com/jsa00414/Troop-3-Site-V2) on the VPS behind Caddy.
 
 ## Deploy / update
 
@@ -23,7 +23,7 @@ What it does:
 | Env | Default |
 |-----|---------|
 | `TROOP3_DOMAIN` | `troop3.vpstruelord.com` |
-| `TROOP3_REPO` | `https://github.com/jsa00414/troop-3-test-site.git` |
+| `TROOP3_REPO` | `https://github.com/jsa00414/Troop-3-Site-V2.git` |
 | `TROOP3_BRANCH` | `main` |
 | `TROOP3_PORT` | `3013` |
 | `TROOP3_ROOT` | `/opt/sites/troop3` |

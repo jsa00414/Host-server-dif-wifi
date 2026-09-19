@@ -4,7 +4,7 @@
 set -euo pipefail
 
 DOMAIN="${TROOP3_DOMAIN:-troop3.vpstruelord.com}"
-REPO_URL="${TROOP3_REPO:-https://github.com/jsa00414/troop-3-test-site.git}"
+REPO_URL="${TROOP3_REPO:-https://github.com/jsa00414/Troop-3-Site-V2.git}"
 BRANCH="${TROOP3_BRANCH:-main}"
 SITE_ROOT="${TROOP3_ROOT:-/opt/sites/troop3}"
 PORT="${TROOP3_PORT:-3013}"
@@ -35,9 +35,16 @@ fi
 echo "=== clone/update ${REPO_URL} @ ${BRANCH} ==="
 mkdir -p "$(dirname "$SITE_ROOT")"
 if [[ -d "$SITE_ROOT/.git" ]]; then
-  git -C "$SITE_ROOT" fetch --prune origin
-  git -C "$SITE_ROOT" checkout "$BRANCH"
-  git -C "$SITE_ROOT" reset --hard "origin/$BRANCH"
+  current_url="$(git -C "$SITE_ROOT" remote get-url origin 2>/dev/null || true)"
+  if [[ "$current_url" != "$REPO_URL" ]]; then
+    echo "origin changed ($current_url -> $REPO_URL); recloning"
+    rm -rf "$SITE_ROOT"
+    git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$SITE_ROOT"
+  else
+    git -C "$SITE_ROOT" fetch --prune origin
+    git -C "$SITE_ROOT" checkout "$BRANCH"
+    git -C "$SITE_ROOT" reset --hard "origin/$BRANCH"
+  fi
 else
   rm -rf "$SITE_ROOT"
   git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$SITE_ROOT"
