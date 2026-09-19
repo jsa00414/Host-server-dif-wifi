@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Apply viewport / zoom fixes so the Troop 3 site stays fully in frame
-# on mobile and desktop (blocks pinch, Ctrl-wheel, and keyboard zoom).
+# Apply Troop 3 site patches (no-zoom, stable mobile hero/stats, copyright).
 set -euo pipefail
 
 ROOT="${1:-/opt/sites/troop3}"
@@ -23,7 +22,6 @@ text, n = re.subn(r'content="width=device-width[^"]*"', viewport, text, count=1)
 if n == 0:
     raise SystemExit(f"viewport meta not found in {index}")
 
-# Early head script — runs before React so desktop Ctrl-zoom is blocked ASAP
 early = """
     <script>
       /* TROOP3-NO-ZOOM-EARLY */
@@ -56,7 +54,7 @@ if "TROOP3-NO-ZOOM-EARLY" not in text:
 index.write_text(text, encoding="utf-8")
 print(f"updated {index}")
 
-# 2) CSS
+# 2) CSS: no-zoom + mobile hero/stats stretch fix
 css = root / "src" / "index.css"
 css_text = css.read_text(encoding="utf-8")
 marker = "/* TROOP3-NO-ZOOM */"
@@ -90,10 +88,136 @@ if marker in css_text:
         count=1,
         flags=re.S,
     )
-css.write_text(block + css_text.lstrip(), encoding="utf-8")
+css_text = block + css_text.lstrip()
+
+# Lock base .hero height to svh only (dvh stretches when mobile chrome hides)
+css_text = re.sub(
+    r"(\.hero \{[^}]*?)"
+    r"height: calc\(100vh - var\(--header\)\);\s*"
+    r"height: calc\(100dvh - var\(--header\)\);\s*"
+    r"height: calc\(100svh - var\(--header\)\);\s*"
+    r"min-height: calc\(100vh - var\(--header\)\);\s*"
+    r"min-height: calc\(100dvh - var\(--header\)\);\s*"
+    r"min-height: calc\(100svh - var\(--header\)\);",
+    r"\1/* TROOP3-STABLE-HERO */\n  height: calc(100svh - var(--header));\n"
+    r"  min-height: calc(100svh - var(--header));\n"
+    r"  max-height: calc(100svh - var(--header));",
+    css_text,
+    count=1,
+    flags=re.S,
+)
+
+# Mobile hero block: stable svh + non-stretching stats bar
+old_mobile_hero = """  .hero {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--header));
+    height: calc(100dvh - var(--header));
+    height: calc(100svh - var(--header));
+    min-height: calc(100svh - var(--header));
+    max-height: calc(100svh - var(--header));
+    overflow: hidden;
+  }"""
+new_mobile_hero = """  .hero {
+    display: flex;
+    flex-direction: column;
+    /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
+    height: calc(100svh - var(--header));
+    min-height: calc(100svh - var(--header));
+    max-height: calc(100svh - var(--header));
+    overflow: hidden;
+  }"""
+if old_mobile_hero in css_text:
+    css_text = css_text.replace(old_mobile_hero, new_mobile_hero)
+    print("patched mobile .hero height")
+elif "svh only — dvh/vh resize" in css_text:
+    print("mobile .hero already patched")
+else:
+    print("WARN: mobile .hero block not found")
+
+old_stats = """  .hero .stats {
+    position: relative;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    grid-template-columns: 1fr 1fr;
+    background: var(--forest);
+    align-content: stretch;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }"""
+new_stats = """  .hero .stats {
+    position: relative;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    flex: 0 0 auto;
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: max-content;
+    background: var(--forest);
+    align-content: start;
+    align-items: stretch;
+    /* fixed padding — safe-area inset changes on scroll and stretches this bar */
+    padding-bottom: 0;
+  }"""
+if old_stats in css_text:
+    css_text = css_text.replace(old_stats, new_stats)
+    print("patched mobile .hero .stats")
+elif "grid-auto-rows: max-content" in css_text:
+    print("mobile .hero .stats already patched")
+else:
+    print("WARN: mobile .hero .stats block not found")
+
+# Keep fixed header height constant (no safe-area-driven stretch on scroll)
+old_header = """.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  height: var(--header);
+  display: flex;
+  align-items: center;
+  background: rgba(246, 241, 228, 0.96);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}"""
+new_header = """.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  height: var(--header);
+  max-height: var(--header);
+  display: flex;
+  align-items: center;
+  background: rgba(246, 241, 228, 0.96);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+  /* keep height fixed — do not add safe-area padding here (it changes on scroll) */
+}"""
+if old_header in css_text:
+    css_text = css_text.replace(old_header, new_header)
+    print("patched .site-header")
+elif "keep height fixed" in css_text:
+    print(".site-header already patched")
+
+css.write_text(css_text, encoding="utf-8")
 print(f"updated {css}")
 
-# 3) Runtime zoom lock module + import from main.tsx
+# 3) Runtime zoom lock — NO visualViewport transform (that stretched layout on scroll)
 no_zoom = root / "src" / "noZoom.ts"
 no_zoom.write_text(
     """/** Block browser zoom so the full Troop 3 site stays in frame. */
@@ -114,26 +238,6 @@ function blockGesture(e: Event) {
   e.preventDefault();
 }
 
-/** Counteract mobile pinch scale via visualViewport when possible. */
-function syncVisualViewport() {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  const scale = vv.scale || 1;
-  const root = document.documentElement;
-  if (Math.abs(scale - 1) < 0.01) {
-    root.style.removeProperty("transform");
-    root.style.removeProperty("transform-origin");
-    root.style.removeProperty("width");
-    root.style.removeProperty("height");
-    return;
-  }
-  const inv = 1 / scale;
-  root.style.transformOrigin = "0 0";
-  root.style.transform = `scale(${inv})`;
-  root.style.width = `${scale * 100}%`;
-  root.style.height = `${scale * 100}%`;
-}
-
 export function installNoZoom(): void {
   const wheelOpts: AddEventListenerOptions = { passive: false, capture: true };
   window.addEventListener("wheel", blockWheel, wheelOpts);
@@ -143,21 +247,13 @@ export function installNoZoom(): void {
   document.addEventListener("gesturechange", blockGesture, { passive: false, capture: true });
   document.addEventListener("gestureend", blockGesture, { passive: false, capture: true });
 
-  // Multi-touch pinch on some browsers
-  let lastTouchCount = 0;
   window.addEventListener(
     "touchmove",
     (e) => {
       if (e.touches.length > 1) e.preventDefault();
-      lastTouchCount = e.touches.length;
     },
     { passive: false, capture: true },
   );
-  void lastTouchCount;
-
-  syncVisualViewport();
-  window.visualViewport?.addEventListener("resize", syncVisualViewport);
-  window.visualViewport?.addEventListener("scroll", syncVisualViewport);
 }
 
 installNoZoom();
@@ -169,7 +265,6 @@ print(f"wrote {no_zoom}")
 main = root / "src" / "main.tsx"
 mt = main.read_text(encoding="utf-8")
 if 'import "./noZoom"' not in mt and "from \"./noZoom\"" not in mt:
-    # insert after last import-style line of CSS imports
     if 'import "./admin.css";' in mt:
         mt = mt.replace('import "./admin.css";', 'import "./admin.css";\nimport "./noZoom";')
     elif 'import "./index.css";' in mt:
