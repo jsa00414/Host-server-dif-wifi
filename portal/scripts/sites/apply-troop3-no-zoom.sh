@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Apply Troop 3 site patches (no-zoom, stable mobile hero/stats, copyright).
+# Note: do NOT add safe-area-inset-top to the fixed header — that left a large
+# empty gap below the footer on mobile Safari/Chrome.
 set -euo pipefail
 
 ROOT="${1:-/opt/sites/troop3}"
@@ -54,9 +56,20 @@ if "TROOP3-NO-ZOOM-EARLY" not in text:
 index.write_text(text, encoding="utf-8")
 print(f"updated {index}")
 
-# 2) CSS: no-zoom + mobile hero/stats stretch fix
+# 2) CSS patches
 css = root / "src" / "index.css"
 css_text = css.read_text(encoding="utf-8")
+
+# Strip any previous safe-area header/shell/hero experiments
+css_text = css_text.replace(
+    "calc(100svh - var(--header) - env(safe-area-inset-top, 0px))",
+    "calc(100svh - var(--header))",
+)
+css_text = css_text.replace(
+    "padding-top: calc(var(--header) + env(safe-area-inset-top, 0px));",
+    "padding-top: var(--header);",
+)
+
 marker = "/* TROOP3-NO-ZOOM */"
 block = """/* TROOP3-NO-ZOOM */
 html {
@@ -90,7 +103,7 @@ if marker in css_text:
     )
 css_text = block + css_text.lstrip()
 
-# Lock base .hero height to svh only (dvh stretches when mobile chrome hides)
+# Lock base .hero height to svh only
 css_text = re.sub(
     r"(\.hero \{[^}]*?)"
     r"height: calc\(100vh - var\(--header\)\);\s*"
@@ -100,15 +113,28 @@ css_text = re.sub(
     r"min-height: calc\(100dvh - var\(--header\)\);\s*"
     r"min-height: calc\(100svh - var\(--header\)\);",
     r"\1/* TROOP3-STABLE-HERO */\n"
-    r"  height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n"
-    r"  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n"
-    r"  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));",
+    r"  height: calc(100svh - var(--header));\n"
+    r"  min-height: calc(100svh - var(--header));\n"
+    r"  max-height: calc(100svh - var(--header));",
     css_text,
     count=1,
     flags=re.S,
 )
 
-# Mobile hero block: stable svh + non-stretching stats bar
+# Also normalize an already-patched STABLE-HERO that still had safe-area
+css_text = re.sub(
+    r"/\* TROOP3-STABLE-HERO \*/\s*"
+    r"height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);\s*"
+    r"min-height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);\s*"
+    r"max-height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);",
+    "/* TROOP3-STABLE-HERO */\n"
+    "  height: calc(100svh - var(--header));\n"
+    "  min-height: calc(100svh - var(--header));\n"
+    "  max-height: calc(100svh - var(--header));",
+    css_text,
+    count=1,
+)
+
 old_mobile_hero = """  .hero {
     display: flex;
     flex-direction: column;
@@ -123,16 +149,28 @@ new_mobile_hero = """  .hero {
     display: flex;
     flex-direction: column;
     /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
-    height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-    min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-    max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
+    height: calc(100svh - var(--header));
+    min-height: calc(100svh - var(--header));
+    max-height: calc(100svh - var(--header));
     overflow: hidden;
   }"""
 if old_mobile_hero in css_text:
     css_text = css_text.replace(old_mobile_hero, new_mobile_hero)
     print("patched mobile .hero height")
 elif "svh only — dvh/vh resize" in css_text:
-    print("mobile .hero already patched")
+    # ensure no safe-area left in that block
+    css_text = re.sub(
+        r"(/\* svh only[^*]*\*/\s*)"
+        r"height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);\s*"
+        r"min-height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);\s*"
+        r"max-height: calc\(100svh - var\(--header\)(?: - env\(safe-area-inset-top, 0px\))?\);",
+        r"\1height: calc(100svh - var(--header));\n"
+        r"    min-height: calc(100svh - var(--header));\n"
+        r"    max-height: calc(100svh - var(--header));",
+        css_text,
+        count=1,
+    )
+    print("normalized mobile .hero height")
 else:
     print("WARN: mobile .hero block not found")
 
@@ -169,7 +207,6 @@ new_stats = """  .hero .stats {
     background: var(--forest);
     align-content: start;
     align-items: stretch;
-    /* fixed padding — safe-area inset changes on scroll and stretches this bar */
     padding-bottom: 0;
   }"""
 if old_stats in css_text:
@@ -180,25 +217,8 @@ elif "grid-auto-rows: max-content" in css_text:
 else:
     print("WARN: mobile .hero .stats block not found")
 
-# Header must clear the iPhone Dynamic Island / status bar.
-# With viewport-fit=cover, a plain top:0;height:78px header draws UNDER the
-# notch and the logo looks vertically "stretched" / too low in empty cream space.
-old_header = """.site-header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  height: var(--header);
-  max-height: var(--header);
-  display: flex;
-  align-items: center;
-  background: rgba(246, 241, 228, 0.96);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--line);
-  /* keep height fixed — do not add safe-area padding here (it changes on scroll) */
-}"""
-new_header = """.site-header {
+# Revert any safe-area header back to plain fixed height
+old_header_safe = """.site-header {
   position: fixed;
   top: 0;
   left: 0;
@@ -214,7 +234,20 @@ new_header = """.site-header {
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
 }"""
-# Also match upstream without our prior max-height comment patch
+new_header = """.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  height: var(--header);
+  max-height: var(--header);
+  display: flex;
+  align-items: center;
+  background: rgba(246, 241, 228, 0.96);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}"""
 old_header_upstream = """.site-header {
   position: fixed;
   top: 0;
@@ -228,68 +261,62 @@ old_header_upstream = """.site-header {
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
 }"""
-if old_header in css_text:
-    css_text = css_text.replace(old_header, new_header)
-    print("patched .site-header (from prior patch)")
+if old_header_safe in css_text:
+    css_text = css_text.replace(old_header_safe, new_header)
+    print("reverted .site-header safe-area")
 elif old_header_upstream in css_text:
     css_text = css_text.replace(old_header_upstream, new_header)
-    print("patched .site-header (upstream)")
-elif "safe-area-inset-top" in css_text and ".site-header" in css_text:
-    print(".site-header already has safe-area")
+    print("normalized .site-header")
 else:
-    print("WARN: .site-header block not found")
+    print(".site-header left as-is / already plain")
 
-# Keep page content below the taller safe-area header
-old_shell = """.site-shell {
-  padding-top: var(--header);
-  container-type: inline-size;
-  container-name: site;
-}"""
-new_shell = """.site-shell {
-  padding-top: calc(var(--header) + env(safe-area-inset-top, 0px));
-  container-type: inline-size;
-  container-name: site;
-}"""
-if old_shell in css_text:
-    css_text = css_text.replace(old_shell, new_shell)
-    print("patched .site-shell")
-elif "padding-top: calc(var(--header) + env(safe-area-inset-top" in css_text:
-    print(".site-shell already patched")
-else:
-    print("WARN: .site-shell block not found")
+# Sticky footer: keep green footer flush to the bottom of the viewport
+# when the page is shorter than the screen (and remove leftover gap).
+footer_fix = """
+/* TROOP3-FOOTER-FLUSH */
+html,
+body,
+#root {
+  min-height: 100%;
+}
 
-# Hero heights must subtract the same safe-area so the first screen still fits
-css_text = css_text.replace(
-    "height: calc(100svh - var(--header));\n  min-height: calc(100svh - var(--header));\n  max-height: calc(100svh - var(--header));",
-    "height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));\n  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));",
-)
-# mobile hero block comment variant
-css_text = css_text.replace(
-    """    /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
-    height: calc(100svh - var(--header));
-    min-height: calc(100svh - var(--header));
-    max-height: calc(100svh - var(--header));""",
-    """    /* svh only — dvh/vh resize with the browser chrome and stretch the stats bar */
-    height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-    min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-    max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));""",
-)
-# TroOP3-STABLE-HERO block
-css_text = css_text.replace(
-    """  /* TROOP3-STABLE-HERO */
-  height: calc(100svh - var(--header));
-  min-height: calc(100svh - var(--header));
-  max-height: calc(100svh - var(--header));""",
-    """  /* TROOP3-STABLE-HERO */
-  height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-  min-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));
-  max-height: calc(100svh - var(--header) - env(safe-area-inset-top, 0px));""",
-)
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+.site-shell {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  box-sizing: border-box;
+}
+
+.site-shell > *:not(.site-footer) {
+  flex: 0 0 auto;
+}
+
+.site-footer {
+  margin-top: auto;
+}
+"""
+if "/* TROOP3-FOOTER-FLUSH */" in css_text:
+    css_text = re.sub(
+        r"/\* TROOP3-FOOTER-FLUSH \*/.*?(?=\n/\* |\n:root|\Z)",
+        "",
+        css_text,
+        count=1,
+        flags=re.S,
+    )
+# append near end
+css_text = css_text.rstrip() + "\n" + footer_fix
+print("added footer flush")
 
 css.write_text(css_text, encoding="utf-8")
 print(f"updated {css}")
 
-# 3) Runtime zoom lock — NO visualViewport transform (that stretched layout on scroll)
+# 3) Runtime zoom lock — no visualViewport transform
 no_zoom = root / "src" / "noZoom.ts"
 no_zoom.write_text(
     """/** Block browser zoom so the full Troop 3 site stays in frame. */
