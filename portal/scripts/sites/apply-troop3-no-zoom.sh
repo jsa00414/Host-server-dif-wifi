@@ -202,4 +202,24 @@ if editor.is_file():
             raise SystemExit(f"scale block not found in {editor}")
         editor.write_text(et.replace(old, new), encoding="utf-8")
         print(f"updated {editor}")
+
+# 5) Footer copyright credit
+layout = root / "src" / "components" / "Layout.tsx"
+if layout.is_file():
+    lt = layout.read_text(encoding="utf-8")
+    credit = (
+        "          Copyright © {new Date().getFullYear()} Troop 3 Ambler. Content drawn from\n"
+        "          troop3ambler.com. Redesigned by James Aemisegger using Cursor AI."
+    )
+    if "James Aemisegger using Cursor AI" in lt:
+        print(f"already patched copyright in {layout}")
+    else:
+        old = (
+            "          Copyright © {new Date().getFullYear()} Troop 3 Ambler. Content drawn from\n"
+            "          troop3ambler.com."
+        )
+        if old not in lt:
+            raise SystemExit(f"copyright block not found in {layout}")
+        layout.write_text(lt.replace(old, credit), encoding="utf-8")
+        print(f"updated copyright in {layout}")
 PY
