@@ -50,6 +50,14 @@ else
   git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$SITE_ROOT"
 fi
 
+echo "=== anti-zoom / fit-in-frame patches ==="
+PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$PATCH_DIR/apply-troop3-no-zoom.sh" ]]; then
+  bash "$PATCH_DIR/apply-troop3-no-zoom.sh" "$SITE_ROOT"
+elif [[ -f /opt/sites/bin/apply-troop3-no-zoom.sh ]]; then
+  bash /opt/sites/bin/apply-troop3-no-zoom.sh "$SITE_ROOT"
+fi
+
 echo "=== build ==="
 cd "$SITE_ROOT"
 npm ci

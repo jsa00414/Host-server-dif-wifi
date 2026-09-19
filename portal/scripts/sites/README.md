@@ -13,10 +13,11 @@ bash /path/to/portal/scripts/sites/deploy-troop3.sh
 What it does:
 
 1. Clones/updates the repo under `/opt/sites/troop3`
-2. Runs `npm ci` + `npm run build`
-3. Installs/restarts systemd unit `troop3-site` on port `3013`
-4. Adds a Caddy reverse_proxy block for `troop3.vpstruelord.com` (outside managed hookups)
-5. Creates/updates the Cloudflare A record (uses `CF_API_TOKEN` from `/opt/wireguard/port-forward-ui.env`)
+2. Applies `apply-troop3-no-zoom.sh` (locks viewport scale, blocks pinch zoom, keeps editor preview ≤1×)
+3. Runs `npm ci` + `npm run build`
+4. Installs/restarts systemd unit `troop3-site` on port `3013`
+5. Adds a Caddy reverse_proxy block for `troop3.vpstruelord.com` (outside managed hookups)
+6. Creates/updates the Cloudflare A record (uses `CF_API_TOKEN` from `/opt/wireguard/port-forward-ui.env`)
 
 ## Overrides
 
