@@ -1750,6 +1750,7 @@
                   <div class="leds-group-label">Hookup</div>
                   <div class="leds-seg" role="group" aria-label="Elements USB actions">
                     <button type="button" id="settingsElementsAttachBtn" data-elements-action="attach">Attach to Plex</button>
+                    <button type="button" id="settingsElementsRdpBtn" data-elements-action="to-rdp">Send to RDP VM</button>
                   </div>
                 </div>
                 <div class="settings-row" style="padding-top:4px">
@@ -3733,6 +3734,8 @@
       const err = data && data.ok === false ? String(data.error || "error") : "";
       const readable = !err && !!(data && data.ct_readable);
       const present = !err && !!(data && data.present);
+      const rdpUsb = !err && !!(data && data.rdp_usb);
+      const owner = String((data && data.owner) || "").toLowerCase();
       const auto = !err && !!(data && data.auto);
 
       let title = "Unknown";
@@ -3740,12 +3743,18 @@
       if (busy && pending === "attach") {
         title = "Attaching…";
         subtitle = "Mounting Elements and binding into Plex…";
+      } else if (busy && (pending === "to-rdp" || pending === "rdp")) {
+        title = "Sending to RDP…";
+        subtitle = "Passing Elements USB through to win11-rdp…";
       } else if (busy && pending.startsWith("auto")) {
         title = "Saving…";
         subtitle = "Updating auto-hookup…";
       } else if (err) {
         title = "Unavailable";
         subtitle = err;
+      } else if (owner === "rdp" || rdpUsb) {
+        title = "On RDP VM";
+        subtitle = `USB passthrough → win11-rdp (VM ${(data && data.rdp_vmid) || "102"})`;
       } else if (readable) {
         title = "Attached to Plex";
         subtitle = `${(data && data.host_mnt) || "/mnt/plex-usb"} → CT ${(data && data.ctid) || "101"} ${(data && data.ct_mnt) || "/mnt/usb"}`;
@@ -3764,7 +3773,9 @@
       if (ctidEl) ctidEl.textContent = (data && data.ctid) || "101";
       if (hintEl) {
         hintEl.textContent = (data && data.hint) || (
-          readable
+          rdpUsb
+            ? "Elements is on win11-rdp. Click Attach to Plex to return it to the Plex CT."
+            : readable
             ? "Elements is mounted for Plex. Auto-hookup reattaches it if the bind mount breaks."
             : "Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb."
         );
@@ -3772,18 +3783,20 @@
       if (autoEl && !busy) autoEl.checked = !!auto;
       if (dotEl) {
         dotEl.className = "leds-dot"
-          + (busy ? "" : err ? " err" : readable ? " on" : present ? " windows" : " off");
+          + (busy ? "" : err ? " err" : (readable || rdpUsb) ? " on" : present ? " windows" : " off");
       }
       if (heroEl) {
-        heroEl.classList.toggle("is-on", !busy && !!readable);
-        heroEl.classList.toggle("is-off", !busy && !readable && !present);
-        heroEl.classList.toggle("is-windows", !busy && !!present && !readable);
+        heroEl.classList.toggle("is-on", !busy && (!!readable || !!rdpUsb));
+        heroEl.classList.toggle("is-off", !busy && !readable && !present && !rdpUsb);
+        heroEl.classList.toggle("is-windows", !busy && !!rdpUsb);
         heroEl.classList.toggle("is-err", !busy && !!err);
       }
       if (panel) {
         panel.querySelectorAll("[data-elements-action]").forEach((btn) => {
           btn.disabled = !!busy;
-          btn.classList.toggle("is-active", !busy && !!readable && btn.getAttribute("data-elements-action") === "attach");
+          const act = btn.getAttribute("data-elements-action");
+          const active = (!busy && ((act === "attach" && !!readable) || (act === "to-rdp" && !!rdpUsb)));
+          btn.classList.toggle("is-active", active);
         });
         if (autoEl) autoEl.disabled = !!busy;
       }
@@ -3820,6 +3833,8 @@
         setStatus(
           action.startsWith("auto")
             ? `Elements auto-hookup ${data.auto ? "on" : "off"}`
+            : action === "to-rdp" || action === "rdp"
+            ? (data.rdp_usb ? "Elements sent to RDP VM" : "Elements updated")
             : (data.ct_readable ? "Elements attached to Plex" : "Elements updated"),
           "ok"
         );
