@@ -7328,17 +7328,28 @@ def _parse_elements_status(out: str) -> dict:
         "host_mounted": False,
         "ct_mounted": False,
         "ct_readable": False,
+        "rdp_usb": False,
         "auto": False,
+        "owner": "plex",
         "usb_id": "1058:25a3",
         "host_mnt": "/mnt/plex-usb",
         "ct_mnt": "/mnt/usb",
         "ctid": "101",
+        "rdp_vmid": "102",
     }
     for tok in out.replace("\n", " ").split():
         if "=" not in tok:
             continue
         k, v = tok.split("=", 1)
-        if k in ("ok", "present", "host_mounted", "ct_mounted", "ct_readable", "auto"):
+        if k in (
+            "ok",
+            "present",
+            "host_mounted",
+            "ct_mounted",
+            "ct_readable",
+            "rdp_usb",
+            "auto",
+        ):
             info[k] = v in ("1", "true", "True", "yes")
         elif k in ("id", "usb_id"):
             info["usb_id"] = v
@@ -7348,6 +7359,10 @@ def _parse_elements_status(out: str) -> dict:
             info["ct_mnt"] = v
         elif k == "ctid":
             info["ctid"] = v
+        elif k == "owner":
+            info["owner"] = v
+        elif k == "rdp_vmid":
+            info["rdp_vmid"] = v
     return info
 
 
@@ -7363,9 +7378,16 @@ def _elements_payload(
     info = info or {}
     present = bool(info.get("present"))
     readable = bool(info.get("ct_readable"))
+    rdp_usb = bool(info.get("rdp_usb"))
     auto = bool(info.get("auto"))
+    owner = str(info.get("owner") or "plex")
     if hint is None:
-        if not present:
+        if owner == "rdp" and rdp_usb:
+            hint = (
+                "Elements is passed through to win11-rdp (VM 102). "
+                "Use Attach to Plex (to-plex) to return it to the Plex CT."
+            )
+        elif not present and not rdp_usb:
             hint = "Plug the WD Elements drive into the Proxmox PC, then click Attach to Plex."
         elif readable:
             hint = (
@@ -7374,14 +7396,24 @@ def _elements_payload(
             )
         else:
             hint = "Drive is present but not readable in Plex — click Attach to Plex to remount."
-    state = "attached" if readable else ("present" if present else "missing")
+    if owner == "rdp" and rdp_usb:
+        state = "rdp"
+    elif readable:
+        state = "attached"
+    elif present:
+        state = "present"
+    else:
+        state = "missing"
     return {
         "ok": ok,
         "state": state,
+        "owner": owner,
         "present": present,
         "host_mounted": bool(info.get("host_mounted")),
         "ct_mounted": bool(info.get("ct_mounted")),
         "ct_readable": readable,
+        "rdp_usb": rdp_usb,
+        "rdp_vmid": info.get("rdp_vmid") or "102",
         "auto": auto,
         "usb_id": info.get("usb_id") or "1058:25a3",
         "host_mnt": info.get("host_mnt") or "/mnt/plex-usb",
@@ -7413,15 +7445,22 @@ def elements_status() -> dict:
 
 
 def elements_set(action: str) -> dict:
-    """Attach Elements to Plex, or toggle auto-hookup."""
+    """Attach Elements to Plex or RDP VM, or toggle auto-hookup."""
     act = str(action or "").strip().lower()
-    if act in ("attach", "reattach", "mount", "hookup"):
+    if act in ("attach", "reattach", "mount", "hookup", "to-plex", "plex"):
         remote = (
             f"{PROXMOX_ELEMENTS_CMD} attach; ec=$?; "
             f"{PROXMOX_ELEMENTS_CMD} status; "
             f"exit $ec"
         )
         label = "attach"
+    elif act in ("to-rdp", "rdp", "to-windows", "windows"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_CMD} to-rdp; ec=$?; "
+            f"{PROXMOX_ELEMENTS_CMD} status; "
+            f"exit $ec"
+        )
+        label = "to-rdp"
     elif act in ("auto-on", "auto_on", "enable-auto", "auto"):
         remote = (
             f"{PROXMOX_ELEMENTS_CMD} auto-on; "
@@ -7437,7 +7476,7 @@ def elements_set(action: str) -> dict:
         )
         label = "auto-off"
     else:
-        raise ValueError("action must be attach, auto-on, or auto-off")
+        raise ValueError("action must be attach, to-rdp, auto-on, or auto-off")
     try:
         proc = _elements_ssh(remote)
     except subprocess.TimeoutExpired as exc:

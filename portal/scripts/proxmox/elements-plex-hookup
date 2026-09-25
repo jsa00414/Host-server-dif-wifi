@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# WD Elements USB ↔ Plex CT hookup on the Proxmox host.
+# WD Elements USB ownership: Plex CT (host mount) ↔ RDP Windows VM.
 #
 # Device: Western Digital Elements 1058:25a3
 # Host mount: /mnt/plex-usb → CT 101 /mnt/usb
+# RDP VM: 102 (win11-rdp) USB passthrough
 #
 # Usage:
 #   elements-plex-hookup status
-#   elements-plex-hookup attach     # mount + bind into Plex (reattach)
+#   elements-plex-hookup attach|to-plex   # mount + bind into Plex
+#   elements-plex-hookup to-rdp           # pass USB to win11-rdp (VM 102)
 #   elements-plex-hookup auto-status
 #   elements-plex-hookup auto-on|auto-off
-#   elements-plex-hookup install    # udev + timer for auto-reattach
+#   elements-plex-hookup install          # udev + timer for auto-reattach to Plex
 set -euo pipefail
 
 WD_ID="${WD_USB_ID:-1058:25a3}"
@@ -18,14 +20,40 @@ HOST_MNT="${HOST_MNT:-/mnt/plex-usb}"
 CT_MNT="${CT_MNT:-/mnt/usb}"
 USB_HOST_PATH="${USB_HOST_PATH:-4-3.1.4}"
 VMID="${VMID:-100}"
+RDP_VMID="${RDP_VMID:-102}"
+RDP_USB_SLOT="${RDP_USB_SLOT:-usb0}"
 CONF_DIR="/etc/proxmox-elements"
 CONF_PATH="${CONF_DIR}/auto.json"
+OWNER_PATH="${CONF_DIR}/owner"
 MOUNT_HELPER="${MOUNT_HELPER:-/usr/local/sbin/mount-plex-usb}"
 
 mkdir -p "$CONF_DIR"
 
 device_present() {
   lsusb -d "$WD_ID" >/dev/null 2>&1
+}
+
+read_owner() {
+  if [[ -f "$OWNER_PATH" ]]; then
+    tr -d '[:space:]' <"$OWNER_PATH"
+    return
+  fi
+  if rdp_vm_has_usb; then
+    echo rdp
+  else
+    echo plex
+  fi
+}
+
+write_owner() {
+  printf '%s\n' "$1" >"$OWNER_PATH"
+}
+
+rdp_vm_has_usb() {
+  local cfg
+  cfg="$(qm config "$RDP_VMID" 2>/dev/null || true)"
+  [[ -n "$cfg" ]] || return 1
+  echo "$cfg" | grep -qiE "^usb[0-9]+:.*(${WD_ID}|host=${USB_HOST_PATH}\\b|1058:25a3)"
 }
 
 auto_enabled() {
@@ -52,16 +80,49 @@ print(json.dumps({"enabled": enabled}))
 PY
 }
 
-detach_from_windows() {
+detach_from_vm() {
+  local vmid="$1"
   local line key val
-  mapfile -t usb_lines < <(qm config "$VMID" 2>/dev/null | grep -E '^usb[0-9]+:' || true)
+  mapfile -t usb_lines < <(qm config "$vmid" 2>/dev/null | grep -E '^usb[0-9]+:' || true)
   for line in "${usb_lines[@]}"; do
     key="${line%%:*}"
     val="${line#*: }"
     if [[ "$val" == *"$USB_HOST_PATH"* ]] || [[ "$val" == *"$WD_ID"* ]] || [[ "$val" == *"1058:25a3"* ]]; then
-      echo "detach $key ($val) from VM ${VMID}"
-      qm set "$VMID" --delete "$key" >/dev/null 2>&1 || true
+      echo "detach $key ($val) from VM ${vmid}"
+      qm set "$vmid" --delete "$key" >/dev/null 2>&1 || true
     fi
+  done
+}
+
+detach_from_windows() {
+  detach_from_vm "$VMID"
+}
+
+detach_from_rdp() {
+  detach_from_vm "$RDP_VMID"
+  qm set "$RDP_VMID" --delete "$RDP_USB_SLOT" >/dev/null 2>&1 || true
+}
+
+release_plex_mount() {
+  echo "plex: releasing host mount / CT bind for Elements"
+  # Stop automount reclaim while we hand the disk to a VM
+  systemctl stop 'mnt-plex\x2dusb.automount' 2>/dev/null || true
+  systemctl stop 'mnt-plex\x2dusb.mount' 2>/dev/null || true
+  if pct config "$CTID" 2>/dev/null | grep -qE '^mp1:'; then
+    pct set "$CTID" --delete mp1 >/dev/null 2>&1 || true
+    echo "ct: removed mp1 bind"
+  fi
+  if mountpoint -q "$HOST_MNT" 2>/dev/null; then
+    umount -l "$HOST_MNT" 2>/dev/null || umount -f "$HOST_MNT" 2>/dev/null || true
+    sleep 1
+  fi
+  local i
+  for i in $(seq 1 20); do
+    if ! grep -qE 'plex-usb|Elements' /proc/mounts 2>/dev/null; then
+      break
+    fi
+    umount -l "$HOST_MNT" 2>/dev/null || true
+    sleep 0.5
   done
 }
 
@@ -82,6 +143,8 @@ find_partition() {
 }
 
 ensure_host_mount() {
+  # Re-enable automount unit if present (Plex path)
+  systemctl start 'mnt-plex\x2dusb.automount' 2>/dev/null || true
   if mountpoint -q "$HOST_MNT" 2>/dev/null; then
     if ls "$HOST_MNT" >/dev/null 2>&1; then
       echo "host: already mounted readable at $HOST_MNT"
@@ -126,9 +189,12 @@ ensure_ct_bind() {
 }
 
 cmd_status() {
-  local present=0 host=0 ct=0 readable=0 auto=0
+  local present=0 host=0 ct=0 readable=0 auto=0 rdp=0
+  local owner
+  owner="$(read_owner)"
   device_present && present=1
   mountpoint -q "$HOST_MNT" 2>/dev/null && host=1
+  rdp_vm_has_usb && rdp=1
   if pct status "$CTID" 2>/dev/null | grep -q running; then
     if pct exec "$CTID" -- mountpoint -q "$CT_MNT" 2>/dev/null; then
       ct=1
@@ -139,26 +205,79 @@ cmd_status() {
   fi
   auto_enabled && auto=1
   local ok=0
-  [[ "$present" -eq 1 && "$host" -eq 1 && "$readable" -eq 1 ]] && ok=1
-  echo "ok=${ok} present=${present} host_mounted=${host} ct_mounted=${ct} ct_readable=${readable} auto=${auto} id=${WD_ID} host_mnt=${HOST_MNT} ct_mnt=${CT_MNT} ctid=${CTID}"
+  if [[ "$owner" == "rdp" ]]; then
+    [[ "$rdp" -eq 1 ]] && ok=1
+  else
+    [[ "$present" -eq 1 && "$host" -eq 1 && "$readable" -eq 1 ]] && ok=1
+  fi
+  echo "ok=${ok} owner=${owner} present=${present} host_mounted=${host} ct_mounted=${ct} ct_readable=${readable} rdp_usb=${rdp} auto=${auto} id=${WD_ID} rdp_vmid=${RDP_VMID} host_mnt=${HOST_MNT} ct_mnt=${CT_MNT} ctid=${CTID}"
 }
 
 cmd_attach() {
-  if ! device_present; then
+  if ! device_present && ! rdp_vm_has_usb; then
     echo "WD Elements ${WD_ID} not plugged into Proxmox" >&2
     cmd_status
     exit 1
   fi
   detach_from_windows
-  sleep 1
+  detach_from_rdp
+  sleep 2
+  # Wait for device to reappear on host after VM detach
+  local i
+  for i in $(seq 1 40); do
+    device_present && break
+    sleep 0.5
+  done
   if [[ -x "$MOUNT_HELPER" ]]; then
     echo "using $MOUNT_HELPER"
     "$MOUNT_HELPER" || true
   fi
   ensure_host_mount
   ensure_ct_bind
+  write_owner plex
   cmd_status
   echo "Elements attached for Plex (CT ${CTID} ${CT_MNT})."
+}
+
+cmd_to_rdp() {
+  if ! qm status "$RDP_VMID" >/dev/null 2>&1; then
+    echo "RDP VM ${RDP_VMID} not found" >&2
+    exit 1
+  fi
+  if ! qm status "$RDP_VMID" | grep -q running; then
+    echo "RDP VM ${RDP_VMID} is not running — start it first" >&2
+    exit 1
+  fi
+
+  # Stop Plex auto-reattach while RDP owns the drive
+  set_auto off >/dev/null
+  write_owner rdp
+
+  detach_from_windows
+  release_plex_mount
+  sleep 1
+
+  if ! device_present; then
+    echo "WD Elements ${WD_ID} not visible on host after unmount" >&2
+    cmd_status
+    exit 1
+  fi
+
+  # Prefer stable vendor:product mapping (survives USB re-enumeration)
+  detach_from_rdp
+  sleep 0.5
+  qm set "$RDP_VMID" -"$RDP_USB_SLOT" "host=${WD_ID},usb3=1"
+  sleep 2
+  if ! rdp_vm_has_usb; then
+    echo "failed to attach Elements to VM ${RDP_VMID}" >&2
+    cmd_status
+    exit 1
+  fi
+  write_owner rdp
+  cmd_status
+  echo "Elements ${WD_ID} handed to RDP VM ${RDP_VMID} on ${RDP_USB_SLOT}."
+  echo "In Windows Explorer it should appear as the Elements drive letter."
+  echo "Plex auto-hookup is OFF while RDP owns the disk (elements-plex-hookup to-plex to restore)."
 }
 
 cmd_auto_status() {
@@ -171,6 +290,7 @@ cmd_auto_status() {
 
 cmd_install() {
   set_auto on >/dev/null
+  write_owner plex
   # Keep mount-plex-usb available under stable name if shipped as .sh
   if [[ -f /usr/local/sbin/mount-plex-usb.sh && ! -x /usr/local/sbin/mount-plex-usb ]]; then
     install -m 755 /usr/local/sbin/mount-plex-usb.sh /usr/local/sbin/mount-plex-usb
@@ -214,6 +334,12 @@ EOF
 }
 
 cmd_auto_apply() {
+  local owner
+  owner="$(read_owner)"
+  if [[ "$owner" == "rdp" ]]; then
+    echo "owner=rdp — skip Plex auto-attach"
+    exit 0
+  fi
   if ! auto_enabled; then
     echo "auto=0 — skip"
     exit 0
@@ -233,14 +359,17 @@ cmd_auto_apply() {
 }
 
 usage() {
-  echo "Usage: elements-plex-hookup status|attach|auto-status|auto-on|auto-off|auto-apply|install"
+  echo "Usage: elements-plex-hookup status|attach|to-plex|to-rdp|auto-status|auto-on|auto-off|auto-apply|install"
+  echo "  to-rdp  → USB passthrough to win11-rdp (VM ${RDP_VMID})"
+  echo "  to-plex → remount for Plex CT ${CTID}"
 }
 
 main() {
   local action="${1:-}"
   case "$action" in
     status) cmd_status ;;
-    attach|reattach) cmd_attach ;;
+    attach|reattach|to-plex|plex) cmd_attach ;;
+    to-rdp|rdp|to-windows) cmd_to_rdp ;;
     auto-status) cmd_auto_status ;;
     auto-on) set_auto on; echo "auto=1" ;;
     auto-off) set_auto off; echo "auto=0" ;;
