@@ -229,7 +229,8 @@ qm create "$VMID" \
   --net0 e1000e,bridge="$BRIDGE",firewall=0 \
   --agent enabled=1 \
   --onboot 0 \
-  --tablet 1
+  --tablet 1 \
+  --args '-device usb-mouse,id=fakemouse,bus=ehci.0'
 
 qm set "$VMID" --efidisk0 "${STORAGE}:1,efitype=4m,pre-enrolled-keys=0"
 qm set "$VMID" --tpmstate0 "${STORAGE}:1,version=v2.0"
