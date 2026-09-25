@@ -3875,6 +3875,7 @@
     document.getElementById("settingsXboxHostBtn")?.addEventListener("click", () => setXboxAction("host"));
     document.getElementById("settingsElementsRefreshBtn")?.addEventListener("click", () => refreshElementsSettings());
     document.getElementById("settingsElementsAttachBtn")?.addEventListener("click", () => setElementsAction("attach"));
+    document.getElementById("settingsElementsRdpBtn")?.addEventListener("click", () => setElementsAction("to-rdp"));
     document.getElementById("settingsElementsAuto")?.addEventListener("change", (ev) => {
       setElementsAction(ev.target.checked ? "auto-on" : "auto-off");
     });
