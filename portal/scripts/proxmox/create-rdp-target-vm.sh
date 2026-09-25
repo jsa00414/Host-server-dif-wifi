@@ -17,9 +17,16 @@ ADMIN_PASS="${RDP_ADMIN_PASS:-RdpTarget2026!}"
 COMPUTER_NAME="${RDP_COMPUTER_NAME:-WIN11-RDP}"
 
 if qm status "$VMID" &>/dev/null; then
-  echo "VM $VMID already exists:"
-  qm config "$VMID"
-  exit 0
+  if [[ "${FORCE_RECREATE:-0}" == "1" ]]; then
+    echo "FORCE_RECREATE=1 — destroying VM $VMID"
+    qm stop "$VMID" --timeout 30 2>/dev/null || qm stop "$VMID" --skiplock 2>/dev/null || true
+    sleep 2
+    qm destroy "$VMID" --purge 1 --destroy-unreferenced-disks 1
+  else
+    echo "VM $VMID already exists:"
+    qm config "$VMID"
+    exit 0
+  fi
 fi
 
 WORK="$(mktemp -d /tmp/rdp-vm-XXXXXX)"
@@ -87,6 +94,11 @@ cat >"$WORK/Autounattend.xml" <<EOF
         <AcceptEula>true</AcceptEula>
         <FullName>${ADMIN_USER}</FullName>
         <Organization>Home</Organization>
+        <!-- Generic Win11 Pro key (install only; not a license) -->
+        <ProductKey>
+          <Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
       </UserData>
     </component>
   </settings>
@@ -177,7 +189,8 @@ cat >"$WORK/Autounattend.xml" <<EOF
 </unattend>
 EOF
 
-# Build a small ISO containing Autounattend.xml (Windows looks for it on any volume)
+# Build ISO + small FAT disk image with Autounattend.xml.
+# Windows Setup reliably finds Autounattend on fixed disks; CD-only is flaky on q35.
 if command -v genisoimage >/dev/null 2>&1; then
   genisoimage -J -r -V "AUTOUNATTEND" -o "$WORK/autounattend.iso" "$WORK/Autounattend.xml"
 elif command -v mkisofs >/dev/null 2>&1; then
@@ -188,8 +201,18 @@ else
   genisoimage -J -r -V "AUTOUNATTEND" -o "$WORK/autounattend.iso" "$WORK/Autounattend.xml"
 fi
 
+AA_IMG=/var/lib/vz/template/iso/autounattend-rdp.img
+dd if=/dev/zero of="$WORK/autounattend.img" bs=1M count=32 status=none
+mkfs.vfat -n UNATTEND "$WORK/autounattend.img"
+MNT="$WORK/mnt"
+mkdir -p "$MNT"
+mount -o loop "$WORK/autounattend.img" "$MNT"
+cp -f "$WORK/Autounattend.xml" "$MNT/Autounattend.xml"
+umount "$MNT"
+
 install -d -m 755 /var/lib/vz/template/iso
 install -m 644 "$WORK/autounattend.iso" /var/lib/vz/template/iso/autounattend-rdp.iso
+install -m 644 "$WORK/autounattend.img" "$AA_IMG"
 install -m 644 "$WORK/Autounattend.xml" /var/lib/vz/template/iso/Autounattend-rdp.xml
 
 echo "=== creating VM ${VMID} (${NAME}) ==="
@@ -210,8 +233,13 @@ qm create "$VMID" \
 
 qm set "$VMID" --efidisk0 "${STORAGE}:1,efitype=4m,pre-enrolled-keys=0"
 qm set "$VMID" --tpmstate0 "${STORAGE}:1,version=v2.0"
-# SATA disk (not VirtIO) so Autounattend works without WinPE driver injection
+# SATA system disk (not VirtIO) so Autounattend works without WinPE driver injection
 qm set "$VMID" --sata0 "${STORAGE}:${DISK_GB},discard=on,ssd=1"
+# FAT answer-file disk as sata1 — Setup scans fixed volumes for Autounattend.xml
+qm importdisk "$VMID" "$AA_IMG" "$STORAGE" --format raw
+AA_UNUSED="$(qm config "$VMID" | awk -F': ' '/^unused[0-9]+:/ {print $2; exit}')"
+test -n "$AA_UNUSED"
+qm set "$VMID" --sata1 "${AA_UNUSED}"
 qm set "$VMID" --ide2 "${WIN_ISO},media=cdrom"
 qm set "$VMID" --ide3 "local:iso/virtio-win.iso,media=cdrom"
 qm set "$VMID" --ide0 "local:iso/autounattend-rdp.iso,media=cdrom"
@@ -222,6 +250,20 @@ echo "=== VM config ==="
 qm config "$VMID"
 echo "=== starting installer ==="
 qm start "$VMID"
+
+# Windows ISO shows "Press any key to boot from CD or DVD...." — send keys
+# during the prompt window so unattended setup actually starts.
+(
+  sleep 4
+  for _ in $(seq 1 90); do
+    qm sendkey "$VMID" ret 2>/dev/null || true
+    sleep 0.35
+    qm sendkey "$VMID" spc 2>/dev/null || true
+    sleep 0.35
+  done
+) >/tmp/rdp-vm-${VMID}-sendkeys.log 2>&1 &
+echo "SENDKEYS_PID=$!"
+
 echo "STARTED_VM_${VMID}"
 echo "Admin user: ${ADMIN_USER}"
 echo "Admin pass: ${ADMIN_PASS}"
