@@ -1,0 +1,14 @@
+[Unit]
+Description=ServerManager WebDAV gateway for Windows Explorer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/opt/wireguard/port-forward-ui.env
+ExecStart=/opt/wireguard/nas-webdav-gateway/run.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

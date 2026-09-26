@@ -1,0 +1,21 @@
+<user-mapping>
+  <!-- Portal embeds Guacamole; login matches portal admin by default (override via deploy). -->
+  <authorize username="admin" password="CHANGE_ME">
+    <connection name="Windows VM">
+      <protocol>rdp</protocol>
+      <param name="hostname">192.168.8.181</param>
+      <param name="port">3389</param>
+      <param name="ignore-cert">true</param>
+      <param name="enable-wallpaper">true</param>
+      <param name="enable-theming">true</param>
+      <param name="enable-font-smoothing">true</param>
+      <param name="enable-desktop-composition">true</param>
+      <param name="enable-menu-animations">true</param>
+      <param name="resize-method">display-update</param>
+      <param name="color-depth">32</param>
+      <!-- Empty credentials → Guacamole prompts for Windows username/password -->
+      <param name="security">any</param>
+      <param name="disable-auth">false</param>
+    </connection>
+  </authorize>
+</user-mapping>
