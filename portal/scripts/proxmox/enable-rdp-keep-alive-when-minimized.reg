@@ -1,0 +1,10 @@
+Windows Registry Editor Version 5.00
+
+; Keep RDP session active when the client window is minimized (webcam stays on).
+; Import on the RDP CLIENT (James-Gaming-PC / VM 100), then reconnect mstsc.
+
+[HKEY_CURRENT_USER\Software\Microsoft\Terminal Server Client]
+"RemoteDesktop_SuppressWhenMinimized"=dword:00000002
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Terminal Server Client]
+"RemoteDesktop_SuppressWhenMinimized"=dword:00000002
