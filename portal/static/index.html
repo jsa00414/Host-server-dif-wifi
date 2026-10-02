@@ -829,6 +829,102 @@
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
     }
+    .media-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    @media (max-width: 900px) {
+      .media-grid { grid-template-columns: 1fr; }
+    }
+    .media-drop {
+      position: relative;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      min-height: 220px;
+      padding: 18px 16px;
+      border: 1.5px dashed var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(61,222,160,.04), transparent 70%), var(--bg1);
+      transition: border-color .15s, background .15s, transform .15s;
+      cursor: pointer;
+    }
+    .media-drop:hover, .media-drop.is-drag {
+      border-color: rgba(61,222,160,.55);
+      background: linear-gradient(180deg, rgba(61,222,160,.1), transparent 70%), var(--bg1);
+    }
+    .media-drop.is-drag { transform: scale(1.01); }
+    .media-drop h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      letter-spacing: -.02em;
+    }
+    .media-drop p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.45;
+    }
+    .media-drop .media-drop-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .media-drop .media-drop-meta {
+      margin-top: auto;
+      color: var(--muted);
+      font-size: .72rem;
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .media-progress {
+      display: none;
+      margin-top: 10px;
+      gap: 6px;
+    }
+    .media-progress.is-on { display: grid; }
+    .media-progress-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--bg3);
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .media-progress-bar > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #2bb87f, var(--accent));
+      transition: width .2s ease;
+    }
+    .media-progress-label {
+      color: var(--muted);
+      font-size: .72rem;
+    }
+    .media-file-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 4px;
+      max-height: 140px;
+      overflow: auto;
+      font-size: .75rem;
+      font-family: "IBM Plex Mono", monospace;
+      color: var(--muted);
+    }
+    .media-file-list li {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .media-file-list li.ok { color: var(--accent); }
+    .media-file-list li.err { color: var(--danger); }
+    .media-file-list li.busy { color: var(--text); }
     .ts-section-title {
       margin: 14px 0 0; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--line);
       border-radius: 10px 10px 0 0; color: var(--muted); font-size: .72rem; letter-spacing: .08em;
@@ -1100,6 +1196,9 @@
     <button type="button" class="nav-btn" data-view="files">
       <span class="nav-copy"><span>Files</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="media">
+      <span class="nav-copy"><span>Media</span><small>Upload · Plex</small></span>
+    </button>
     
     <button type="button" class="nav-btn" data-view="domains">
       <span class="nav-copy"><span>Domains</span></span>
@@ -1170,6 +1269,11 @@
             <div class="k">Files</div>
             <div class="v">NAS</div>
             <div class="s">WebAccess</div>
+          </button>
+          <button type="button" class="stat" data-go="media">
+            <div class="k">Media</div>
+            <div class="v" id="ovMedia">Upload</div>
+            <div class="s" id="ovMediaNote">Elements → Plex</div>
           </button>
           <button type="button" class="stat" data-go="domains">
             <div class="k">Domains</div>
@@ -1249,6 +1353,92 @@
             <div class="panel-body">
               <div id="ovLan" class="lan-list"><div class="empty">No devices yet.</div></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-media">
+        <div class="page-head">
+          <h2>Media upload</h2>
+        </div>
+        <div class="ts-callout" id="mediaCallout">Loading Elements drive status…</div>
+
+        <div class="panel" style="margin-bottom:16px">
+          <div class="panel-head">
+            <h3>Elements → Plex</h3>
+            <button type="button" class="ghost" id="mediaRefreshBtn">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <div class="leds-hero" id="mediaStatus" style="margin-bottom:14px">
+              <div class="leds-status-top">
+                <div class="leds-live">
+                  <span class="leds-dot" id="mediaDot" aria-hidden="true"></span>
+                  <div class="leds-live-text">
+                    <strong id="mediaState">—</strong>
+                    <span id="mediaOwner">—</span>
+                  </div>
+                </div>
+              </div>
+              <div class="leds-meta-row">
+                <span>USB <strong id="mediaUsbId">1058:25a3</strong></span>
+                <span>CT <strong id="mediaCtid">101</strong></span>
+                <span>Host <strong id="mediaHost">—</strong></span>
+              </div>
+            </div>
+            <div class="vps-metrics" id="mediaMetrics">
+              <div class="vps-metric"><div class="k">Inbox movies</div><div class="v" id="mediaInboxMovies">—</div><div class="s">waiting to sort</div></div>
+              <div class="vps-metric"><div class="k">Inbox TV</div><div class="v" id="mediaInboxTv">—</div><div class="s">waiting to sort</div></div>
+              <div class="vps-metric"><div class="k">Library movies</div><div class="v" id="mediaLibMovies">—</div><div class="s">on Elements</div></div>
+              <div class="vps-metric"><div class="k">Library TV</div><div class="v" id="mediaLibTv">—</div><div class="s">on Elements</div></div>
+            </div>
+            <div class="toolbar" style="margin-top:14px;justify-content:flex-start;gap:8px;flex-wrap:wrap">
+              <button type="button" class="primary" id="mediaAttachBtn" data-elements-action="attach">Attach to Plex</button>
+              <button type="button" id="mediaPipelineBtn" data-elements-action="pipeline">Run pipeline</button>
+              <button type="button" id="mediaScanBtn" data-elements-action="scan">Scan Plex</button>
+              <label class="settings-row" style="margin-left:auto;padding:0;gap:10px;border:none">
+                <span class="meta" style="text-align:right"><strong>Auto-hookup</strong><small>reattach when drive returns</small></span>
+                <label class="switch"><input type="checkbox" id="mediaAuto" /><span></span></label>
+              </label>
+            </div>
+            <div class="media-progress" id="mediaProgress">
+              <div class="media-progress-bar"><span id="mediaProgressFill"></span></div>
+              <div class="media-progress-label" id="mediaProgressLabel">Uploading…</div>
+            </div>
+            <p class="hint" style="margin-top:12px" id="mediaHint">Upload into the inbox, then Run pipeline to move files into Movies / TV Shows and refresh Plex.</p>
+          </div>
+        </div>
+
+        <div class="media-grid">
+          <div class="media-drop" id="mediaDropMovies" tabindex="0" role="button" aria-label="Upload movies">
+            <h3>Movies</h3>
+            <p>Drop video files here, or choose files. Names like <code>Movie Name (2020).mkv</code> work best.</p>
+            <div class="media-drop-actions">
+              <button type="button" class="primary" id="mediaUploadMoviesBtn">Choose movies</button>
+            </div>
+            <div class="media-drop-meta" id="mediaDropMoviesMeta">inbox/movies → Movies/</div>
+            <ul class="media-file-list" id="mediaMovieQueue" aria-live="polite"></ul>
+            <input type="file" id="mediaMovieInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+          </div>
+          <div class="media-drop" id="mediaDropTv" tabindex="0" role="button" aria-label="Upload TV shows">
+            <h3>TV shows</h3>
+            <p>Drop episodes here. Prefer <code>Show.Name.S01E02.mkv</code> or <code>Show Name - 1x02.mkv</code> so seasons sort correctly.</p>
+            <div class="media-drop-actions">
+              <button type="button" class="primary" id="mediaUploadTvBtn">Choose TV files</button>
+            </div>
+            <div class="media-drop-meta" id="mediaDropTvMeta">inbox/tvshows → TV Shows/</div>
+            <ul class="media-file-list" id="mediaTvQueue" aria-live="polite"></ul>
+            <input type="file" id="mediaTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>How it works</h3></div>
+          <div class="panel-body">
+            <p class="hint" style="margin:0">
+              Files land on the WD Elements drive under <code>inbox/movies</code> or <code>inbox/tvshows</code>.
+              <strong>Run pipeline</strong> moves them into the Plex library folders and triggers a library scan.
+              Keep the drive attached to Plex (green status) while uploading.
+            </p>
           </div>
         </div>
       </section>
@@ -1759,26 +1949,16 @@
                   </div>
                   <label class="switch"><input type="checkbox" id="settingsElementsAuto" /><span></span></label>
                 </div>
-                <div class="leds-group" style="margin-top:12px">
-                  <div class="leds-group-label">Media pipeline</div>
-                  <div class="leds-meta-row" id="settingsElementsPipelineMeta" style="margin-bottom:8px">
-                    <span>Inbox movies <strong id="settingsElementsInboxMovies">—</strong></span>
-                    <span>Inbox TV <strong id="settingsElementsInboxTv">—</strong></span>
-                    <span>Library <strong id="settingsElementsLibCounts">—</strong></span>
-                  </div>
-                  <div class="leds-seg" role="group" aria-label="Elements media upload">
-                    <button type="button" id="settingsElementsUploadMoviesBtn">Upload movies</button>
-                    <button type="button" id="settingsElementsUploadTvBtn">Upload TV shows</button>
-                  </div>
-                  <div class="leds-seg" role="group" aria-label="Elements media pipeline" style="margin-top:8px">
-                    <button type="button" id="settingsElementsPipelineBtn" data-elements-action="pipeline">Run pipeline</button>
-                    <button type="button" id="settingsElementsScanBtn" data-elements-action="scan">Scan Plex</button>
-                  </div>
-                  <input type="file" id="settingsElementsMovieInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
-                  <input type="file" id="settingsElementsTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+                <div class="leds-meta-row" id="settingsElementsPipelineMeta" style="margin-top:8px">
+                  <span>Inbox movies <strong id="settingsElementsInboxMovies">—</strong></span>
+                  <span>Inbox TV <strong id="settingsElementsInboxTv">—</strong></span>
+                  <span>Library <strong id="settingsElementsLibCounts">—</strong></span>
+                </div>
+                <div class="settings-actions" style="margin-top:12px">
+                  <button type="button" class="primary" data-go="media">Open Media upload</button>
                 </div>
               </div>
-              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb. Uploads go to inbox/, then Run pipeline moves them into Movies / TV Shows and refreshes Plex.</p>
+              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb. Use the Media tab to upload movies and TV shows.</p>
             </div>
           </div>
 
@@ -1842,6 +2022,7 @@
                     <option value="buffalo">Buffalo</option>
                     <option value="proxmox">Proxmox</option>
                     <option value="files">Files</option>
+                    <option value="media">Media</option>
                     <option value="domains">Domains</option>
                     <option value="firewall">Firewall</option>
                     <option value="wireguard">WireGuard</option>
@@ -2226,6 +2407,7 @@
       if (name === "tailscale") { refreshTailscale(); }
       if (name === "surfshark") { refreshSurfshark(); }
       if (name === "backup") { refreshBackupStatus(); }
+      if (name === "media") { refreshElementsSettings(); }
       if (name === "settings") { refreshSettings(); }
       if (name === "pihole") { loadPiholeFrame(); }
       try {
@@ -3732,21 +3914,44 @@
 
     let elementsBusy = false;
     let elementsLastData = null;
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value;
+    }
+    function setMediaProgress(on, pct, label) {
+      const wrap = document.getElementById("mediaProgress");
+      const fill = document.getElementById("mediaProgressFill");
+      const lab = document.getElementById("mediaProgressLabel");
+      if (wrap) wrap.classList.toggle("is-on", !!on);
+      if (fill) fill.style.width = Math.max(0, Math.min(100, Number(pct) || 0)) + "%";
+      if (lab && label != null) lab.textContent = label;
+    }
+    function queueElForLibrary(library) {
+      return document.getElementById(library === "tvshows" ? "mediaTvQueue" : "mediaMovieQueue");
+    }
+    function resetMediaQueue(library, files) {
+      const ul = queueElForLibrary(library);
+      if (!ul) return;
+      ul.innerHTML = "";
+      Array.from(files || []).forEach((file, idx) => {
+        const li = document.createElement("li");
+        li.dataset.idx = String(idx);
+        li.textContent = file.name;
+        ul.appendChild(li);
+      });
+    }
+    function markMediaQueue(library, idx, state) {
+      const ul = queueElForLibrary(library);
+      if (!ul) return;
+      const li = ul.querySelector(`li[data-idx="${idx}"]`);
+      if (!li) return;
+      li.classList.remove("ok", "err", "busy");
+      if (state) li.classList.add(state);
+    }
     function renderElementsSettings(data, opts = {}) {
       const stateEl = document.getElementById("settingsElementsState");
-      const ownerEl = document.getElementById("settingsElementsOwner");
-      const hostEl = document.getElementById("settingsElementsHost");
-      const hintEl = document.getElementById("settingsElementsHint");
-      const dotEl = document.getElementById("settingsElementsDot");
-      const heroEl = document.getElementById("settingsElementsStatus");
-      const usbEl = document.getElementById("settingsElementsUsbId");
-      const ctidEl = document.getElementById("settingsElementsCtid");
-      const autoEl = document.getElementById("settingsElementsAuto");
-      const inboxMoviesEl = document.getElementById("settingsElementsInboxMovies");
-      const inboxTvEl = document.getElementById("settingsElementsInboxTv");
-      const libCountsEl = document.getElementById("settingsElementsLibCounts");
-      const panel = document.getElementById("settingsElementsPanel");
-      if (!stateEl) return;
+      const mediaStateEl = document.getElementById("mediaState");
+      if (!stateEl && !mediaStateEl) return;
       if (data) elementsLastData = data;
 
       const busy = !!opts.busy || elementsBusy;
@@ -3788,47 +3993,89 @@
         subtitle = "Connect WD Elements to the Proxmox PC";
       }
 
-      stateEl.textContent = title;
-      if (ownerEl) ownerEl.textContent = subtitle;
-      if (hostEl) hostEl.textContent = (data && data.host) || "—";
-      if (usbEl) usbEl.textContent = (data && data.usb_id) || "1058:25a3";
-      if (ctidEl) ctidEl.textContent = (data && data.ctid) || "101";
-      if (inboxMoviesEl) inboxMoviesEl.textContent = pipe.inbox_movies != null ? String(pipe.inbox_movies) : "—";
-      if (inboxTvEl) inboxTvEl.textContent = pipe.inbox_tv != null ? String(pipe.inbox_tv) : "—";
-      if (libCountsEl) {
-        libCountsEl.textContent = (pipe.lib_movies != null || pipe.lib_tv != null)
-          ? `${pipe.lib_movies || 0} movies · ${pipe.lib_tv || 0} TV`
-          : "—";
-      }
-      if (hintEl) {
-        hintEl.textContent = (data && data.hint) || (
-          readable
-            ? "Upload to inbox, then Run pipeline to sort into Movies / TV Shows and refresh Plex."
-            : "Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb."
-        );
-      }
-      if (autoEl && !busy) autoEl.checked = !!auto;
-      if (dotEl) {
-        dotEl.className = "leds-dot"
-          + (busy ? "" : err ? " err" : readable ? " on" : present ? " windows" : " off");
-      }
-      if (heroEl) {
-        heroEl.classList.toggle("is-on", !busy && !!readable);
-        heroEl.classList.toggle("is-off", !busy && !readable && !present);
-        heroEl.classList.toggle("is-windows", !busy && !!present && !readable);
-        heroEl.classList.toggle("is-err", !busy && !!err);
-      }
-      if (panel) {
-        panel.querySelectorAll("[data-elements-action]").forEach((btn) => {
-          btn.disabled = !!busy;
-          const act = btn.getAttribute("data-elements-action");
-          btn.classList.toggle("is-active", !busy && !!readable && act === "attach");
-        });
-        ["settingsElementsUploadMoviesBtn", "settingsElementsUploadTvBtn"].forEach((id) => {
-          const btn = document.getElementById(id);
-          if (btn) btn.disabled = !!busy;
-        });
-        if (autoEl) autoEl.disabled = !!busy;
+      const hint = (data && data.hint) || (
+        readable
+          ? "Upload to inbox, then Run pipeline to sort into Movies / TV Shows and refresh Plex."
+          : "Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb."
+      );
+      const host = (data && data.host) || "—";
+      const usb = (data && data.usb_id) || "1058:25a3";
+      const ctid = (data && data.ctid) || "101";
+      const inboxMovies = pipe.inbox_movies != null ? String(pipe.inbox_movies) : "—";
+      const inboxTv = pipe.inbox_tv != null ? String(pipe.inbox_tv) : "—";
+      const libMovies = pipe.lib_movies != null ? String(pipe.lib_movies) : "—";
+      const libTv = pipe.lib_tv != null ? String(pipe.lib_tv) : "—";
+      const libCounts = (pipe.lib_movies != null || pipe.lib_tv != null)
+        ? `${pipe.lib_movies || 0} movies · ${pipe.lib_tv || 0} TV`
+        : "—";
+      const callout = err
+        ? subtitle
+        : readable
+        ? `Drive ready. Inbox ${inboxMovies} movies · ${inboxTv} TV · library ${libCounts}.`
+        : present
+        ? "Elements is plugged in but not attached to Plex yet."
+        : "Plug in the WD Elements drive, then Attach to Plex.";
+
+      setText("settingsElementsState", title);
+      setText("settingsElementsOwner", subtitle);
+      setText("settingsElementsHost", host);
+      setText("settingsElementsUsbId", usb);
+      setText("settingsElementsCtid", ctid);
+      setText("settingsElementsInboxMovies", inboxMovies);
+      setText("settingsElementsInboxTv", inboxTv);
+      setText("settingsElementsLibCounts", libCounts);
+      setText("settingsElementsHint", hint);
+
+      setText("mediaState", title);
+      setText("mediaOwner", subtitle);
+      setText("mediaHost", host);
+      setText("mediaUsbId", usb);
+      setText("mediaCtid", ctid);
+      setText("mediaInboxMovies", inboxMovies);
+      setText("mediaInboxTv", inboxTv);
+      setText("mediaLibMovies", libMovies);
+      setText("mediaLibTv", libTv);
+      setText("mediaHint", hint);
+      setText("mediaCallout", callout);
+      setText("ovMedia", readable ? (libMovies !== "—" ? libMovies : "Ready") : (present ? "Attach" : "Drive"));
+      setText("ovMediaNote", readable ? `${libCounts} on Elements` : (present ? "needs Attach" : "Elements → Plex"));
+
+      ["settingsElementsAuto", "mediaAuto"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && !busy) el.checked = !!auto;
+        if (el) el.disabled = !!busy;
+      });
+
+      const dotClass = "leds-dot"
+        + (busy ? "" : err ? " err" : readable ? " on" : present ? " windows" : " off");
+      ["settingsElementsDot", "mediaDot"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.className = dotClass;
+      });
+      ["settingsElementsStatus", "mediaStatus"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle("is-on", !busy && !!readable);
+        el.classList.toggle("is-off", !busy && !readable && !present);
+        el.classList.toggle("is-windows", !busy && !!present && !readable);
+        el.classList.toggle("is-err", !busy && !!err);
+      });
+
+      document.querySelectorAll("#settingsElementsPanel [data-elements-action], #view-media [data-elements-action]").forEach((btn) => {
+        btn.disabled = !!busy;
+        const act = btn.getAttribute("data-elements-action");
+        btn.classList.toggle("is-active", !busy && !!readable && act === "attach");
+      });
+      ["mediaUploadMoviesBtn", "mediaUploadTvBtn", "mediaRefreshBtn", "settingsElementsRefreshBtn", "mediaAttachBtn", "mediaPipelineBtn", "mediaScanBtn"].forEach((id) => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = !!busy && id !== "mediaRefreshBtn";
+        if (btn && id === "mediaRefreshBtn") btn.disabled = !!busy;
+      });
+      if (busy && pending === "upload") {
+        const pct = Number(opts.uploadPct);
+        setMediaProgress(true, Number.isFinite(pct) ? pct : 5, opts.uploadLabel || "Uploading…");
+      } else if (!busy) {
+        setMediaProgress(false, 0, "");
       }
     }
     async function refreshElementsSettings() {
@@ -3890,12 +4137,18 @@
       if (!files.length || elementsBusy) return;
       elementsBusy = true;
       let done = 0;
+      resetMediaQueue(library, files);
       try {
-        for (const file of files) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          markMediaQueue(library, i, "busy");
+          const pct = Math.round((i / files.length) * 100);
+          const label = `Uploading ${file.name} (${i + 1}/${files.length})…`;
           renderElementsSettings(elementsLastData || { ok: true }, {
             busy: true,
             pendingAction: "upload",
-            uploadLabel: `Uploading ${file.name} (${done + 1}/${files.length})…`,
+            uploadLabel: label,
+            uploadPct: pct,
           });
           setStatus(`Uploading ${file.name} to Elements ${library}…`);
           const url = "/api/elements/upload?library=" + encodeURIComponent(library)
@@ -3911,9 +4164,12 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || data.ok === false) {
+            markMediaQueue(library, i, "err");
             throw new Error(data.error || ("upload failed: " + file.name));
           }
+          markMediaQueue(library, i, "ok");
           done += 1;
+          setMediaProgress(true, Math.round((done / files.length) * 100), `Uploaded ${done}/${files.length}`);
         }
         elementsBusy = false;
         setStatus(`Uploaded ${done} file(s) to ${library} inbox`, "ok");
@@ -3931,6 +4187,41 @@
         });
         setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
       }
+    }
+    function wireMediaDrop(dropId, inputId, library) {
+      const drop = document.getElementById(dropId);
+      const input = document.getElementById(inputId);
+      if (!drop || !input) return;
+      const openPicker = () => { if (!elementsBusy) input.click(); };
+      drop.addEventListener("click", (ev) => {
+        if (ev.target.closest("button, input, a, label")) return;
+        openPicker();
+      });
+      drop.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          openPicker();
+        }
+      });
+      ["dragenter", "dragover"].forEach((type) => {
+        drop.addEventListener(type, (ev) => {
+          ev.preventDefault();
+          drop.classList.add("is-drag");
+        });
+      });
+      ["dragleave", "drop"].forEach((type) => {
+        drop.addEventListener(type, (ev) => {
+          ev.preventDefault();
+          drop.classList.remove("is-drag");
+        });
+      });
+      drop.addEventListener("drop", (ev) => {
+        const files = ev.dataTransfer && ev.dataTransfer.files;
+        if (files && files.length) uploadElementsMedia(library, files);
+      });
+      input.addEventListener("change", () => {
+        uploadElementsMedia(library, input.files).finally(() => { input.value = ""; });
+      });
     }
 
 
@@ -3952,25 +4243,26 @@
     document.getElementById("settingsXboxHostBtn")?.addEventListener("click", () => setXboxAction("host"));
     document.getElementById("settingsElementsRefreshBtn")?.addEventListener("click", () => refreshElementsSettings());
     document.getElementById("settingsElementsAttachBtn")?.addEventListener("click", () => setElementsAction("attach"));
-    document.getElementById("settingsElementsPipelineBtn")?.addEventListener("click", () => setElementsAction("pipeline"));
-    document.getElementById("settingsElementsScanBtn")?.addEventListener("click", () => setElementsAction("scan"));
-    document.getElementById("settingsElementsUploadMoviesBtn")?.addEventListener("click", () => {
-      document.getElementById("settingsElementsMovieInput")?.click();
-    });
-    document.getElementById("settingsElementsUploadTvBtn")?.addEventListener("click", () => {
-      document.getElementById("settingsElementsTvInput")?.click();
-    });
-    document.getElementById("settingsElementsMovieInput")?.addEventListener("change", (ev) => {
-      const input = ev.target;
-      uploadElementsMedia("movies", input.files).finally(() => { input.value = ""; });
-    });
-    document.getElementById("settingsElementsTvInput")?.addEventListener("change", (ev) => {
-      const input = ev.target;
-      uploadElementsMedia("tvshows", input.files).finally(() => { input.value = ""; });
-    });
     document.getElementById("settingsElementsAuto")?.addEventListener("change", (ev) => {
       setElementsAction(ev.target.checked ? "auto-on" : "auto-off");
     });
+    document.getElementById("mediaRefreshBtn")?.addEventListener("click", () => refreshElementsSettings());
+    document.getElementById("mediaAttachBtn")?.addEventListener("click", () => setElementsAction("attach"));
+    document.getElementById("mediaPipelineBtn")?.addEventListener("click", () => setElementsAction("pipeline"));
+    document.getElementById("mediaScanBtn")?.addEventListener("click", () => setElementsAction("scan"));
+    document.getElementById("mediaAuto")?.addEventListener("change", (ev) => {
+      setElementsAction(ev.target.checked ? "auto-on" : "auto-off");
+    });
+    document.getElementById("mediaUploadMoviesBtn")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      document.getElementById("mediaMovieInput")?.click();
+    });
+    document.getElementById("mediaUploadTvBtn")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      document.getElementById("mediaTvInput")?.click();
+    });
+    wireMediaDrop("mediaDropMovies", "mediaMovieInput", "movies");
+    wireMediaDrop("mediaDropTv", "mediaTvInput", "tvshows");
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
