@@ -1421,7 +1421,6 @@
               <div class="media-progress-bar"><span id="mediaProgressFill"></span></div>
               <div class="media-progress-label" id="mediaProgressLabel">Uploading…</div>
             </div>
-            <p class="hint" style="margin-top:12px" id="mediaHint">Uploads go to the inbox, then automatically sort into the library folder and refresh Plex. Use Run pipeline if something is still waiting in the inbox.</p>
           </div>
         </div>
 
@@ -4072,7 +4071,6 @@
       setText("mediaLibKidsMovies", libKidsMovies);
       setText("mediaLibTv", libTv);
       setText("mediaLibKidsTv", libKidsTv);
-      setText("mediaHint", hint);
       setText("ovMedia", readable ? (hasLibs ? String((pipe.lib_movies || 0) + (pipe.lib_kids_movies || 0)) : "Ready") : (present ? "Attach" : "Drive"));
       setText("ovMediaNote", readable ? `${libCounts}` : (present ? "needs Attach" : "Elements → Plex"));
 
