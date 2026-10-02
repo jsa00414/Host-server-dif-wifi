@@ -4051,13 +4051,13 @@
       const libKidsTv = n(pipe.lib_kids_tv);
       const hasLibs = pipe.lib_movies != null || pipe.lib_kids_movies != null || pipe.lib_tv != null || pipe.lib_kids_tv != null;
       const libCounts = hasLibs
-        ? `${pipe.lib_movies || 0} · ${pipe.lib_kids_movies || 0} kids · ${pipe.lib_tv || 0} TV · ${pipe.lib_kids_tv || 0} kids TV`
+        ? `Movies ${pipe.lib_movies || 0} · Kids Movies ${pipe.lib_kids_movies || 0} · TV Shows ${pipe.lib_tv || 0} · Kids TV Shows ${pipe.lib_kids_tv || 0}`
         : "—";
       const inboxTotal = (pipe.inbox_movies || 0) + (pipe.inbox_kids_movies || 0) + (pipe.inbox_tv || 0) + (pipe.inbox_kids_tv || 0);
       const callout = err
         ? subtitle
         : readable
-        ? `Drive ready. Library ${libCounts}. Inbox waiting: ${inboxTotal}.`
+        ? `Drive ready. ${libCounts}. Inbox waiting: ${inboxTotal}.`
         : present
         ? "Elements is plugged in but not attached to Plex yet."
         : "Plug in the WD Elements drive, then Attach to Plex.";
