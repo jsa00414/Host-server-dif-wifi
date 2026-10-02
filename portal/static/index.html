@@ -829,11 +829,20 @@
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
     }
+    #view-media .page-head,
+    #view-media > .panel,
+    #view-media .media-grid {
+      max-width: 920px;
+      margin-left: auto;
+      margin-right: auto;
+    }
     .media-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 14px;
       margin-bottom: 14px;
+      width: 100%;
+      box-sizing: border-box;
     }
     @media (max-width: 1100px) {
       .media-grid { grid-template-columns: 1fr 1fr; }
@@ -1208,7 +1217,7 @@
       <span class="nav-copy"><span>Files</span></span>
     </button>
     <button type="button" class="nav-btn" data-view="media">
-      <span class="nav-copy"><span>Media</span><small>Upload · Plex</small></span>
+      <span class="nav-copy"><span>Plex Upload</span></span>
     </button>
     
     <button type="button" class="nav-btn" data-view="domains">
@@ -1282,7 +1291,7 @@
             <div class="s">WebAccess</div>
           </button>
           <button type="button" class="stat" data-go="media">
-            <div class="k">Media</div>
+            <div class="k">Plex Upload</div>
             <div class="v" id="ovMedia">Upload</div>
             <div class="s" id="ovMediaNote">Elements → Plex</div>
           </button>
@@ -1370,7 +1379,7 @@
 
       <section class="view" id="view-media">
         <div class="page-head">
-          <h2>Media upload</h2>
+          <h2>Plex Upload</h2>
         </div>
 
         <div class="panel" style="margin-bottom:16px">
@@ -1976,10 +1985,10 @@
                   <span>Kids TV <strong id="settingsElementsLibKidsTv">—</strong></span>
                 </div>
                 <div class="settings-actions" style="margin-top:12px">
-                  <button type="button" class="primary" data-go="media">Open Media upload</button>
+                  <button type="button" class="primary" data-go="media">Open Plex Upload</button>
                 </div>
               </div>
-              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb. Use the Media tab to upload movies and TV shows.</p>
+              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb. Use Plex Upload to upload movies and TV shows.</p>
             </div>
           </div>
 
@@ -2043,7 +2052,7 @@
                     <option value="buffalo">Buffalo</option>
                     <option value="proxmox">Proxmox</option>
                     <option value="files">Files</option>
-                    <option value="media">Media</option>
+                    <option value="media">Plex Upload</option>
                     <option value="domains">Domains</option>
                     <option value="firewall">Firewall</option>
                     <option value="wireguard">WireGuard</option>
