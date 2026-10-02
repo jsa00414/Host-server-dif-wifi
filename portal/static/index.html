@@ -829,20 +829,11 @@
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
     }
-    #view-media .page-head,
-    #view-media > .panel,
-    #view-media .media-grid {
-      max-width: 920px;
-      margin-left: auto;
-      margin-right: auto;
-    }
     .media-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 14px;
       margin-bottom: 14px;
-      width: 100%;
-      box-sizing: border-box;
     }
     @media (max-width: 1100px) {
       .media-grid { grid-template-columns: 1fr 1fr; }
@@ -862,7 +853,9 @@
       position: relative;
       display: grid;
       gap: 10px;
-      align-content: start;
+      align-content: center;
+      justify-items: center;
+      text-align: center;
       min-height: 220px;
       padding: 18px 16px;
       border: 1.5px dashed var(--line);
@@ -892,12 +885,17 @@
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 4px;
+      justify-content: center;
     }
     .media-drop .media-drop-meta {
-      margin-top: auto;
+      margin-top: 0;
       color: var(--muted);
       font-size: .72rem;
       font-family: "IBM Plex Mono", monospace;
+    }
+    .media-drop .media-file-list {
+      width: 100%;
+      text-align: left;
     }
     .media-progress {
       display: none;
