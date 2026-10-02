@@ -114,23 +114,23 @@ elements-plex-hookup status|attach|auto-on|auto-off
 
 Portal **Settings → Elements USB (Plex)** shows status, **Attach to Plex**, and an **Auto-hookup** switch.
 
-## Elements media pipeline (Movies / TV Shows)
+## Elements media pipeline (four libraries)
 
-`elements-media-pipeline` turns the WD Elements drive into an upload → sort → Plex scan flow:
+`elements-media-pipeline` turns the WD Elements drive into an upload → sort → Plex scan flow for these folders:
 
 ```
-/mnt/plex-usb/inbox/movies/     ← portal "Upload movies"
-/mnt/plex-usb/inbox/tvshows/    ← portal "Upload TV shows"
-/mnt/plex-usb/Movies/           ← Plex USB Movies library
-/mnt/plex-usb/TV Shows/         ← Plex USB TV library (Show/Season XX/)
+/mnt/plex-usb/inbox/movies/         → Movies/
+/mnt/plex-usb/inbox/kids-movies/    → Kids Movies/
+/mnt/plex-usb/inbox/tvshows/        → TV Shows/
+/mnt/plex-usb/inbox/kids-tvshows/   → KIDS TV SHOWS/
 ```
 
 ```bash
 install -m 755 elements-media-pipeline /usr/local/sbin/elements-media-pipeline
 install -m 755 add-plex-usb-libraries.sh /usr/local/sbin/add-plex-usb-libraries
 elements-media-pipeline ensure-dirs
-elements-media-pipeline process   # inbox → Movies / TV Shows
-elements-media-pipeline scan      # create/refresh Plex libs
+elements-media-pipeline process   # inbox → four library folders
+elements-media-pipeline scan      # create/refresh four Plex libs
 elements-media-pipeline run       # process + scan
 ```
 
@@ -141,5 +141,5 @@ python3 portal/scripts/proxmox/run-elements-pipeline-via-vps.py ensure-dirs
 python3 portal/scripts/proxmox/run-elements-pipeline-via-vps.py run
 ```
 
-Portal **Settings → Elements USB** also has **Upload movies**, **Upload TV shows**, **Run pipeline**, and **Scan Plex**.
-TV episodes are sorted by `SxxExx` / `1x02` in the filename; movies stay flat under `Movies/`.
+Portal **Media** tab uploads into each folder; **Run pipeline** sorts and refreshes Plex.
+TV episodes are sorted by `SxxExx` / `1x02` in the filename; movies stay flat under their library folder.

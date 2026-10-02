@@ -7362,14 +7362,34 @@ def _parse_elements_pipeline_status(out: str) -> dict:
         "ok": False,
         "mounted": False,
         "inbox_movies": 0,
+        "inbox_kids_movies": 0,
         "inbox_tv": 0,
+        "inbox_kids_tv": 0,
         "lib_movies": 0,
+        "lib_kids_movies": 0,
         "lib_tv": 0,
+        "lib_kids_tv": 0,
         "last_ok": False,
         "last_at": "",
         "last_detail": "",
         "host_mnt": "/mnt/plex-usb",
+        "folders": {
+            "movies": "Movies",
+            "kids_movies": "Kids Movies",
+            "tvshows": "TV Shows",
+            "kids_tvshows": "KIDS TV SHOWS",
+        },
     }
+    int_keys = (
+        "inbox_movies",
+        "inbox_kids_movies",
+        "inbox_tv",
+        "inbox_kids_tv",
+        "lib_movies",
+        "lib_kids_movies",
+        "lib_tv",
+        "lib_kids_tv",
+    )
     for line in out.splitlines():
         if line.startswith("last_detail="):
             info["last_detail"] = line.split("=", 1)[1]
@@ -7380,7 +7400,7 @@ def _parse_elements_pipeline_status(out: str) -> dict:
             k, v = tok.split("=", 1)
             if k in ("ok", "mounted", "last_ok"):
                 info[k] = v in ("1", "true", "True", "yes")
-            elif k in ("inbox_movies", "inbox_tv", "lib_movies", "lib_tv"):
+            elif k in int_keys:
                 try:
                     info[k] = int(v)
                 except ValueError:
@@ -7411,8 +7431,8 @@ def _elements_payload(
             hint = "Plug the WD Elements drive into the Proxmox PC, then click Attach to Plex."
         elif readable:
             hint = (
-                "Elements is mounted for Plex. Upload movies/TV to the inbox, then Run pipeline "
-                "to move them into Movies / TV Shows and refresh Plex."
+                "Elements is mounted for Plex. Upload into Movies, Kids Movies, TV Shows, or "
+                "KIDS TV SHOWS inboxes, then Run pipeline to sort and refresh Plex."
             )
         else:
             hint = "Drive is present but not readable in Plex — click Attach to Plex to remount."
@@ -7594,16 +7614,46 @@ def _elements_sanitize_filename(name: str) -> str:
 def elements_upload_media(
     library: str, filename: str, data: bytes, *, process: bool = False
 ) -> dict:
-    """Upload a media file into the Elements inbox (movies or tvshows)."""
-    lib = str(library or "").strip().lower()
+    """Upload a media file into one of the four Elements library inboxes."""
+    lib = str(library or "").strip().lower().replace(" ", "-").replace("_", "-")
     if lib in ("movie", "movies", "film", "films"):
         sub = "inbox/movies"
         kind = "movies"
+        folder = "Movies"
+    elif lib in (
+        "kids-movie",
+        "kids-movies",
+        "kidsmovie",
+        "kidsmovies",
+        "kid-movies",
+        "kidmovies",
+    ):
+        sub = "inbox/kids-movies"
+        kind = "kids-movies"
+        folder = "Kids Movies"
     elif lib in ("tv", "tvshow", "tvshows", "show", "shows", "series"):
         sub = "inbox/tvshows"
         kind = "tvshows"
+        folder = "TV Shows"
+    elif lib in (
+        "kids-tv",
+        "kids-tvshow",
+        "kids-tvshows",
+        "kidstv",
+        "kidstvshow",
+        "kidstvshows",
+        "kids-tv-show",
+        "kids-tv-shows",
+        "kid-tv",
+        "kid-tvshows",
+    ):
+        sub = "inbox/kids-tvshows"
+        kind = "kids-tvshows"
+        folder = "KIDS TV SHOWS"
     else:
-        raise ValueError("library must be movies or tvshows")
+        raise ValueError(
+            "library must be movies, kids-movies, tvshows, or kids-tvshows"
+        )
     if not data:
         raise ValueError("empty upload")
     if len(data) > ELEMENTS_UPLOAD_MAX_BYTES:
@@ -7654,6 +7704,7 @@ def elements_upload_media(
     result: dict = {
         "ok": True,
         "library": kind,
+        "folder": folder,
         "filename": name,
         "bytes": len(data),
         "path": dest,

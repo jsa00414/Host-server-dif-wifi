@@ -2,30 +2,37 @@
 # Elements USB media ingest pipeline (Proxmox host).
 #
 # Layout on WD Elements (/mnt/plex-usb):
-#   inbox/movies/     ← drop / upload movie files here
-#   inbox/tvshows/    ← drop / upload episode files here
-#   Movies/           ← Plex movie library root
-#   TV Shows/         ← Plex TV library root
+#   inbox/movies/         ← upload movies
+#   inbox/kids-movies/    ← upload kids movies
+#   inbox/tvshows/        ← upload TV episodes
+#   inbox/kids-tvshows/   ← upload kids TV episodes
+#   Movies/               ← Plex movie library
+#   Kids Movies/          ← Plex kids movie library
+#   TV Shows/             ← Plex TV library
+#   KIDS TV SHOWS/        ← Plex kids TV library
 #
 # Usage:
 #   elements-media-pipeline status
 #   elements-media-pipeline ensure-dirs
-#   elements-media-pipeline process          # inbox → Movies / TV Shows
-#   elements-media-pipeline scan             # ensure Plex libs + refresh
-#   elements-media-pipeline run              # process + scan
+#   elements-media-pipeline process
+#   elements-media-pipeline scan
+#   elements-media-pipeline run
 set -euo pipefail
 
 HOST_MNT="${HOST_MNT:-/mnt/plex-usb}"
 CTID="${CTID:-101}"
 CT_MNT="${CT_MNT:-/mnt/usb}"
 INBOX_MOVIES="${HOST_MNT}/inbox/movies"
+INBOX_KIDS_MOVIES="${HOST_MNT}/inbox/kids-movies"
 INBOX_TV="${HOST_MNT}/inbox/tvshows"
+INBOX_KIDS_TV="${HOST_MNT}/inbox/kids-tvshows"
 LIB_MOVIES="${HOST_MNT}/Movies"
+LIB_KIDS_MOVIES="${HOST_MNT}/Kids Movies"
 LIB_TV="${HOST_MNT}/TV Shows"
+LIB_KIDS_TV="${HOST_MNT}/KIDS TV SHOWS"
 STATE_DIR="/etc/proxmox-elements"
 STATE_PATH="${STATE_DIR}/pipeline-last.json"
 VIDEO_EXT_RE='\.(mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|mpg|mpeg|webm)$'
-SIDE_EXT_RE='\.(srt|sub|idx|nfo|jpg|jpeg|png|txt)$'
 
 mkdir -p "$STATE_DIR"
 
@@ -37,10 +44,13 @@ require_mount() {
 
 cmd_ensure_dirs() {
   require_mount
-  mkdir -p "$INBOX_MOVIES" "$INBOX_TV" "$LIB_MOVIES" "$LIB_TV"
-  # Keep inbox discoverable
-  touch "$INBOX_MOVIES/.keep" "$INBOX_TV/.keep" 2>/dev/null || true
-  echo "dirs_ok movies=$LIB_MOVIES tv=$LIB_TV inbox_movies=$INBOX_MOVIES inbox_tv=$INBOX_TV"
+  mkdir -p \
+    "$INBOX_MOVIES" "$INBOX_KIDS_MOVIES" "$INBOX_TV" "$INBOX_KIDS_TV" \
+    "$LIB_MOVIES" "$LIB_KIDS_MOVIES" "$LIB_TV" "$LIB_KIDS_TV"
+  touch \
+    "$INBOX_MOVIES/.keep" "$INBOX_KIDS_MOVIES/.keep" \
+    "$INBOX_TV/.keep" "$INBOX_KIDS_TV/.keep" 2>/dev/null || true
+  echo "dirs_ok movies=$LIB_MOVIES kids_movies=$LIB_KIDS_MOVIES tv=$LIB_TV kids_tv=$LIB_KIDS_TV"
 }
 
 count_videos() {
@@ -50,13 +60,19 @@ count_videos() {
 }
 
 cmd_status() {
-  local mounted=0 movies_inbox=0 tv_inbox=0 movies_lib=0 tv_lib=0
+  local mounted=0
+  local movies_inbox=0 kids_movies_inbox=0 tv_inbox=0 kids_tv_inbox=0
+  local movies_lib=0 kids_movies_lib=0 tv_lib=0 kids_tv_lib=0
   mountpoint -q "$HOST_MNT" 2>/dev/null && mounted=1
   if [[ "$mounted" -eq 1 ]]; then
     movies_inbox=$(count_videos "$INBOX_MOVIES")
+    kids_movies_inbox=$(count_videos "$INBOX_KIDS_MOVIES")
     tv_inbox=$(count_videos "$INBOX_TV")
+    kids_tv_inbox=$(count_videos "$INBOX_KIDS_TV")
     movies_lib=$(count_videos "$LIB_MOVIES")
+    kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
     tv_lib=$(count_videos "$LIB_TV")
+    kids_tv_lib=$(count_videos "$LIB_KIDS_TV")
   fi
   local last_ok=0 last_at="" last_detail=""
   if [[ -f "$STATE_PATH" ]]; then
@@ -72,24 +88,14 @@ print("last_detail=%s" % shlex.quote(str(d.get("detail") or "")[:240]))
 PY
 )"
   fi
-  echo "ok=1 mounted=${mounted} inbox_movies=${movies_inbox} inbox_tv=${tv_inbox} lib_movies=${movies_lib} lib_tv=${tv_lib} last_ok=${last_ok:-0} last_at=${last_at:-} host_mnt=${HOST_MNT}"
+  echo "ok=1 mounted=${mounted} inbox_movies=${movies_inbox} inbox_kids_movies=${kids_movies_inbox} inbox_tv=${tv_inbox} inbox_kids_tv=${kids_tv_inbox} lib_movies=${movies_lib} lib_kids_movies=${kids_movies_lib} lib_tv=${tv_lib} lib_kids_tv=${kids_tv_lib} last_ok=${last_ok:-0} last_at=${last_at:-} host_mnt=${HOST_MNT}"
   if [[ -n "${last_detail:-}" ]]; then
     echo "last_detail=${last_detail}"
   fi
 }
 
-_title_case_show() {
-  python3 - "$1" <<'PY'
-import re, sys
-s = sys.argv[1]
-s = re.sub(r'[._]+', ' ', s)
-s = re.sub(r'\s+', ' ', s).strip()
-print(s.title() if s else "Unknown Show")
-PY
-}
-
 _move_sidecars() {
-  local src="$1" dest_dir="$2" base="$3"
+  local src="$1" dest_dir="$2"
   local dir name stem ext f
   dir=$(dirname "$src")
   name=$(basename "$src")
@@ -107,27 +113,29 @@ _move_sidecars() {
   shopt -u nullglob
 }
 
-_process_movies() {
+_process_movies_into() {
+  local inbox="$1" lib="$2" label="$3" key="$4"
   local f name dest moved=0
-  [[ -d "$INBOX_MOVIES" ]] || return 0
+  [[ -d "$inbox" ]] || { echo "${key}_moved=0"; return 0; }
   while IFS= read -r -d '' f; do
     name=$(basename "$f")
-    dest="$LIB_MOVIES/$name"
+    dest="$lib/$name"
     if [[ -e "$dest" ]]; then
       echo "  skip exists: $name"
       continue
     fi
     mv -- "$f" "$dest"
-    echo "  movie: $name → Movies/"
-    _move_sidecars "$f" "$LIB_MOVIES" "$name"
+    echo "  movie: $name → ${label}/"
+    _move_sidecars "$f" "$lib"
     moved=$((moved + 1))
-  done < <(find "$INBOX_MOVIES" -maxdepth 2 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
-  echo "movies_moved=${moved}"
+  done < <(find "$inbox" -maxdepth 2 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
+  echo "${key}_moved=${moved}"
 }
 
-_process_tv() {
+_process_tv_into() {
+  local inbox="$1" lib="$2" label="$3" key="$4"
   local f name show season ep dest_dir dest moved=0 parsed
-  [[ -d "$INBOX_TV" ]] || return 0
+  [[ -d "$inbox" ]] || { echo "${key}_moved=0"; return 0; }
   while IFS= read -r -d '' f; do
     name=$(basename "$f")
     parsed=$(python3 - "$name" <<'PY'
@@ -156,9 +164,9 @@ PY
     if [[ -z "$show" || "$season" == "0" ]]; then
       show="Unsorted"
       season=1
-      dest_dir="$LIB_TV/$show"
+      dest_dir="$lib/$show"
     else
-      dest_dir=$(printf '%s/%s/Season %02d' "$LIB_TV" "$show" "$season")
+      dest_dir=$(printf '%s/%s/Season %02d' "$lib" "$show" "$season")
     fi
     mkdir -p "$dest_dir"
     dest="$dest_dir/$name"
@@ -168,10 +176,10 @@ PY
     fi
     mv -- "$f" "$dest"
     echo "  tv: $name → ${dest_dir#"$HOST_MNT"/}/"
-    _move_sidecars "$f" "$dest_dir" "$name"
+    _move_sidecars "$f" "$dest_dir"
     moved=$((moved + 1))
-  done < <(find "$INBOX_TV" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
-  echo "tv_moved=${moved}"
+  done < <(find "$inbox" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
+  echo "${key}_moved=${moved}"
 }
 
 _write_state() {
@@ -192,15 +200,24 @@ PY
 
 cmd_process() {
   cmd_ensure_dirs
-  echo "=== processing movie inbox ==="
-  local mout tout
-  mout=$(_process_movies)
+  local mout kmout tout ktout detail
+  echo "=== processing Movies inbox ==="
+  mout=$(_process_movies_into "$INBOX_MOVIES" "$LIB_MOVIES" "Movies" "movies")
   echo "$mout"
-  echo "=== processing TV inbox ==="
-  tout=$(_process_tv)
+  echo "=== processing Kids Movies inbox ==="
+  kmout=$(_process_movies_into "$INBOX_KIDS_MOVIES" "$LIB_KIDS_MOVIES" "Kids Movies" "kids_movies")
+  echo "$kmout"
+  echo "=== processing TV Shows inbox ==="
+  tout=$(_process_tv_into "$INBOX_TV" "$LIB_TV" "TV Shows" "tv")
   echo "$tout"
-  local detail
-  detail=$(printf '%s; %s' "$(echo "$mout" | grep movies_moved= || true)" "$(echo "$tout" | grep tv_moved= || true)")
+  echo "=== processing KIDS TV SHOWS inbox ==="
+  ktout=$(_process_tv_into "$INBOX_KIDS_TV" "$LIB_KIDS_TV" "KIDS TV SHOWS" "kids_tv")
+  echo "$ktout"
+  detail=$(printf '%s; %s; %s; %s' \
+    "$(echo "$mout" | grep movies_moved= || true)" \
+    "$(echo "$kmout" | grep kids_movies_moved= || true)" \
+    "$(echo "$tout" | grep tv_moved= || true)" \
+    "$(echo "$ktout" | grep kids_tv_moved= || true)")
   _write_state 1 "$detail"
   echo "process_ok=1 ${detail}"
 }
@@ -218,7 +235,6 @@ cmd_scan() {
   else
     echo "add-plex-usb-libraries not installed — refreshing sections only"
   fi
-  # Best-effort Plex refresh inside CT
   pct exec "$CTID" -- bash -lc '
     set -e
     TOKEN=$(python3 - <<'"'"'PY'"'"'
