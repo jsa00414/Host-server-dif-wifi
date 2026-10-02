@@ -30,12 +30,13 @@ fi
 echo "==> Top-level USB:"
 ls -1 "$CT_MNT" | head -80
 
-# Four primary library folders (exact names on the Elements drive)
+# Four primary library folders (exact names on the Elements drive).
+# Plex section titles match existing libraries already claimed on this server.
 declare -a libs=(
-  "Movies|1|USB Movies|tv.plex.agents.movie|Plex Movie"
-  "Kids Movies|1|USB Kids Movies|tv.plex.agents.movie|Plex Movie"
-  "TV Shows|2|USB TV|tv.plex.agents.series|Plex TV Series"
-  "KIDS TV SHOWS|2|USB Kids TV|tv.plex.agents.series|Plex TV Series"
+  "Movies|1|Movies|tv.plex.agents.movie|Plex Movie"
+  "Kids Movies|1|Kids Movies|tv.plex.agents.movie|Plex Movie"
+  "TV Shows|2|TV Shows|tv.plex.agents.series|Plex TV Series"
+  "KIDS TV SHOWS|2|Kids TV Shows|tv.plex.agents.series|Plex TV Series"
 )
 
 existing=$(curl -sk --max-time 30 "http://127.0.0.1:32400/library/sections?X-Plex-Token=$TOKEN" || true)
@@ -63,10 +64,15 @@ create_or_add() {
   key=$(section_key "$name")
   if [[ -n "$key" ]]; then
     echo "==> Section '$name' exists (key=$key); ensuring location $loc…"
-    code=$(curl -sk -o /tmp/plex-loc.out -w '%{http_code}' -X POST \
-      "http://127.0.0.1:32400/library/sections/${key}/location?X-Plex-Token=$TOKEN&location=$(q "$loc")" || true)
-    echo "    add $loc -> HTTP $code"
-    head -c 200 /tmp/plex-loc.out 2>/dev/null; echo
+    # Skip add when this path is already attached (Plex returns 404 for duplicate location).
+    if printf '%s' "$existing" | grep -Fq "path=\"$loc\""; then
+      echo "    already hooked: $loc"
+    else
+      code=$(curl -sk -o /tmp/plex-loc.out -w '%{http_code}' -X POST \
+        "http://127.0.0.1:32400/library/sections/${key}/location?X-Plex-Token=$TOKEN&location=$(q "$loc")" || true)
+      echo "    add $loc -> HTTP $code"
+      head -c 200 /tmp/plex-loc.out 2>/dev/null; echo
+    fi
     curl -sk "http://127.0.0.1:32400/library/sections/${key}/refresh?X-Plex-Token=$TOKEN" >/dev/null || true
   else
     echo "==> Creating section '$name' type=$type location=$loc"
