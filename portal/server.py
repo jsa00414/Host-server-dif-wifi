@@ -1801,6 +1801,12 @@ PROXMOX_XBOX_USB_ID = os.environ.get("PROXMOX_XBOX_USB_ID", "045e:0b12").strip()
 PROXMOX_ELEMENTS_CMD = os.environ.get(
     "PROXMOX_ELEMENTS_CMD", "/usr/local/sbin/elements-plex-hookup"
 ).strip() or "/usr/local/sbin/elements-plex-hookup"
+PROXMOX_ELEMENTS_PIPELINE_CMD = os.environ.get(
+    "PROXMOX_ELEMENTS_PIPELINE_CMD", "/usr/local/sbin/elements-media-pipeline"
+).strip() or "/usr/local/sbin/elements-media-pipeline"
+ELEMENTS_UPLOAD_MAX_BYTES = int(
+    os.environ.get("ELEMENTS_UPLOAD_MAX_BYTES", str(16 * 1024 * 1024 * 1024))
+)
 
 ROUTER_HOSTS = [
     h.strip()
@@ -7351,6 +7357,41 @@ def _parse_elements_status(out: str) -> dict:
     return info
 
 
+def _parse_elements_pipeline_status(out: str) -> dict:
+    info = {
+        "ok": False,
+        "mounted": False,
+        "inbox_movies": 0,
+        "inbox_tv": 0,
+        "lib_movies": 0,
+        "lib_tv": 0,
+        "last_ok": False,
+        "last_at": "",
+        "last_detail": "",
+        "host_mnt": "/mnt/plex-usb",
+    }
+    for line in out.splitlines():
+        if line.startswith("last_detail="):
+            info["last_detail"] = line.split("=", 1)[1]
+            continue
+        for tok in line.split():
+            if "=" not in tok:
+                continue
+            k, v = tok.split("=", 1)
+            if k in ("ok", "mounted", "last_ok"):
+                info[k] = v in ("1", "true", "True", "yes")
+            elif k in ("inbox_movies", "inbox_tv", "lib_movies", "lib_tv"):
+                try:
+                    info[k] = int(v)
+                except ValueError:
+                    pass
+            elif k == "last_at":
+                info["last_at"] = v
+            elif k == "host_mnt":
+                info["host_mnt"] = v
+    return info
+
+
 def _elements_payload(
     *,
     ok: bool,
@@ -7359,6 +7400,7 @@ def _elements_payload(
     detail: str | None = None,
     hint: str | None = None,
     action: str | None = None,
+    pipeline: dict | None = None,
 ) -> dict:
     info = info or {}
     present = bool(info.get("present"))
@@ -7369,8 +7411,8 @@ def _elements_payload(
             hint = "Plug the WD Elements drive into the Proxmox PC, then click Attach to Plex."
         elif readable:
             hint = (
-                "Elements is mounted for Plex. Auto-hookup reattaches it on plug-in / every few minutes "
-                "if the bind mount breaks."
+                "Elements is mounted for Plex. Upload movies/TV to the inbox, then Run pipeline "
+                "to move them into Movies / TV Shows and refresh Plex."
             )
         else:
             hint = "Drive is present but not readable in Plex — click Attach to Plex to remount."
@@ -7392,11 +7434,32 @@ def _elements_payload(
         "error": error,
         "detail": detail,
         "action": action,
+        "pipeline": pipeline,
     }
 
 
+def elements_pipeline_status() -> dict:
+    """Inbox / library counts for the Elements media pipeline."""
+    try:
+        proc = proxmox_ssh(f"{PROXMOX_ELEMENTS_PIPELINE_CMD} status", timeout=60)
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error": "SSH to Proxmox timed out while reading media pipeline status",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    out = _elements_ssh_out(proc)
+    info = _parse_elements_pipeline_status(out)
+    info["ok"] = proc.returncode == 0 and bool(info.get("ok", True))
+    if proc.returncode != 0 and not info.get("error"):
+        info["error"] = out or f"pipeline status failed ({proc.returncode})"
+    info["detail"] = out
+    return info
+
+
 def elements_status() -> dict:
-    """WD Elements USB mount status for Plex CT."""
+    """WD Elements USB mount status for Plex CT (+ pipeline summary)."""
     try:
         proc = _elements_ssh(f"{PROXMOX_ELEMENTS_CMD} status")
     except subprocess.TimeoutExpired:
@@ -7409,19 +7472,28 @@ def elements_status() -> dict:
     out = _elements_ssh_out(proc)
     info = _parse_elements_status(out)
     ok = proc.returncode == 0
-    return _elements_payload(ok=ok, info=info, detail=out, error=None if ok else out)
+    pipe = None
+    try:
+        pipe = elements_pipeline_status()
+    except Exception:
+        pipe = None
+    return _elements_payload(
+        ok=ok, info=info, detail=out, error=None if ok else out, pipeline=pipe
+    )
 
 
 def elements_set(action: str) -> dict:
-    """Attach Elements to Plex, or toggle auto-hookup."""
+    """Attach Elements to Plex, toggle auto-hookup, or run media pipeline."""
     act = str(action or "").strip().lower()
     if act in ("attach", "reattach", "mount", "hookup"):
         remote = (
             f"{PROXMOX_ELEMENTS_CMD} attach; ec=$?; "
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} ensure-dirs || true; "
             f"{PROXMOX_ELEMENTS_CMD} status; "
             f"exit $ec"
         )
         label = "attach"
+        timeout = 240
     elif act in ("auto-on", "auto_on", "enable-auto", "auto"):
         remote = (
             f"{PROXMOX_ELEMENTS_CMD} auto-on; "
@@ -7429,6 +7501,7 @@ def elements_set(action: str) -> dict:
             f"exit 0"
         )
         label = "auto-on"
+        timeout = 60
     elif act in ("auto-off", "auto_off", "disable-auto"):
         remote = (
             f"{PROXMOX_ELEMENTS_CMD} auto-off; "
@@ -7436,10 +7509,45 @@ def elements_set(action: str) -> dict:
             f"exit 0"
         )
         label = "auto-off"
+        timeout = 60
+    elif act in ("pipeline", "run", "process-scan"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} run; ec=$?; "
+            f"{PROXMOX_ELEMENTS_CMD} status; "
+            f"exit $ec"
+        )
+        label = "pipeline"
+        timeout = 600
+    elif act in ("process", "ingest"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} process; ec=$?; "
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} status; "
+            f"exit $ec"
+        )
+        label = "process"
+        timeout = 600
+    elif act in ("scan", "refresh"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} scan; ec=$?; "
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} status; "
+            f"exit $ec"
+        )
+        label = "scan"
+        timeout = 300
+    elif act in ("ensure-dirs", "ensure"):
+        remote = (
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} ensure-dirs; ec=$?; "
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} status; "
+            f"exit $ec"
+        )
+        label = "ensure-dirs"
+        timeout = 60
     else:
-        raise ValueError("action must be attach, auto-on, or auto-off")
+        raise ValueError(
+            "action must be attach, auto-on, auto-off, pipeline, process, or scan"
+        )
     try:
-        proc = _elements_ssh(remote)
+        proc = proxmox_ssh(remote, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"SSH to Proxmox timed out during Elements {label}"
@@ -7448,7 +7556,120 @@ def elements_set(action: str) -> dict:
     if proc.returncode != 0:
         raise RuntimeError(out or f"Elements {label} failed ({proc.returncode})")
     info = _parse_elements_status(out)
-    return _elements_payload(ok=True, info=info, detail=out, action=label)
+    pipe = _parse_elements_pipeline_status(out)
+    if not any(k in out for k in ("present=", "host_mounted=")):
+        # pipeline-only status — merge with fresh hookup status
+        try:
+            st = elements_status()
+            info = {
+                "present": st.get("present"),
+                "host_mounted": st.get("host_mounted"),
+                "ct_mounted": st.get("ct_mounted"),
+                "ct_readable": st.get("ct_readable"),
+                "auto": st.get("auto"),
+                "usb_id": st.get("usb_id"),
+                "host_mnt": st.get("host_mnt"),
+                "ct_mnt": st.get("ct_mnt"),
+                "ctid": st.get("ctid"),
+            }
+            pipe = st.get("pipeline") or pipe
+        except Exception:
+            pass
+    return _elements_payload(
+        ok=True, info=info, detail=out, action=label, pipeline=pipe
+    )
+
+
+def _elements_sanitize_filename(name: str) -> str:
+    base = Path(str(name or "")).name.strip()
+    if not base or base in (".", "..") or "/" in base or "\\" in base:
+        raise ValueError("invalid filename")
+    # strip path tricks / nulls
+    base = base.replace("\x00", "").strip()
+    if not base or base.startswith("."):
+        raise ValueError("invalid filename")
+    return base
+
+
+def elements_upload_media(
+    library: str, filename: str, data: bytes, *, process: bool = False
+) -> dict:
+    """Upload a media file into the Elements inbox (movies or tvshows)."""
+    lib = str(library or "").strip().lower()
+    if lib in ("movie", "movies", "film", "films"):
+        sub = "inbox/movies"
+        kind = "movies"
+    elif lib in ("tv", "tvshow", "tvshows", "show", "shows", "series"):
+        sub = "inbox/tvshows"
+        kind = "tvshows"
+    else:
+        raise ValueError("library must be movies or tvshows")
+    if not data:
+        raise ValueError("empty upload")
+    if len(data) > ELEMENTS_UPLOAD_MAX_BYTES:
+        raise ValueError(
+            f"file too large ({len(data)} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
+        )
+    name = _elements_sanitize_filename(filename)
+    # Ensure drive is attached + inbox dirs exist
+    prep = proxmox_ssh(
+        f"{PROXMOX_ELEMENTS_CMD} status; "
+        f"{PROXMOX_ELEMENTS_PIPELINE_CMD} ensure-dirs",
+        timeout=120,
+    )
+    prep_out = _elements_ssh_out(prep)
+    if "mounted=0" in prep_out or "not mounted" in prep_out.lower():
+        # try attach once
+        att = proxmox_ssh(
+            f"{PROXMOX_ELEMENTS_CMD} attach; "
+            f"{PROXMOX_ELEMENTS_PIPELINE_CMD} ensure-dirs",
+            timeout=240,
+        )
+        if att.returncode != 0:
+            raise RuntimeError(
+                _elements_ssh_out(att) or "Elements not mounted; attach failed"
+            )
+    dest = f"/mnt/plex-usb/{sub}/{name}"
+    # Stream bytes over SSH stdin
+    timeout = max(300, len(data) // (512 * 1024) + 120)
+    cmd = [
+        "ssh",
+        "-i",
+        PROXMOX_SSH_KEY,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=8",
+        f"{PROXMOX_SSH_USER}@{PROXMOX_SSH_HOST}",
+        f"cat > {shlex.quote(dest)}",
+    ]
+    proc = subprocess.run(
+        cmd, input=data, capture_output=True, timeout=timeout
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        raise RuntimeError(err.strip() or f"upload failed ({proc.returncode})")
+    result: dict = {
+        "ok": True,
+        "library": kind,
+        "filename": name,
+        "bytes": len(data),
+        "path": dest,
+        "processed": False,
+    }
+    if process:
+        run = elements_set("pipeline")
+        result["processed"] = True
+        result["pipeline"] = run.get("pipeline")
+        result["detail"] = run.get("detail")
+    else:
+        try:
+            result["pipeline"] = elements_pipeline_status()
+        except Exception:
+            pass
+    return result
 
 
 def _active_session_count() -> int:
@@ -12682,6 +12903,14 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc), "state": "unknown"})
             return
+        if path == "/api/elements/pipeline":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, elements_pipeline_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/forwards":
             try:
                 self._json(200, read_state())
@@ -13336,6 +13565,40 @@ document.getElementById('f').onsubmit = async (e) => {
                     ).strip()
                 result = elements_set(action)
                 self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/elements/upload":
+            if not self._require_auth(api=True):
+                return
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                library = (qs.get("library") or qs.get("kind") or ["movies"])[0]
+                filename = (qs.get("filename") or qs.get("name") or [""])[0]
+                process = (qs.get("process") or ["0"])[0] in (
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                )
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length <= 0:
+                    raise ValueError("empty upload")
+                if length > ELEMENTS_UPLOAD_MAX_BYTES:
+                    raise ValueError(
+                        f"file too large ({length} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
+                    )
+                if not filename:
+                    filename = self.headers.get("X-Filename") or "upload.bin"
+                data = self.rfile.read(length)
+                self._json(
+                    200,
+                    elements_upload_media(
+                        library, filename, data, process=process
+                    ),
+                )
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:

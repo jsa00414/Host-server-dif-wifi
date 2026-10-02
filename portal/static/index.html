@@ -1759,8 +1759,26 @@
                   </div>
                   <label class="switch"><input type="checkbox" id="settingsElementsAuto" /><span></span></label>
                 </div>
+                <div class="leds-group" style="margin-top:12px">
+                  <div class="leds-group-label">Media pipeline</div>
+                  <div class="leds-meta-row" id="settingsElementsPipelineMeta" style="margin-bottom:8px">
+                    <span>Inbox movies <strong id="settingsElementsInboxMovies">—</strong></span>
+                    <span>Inbox TV <strong id="settingsElementsInboxTv">—</strong></span>
+                    <span>Library <strong id="settingsElementsLibCounts">—</strong></span>
+                  </div>
+                  <div class="leds-seg" role="group" aria-label="Elements media upload">
+                    <button type="button" id="settingsElementsUploadMoviesBtn">Upload movies</button>
+                    <button type="button" id="settingsElementsUploadTvBtn">Upload TV shows</button>
+                  </div>
+                  <div class="leds-seg" role="group" aria-label="Elements media pipeline" style="margin-top:8px">
+                    <button type="button" id="settingsElementsPipelineBtn" data-elements-action="pipeline">Run pipeline</button>
+                    <button type="button" id="settingsElementsScanBtn" data-elements-action="scan">Scan Plex</button>
+                  </div>
+                  <input type="file" id="settingsElementsMovieInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+                  <input type="file" id="settingsElementsTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+                </div>
               </div>
-              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb.</p>
+              <p class="leds-hint" id="settingsElementsHint">Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb. Uploads go to inbox/, then Run pipeline moves them into Movies / TV Shows and refreshes Plex.</p>
             </div>
           </div>
 
@@ -3724,6 +3742,9 @@
       const usbEl = document.getElementById("settingsElementsUsbId");
       const ctidEl = document.getElementById("settingsElementsCtid");
       const autoEl = document.getElementById("settingsElementsAuto");
+      const inboxMoviesEl = document.getElementById("settingsElementsInboxMovies");
+      const inboxTvEl = document.getElementById("settingsElementsInboxTv");
+      const libCountsEl = document.getElementById("settingsElementsLibCounts");
       const panel = document.getElementById("settingsElementsPanel");
       if (!stateEl) return;
       if (data) elementsLastData = data;
@@ -3734,12 +3755,22 @@
       const readable = !err && !!(data && data.ct_readable);
       const present = !err && !!(data && data.present);
       const auto = !err && !!(data && data.auto);
+      const pipe = (data && data.pipeline) || {};
 
       let title = "Unknown";
       let subtitle = "Waiting for status…";
       if (busy && pending === "attach") {
         title = "Attaching…";
         subtitle = "Mounting Elements and binding into Plex…";
+      } else if (busy && (pending === "pipeline" || pending === "process")) {
+        title = "Running pipeline…";
+        subtitle = "Moving inbox media into Movies / TV Shows…";
+      } else if (busy && pending === "scan") {
+        title = "Scanning Plex…";
+        subtitle = "Refreshing USB Movies / USB TV libraries…";
+      } else if (busy && pending === "upload") {
+        title = "Uploading…";
+        subtitle = opts.uploadLabel || "Sending media to Elements inbox…";
       } else if (busy && pending.startsWith("auto")) {
         title = "Saving…";
         subtitle = "Updating auto-hookup…";
@@ -3762,10 +3793,17 @@
       if (hostEl) hostEl.textContent = (data && data.host) || "—";
       if (usbEl) usbEl.textContent = (data && data.usb_id) || "1058:25a3";
       if (ctidEl) ctidEl.textContent = (data && data.ctid) || "101";
+      if (inboxMoviesEl) inboxMoviesEl.textContent = pipe.inbox_movies != null ? String(pipe.inbox_movies) : "—";
+      if (inboxTvEl) inboxTvEl.textContent = pipe.inbox_tv != null ? String(pipe.inbox_tv) : "—";
+      if (libCountsEl) {
+        libCountsEl.textContent = (pipe.lib_movies != null || pipe.lib_tv != null)
+          ? `${pipe.lib_movies || 0} movies · ${pipe.lib_tv || 0} TV`
+          : "—";
+      }
       if (hintEl) {
         hintEl.textContent = (data && data.hint) || (
           readable
-            ? "Elements is mounted for Plex. Auto-hookup reattaches it if the bind mount breaks."
+            ? "Upload to inbox, then Run pipeline to sort into Movies / TV Shows and refresh Plex."
             : "Mounts WD Elements on the Proxmox host and binds it into the Plex container at /mnt/usb."
         );
       }
@@ -3783,7 +3821,12 @@
       if (panel) {
         panel.querySelectorAll("[data-elements-action]").forEach((btn) => {
           btn.disabled = !!busy;
-          btn.classList.toggle("is-active", !busy && !!readable && btn.getAttribute("data-elements-action") === "attach");
+          const act = btn.getAttribute("data-elements-action");
+          btn.classList.toggle("is-active", !busy && !!readable && act === "attach");
+        });
+        ["settingsElementsUploadMoviesBtn", "settingsElementsUploadTvBtn"].forEach((id) => {
+          const btn = document.getElementById(id);
+          if (btn) btn.disabled = !!busy;
         });
         if (autoEl) autoEl.disabled = !!busy;
       }
@@ -3813,16 +3856,18 @@
         const data = await api("/api/elements", {
           method: "POST",
           body: JSON.stringify({ action }),
-          timeoutMs: 180000,
+          timeoutMs: action === "pipeline" || action === "process" ? 600000 : 180000,
         });
         elementsBusy = false;
         renderElementsSettings(data);
-        setStatus(
-          action.startsWith("auto")
-            ? `Elements auto-hookup ${data.auto ? "on" : "off"}`
-            : (data.ct_readable ? "Elements attached to Plex" : "Elements updated"),
-          "ok"
-        );
+        const msg = action.startsWith("auto")
+          ? `Elements auto-hookup ${data.auto ? "on" : "off"}`
+          : action === "pipeline" || action === "process"
+          ? "Elements media pipeline finished"
+          : action === "scan"
+          ? "Plex library scan started"
+          : (data.ct_readable ? "Elements attached to Plex" : "Elements updated");
+        setStatus(msg, "ok");
         showLog(`Elements ${action} → ${data.state || "?"}`, true);
       } catch (e) {
         elementsBusy = false;
@@ -3836,6 +3881,53 @@
           ...(elementsLastData || {}),
           ok: false,
           error: friendly,
+        });
+        setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
+      }
+    }
+    async function uploadElementsMedia(library, fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length || elementsBusy) return;
+      elementsBusy = true;
+      let done = 0;
+      try {
+        for (const file of files) {
+          renderElementsSettings(elementsLastData || { ok: true }, {
+            busy: true,
+            pendingAction: "upload",
+            uploadLabel: `Uploading ${file.name} (${done + 1}/${files.length})…`,
+          });
+          setStatus(`Uploading ${file.name} to Elements ${library}…`);
+          const url = "/api/elements/upload?library=" + encodeURIComponent(library)
+            + "&filename=" + encodeURIComponent(file.name);
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Filename": file.name,
+            },
+            body: file,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false) {
+            throw new Error(data.error || ("upload failed: " + file.name));
+          }
+          done += 1;
+        }
+        elementsBusy = false;
+        setStatus(`Uploaded ${done} file(s) to ${library} inbox`, "ok");
+        showLog(`Elements upload ${library}: ${done} file(s)`, true);
+        await refreshElementsSettings();
+      } catch (e) {
+        elementsBusy = false;
+        const msg = String(e.message || e);
+        setStatus(msg, "err");
+        showLog(msg, true);
+        renderElementsSettings({
+          ...(elementsLastData || {}),
+          ok: false,
+          error: msg,
         });
         setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
       }
@@ -3860,6 +3952,22 @@
     document.getElementById("settingsXboxHostBtn")?.addEventListener("click", () => setXboxAction("host"));
     document.getElementById("settingsElementsRefreshBtn")?.addEventListener("click", () => refreshElementsSettings());
     document.getElementById("settingsElementsAttachBtn")?.addEventListener("click", () => setElementsAction("attach"));
+    document.getElementById("settingsElementsPipelineBtn")?.addEventListener("click", () => setElementsAction("pipeline"));
+    document.getElementById("settingsElementsScanBtn")?.addEventListener("click", () => setElementsAction("scan"));
+    document.getElementById("settingsElementsUploadMoviesBtn")?.addEventListener("click", () => {
+      document.getElementById("settingsElementsMovieInput")?.click();
+    });
+    document.getElementById("settingsElementsUploadTvBtn")?.addEventListener("click", () => {
+      document.getElementById("settingsElementsTvInput")?.click();
+    });
+    document.getElementById("settingsElementsMovieInput")?.addEventListener("change", (ev) => {
+      const input = ev.target;
+      uploadElementsMedia("movies", input.files).finally(() => { input.value = ""; });
+    });
+    document.getElementById("settingsElementsTvInput")?.addEventListener("change", (ev) => {
+      const input = ev.target;
+      uploadElementsMedia("tvshows", input.files).finally(() => { input.value = ""; });
+    });
     document.getElementById("settingsElementsAuto")?.addEventListener("change", (ev) => {
       setElementsAction(ev.target.checked ? "auto-on" : "auto-off");
     });
