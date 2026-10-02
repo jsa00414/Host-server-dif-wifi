@@ -4041,15 +4041,6 @@
       const libCounts = hasLibs
         ? `Movies ${pipe.lib_movies || 0} · Kids Movies ${pipe.lib_kids_movies || 0} · TV Shows ${pipe.lib_tv || 0} · Kids TV Shows ${pipe.lib_kids_tv || 0}`
         : "—";
-      const inboxTotal = (pipe.inbox_movies || 0) + (pipe.inbox_kids_movies || 0) + (pipe.inbox_tv || 0) + (pipe.inbox_kids_tv || 0);
-      const callout = err
-        ? subtitle
-        : readable
-        ? `Drive ready. ${libCounts}. Inbox waiting: ${inboxTotal}.`
-        : present
-        ? "Elements is plugged in but not attached to Plex yet."
-        : "Plug in the WD Elements drive, then Attach to Plex.";
-
       setText("settingsElementsState", title);
       setText("settingsElementsOwner", subtitle);
       setText("settingsElementsHost", host);
