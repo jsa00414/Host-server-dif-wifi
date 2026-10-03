@@ -39,5 +39,5 @@ docker compose pull
 docker compose up -d
 sleep 2
 docker compose ps
-echo "Grafana listening on 127.0.0.1:${PORT} → ${ROOT_URL}"
+echo "Grafana listening on 0.0.0.0:${PORT} → ${ROOT_URL}"
 curl -sS -o /dev/null -w "health_http=%{http_code}\n" "http://127.0.0.1:${PORT}/api/health" || true

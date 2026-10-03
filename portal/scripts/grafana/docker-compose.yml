@@ -15,7 +15,8 @@ services:
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     ports:
-      - "127.0.0.1:3016:3000"
+      # Bind on all interfaces so Caddy (Docker bridge → 172.18.0.1) can reach it
+      - "3016:3000"
     volumes:
       - grafana-data:/var/lib/grafana
     healthcheck:
