@@ -266,7 +266,6 @@
       </div>
     </section>
     <section class="code-pane" id="codePane" hidden>
-      <div class="acct" id="acctLabel"></div>
       <div class="code" id="codeView">------</div>
       <div class="bar"><i id="tickBar"></i></div>
     </section>
@@ -295,7 +294,6 @@
       lockSub: document.getElementById("lockSub"),
       codePane: document.getElementById("codePane"),
       emptyView: document.getElementById("emptyView"),
-      acctLabel: document.getElementById("acctLabel"),
       codeView: document.getElementById("codeView"),
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
@@ -474,7 +472,6 @@
         els.codePane.hidden = false;
         els.copyBtn.hidden = false;
         els.lockNowBtn.hidden = false;
-        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
         tick();
         bumpIdle();
       }
