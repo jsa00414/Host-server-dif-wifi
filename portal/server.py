@@ -8146,8 +8146,9 @@ def _security_attacker_stats(banned_ips: list[str]) -> dict:
 
     top_list = [
         {"ip": ip, "attempts": n}
-        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)[:20]
-    ]
+        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)
+        if ip not in banned_set
+    ][:20]
     banned_details = []
     for ip in banned_ips:
         row = by_banned.get(ip) or {
