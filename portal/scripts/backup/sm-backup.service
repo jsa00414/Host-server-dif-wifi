@@ -1,0 +1,9 @@
+[Unit]
+Description=ServerManager GitHub backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/servermanager-backup/sm-backup.sh
+Nice=10

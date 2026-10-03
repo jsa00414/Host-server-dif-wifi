@@ -68,6 +68,46 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-webdav-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
     ),
+    (
+        ROOT / "scripts/backup/sm-backup.sh",
+        "/opt/servermanager-backup/sm-backup.sh",
+    ),
+    (
+        ROOT / "scripts/backup/secrets.env.example",
+        "/opt/servermanager-backup/secrets.env.example",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.service",
+        "/etc/systemd/system/sm-backup.service",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.timer",
+        "/etc/systemd/system/sm-backup.timer",
+    ),
+    (
+        ROOT / "scripts/security/harden-secret-perms.sh",
+        f"{REMOTE_UI}/scripts/security/harden-secret-perms.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-smb-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-smb-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-portal-5002-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-portal-5002-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-nas-gateways-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-nas-gateways-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-wg-easy-ui-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-wg-easy-ui-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/forwards/apply-lan-forwards.sh",
+        "/opt/wireguard/scripts/apply-lan-forwards.sh",
+    ),
 ]
 
 
@@ -141,11 +181,53 @@ def main() -> int:
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
-            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh",
+            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh "
+            "/opt/servermanager-backup/sm-backup.sh 2>/dev/null || true",
         )
         _run(
             client,
-            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \"import server; s=server.read_hookups_state(); print(server.write_hookups_state([r for r in s.get('rules', []) if not r.get('external')]))\"",
+            "systemctl daemon-reload && "
+            "systemctl enable --now sm-backup.timer 2>/dev/null || true && "
+            "systemctl is-enabled sm-backup.timer 2>/dev/null || true",
+        )
+        # Grafana: localhost bind + Caddy docker network + unique admin password
+        _run(
+            client,
+            f"mkdir -p {REMOTE_UI}/scripts/grafana "
+            f"{REMOTE_UI}/scripts/grafana/dashboards "
+            f"{REMOTE_UI}/scripts/grafana/prometheus "
+            f"{REMOTE_UI}/scripts/grafana/provisioning/dashboards "
+            f"{REMOTE_UI}/scripts/grafana/provisioning/datasources "
+            "/opt/grafana",
+        )
+        # Upload grafana tree via a second sftp pass (paths may be many).
+        sftp = client.open_sftp()
+        try:
+            groot = ROOT / "scripts" / "grafana"
+            for local in groot.rglob("*"):
+                if not local.is_file():
+                    continue
+                rel = local.relative_to(groot).as_posix()
+                remote = f"{REMOTE_UI}/scripts/grafana/{rel}"
+                remote_dir = str(Path(remote).parent)
+                _run(client, f"mkdir -p {remote_dir}")
+                print(f"  upload grafana/{rel} -> {remote}")
+                sftp.put(str(local), remote)
+        finally:
+            sftp.close()
+        _run(
+            client,
+            f"chmod +x {REMOTE_UI}/scripts/grafana/install-grafana.sh && "
+            f"bash {REMOTE_UI}/scripts/grafana/install-grafana.sh",
+        )
+        _run(
+            client,
+            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \""
+            "import server; "
+            "s=server.read_hookups_state(); "
+            "rules=[r for r in s.get('rules', []) if not r.get('external')]; "
+            "print(server.write_hookups_state(rules))"
+            "\"",
         )
         gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
         _run(client, f"chmod +x {gateway} && bash {gateway}")
