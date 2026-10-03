@@ -1,10 +1,5 @@
 # ServerManager - Windows built-in IKEv2 VPN setup
 # Run in elevated PowerShell (Run as administrator) OR use the .cmd launcher.
-#
-# IKEv2 is reachable only through OpenVPN on the VPS:
-#   1) Connect OpenVPN (windows.ovpn) first
-#   2) Then connect this IKEv2 profile to portal.vpstruelord.com
-#      (OpenVPN DNS resolves it to 10.9.0.1 on tun0)
 param(
   [string]$Server = "portal.vpstruelord.com",
   [string]$Name = "ServerManager IKEv2",
@@ -12,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "Creating Windows VPN profile '$Name' -> $Server (IKEv2 via OpenVPN)..."
+Write-Host "Creating Windows VPN profile '$Name' -> $Server (IKEv2)..."
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
   [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -59,11 +54,10 @@ try {
 }
 
 Write-Host ""
-Write-Host "Done. Use this order:"
-Write-Host "  1) Connect OpenVPN (windows.ovpn) first"
-Write-Host "  2) Settings -> Network & internet -> VPN -> connect '$Name'"
+Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
-Write-Host "IKEv2 is not open on the public internet anymore — only via OpenVPN."
+Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
+Write-Host "If portal is Forbidden after connect: flush DNS (ipconfig /flushdns) and retry."
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

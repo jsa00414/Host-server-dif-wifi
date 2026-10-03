@@ -117,16 +117,25 @@ for plug in eap-mschapv2 eap-identity openssl pem pkcs1 pubkey x509 revocation a
   fi
 done
 
-# IKEv2 is only reachable via OpenVPN (tun0) — not public WAN 500/4500
-VIA_OVPN_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-via-openvpn.sh"
-if [[ -f "$VIA_OVPN_SRC" ]]; then
-  cp -f "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
-  chmod 0755 "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
-  bash "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh" || true
+# Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
+#   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  VIA_OVPN_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-via-openvpn.sh"
+  if [[ -f "$VIA_OVPN_SRC" ]]; then
+    cp -f "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
+    chmod 0755 "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
+    bash "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh" || true
+  fi
 else
-  # fallback (legacy): public IKE — prefer ensure-ikev2-via-openvpn.sh
-  ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
-  ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+  PUBLIC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-public.sh"
+  if [[ -f "$PUBLIC_SRC" ]]; then
+    cp -f "$PUBLIC_SRC" "$IKEV2_DIR/ensure-ikev2-public.sh"
+    chmod 0755 "$IKEV2_DIR/ensure-ikev2-public.sh"
+    bash "$IKEV2_DIR/ensure-ikev2-public.sh" || true
+  else
+    ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
+    ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+  fi
 fi
 # Host INPUT for tun VIP / sslh (split-DNS points portal at 10.9.0.1)
 ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
@@ -198,4 +207,8 @@ echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
 echo "  Cert:     ${LE_LIVE}"
 echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
 echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"
-echo "  ViaOpenVPN: IKEv2 listens on tun0 only — connect OpenVPN first"
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  echo "  Mode:     IKEv2 via OpenVPN only (tun0)"
+else
+  echo "  Mode:     public IKEv2 (UDP 500/4500)"
+fi
