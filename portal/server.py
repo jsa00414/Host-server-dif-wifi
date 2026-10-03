@@ -1704,6 +1704,10 @@ ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
+# Timed unlock for Security → VPS login method & SSH keys mutations.
+SSH_PANEL_UNLOCK_SECONDS = int(os.environ.get("SSH_PANEL_UNLOCK_SECONDS", "300"))
+_ssh_panel_unlocks: dict[str, float] = {}
+_ssh_panel_unlocks_lock = threading.Lock()
 NAS_DL_TOKEN_TTL = float(os.environ.get("NAS_DL_TOKEN_TTL", "600"))
 _nas_dl_tokens: dict[str, float] = {}
 _nas_dl_tokens_lock = threading.Lock()
@@ -7133,6 +7137,14 @@ def _security_sshd_config() -> dict:
         "unknown": "Unknown / custom",
     }.get(method, "Unknown / custom")
     out.update(_security_root_login_meta(out.get("permit_root_login")))
+    # Default locked until the request handler attaches session unlock status.
+    out["panel_lock"] = {
+        "unlocked": False,
+        "expires_at": None,
+        "expires_in": 0,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "required": ["portal_password"],
+    }
     return out
 
 
@@ -10587,6 +10599,8 @@ def destroy_session(token: str | None) -> None:
         return
     with _sessions_lock:
         _sessions.pop(token, None)
+    with _ssh_panel_unlocks_lock:
+        _ssh_panel_unlocks.pop(token, None)
 
 
 def session_valid(token: str | None) -> bool:
@@ -10615,6 +10629,83 @@ def check_credentials(username: str, password: str) -> bool:
     return hmac.compare_digest(username, AUTH_USER) and hmac.compare_digest(
         password, AUTH_PASS
     )
+
+
+def _purge_ssh_panel_unlocks(now: float | None = None) -> None:
+    ts = now if now is not None else time.time()
+    with _ssh_panel_unlocks_lock:
+        dead = [tok for tok, exp in _ssh_panel_unlocks.items() if exp <= ts]
+        for tok in dead:
+            _ssh_panel_unlocks.pop(tok, None)
+
+
+def ssh_panel_unlock_status(token: str | None) -> dict:
+    """Whether this portal session may mutate VPS login / SSH keys."""
+    now = time.time()
+    _purge_ssh_panel_unlocks(now)
+    if not token or not session_valid(token):
+        return {
+            "unlocked": False,
+            "expires_at": None,
+            "expires_in": 0,
+            "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+            "required": ["portal_password"],
+        }
+    with _ssh_panel_unlocks_lock:
+        exp = _ssh_panel_unlocks.get(token)
+    if not exp or exp <= now:
+        return {
+            "unlocked": False,
+            "expires_at": None,
+            "expires_in": 0,
+            "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+            "required": ["portal_password"],
+        }
+    return {
+        "unlocked": True,
+        "expires_at": int(exp),
+        "expires_in": max(0, int(exp - now)),
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "required": ["portal_password"],
+    }
+
+
+def unlock_ssh_panel(token: str | None, password: str) -> dict:
+    """Unlock SSH panel mutations by re-entering the portal admin password."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    if not AUTH_PASS:
+        raise ValueError("Portal password is not configured")
+    if not hmac.compare_digest(str(password or ""), AUTH_PASS):
+        time.sleep(0.35)
+        raise ValueError("Incorrect portal password")
+    now = time.time()
+    exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
+    with _ssh_panel_unlocks_lock:
+        _purge_ssh_panel_unlocks(now)
+        _ssh_panel_unlocks[token] = exp
+    return {
+        "ok": True,
+        "unlocked": True,
+        "expires_at": int(exp),
+        "expires_in": int(exp - now),
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "message": f"VPS login panel unlocked for {SSH_PANEL_UNLOCK_SECONDS // 60} minutes.",
+    }
+
+
+def lock_ssh_panel(token: str | None) -> dict:
+    if token:
+        with _ssh_panel_unlocks_lock:
+            _ssh_panel_unlocks.pop(token, None)
+    return {
+        "ok": True,
+        "unlocked": False,
+        "expires_at": None,
+        "expires_in": 0,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "message": "VPS login panel locked.",
+    }
 
 
 # ServerManager Files theme (desktop + mobile) — injected into /nas-files HTML.
@@ -14819,6 +14910,22 @@ class Handler(BaseHTTPRequestHandler):
         self._unauthorized(api=api)
         return False
 
+    def _require_ssh_panel_unlock(self) -> bool:
+        """Portal session must have recently re-entered the portal password."""
+        tok = parse_session_cookie(self.headers.get("Cookie"))
+        st = ssh_panel_unlock_status(tok)
+        if st.get("unlocked"):
+            return True
+        self._json(
+            403,
+            {
+                "ok": False,
+                "error": "VPS login panel is locked. Re-enter the portal password to unlock.",
+                "panel_lock": st,
+            },
+        )
+        return False
+
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
@@ -15477,9 +15584,22 @@ document.getElementById('f').onsubmit = async (e) => {
             if not self._require_auth(api=True):
                 return
             try:
-                self._json(200, build_security_status())
+                status = build_security_status()
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(status.get("ssh"), dict):
+                    status["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, status)
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security/ssh-unlock":
+            if not self._require_auth(api=True):
+                return
+            try:
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                self._json(200, {"ok": True, **ssh_panel_unlock_status(tok)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path in (
             "/api/security/ssh-login",
@@ -15489,7 +15609,10 @@ document.getElementById('f').onsubmit = async (e) => {
             if not self._require_auth(api=True):
                 return
             try:
-                self._json(200, {"ok": True, "ssh": _security_sshd_config()})
+                ssh = _security_sshd_config()
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                ssh["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, {"ok": True, "ssh": ssh})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
@@ -15773,7 +15896,32 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/security/ssh-unlock":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                action = str(payload.get("action") or "unlock").strip().lower()
+                if action in ("lock", "relock"):
+                    result = lock_ssh_panel(tok)
+                else:
+                    result = unlock_ssh_panel(
+                        tok, str(payload.get("password") or payload.get("portal_password") or "")
+                    )
+                # Attach fresh ssh snapshot for UI refresh (read-only).
+                ssh = _security_sshd_config()
+                ssh["panel_lock"] = ssh_panel_unlock_status(tok)
+                result["ssh"] = ssh
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/security/ssh-login":
+            if not self._require_ssh_panel_unlock():
+                return
             try:
                 payload = self._read_json()
                 if not isinstance(payload, dict):
@@ -15799,6 +15947,9 @@ document.getElementById('f').onsubmit = async (e) => {
                         "Provide method (password_and_keys|keys_only) "
                         "and/or permit_root_login (yes|prohibit-password|no)"
                     )
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
@@ -15806,6 +15957,8 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/security/ssh-keys":
+            if not self._require_ssh_panel_unlock():
+                return
             try:
                 payload = self._read_json()
                 if not isinstance(payload, dict):
@@ -15833,6 +15986,9 @@ document.getElementById('f').onsubmit = async (e) => {
                     )
                 else:
                     raise ValueError("action must be add, generate, or remove")
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
@@ -15840,6 +15996,8 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/security/ssh-users":
+            if not self._require_ssh_panel_unlock():
+                return
             try:
                 payload = self._read_json()
                 if not isinstance(payload, dict):
@@ -15862,6 +16020,9 @@ document.getElementById('f').onsubmit = async (e) => {
                     comment=str(payload.get("comment") or ""),
                     also_root=bool(payload.get("also_root")),
                 )
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})

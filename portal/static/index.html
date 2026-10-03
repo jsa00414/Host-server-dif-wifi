@@ -873,6 +873,24 @@
       min-height: 34px;
     }
     .sec-ssh-check input { width: auto; }
+    .sec-ssh-lock {
+      margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--line);
+      border-radius: 12px; background: rgba(226,180,90,.08);
+    }
+    .sec-ssh-lock.unlocked {
+      background: rgba(61,222,160,.06); border-color: rgba(61,222,160,.28);
+    }
+    .sec-ssh-lock .lock-title {
+      font-family: "IBM Plex Mono", monospace; font-size: .86rem; font-weight: 600; margin-bottom: 4px;
+    }
+    .sec-ssh-lock .lock-sub { color: var(--muted); font-size: .76rem; line-height: 1.4; margin-bottom: 10px; }
+    .sec-ssh-lock-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sec-ssh-lock-form input[type="password"] {
+      flex: 1 1 180px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+    }
+    .sec-ssh-controls[data-locked="1"] {
+      opacity: .55; pointer-events: none; user-select: none; filter: grayscale(.15);
+    }
     .sec-callout {
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
@@ -3583,64 +3601,88 @@
               </tr>`).join("")
             }</tbody></table>`
           : `<div class="sec-empty" style="margin-top:8px">No extra login users yet (uid ≥ 1000).</div>`;
+        const panelLock = ssh.panel_lock || {};
+        const unlocked = !!panelLock.unlocked;
+        const unlockSecs = panelLock.unlock_seconds || 300;
+        const expiresIn = panelLock.expires_in || 0;
+        const lockBanner = unlocked
+          ? `<div class="sec-ssh-lock unlocked">
+              <div class="lock-title">Unlocked ${secSev("ok")}</div>
+              <div class="lock-sub">Changes allowed for ~${escHtml(Math.max(1, Math.ceil(expiresIn / 60)))} min. Relock when finished.</div>
+              <div class="sec-login-actions">
+                <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
+              </div>
+            </div>`
+          : `<div class="sec-ssh-lock">
+              <div class="lock-title">Locked ${secSev("medium")}</div>
+              <div class="lock-sub">Status is visible. To change login method, root SSH, users, or keys, re-enter the <strong>portal admin password</strong> (unlocks for ${escHtml(Math.round(unlockSecs / 60))} minutes).</div>
+              <div class="sec-ssh-lock-form">
+                <input type="password" id="secSshUnlockPass" placeholder="Portal password" autocomplete="current-password" />
+                <button type="button" class="primary" id="secSshUnlockBtn">Unlock</button>
+              </div>
+            </div>`;
         sshEl.innerHTML = `
-          <div class="sec-login-method">
-            <div>
-              <div class="method-label">${escHtml(methodLabel)}</div>
-              <div class="method-sub">${escHtml(hint)}</div>
-              <div class="method-sub" style="margin-top:6px">${escHtml(lockHint)}</div>
-            </div>
-            <div class="sec-login-actions">
-              <button type="button" class="primary" id="secSshKeysOnlyBtn" ${isKeys || !keysReady ? "disabled" : ""}>Use SSH keys only</button>
-              <button type="button" class="ghost" id="secSshPasswordBtn" ${isPw ? "disabled" : ""}>Allow password + keys</button>
-            </div>
-          </div>
+          ${lockBanner}
           <div class="meta-grid">
+            <div class="meta-box"><label>Login method</label><div>${escHtml(methodLabel)}</div></div>
             <div class="meta-box"><label>Password login</label><div>${escHtml(ssh.password_authentication ?? "—")}</div></div>
-            <div class="meta-box"><label>Pubkey login</label><div>${escHtml(ssh.pubkey_authentication ?? "—")}</div></div>
             <div class="meta-box"><label>Root login</label><div>${escHtml(ssh.permit_root_login ?? "—")}</div></div>
             <div class="meta-box"><label>Root authorized keys</label><div>${escHtml(keyCount)}</div></div>
           </div>
+          <div class="method-sub" style="margin:8px 0 4px">${escHtml(hint)} ${escHtml(lockHint)}</div>
 
-          <div class="sec-ssh-section">
-            <h4>Root SSH login ${secSev(rootRisk)}</h4>
-            <div class="method-label" style="font-size:.92rem">${escHtml(rootLabel)}</div>
-            <div class="method-sub">${escHtml(rootDetail)}</div>
-            <div class="sec-login-actions" style="margin-top:10px">
-              <button type="button" class="ghost" id="secRootKeysBtn" ${rootKeysOnly ? "disabled" : ""}>Root keys only</button>
-              <button type="button" class="ghost danger" id="secRootDenyBtn" ${rootDenied ? "disabled" : ""}>Disable root SSH</button>
-              <button type="button" class="ghost" id="secRootPasswordBtn" ${rootYes || isKeys ? "disabled" : ""}>Allow root password</button>
-            </div>
-          </div>
-
-          <div class="sec-ssh-section">
-            <h4>Create login user</h4>
-            <div class="method-sub">Create another SSH user (useful before disabling root). Optional auto SSH key downloads once.</div>
-            ${usersTable}
-            <div class="sec-ssh-form">
+          <div class="sec-ssh-controls" data-locked="${unlocked ? "0" : "1"}">
+            <div class="sec-login-method">
               <div>
-                <label for="secUserName">Username</label>
-                <input type="text" id="secUserName" placeholder="ops" autocomplete="off" spellcheck="false" />
+                <div class="method-label">${escHtml(methodLabel)}</div>
+                <div class="method-sub">Change how the VPS accepts SSH logins.</div>
               </div>
-              <div class="sec-ssh-check"><input type="checkbox" id="secUserSudo" checked /> <span>sudo access</span></div>
-              <div class="sec-ssh-check"><input type="checkbox" id="secUserGenKey" checked /> <span>auto-create SSH key</span></div>
-              <div class="sec-ssh-check"><input type="checkbox" id="secUserAlsoRoot" /> <span>also add key to root</span></div>
-              <div>
-                <button type="button" class="primary" id="secUserCreateBtn">Create user</button>
+              <div class="sec-login-actions">
+                <button type="button" class="primary" id="secSshKeysOnlyBtn" ${isKeys || !keysReady ? "disabled" : ""}>Use SSH keys only</button>
+                <button type="button" class="ghost" id="secSshPasswordBtn" ${isPw ? "disabled" : ""}>Allow password + keys</button>
               </div>
             </div>
-          </div>
 
-          <div class="sec-ssh-section">
-            <h4>SSH key management</h4>
-            <div class="method-sub" style="margin-bottom:8px">Public keys in <code>/root/.ssh/authorized_keys</code></div>
-            ${keysTable}
-            <div class="sec-login-actions" style="margin:10px 0">
-              <button type="button" class="primary" id="secSshKeyAutoBtn">Auto-create SSH key</button>
+            <div class="sec-ssh-section">
+              <h4>Root SSH login ${secSev(rootRisk)}</h4>
+              <div class="method-label" style="font-size:.92rem">${escHtml(rootLabel)}</div>
+              <div class="method-sub">${escHtml(rootDetail)}</div>
+              <div class="sec-login-actions" style="margin-top:10px">
+                <button type="button" class="ghost" id="secRootKeysBtn" ${rootKeysOnly ? "disabled" : ""}>Root keys only</button>
+                <button type="button" class="ghost danger" id="secRootDenyBtn" ${rootDenied ? "disabled" : ""}>Disable root SSH</button>
+                <button type="button" class="ghost" id="secRootPasswordBtn" ${rootYes || isKeys ? "disabled" : ""}>Allow root password</button>
+              </div>
             </div>
-            <div class="sec-ssh-add">
-              <textarea id="secSshKeyInput" placeholder="ssh-ed25519 AAAA… comment" spellcheck="false"></textarea>
-              <button type="button" class="primary" id="secSshKeyAddBtn">Add key</button>
+
+            <div class="sec-ssh-section">
+              <h4>Create login user</h4>
+              <div class="method-sub">Create another SSH user (useful before disabling root). Optional auto SSH key downloads once.</div>
+              ${usersTable}
+              <div class="sec-ssh-form">
+                <div>
+                  <label for="secUserName">Username</label>
+                  <input type="text" id="secUserName" placeholder="ops" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserSudo" checked /> <span>sudo access</span></div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserGenKey" checked /> <span>auto-create SSH key</span></div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserAlsoRoot" /> <span>also add key to root</span></div>
+                <div>
+                  <button type="button" class="primary" id="secUserCreateBtn">Create user</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sec-ssh-section">
+              <h4>SSH key management</h4>
+              <div class="method-sub" style="margin-bottom:8px">Public keys in <code>/root/.ssh/authorized_keys</code></div>
+              ${keysTable}
+              <div class="sec-login-actions" style="margin:10px 0">
+                <button type="button" class="primary" id="secSshKeyAutoBtn">Auto-create SSH key</button>
+              </div>
+              <div class="sec-ssh-add">
+                <textarea id="secSshKeyInput" placeholder="ssh-ed25519 AAAA… comment" spellcheck="false"></textarea>
+                <button type="button" class="primary" id="secSshKeyAddBtn">Add key</button>
+              </div>
             </div>
           </div>
 
@@ -3650,6 +3692,11 @@
               rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
             }</tbody></table>
           </div>`;
+        document.getElementById("secSshUnlockBtn")?.addEventListener("click", () => unlockSshPanel());
+        document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") unlockSshPanel();
+        });
+        document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -3661,6 +3708,7 @@
         sshEl.querySelectorAll(".sec-ssh-remove").forEach((btn) => {
           btn.addEventListener("click", () => removeSshAuthorizedKey(btn.getAttribute("data-index"), btn.getAttribute("data-fp")));
         });
+        scheduleSshPanelRelock(expiresIn);
       }
 
       const domEl = document.getElementById("secDomains");
@@ -3698,6 +3746,7 @@
       if (!quiet) setStatus("Scanning security…");
       try {
         const data = await api("/api/security", { timeoutMs: 60000 });
+        window.__lastSecurityData = data;
         renderSecurity(data);
         if (!quiet) setStatus(`Security score ${data.score ?? "—"}`, data.counts?.high ? "err" : "ok");
       } catch (e) {
@@ -3705,6 +3754,51 @@
         if (!quiet) setStatus(String(e.message || e), "err");
       } finally {
         if (btn) btn.disabled = false;
+      }
+    }
+    let sshPanelRelockTimer = null;
+    function scheduleSshPanelRelock(expiresInSec) {
+      if (sshPanelRelockTimer) {
+        clearTimeout(sshPanelRelockTimer);
+        sshPanelRelockTimer = null;
+      }
+      const sec = Number(expiresInSec) || 0;
+      if (sec <= 0) return;
+      sshPanelRelockTimer = setTimeout(() => {
+        refreshSecurity(true);
+      }, (sec + 1) * 1000);
+    }
+    async function unlockSshPanel() {
+      const pass = document.getElementById("secSshUnlockPass")?.value || "";
+      if (!pass) {
+        setStatus("Enter the portal admin password to unlock.", "err");
+        return;
+      }
+      setStatus("Unlocking VPS login panel…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "unlock", password: pass }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || "Panel unlocked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function lockSshPanel() {
+      setStatus("Locking VPS login panel…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "lock" }),
+          timeoutMs: 15000,
+        });
+        setStatus(result.message || "Panel locked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
       }
     }
     async function applySshLoginMethod(method) {
