@@ -11,7 +11,7 @@ CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 STATE_DIR="${IKEV2_PEER_ACL_DIR:-/var/lib/servermanager}"
 STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
-BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32"
+BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32"
 
 export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE BASE_CIDRS_DEFAULT
 
@@ -28,7 +28,7 @@ env_file = Path(os.environ.get("PORTAL_ENV_FILE", "/opt/wireguard/port-forward-u
 state_file = Path(os.environ.get("STATE_FILE", "/var/lib/servermanager/ikev2-peer-ips.txt"))
 base_default = os.environ.get(
     "BASE_CIDRS_DEFAULT",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
 )
 
 PRIVATE = [
@@ -70,20 +70,23 @@ def load_base_cidrs() -> list[str]:
             if line.startswith("VPN_CLIENT_CIDRS="):
                 raw = line.split("=", 1)[1].strip().strip('"').strip("'")
                 parts = raw.split()
-                # Drop previously injected peer /32s (public singles)
+                # Drop previously injected peer /32s (public singles), but keep the
+                # VPS public /32 used for hairpin ACL.
                 cleaned = []
                 for p in parts:
                     if p.endswith("/32"):
                         ip = p[:-3]
-                        if is_public_ipv4(ip):
+                        if is_public_ipv4(ip) and ip != "74.208.76.213":
                             continue
                     cleaned.append(p)
                 if cleaned:
                     base = cleaned
                 break
-    # Ensure IKEv2 pool always present
+    # Ensure IKEv2 pool + VPS public IP (hairpin) always present
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
+    if "74.208.76.213/32" not in base:
+        base.append("74.208.76.213/32")
     return base
 
 

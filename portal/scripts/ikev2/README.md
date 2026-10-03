@@ -59,3 +59,13 @@ systemctl enable --now sm-ikev2-peer-acl.timer
 This syncs each **active IKEv2 peer public IP** into Caddy `@vpn_clients` every 30s
 so portal works for the connected Windows/phone WAN IP without opening it to the world.
 
+## Hairpin (speedtest shows VPS IP, portal still Forbidden)
+
+Full-tunnel IKEv2 makes speedtests show `74.208.76.213`. Hitting the portal A record
+can hairpin through MASQUERADE so Caddy sees that same IP and returns 403.
+
+```bash
+bash /opt/ikev2/ensure-ikev2-forward.sh   # installs NO-HAIRPIN-MASQ RETURN rule
+bash /opt/ikev2/ensure-ikev2-peer-acl.sh  # also allows 74.208.76.213/32 in Caddy
+```
+

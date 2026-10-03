@@ -2273,7 +2273,7 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 100.64.0.0/10 172.18.0.1/32 127.0.0.1/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
 )
 VPN_UFW_FROM = os.environ.get("VPN_UFW_FROM", "10.8.0.0/24")
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
