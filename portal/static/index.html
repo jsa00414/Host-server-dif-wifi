@@ -4022,6 +4022,11 @@
       const circleMeta = document.getElementById("secVpnCircleMeta");
       if (!circleMeta) return;
       circle = circle || {};
+      const nameMap = circle.device_names && typeof circle.device_names === "object" ? circle.device_names : {};
+      const deviceLabel = (row) => {
+        const ip = String(row?.ip || "").trim();
+        return String(row?.name || row?.hostname || nameMap[ip] || "").trim();
+      };
       circleMeta.innerHTML = `
         <div class="meta-box"><label>Allowlisted</label><div>${escHtml((circle.allowed || []).length)}</div></div>
         <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
@@ -4040,7 +4045,7 @@
               const sealed = !!(r.sealed || r.source === "router");
               const hiddenFromApps = !!(!sealed && r.hidden);
               const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
-              const name = String(r.name || r.hostname || "").trim();
+              const name = deviceLabel(r);
               const note = sealed
                 ? (r.note || "Flint router WAN (sealed)")
                 : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
@@ -4049,7 +4054,7 @@
                 : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
                    <button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Remove</button>`;
               return `<tr>
-              <td>${escHtml(name || "—")}</td>
+              <td><strong>${escHtml(name || "—")}</strong></td>
               <td><code>${escHtml(r.ip)}</code></td>
               <td class="sec-users">${escHtml(note)}</td>
               <td style="white-space:nowrap">${action}</td>
@@ -4066,9 +4071,9 @@
           ? pending.map((r) => {
               const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
               const authApp = !!(r.auth_app || r.auth_app_enrolled);
-              const name = String(r.name || r.hostname || "").trim();
+              const name = deviceLabel(r);
               return `<tr>
-              <td>${escHtml(name || (isLan ? (r.note || "LAN device") : "—"))}</td>
+              <td><strong>${escHtml(name || (isLan ? (r.note || "LAN device") : "—"))}</strong></td>
               <td><code>${escHtml(r.ip)}</code></td>
               <td class="sec-users">${escHtml(isLan ? "—" : (r.vip || "—"))}</td>
               <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
@@ -4081,7 +4086,7 @@
             }).join("")
           : "";
         const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
-            <td>${escHtml(a.name || a.hostname || "—")}</td>
+            <td><strong>${escHtml(deviceLabel(a) || "—")}</strong></td>
             <td><code>${escHtml(a.ip)}</code></td>
             <td class="sec-users">${escHtml(a.vip || "—")}</td>
             <td colspan="2" class="sec-users">${escHtml(a.ts ? new Date(a.ts * 1000).toLocaleString() : "—")}</td>
