@@ -113,6 +113,115 @@
       padding-top: calc(8px + var(--sat));
       padding-bottom: 4px;
     }
+    body.is-unlocked {
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+    body.is-unlocked main {
+      justify-content: flex-start;
+      overflow: auto;
+    }
+    .circle {
+      width: min(420px, calc(100% - 28px));
+      margin: 4px auto 0;
+      padding: 12px 12px 4px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(0,0,0,.22);
+      text-align: left;
+    }
+    .circle[hidden] { display: none !important; }
+    .circle h3 {
+      margin: 0 0 4px;
+      font-size: .78rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .circle .sub {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: .72rem;
+      line-height: 1.4;
+    }
+    .circle .meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .circle .meta div {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(255,255,255,.03);
+    }
+    .circle .meta label {
+      display: block;
+      color: var(--muted);
+      font-size: .62rem;
+      margin-bottom: 2px;
+    }
+    .circle .meta strong {
+      font-size: .9rem;
+      font-weight: 600;
+    }
+    .circle-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 10px;
+      max-height: 240px;
+      overflow: auto;
+    }
+    .circle-row {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(255,255,255,.03);
+    }
+    .circle-row .ip {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .86rem;
+      word-break: break-all;
+    }
+    .circle-row .info {
+      color: var(--muted);
+      font-size: .68rem;
+      margin-top: 4px;
+    }
+    .circle-row .row-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .circle-row .row-actions button {
+      min-height: 40px;
+      font-size: .78rem;
+    }
+    .circle-empty {
+      color: var(--muted);
+      font-size: .74rem;
+      padding: 6px 2px 10px;
+    }
+    .circle-add {
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+    .circle-add input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.35);
+      color: var(--text);
+      padding: 12px;
+      font: inherit;
+      font-size: .84rem;
+    }
     main {
       min-height: 0;
       display: flex;
@@ -328,6 +437,20 @@
     <section class="code-pane" id="codePane" hidden>
       <div class="code" id="codeView">------</div>
       <div class="bar"><i id="tickBar"></i></div>
+      <section class="circle" id="circlePane" hidden>
+        <h3>VPN trust circle</h3>
+        <p class="sub">Pending WAN IPs stay on guest DNS until you approve them here.</p>
+        <div class="meta">
+          <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
+          <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
+        </div>
+        <div class="circle-list" id="circleList"><div class="circle-empty">Unlock, then pull to refresh.</div></div>
+        <div class="circle-add">
+          <input id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
+          <button type="button" class="primary" id="circleApproveBtn">Approve into circle</button>
+          <button type="button" id="circleRefreshBtn">Refresh list</button>
+        </div>
+      </section>
     </section>
     <div class="empty" id="emptyView">Open the setup link from the portal Security tab on this iPhone to save your account.</div>
   </main>
@@ -367,6 +490,13 @@
       pinSubmitBtn: document.getElementById("pinSubmitBtn"),
       installHint: document.getElementById("installHint"),
       toast: document.getElementById("toast"),
+      circlePane: document.getElementById("circlePane"),
+      circleList: document.getElementById("circleList"),
+      circleAllowedCount: document.getElementById("circleAllowedCount"),
+      circlePendingCount: document.getElementById("circlePendingCount"),
+      circleIpInput: document.getElementById("circleIpInput"),
+      circleApproveBtn: document.getElementById("circleApproveBtn"),
+      circleRefreshBtn: document.getElementById("circleRefreshBtn"),
     };
 
     let account = null;
@@ -375,6 +505,8 @@
     let idleTimer = null;
     let busy = false;
     let pinMode = false;
+    let circleData = null;
+    let circleLoading = false;
 
     function toast(msg) {
       els.toast.textContent = msg;
@@ -532,6 +664,114 @@
         (digest[offset + 3] & 0xff);
       return String(codeInt % 10 ** DIGITS).padStart(DIGITS, "0");
     }
+    async function currentTotpCode() {
+      if (!account?.secret) throw new Error("No authenticator account");
+      return totpAt(account.secret);
+    }
+    async function fetchCircle() {
+      if (!account || !unlocked) return;
+      circleLoading = true;
+      try {
+        const code = await currentTotpCode();
+        const res = await fetch(`/api/auth-app/vpn-allowlist?code=${encodeURIComponent(code)}`, {
+          headers: { "X-SM-Totp": code, Accept: "application/json" },
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        circleData = data;
+        renderCircle();
+      } catch (err) {
+        if (els.circleList) {
+          els.circleList.innerHTML = `<div class="circle-empty">${String(err?.message || err)}</div>`;
+        }
+      } finally {
+        circleLoading = false;
+      }
+    }
+    async function mutateCircle(action, ip, note) {
+      if (!ip) {
+        toast("Enter a WAN IP");
+        return;
+      }
+      try {
+        const code = await currentTotpCode();
+        const res = await fetch("/api/auth-app/vpn-allowlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ code, action, ip, note: note || "" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        circleData = data.vpn_allowlist || data;
+        renderCircle();
+        toast(`${action}d ${ip}`);
+        bumpIdle();
+      } catch (err) {
+        toast(String(err?.message || err));
+      }
+    }
+    function renderCircle() {
+      if (!els.circlePane) return;
+      if (!account || !unlocked) {
+        els.circlePane.hidden = true;
+        return;
+      }
+      els.circlePane.hidden = false;
+      const allowed = circleData?.allowed || [];
+      const pending = circleData?.pending || [];
+      const attempts = circleData?.attempts || [];
+      els.circleAllowedCount.textContent = String(allowed.length);
+      els.circlePendingCount.textContent = String(pending.length);
+      const blocks = [];
+      if (pending.length) {
+        pending.forEach((row) => {
+          blocks.push(`<div class="circle-row">
+            <div class="ip">${esc(row.ip)}</div>
+            <div class="info">${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits</div>
+            <div class="row-actions">
+              <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
+              <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
+            </div>
+          </div>`);
+        });
+      }
+      if (allowed.length) {
+        allowed.forEach((row) => {
+          blocks.push(`<div class="circle-row">
+            <div class="ip">${esc(row.ip)}</div>
+            <div class="info">allowlisted · ${esc(row.note || row.source || "—")}</div>
+            <div class="row-actions">
+              <button type="button" class="danger circle-revoke" data-ip="${esc(row.ip)}" style="grid-column:1/-1">Revoke</button>
+            </div>
+          </div>`);
+        });
+      }
+      if (!pending.length && !allowed.length) {
+        const recent = attempts.slice(0, 4).map((a) =>
+          `<div class="circle-row"><div class="ip">${esc(a.ip)}</div><div class="info">recent · VIP ${esc(a.vip || "—")} · guest DNS</div>
+           <div class="row-actions"><button type="button" class="primary circle-approve" data-ip="${esc(a.ip)}">Approve</button>
+           <button type="button" class="danger circle-deny" data-ip="${esc(a.ip)}">Deny</button></div></div>`
+        ).join("");
+        els.circleList.innerHTML = recent || `<div class="circle-empty">No pending VPN WAN attempts.</div>`;
+      } else {
+        els.circleList.innerHTML = blocks.join("");
+      }
+      els.circleList.querySelectorAll(".circle-approve").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("approve", btn.dataset.ip || ""));
+      });
+      els.circleList.querySelectorAll(".circle-deny").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("deny", btn.dataset.ip || ""));
+      });
+      els.circleList.querySelectorAll(".circle-revoke").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("revoke", btn.dataset.ip || ""));
+      });
+    }
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
     function remaining() {
       return PERIOD - ((Date.now() / 1000) % PERIOD);
     }
@@ -567,8 +807,10 @@
     function lockNow(msg) {
       unlocked = false;
       pinMode = false;
+      circleData = null;
       els.codeView.textContent = "------";
       els.pinInput.value = "";
+      if (els.circlePane) els.circlePane.hidden = true;
       clearTimeout(idleTimer);
       render();
       if (msg) toast(msg);
@@ -619,6 +861,8 @@
         els.lockNowBtn.hidden = false;
         tick();
         bumpIdle();
+        renderCircle();
+        if (!circleData && !circleLoading) fetchCircle();
       }
       updateInstallUi();
     }
@@ -689,6 +933,16 @@
       }
     });
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
+    els.circleRefreshBtn?.addEventListener("click", () => withBusy(async () => {
+      await fetchCircle();
+      toast(circleLoading ? "Loading…" : "Refreshed");
+      bumpIdle();
+    }));
+    els.circleApproveBtn?.addEventListener("click", () => withBusy(async () => {
+      const ip = String(els.circleIpInput?.value || "").trim();
+      await mutateCircle("approve", ip, "manual from iPhone auth app");
+      if (els.circleIpInput) els.circleIpInput.value = "";
+    }));
     els.copyBtn.addEventListener("click", async () => {
       if (!unlocked) return;
       const code = els.codeView.textContent || "";

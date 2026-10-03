@@ -11297,7 +11297,7 @@ def build_vpn_allowlist_status() -> dict:
     }
 
 
-def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
+def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = "security-ui") -> dict:
     ip_n = _normalize_vpn_ip(ip)
     if not ip_n or not _is_public_ipv4(ip_n):
         raise ValueError("A public IPv4 address is required")
@@ -11306,6 +11306,7 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
         raise ValueError("action must be approve, revoke, or deny")
     data = _read_vpn_allowlist()
     now = int(time.time())
+    src = (source or "security-ui").strip()[:40] or "security-ui"
 
     def _without(rows: list, target: str) -> list:
         out = []
@@ -11327,7 +11328,7 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
                 "ip": ip_n,
                 "note": (note or "").strip()[:120],
                 "approved_at": now,
-                "source": "security-ui",
+                "source": src,
             }
         )
     elif action_n == "deny":
@@ -11336,7 +11337,7 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
                 "ip": ip_n,
                 "note": (note or "").strip()[:120],
                 "denied_at": now,
-                "source": "security-ui",
+                "source": src,
             }
         )
         data["pending"].append(
@@ -11359,6 +11360,20 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
         "sync": sync_msg,
         "vpn_allowlist": build_vpn_allowlist_status(),
     }
+
+
+def verify_auth_app_totp(code: str) -> bool:
+    """Validate a TOTP from the phone authenticator PWA against the enrolled secret."""
+    st = _read_ssh_panel_2fa()
+    secret = str(st.get("totp_secret") or "").strip()
+    if not st.get("enabled") or str(st.get("method") or "") != "app" or not secret:
+        return False
+    return verify_totp_code(secret, code, window=1)
+
+
+def require_auth_app_totp(code: str) -> None:
+    if not verify_auth_app_totp(code):
+        raise ValueError("Incorrect or missing authenticator code")
 
 
 def _totp_provisioning(secret_b32: str) -> dict:
@@ -15870,6 +15885,7 @@ class Handler(BaseHTTPRequestHandler):
             "/auth-app-iphone.html",
             "/api/branding",
             "/api/health",
+            "/api/auth-app/vpn-allowlist",
         ) or path.startswith("/static/"):
             pass  # public (auth-app is the phone authenticator PWA)
         elif path in (
@@ -16597,6 +16613,21 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                code = (
+                    self.headers.get("X-SM-Totp")
+                    or (qs.get("code") or [""])[0]
+                    or ""
+                )
+                require_auth_app_totp(str(code))
+                self._json(200, {"ok": True, **build_vpn_allowlist_status()})
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/security/ssh-login",
             "/api/security/ssh-keys",
@@ -16756,6 +16787,25 @@ document.getElementById('f').onsubmit = async (e) => {
             except ValueError as exc:
                 time.sleep(0.25)
                 self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                require_auth_app_totp(str(payload.get("code") or ""))
+                result = mutate_vpn_allowlist(
+                    action=str(payload.get("action") or ""),
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or "from authenticator app"),
+                    source="auth-app",
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
