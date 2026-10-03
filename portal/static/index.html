@@ -1726,6 +1726,14 @@
         </div>
 
         <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Portal IP jail (3 fails → 5 min, same day)</h3></div>
+          <div class="panel-body">
+            <div class="meta-grid" id="secIpJailMeta"></div>
+            <div id="secIpJail"></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
           <div class="panel-head"><h3>Top attackers (7 days)</h3></div>
           <div class="panel-body" id="secTopAttackers"><div class="sec-empty">Loading…</div></div>
         </div>
@@ -3639,6 +3647,37 @@
                 <td class="sec-users">${escHtml(users)}</td>
               </tr>`;
             }).join("")
+          }</tbody></table>`;
+        }
+      }
+
+      const ipJail = data.ip_jail || {};
+      const ipJailMeta = document.getElementById("secIpJailMeta");
+      if (ipJailMeta) {
+        ipJailMeta.innerHTML = `
+          <div class="meta-box"><label>UTC day</label><div>${escHtml(ipJail.day || "—")}</div></div>
+          <div class="meta-box"><label>Threshold</label><div>${escHtml(ipJail.max_fails ?? 3)} fails</div></div>
+          <div class="meta-box"><label>Lockout</label><div>${escHtml(ipJail.lockout_seconds ?? 300)}s</div></div>
+          <div class="meta-box"><label>Currently locked</label><div>${escHtml(ipJail.currently_locked ?? 0)}</div></div>`;
+      }
+      const ipJailEl = document.getElementById("secIpJail");
+      if (ipJailEl) {
+        const locked = ipJail.locked || [];
+        const watching = ipJail.watching || [];
+        if (!locked.length && !watching.length) {
+          ipJailEl.innerHTML = `<div class="sec-empty">No portal login / TOTP failures recorded today.</div>`;
+        } else {
+          const rows = [
+            ...locked.map((r) => ({ ...r, state: `locked ${escHtml(r.retry_after || 0)}s` })),
+            ...watching.map((r) => ({ ...r, state: `${escHtml(r.fail_count || 0)}/${escHtml(ipJail.max_fails ?? 3)} fails` })),
+          ];
+          ipJailEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>State</th><th>Locks today</th><th>Last reason</th></tr></thead><tbody>${
+            rows.map((r) => `<tr>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td>${r.state}</td>
+              <td>${escHtml(r.lock_count_today || 0)}</td>
+              <td class="sec-users">${escHtml(r.last_reason || "—")}</td>
+            </tr>`).join("")
           }</tbody></table>`;
         }
       }

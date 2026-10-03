@@ -38,6 +38,7 @@ fix_mode /opt/wireguard/nas-smb-gateway/credentials 600
 fix_mode /opt/servermanager/panel/ssh-panel-2fa.json 600
 fix_mode /opt/servermanager/panel/auth-app-devices.json 600
 fix_mode /opt/servermanager/panel/vpn-allowlist.json 600
+fix_mode /opt/servermanager/panel/ip-jail.json 600
 fix_mode /opt/servermanager/panel/caddy-sticky-vpn-ips.txt 600
 fix_mode /opt/servermanager/panel/lan-circle-block.txt 600
 
