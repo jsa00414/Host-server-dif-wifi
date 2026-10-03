@@ -103,6 +103,18 @@ conn ikev2-eap
     rightsendcert=never
     eap_identity=%identity
     auto=add
+
+# Do not ESP-encrypt packets sourced from the VPS public IP. Full-tunnel
+# Windows clients hairpin HTTPS to portal/router via the tunnel; without
+# this bypass, replies leave in the clear and browsers time out.
+conn passthrough-vps
+    type=passthrough
+    left=%any
+    leftsubnet=${VPS_PUBLIC_IP:-74.208.76.213}/32
+    right=%any
+    rightsubnet=0.0.0.0/0
+    authby=never
+    auto=route
 EOF
 
 # Bind charon to WAN only. Advertising docker/tun private ADD_4_ADDR makes
