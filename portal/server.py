@@ -10675,10 +10675,10 @@ def unlock_ssh_panel(token: str | None, password: str) -> dict:
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     if not AUTH_PASS:
-        raise ValueError("Portal password is not configured")
+        raise ValueError("Password is not configured")
     if not hmac.compare_digest(str(password or ""), AUTH_PASS):
         time.sleep(0.35)
-        raise ValueError("Incorrect portal password")
+        raise ValueError("Incorrect password")
     now = time.time()
     exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
     _purge_ssh_panel_unlocks(now)
@@ -14920,7 +14920,7 @@ class Handler(BaseHTTPRequestHandler):
             403,
             {
                 "ok": False,
-                "error": "VPS login panel is locked. Re-enter the portal password to unlock.",
+                "error": "VPS login panel is locked. Re-enter the password to unlock.",
                 "panel_lock": st,
             },
         )

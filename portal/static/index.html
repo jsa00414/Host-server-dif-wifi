@@ -3609,9 +3609,9 @@
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
               <div class="lock-title">Locked ${secSev("medium")}</div>
-              <div class="lock-sub">Login method, keys, and users are hidden. Re-enter the <strong>portal admin password</strong> to unlock for ${escHtml(Math.round(unlockSecs / 60))} minutes.</div>
+              <div class="lock-sub">Login method, keys, and users are hidden. Re-enter the password to unlock for ${escHtml(Math.round(unlockSecs / 60))} minutes.</div>
               <div class="sec-ssh-lock-form">
-                <input type="password" id="secSshUnlockPass" placeholder="Portal password" autocomplete="current-password" />
+                <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" />
                 <button type="button" class="primary" id="secSshUnlockBtn">Unlock</button>
               </div>
             </div>`;
@@ -3774,7 +3774,7 @@
     async function unlockSshPanel() {
       const pass = document.getElementById("secSshUnlockPass")?.value || "";
       if (!pass) {
-        setStatus("Enter the portal admin password to unlock.", "err");
+        setStatus("Enter the password to unlock.", "err");
         return;
       }
       setStatus("Unlocking VPS login panel…");
