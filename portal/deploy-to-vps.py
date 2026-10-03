@@ -20,6 +20,13 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/files.html", f"{REMOTE_UI}/static/files.html"),
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
+    (ROOT / "static/email-code-test.html", f"{REMOTE_UI}/static/email-code-test.html"),
+    (ROOT / "static/auth-app.html", f"{REMOTE_UI}/static/auth-app.html"),
+    (ROOT / "static/auth-app.webmanifest", f"{REMOTE_UI}/static/auth-app.webmanifest"),
+    (ROOT / "static/auth-app-sw.js", f"{REMOTE_UI}/static/auth-app-sw.js"),
+    (ROOT / "static/auth-app-icon-180.png", f"{REMOTE_UI}/static/auth-app-icon-180.png"),
+    (ROOT / "static/auth-app-icon-192.png", f"{REMOTE_UI}/static/auth-app-icon-192.png"),
+    (ROOT / "static/auth-app-icon-512.png", f"{REMOTE_UI}/static/auth-app-icon-512.png"),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",

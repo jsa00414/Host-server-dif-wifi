@@ -7138,15 +7138,21 @@ def _security_sshd_config() -> dict:
     }.get(method, "Unknown / custom")
     out.update(_security_root_login_meta(out.get("permit_root_login")))
     # Default locked until the request handler attaches session unlock status.
+    two_factor = ssh_panel_2fa_enabled()
+    method = ssh_panel_2fa_method() if two_factor else "email"
+    required = ["portal_password"]
+    if two_factor:
+        required.append("app_code" if method == "app" else "email_code")
     out["panel_lock"] = {
         "unlocked": False,
         "expires_at": None,
         "expires_in": 0,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-        "two_factor_enabled": ssh_panel_2fa_enabled(),
+        "two_factor_enabled": two_factor,
+        "two_factor_method": method,
+        "auth_app_path": "/auth-app.html",
         "email_to": EMAIL_CODE_TO,
-        "required": ["portal_password"]
-        + (["email_code"] if ssh_panel_2fa_enabled() else []),
+        "required": required,
     }
     return out
 
@@ -10858,23 +10864,102 @@ SSH_PANEL_2FA_PATH = Path(
 _ssh_panel_2fa_lock = threading.Lock()
 
 
-def ssh_panel_2fa_enabled() -> bool:
+def _b32_encode_secret(raw: bytes) -> str:
+    import base64 as _b64
+
+    return _b64.b32encode(raw).decode("ascii").rstrip("=")
+
+
+def _b32_decode_secret(secret: str) -> bytes:
+    import base64 as _b64
+
+    s = re.sub(r"\s+", "", str(secret or "")).upper()
+    pad = "=" * ((8 - len(s) % 8) % 8)
+    return _b64.b32decode(s + pad, casefold=True)
+
+
+def _totp_at(secret_b32: str, for_time: float | None = None, *, step: int = 30, digits: int = 6) -> str:
+    """RFC 6238 TOTP (HMAC-SHA1) without third-party deps."""
+    ts = int(time.time() if for_time is None else for_time)
+    counter = ts // max(1, step)
+    key = _b32_decode_secret(secret_b32)
+    msg = counter.to_bytes(8, "big")
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (
+        ((digest[offset] & 0x7F) << 24)
+        | ((digest[offset + 1] & 0xFF) << 16)
+        | ((digest[offset + 2] & 0xFF) << 8)
+        | (digest[offset + 3] & 0xFF)
+    )
+    mod = 10 ** digits
+    return f"{code_int % mod:0{digits}d}"
+
+
+def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6 or not secret_b32:
+        return False
+    now = time.time()
+    for skew in range(-window, window + 1):
+        expect = _totp_at(secret_b32, now + skew * 30)
+        if hmac.compare_digest(expect, raw):
+            return True
+    return False
+
+
+def _read_ssh_panel_2fa() -> dict:
     try:
         if not SSH_PANEL_2FA_PATH.is_file():
-            return False
+            return {"enabled": False, "method": "email"}
         data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
-        return bool((data or {}).get("enabled"))
+        if not isinstance(data, dict):
+            return {"enabled": False, "method": "email"}
+        method = str(data.get("method") or "email").strip().lower()
+        if method not in ("email", "app"):
+            method = "email"
+        return {
+            "enabled": bool(data.get("enabled")),
+            "method": method,
+            "totp_secret": str(data.get("totp_secret") or ""),
+            "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
+            "updated_at": data.get("updated_at"),
+        }
     except Exception:
-        return False
+        return {"enabled": False, "method": "email"}
 
 
-def _write_ssh_panel_2fa(enabled: bool) -> None:
+def ssh_panel_2fa_enabled() -> bool:
+    return bool(_read_ssh_panel_2fa().get("enabled"))
+
+
+def ssh_panel_2fa_method() -> str:
+    return str(_read_ssh_panel_2fa().get("method") or "email")
+
+
+def _write_ssh_panel_2fa(
+    *,
+    enabled: bool,
+    method: str = "email",
+    totp_secret: str = "",
+) -> None:
     SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    method_n = "app" if str(method).lower() == "app" else "email"
+    prev = _read_ssh_panel_2fa()
+    secret = totp_secret or str(prev.get("totp_secret") or "")
+    if method_n != "app":
+        secret = ""
     payload = {
         "enabled": bool(enabled),
+        "method": method_n,
+        "totp_secret": secret if enabled and method_n == "app" else secret,
         "updated_at": int(time.time()),
         "email_to": EMAIL_CODE_TO,
     }
+    if not enabled:
+        # Keep secret only while enabled as app; wipe on disable for safety.
+        payload["totp_secret"] = ""
+        payload["method"] = method_n
     with _ssh_panel_2fa_lock:
         SSH_PANEL_2FA_PATH.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
@@ -10883,6 +10968,25 @@ def _write_ssh_panel_2fa(enabled: bool) -> None:
             os.chmod(SSH_PANEL_2FA_PATH, 0o600)
         except Exception:
             pass
+
+
+def _totp_provisioning(secret_b32: str) -> dict:
+    from urllib.parse import quote
+
+    account = f"portal@{PORTAL_HOST}"
+    issuer = "ServerManager"
+    label = quote(f"{issuer}:{account}")
+    uri = (
+        f"otpauth://totp/{label}?secret={secret_b32}"
+        f"&issuer={quote(issuer)}&algorithm=SHA1&digits=6&period=30"
+    )
+    return {
+        "secret": secret_b32,
+        "otpauth_url": uri,
+        "account": account,
+        "issuer": issuer,
+        "auth_app_path": f"/auth-app.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+    }
 
 
 def _check_ssh_panel_password(password: str) -> None:
@@ -10901,50 +11005,84 @@ def set_ssh_panel_2fa(
     password: str = "",
     code: str = "",
     client_ip: str = "",
+    method: str = "",
+    enroll_secret: str = "",
 ) -> dict:
-    """Enable/disable email 2FA for the VPS login panel (requires unlock)."""
+    """Enable/disable 2FA for the VPS login panel (email or authenticator app)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     st = ssh_panel_unlock_status(token)
     if not st.get("unlocked"):
         raise ValueError("Unlock the panel before changing two-factor settings")
     want = bool(enabled)
-    if want == ssh_panel_2fa_enabled():
+    cfg = _read_ssh_panel_2fa()
+    method_n = str(method or cfg.get("method") or "app").strip().lower()
+    if method_n not in ("email", "app"):
+        method_n = "app"
+    if want and want == bool(cfg.get("enabled")) and method_n == cfg.get("method"):
         return {
             "ok": True,
-            "two_factor_enabled": want,
+            "two_factor_enabled": True,
+            "two_factor_method": cfg.get("method"),
             "email_to": EMAIL_CODE_TO,
-            "message": "Two-factor already "
-            + ("enabled." if want else "disabled."),
+            "message": "Two-factor already enabled.",
         }
     if want:
-        # Confirm with email code when turning 2FA on.
+        _check_ssh_panel_password(password)
+        if method_n == "app":
+            secret = str(enroll_secret or "").strip()
+            if not secret:
+                secret = _b32_encode_secret(secrets.token_bytes(20))
+                prov = _totp_provisioning(secret)
+                return {
+                    "ok": True,
+                    "need_code": True,
+                    "two_factor_enabled": False,
+                    "two_factor_method": "app",
+                    "enroll": prov,
+                    "enroll_secret": secret,
+                    "email_to": EMAIL_CODE_TO,
+                    "message": "Scan the QR in the Authenticator app, then enter the 6-digit code.",
+                }
+            if not verify_totp_code(secret, code):
+                time.sleep(0.25)
+                raise ValueError("Incorrect authenticator code")
+            _write_ssh_panel_2fa(enabled=True, method="app", totp_secret=secret)
+            return {
+                "ok": True,
+                "two_factor_enabled": True,
+                "two_factor_method": "app",
+                "email_to": EMAIL_CODE_TO,
+                "auth_app_path": "/auth-app.html",
+                "message": "Authenticator app two-factor enabled.",
+            }
+        # Email method
         key = f"ssh-2fa-enable:{token}"
         if not str(code or "").strip():
-            _check_ssh_panel_password(password)
             sent = send_email_test_code(client_ip or "panel", key=key)
             return {
                 "ok": True,
                 "need_code": True,
                 "two_factor_enabled": False,
+                "two_factor_method": "email",
                 "email_to": EMAIL_CODE_TO,
                 "message": sent.get("message")
                 or "Enter the email code to enable two-factor.",
             }
-        _check_ssh_panel_password(password)
         verify_email_test_code(client_ip or "panel", code, key=key)
-        _write_ssh_panel_2fa(True)
+        _write_ssh_panel_2fa(enabled=True, method="email", totp_secret="")
         return {
             "ok": True,
             "two_factor_enabled": True,
+            "two_factor_method": "email",
             "email_to": EMAIL_CODE_TO,
             "message": "Two-factor enabled.",
         }
-    # Disable only needs the panel unlock (already checked).
-    _write_ssh_panel_2fa(False)
+    _write_ssh_panel_2fa(enabled=False, method=method_n, totp_secret="")
     return {
         "ok": True,
         "two_factor_enabled": False,
+        "two_factor_method": method_n,
         "email_to": EMAIL_CODE_TO,
         "message": "Two-factor disabled for VPS login panel.",
     }
@@ -10963,11 +11101,14 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     now = time.time()
     _purge_ssh_panel_unlocks(now)
     two_factor = ssh_panel_2fa_enabled()
+    method = ssh_panel_2fa_method() if two_factor else "email"
     required = ["portal_password"]
     if two_factor:
-        required.append("email_code")
+        required.append("app_code" if method == "app" else "email_code")
     base = {
         "two_factor_enabled": two_factor,
+        "two_factor_method": method,
+        "auth_app_path": "/auth-app.html",
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -11003,28 +11144,51 @@ def unlock_ssh_panel(
     code: str = "",
     client_ip: str = "",
 ) -> dict:
-    """Unlock SSH panel with !!<portal password>!! (+ email code when 2FA on)."""
+    """Unlock SSH panel with !!password!! (+ authenticator or email code when 2FA on)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     _check_ssh_panel_password(password)
-    two_factor = ssh_panel_2fa_enabled()
+    cfg = _read_ssh_panel_2fa()
+    two_factor = bool(cfg.get("enabled"))
+    method = str(cfg.get("method") or "email")
     if two_factor:
-        key = f"ssh-unlock:{token}"
-        if not str(code or "").strip():
-            sent = send_email_test_code(client_ip or "panel", key=key)
-            return {
-                "ok": True,
-                "unlocked": False,
-                "need_code": True,
-                "two_factor_enabled": True,
-                "email_to": EMAIL_CODE_TO,
-                "expires_at": None,
-                "expires_in": 0,
-                "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-                "message": sent.get("message")
-                or "Enter the email verification code to unlock.",
-            }
-        verify_email_test_code(client_ip or "panel", code, key=key)
+        if method == "app":
+            secret = str(cfg.get("totp_secret") or "")
+            if not str(code or "").strip():
+                return {
+                    "ok": True,
+                    "unlocked": False,
+                    "need_code": True,
+                    "two_factor_enabled": True,
+                    "two_factor_method": "app",
+                    "auth_app_path": "/auth-app.html",
+                    "email_to": EMAIL_CODE_TO,
+                    "expires_at": None,
+                    "expires_in": 0,
+                    "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                    "message": "Enter the code from the Authenticator app.",
+                }
+            if not verify_totp_code(secret, code):
+                time.sleep(0.25)
+                raise ValueError("Incorrect authenticator code")
+        else:
+            key = f"ssh-unlock:{token}"
+            if not str(code or "").strip():
+                sent = send_email_test_code(client_ip or "panel", key=key)
+                return {
+                    "ok": True,
+                    "unlocked": False,
+                    "need_code": True,
+                    "two_factor_enabled": True,
+                    "two_factor_method": "email",
+                    "email_to": EMAIL_CODE_TO,
+                    "expires_at": None,
+                    "expires_in": 0,
+                    "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                    "message": sent.get("message")
+                    or "Enter the email verification code to unlock.",
+                }
+            verify_email_test_code(client_ip or "panel", code, key=key)
     now = time.time()
     exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
     _purge_ssh_panel_unlocks(now)
@@ -11035,6 +11199,8 @@ def unlock_ssh_panel(
         "unlocked": True,
         "need_code": False,
         "two_factor_enabled": two_factor,
+        "two_factor_method": method if two_factor else "email",
+        "auth_app_path": "/auth-app.html",
         "email_to": EMAIL_CODE_TO,
         "expires_at": int(exp),
         "expires_in": int(exp - now),
@@ -11047,11 +11213,14 @@ def lock_ssh_panel(token: str | None) -> dict:
     if token:
         with _ssh_panel_unlocks_lock:
             _ssh_panel_unlocks.pop(token, None)
+    method = ssh_panel_2fa_method() if ssh_panel_2fa_enabled() else "email"
     return {
         "ok": True,
         "unlocked": False,
         "need_code": False,
         "two_factor_enabled": ssh_panel_2fa_enabled(),
+        "two_factor_method": method,
+        "auth_app_path": "/auth-app.html",
         "email_to": EMAIL_CODE_TO,
         "expires_at": None,
         "expires_in": 0,
@@ -15303,8 +15472,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/login.html", "/email-code-test.html", "/api/branding", "/api/health") or path.startswith("/static/"):
-            pass  # public
+        if path in (
+            "/login.html",
+            "/email-code-test.html",
+            "/auth-app.html",
+            "/api/branding",
+            "/api/health",
+        ) or path.startswith("/static/"):
+            pass  # public (auth-app is the phone authenticator PWA)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif path in ("/api/email-code/send", "/api/email-code/verify"):
@@ -15463,15 +15638,29 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(
                 STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
             )
+        if path == "/auth-app.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app.html", "text/html; charset=utf-8"
+            )
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
             if not str(target).startswith(str(STATIC_DIR.resolve())):
                 self._json(404, {"error": "not found"})
                 return
-            ctype = "text/css" if target.suffix == ".css" else "application/javascript"
-            if target.suffix == ".html":
+            ctype = "application/octet-stream"
+            if target.suffix == ".css":
+                ctype = "text/css; charset=utf-8"
+            elif target.suffix == ".js":
+                ctype = "application/javascript; charset=utf-8"
+            elif target.suffix == ".html":
                 ctype = "text/html; charset=utf-8"
+            elif target.suffix == ".webmanifest" or target.name.endswith(".webmanifest"):
+                ctype = "application/manifest+json; charset=utf-8"
+            elif target.suffix == ".png":
+                ctype = "image/png"
+            elif target.suffix == ".svg":
+                ctype = "image/svg+xml"
             return self._serve_file(target, ctype)
         if path == "/api/vps-status":
             if not self._require_auth(api=True):
@@ -15998,7 +16187,12 @@ document.getElementById('f').onsubmit = async (e) => {
     def do_HEAD(self) -> None:  # noqa: N802
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+        if path in (
+            "/login.html",
+            "/auth-app.html",
+            "/api/branding",
+            "/api/health",
+        ) or path.startswith("/static/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             return self.do_GET()
@@ -16303,14 +16497,34 @@ document.getElementById('f').onsubmit = async (e) => {
                         password=str(
                             payload.get("password") or payload.get("portal_password") or ""
                         ),
-                        code=str(payload.get("code") or payload.get("email_code") or ""),
+                        code=str(
+                            payload.get("code")
+                            or payload.get("email_code")
+                            or payload.get("app_code")
+                            or ""
+                        ),
                         client_ip=self.client_address[0],
+                        method=str(
+                            payload.get("method")
+                            or payload.get("two_factor_method")
+                            or ""
+                        ),
+                        enroll_secret=str(
+                            payload.get("enroll_secret")
+                            or payload.get("totp_secret")
+                            or ""
+                        ),
                     )
                 else:
                     result = unlock_ssh_panel(
                         tok,
                         str(payload.get("password") or payload.get("portal_password") or ""),
-                        code=str(payload.get("code") or payload.get("email_code") or ""),
+                        code=str(
+                            payload.get("code")
+                            or payload.get("email_code")
+                            or payload.get("app_code")
+                            or ""
+                        ),
                         client_ip=self.client_address[0],
                     )
                 # Attach fresh ssh snapshot for UI refresh (read-only).
@@ -16322,7 +16536,14 @@ document.getElementById('f').onsubmit = async (e) => {
                 else:
                     # Keep details hidden while locked; still surface 2FA flags.
                     result["ssh"] = {"panel_lock": {**lock, **{
-                        k: result[k] for k in ("need_code", "two_factor_enabled", "email_to")
+                        k: result[k]
+                        for k in (
+                            "need_code",
+                            "two_factor_enabled",
+                            "two_factor_method",
+                            "auth_app_path",
+                            "email_to",
+                        )
                         if k in result
                     }}, "ok": True}
                 self._json(200, result)

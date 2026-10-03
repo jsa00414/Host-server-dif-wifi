@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0f0d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SM Auth" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/static/auth-app.webmanifest" />
+  <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
+  <title>ServerManager Authenticator</title>
+  <style>
+    :root {
+      --bg0: #0a0f0d;
+      --bg1: #111916;
+      --line: rgba(170, 210, 185, .14);
+      --text: #e8f2ec;
+      --muted: #84998c;
+      --accent: #3ddea0;
+      --danger: #ff6b6b;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%;
+      background:
+        radial-gradient(120% 80% at 50% -10%, rgba(61,222,160,.16), transparent 55%),
+        linear-gradient(180deg, #0c1410 0%, var(--bg0) 45%, #070b09 100%);
+      color: var(--text);
+      font-family: "Sora", system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    body {
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      padding: calc(18px + var(--safe-top)) 20px calc(24px + var(--safe-bottom));
+    }
+    .brand {
+      text-align: center;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      font-size: .72rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin: 8px 0 4px;
+    }
+    .title {
+      text-align: center;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -.03em;
+      margin: 0 0 6px;
+    }
+    .sub {
+      text-align: center;
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.45;
+      margin: 0 auto 22px;
+      max-width: 28rem;
+    }
+    .stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      width: min(420px, 100%);
+      margin: 0 auto;
+    }
+    .code-shell {
+      width: 100%;
+      border: 1px solid rgba(61,222,160,.28);
+      border-radius: 22px;
+      background: color-mix(in srgb, var(--bg1) 92%, black);
+      padding: 28px 18px 22px;
+      text-align: center;
+      box-shadow: 0 18px 50px rgba(0,0,0,.35);
+    }
+    .acct {
+      color: var(--muted);
+      font-size: .78rem;
+      margin-bottom: 14px;
+      word-break: break-all;
+    }
+    .code {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: clamp(2.4rem, 12vw, 3.2rem);
+      font-weight: 600;
+      letter-spacing: .28em;
+      margin-left: .28em;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .bar {
+      margin: 18px auto 0;
+      width: min(220px, 70%);
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: 100%;
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--accent), #8af0c4);
+      transition: transform .2s linear;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      width: 100%;
+    }
+    button, .btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font: inherit;
+      font-size: .88rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary, .btn.primary {
+      background: rgba(61,222,160,.18);
+      border-color: rgba(61,222,160,.45);
+      color: #d8ffe9;
+    }
+    button.danger {
+      border-color: rgba(255,107,107,.35);
+      color: #ffb4b4;
+    }
+    button:disabled { opacity: .45; cursor: default; }
+    .hint {
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.45;
+      text-align: center;
+      max-width: 28rem;
+    }
+    .install {
+      width: 100%;
+      border: 1px dashed rgba(61,222,160,.35);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(61,222,160,.06);
+      color: var(--text);
+      font-size: .82rem;
+      line-height: 1.45;
+      display: none;
+    }
+    .install.show { display: block; }
+    .install strong { color: var(--accent); }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      font-size: .9rem;
+      line-height: 1.5;
+      padding: 24px 8px;
+    }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(24px + var(--safe-bottom));
+      transform: translateX(-50%) translateY(20px);
+      background: #15231d;
+      border: 1px solid rgba(61,222,160,.35);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: .8rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease, transform .2s ease;
+      z-index: 20;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .manual {
+      width: 100%;
+      display: none;
+      gap: 10px;
+      flex-direction: column;
+    }
+    .manual.show { display: flex; }
+    .manual input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      color: var(--text);
+      padding: 12px 14px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .9rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .manual label {
+      font-size: .78rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="brand">ServerManager</div>
+  <h1 class="title">Authenticator</h1>
+  <p class="sub">Codes for unlocking the VPS login panel. Install this page as an app on your phone.</p>
+
+  <div class="stage" id="stage">
+    <div class="code-shell" id="codeShell" hidden>
+      <div class="acct" id="acctLabel"></div>
+      <div class="code" id="codeView">------</div>
+      <div class="bar"><i id="tickBar"></i></div>
+    </div>
+    <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
+    <div class="install" id="installHint"></div>
+    <div class="actions">
+      <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+      <button type="button" id="installBtn" hidden>Add to Home Screen</button>
+      <button type="button" id="manualBtn">Enter secret</button>
+      <button type="button" class="danger" id="clearBtn" hidden>Remove account</button>
+    </div>
+    <div class="manual" id="manualForm">
+      <label for="secretInput">Base32 secret from portal</label>
+      <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP…" />
+      <label for="accountInput">Account label (optional)</label>
+      <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
+      <button type="button" class="primary" id="saveManualBtn">Save on this phone</button>
+    </div>
+    <p class="hint" id="hint">Works offline after install. Codes refresh every 30 seconds.</p>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const STORE_KEY = "sm.auth.totp.v1";
+    const PERIOD = 30;
+    const DIGITS = 6;
+
+    const els = {
+      codeShell: document.getElementById("codeShell"),
+      emptyView: document.getElementById("emptyView"),
+      acctLabel: document.getElementById("acctLabel"),
+      codeView: document.getElementById("codeView"),
+      tickBar: document.getElementById("tickBar"),
+      copyBtn: document.getElementById("copyBtn"),
+      clearBtn: document.getElementById("clearBtn"),
+      installBtn: document.getElementById("installBtn"),
+      installHint: document.getElementById("installHint"),
+      manualBtn: document.getElementById("manualBtn"),
+      manualForm: document.getElementById("manualForm"),
+      secretInput: document.getElementById("secretInput"),
+      accountInput: document.getElementById("accountInput"),
+      saveManualBtn: document.getElementById("saveManualBtn"),
+      toast: document.getElementById("toast"),
+      hint: document.getElementById("hint"),
+    };
+
+    let account = null;
+    let deferredPrompt = null;
+    let toastTimer = null;
+
+    function toast(msg) {
+      els.toast.textContent = msg;
+      els.toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+    }
+
+    function loadAccount() {
+      try {
+        const raw = localStorage.getItem(STORE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (!data || !data.secret) return null;
+        return {
+          secret: String(data.secret).replace(/\s+/g, "").toUpperCase(),
+          issuer: String(data.issuer || "ServerManager"),
+          account: String(data.account || "portal"),
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function saveAccount(next) {
+      localStorage.setItem(STORE_KEY, JSON.stringify(next));
+      account = next;
+      render();
+    }
+
+    function clearAccount() {
+      localStorage.removeItem(STORE_KEY);
+      account = null;
+      render();
+      toast("Account removed");
+    }
+
+    function parseHash() {
+      const hash = (location.hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      const params = new URLSearchParams(hash);
+      const secret = (params.get("secret") || "").replace(/\s+/g, "").toUpperCase();
+      if (!secret) return null;
+      return {
+        secret,
+        issuer: params.get("issuer") || "ServerManager",
+        account: params.get("account") || "portal",
+      };
+    }
+
+    function b32Decode(secret) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = "";
+      const cleaned = String(secret || "").replace(/=+$/, "").toUpperCase();
+      for (const ch of cleaned) {
+        const val = alphabet.indexOf(ch);
+        if (val < 0) continue;
+        bits += val.toString(2).padStart(5, "0");
+      }
+      const bytes = [];
+      for (let i = 0; i + 8 <= bits.length; i += 8) {
+        bytes.push(parseInt(bits.slice(i, i + 8), 2));
+      }
+      return new Uint8Array(bytes);
+    }
+
+    async function hmacSha1(keyBytes, msgBytes) {
+      const key = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "HMAC", hash: "SHA-1" },
+        false,
+        ["sign"]
+      );
+      const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
+      return new Uint8Array(sig);
+    }
+
+    async function totpAt(secret, forTime = Date.now() / 1000) {
+      const counter = Math.floor(forTime / PERIOD);
+      const msg = new Uint8Array(8);
+      let n = counter;
+      for (let i = 7; i >= 0; i--) {
+        msg[i] = n & 0xff;
+        n = Math.floor(n / 256);
+      }
+      const digest = await hmacSha1(b32Decode(secret), msg);
+      const offset = digest[digest.length - 1] & 0x0f;
+      const codeInt =
+        ((digest[offset] & 0x7f) << 24) |
+        ((digest[offset + 1] & 0xff) << 16) |
+        ((digest[offset + 2] & 0xff) << 8) |
+        (digest[offset + 3] & 0xff);
+      return String(codeInt % 10 ** DIGITS).padStart(DIGITS, "0");
+    }
+
+    function remaining() {
+      const now = Date.now() / 1000;
+      return PERIOD - (now % PERIOD);
+    }
+
+    async function tick() {
+      if (!account) return;
+      try {
+        const code = await totpAt(account.secret);
+        els.codeView.textContent = code;
+        const left = remaining();
+        els.tickBar.style.transform = `scaleX(${left / PERIOD})`;
+      } catch (err) {
+        els.codeView.textContent = "------";
+        els.hint.textContent = "Could not generate code. Check the secret.";
+      }
+    }
+
+    function isIos() {
+      return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    }
+
+    function isStandalone() {
+      return window.matchMedia("(display-mode: standalone)").matches ||
+        window.navigator.standalone === true;
+    }
+
+    function updateInstallUi() {
+      if (isStandalone()) {
+        els.installHint.classList.remove("show");
+        els.installBtn.hidden = true;
+        return;
+      }
+      if (deferredPrompt) {
+        els.installBtn.hidden = false;
+        els.installHint.classList.remove("show");
+        return;
+      }
+      if (isIos()) {
+        els.installBtn.hidden = true;
+        els.installHint.classList.add("show");
+        els.installHint.innerHTML =
+          "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>. Then open SM Auth from your home screen.";
+      } else {
+        els.installBtn.hidden = true;
+        els.installHint.classList.add("show");
+        els.installHint.innerHTML =
+          "On Android/Chrome use the browser menu → <strong>Install app</strong> / <strong>Add to Home screen</strong>.";
+      }
+    }
+
+    function render() {
+      if (account) {
+        els.codeShell.hidden = false;
+        els.emptyView.hidden = true;
+        els.copyBtn.hidden = false;
+        els.clearBtn.hidden = false;
+        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
+        els.manualForm.classList.remove("show");
+        tick();
+      } else {
+        els.codeShell.hidden = true;
+        els.emptyView.hidden = false;
+        els.copyBtn.hidden = true;
+        els.clearBtn.hidden = true;
+        els.codeView.textContent = "------";
+      }
+      updateInstallUi();
+    }
+
+    els.copyBtn.addEventListener("click", async () => {
+      const code = els.codeView.textContent || "";
+      if (!/^\d{6}$/.test(code)) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        toast("Copied");
+      } catch (_) {
+        toast(code);
+      }
+    });
+
+    els.clearBtn.addEventListener("click", () => {
+      if (confirm("Remove the authenticator account from this phone?")) clearAccount();
+    });
+
+    els.manualBtn.addEventListener("click", () => {
+      els.manualForm.classList.toggle("show");
+      if (els.manualForm.classList.contains("show")) els.secretInput.focus();
+    });
+
+    els.saveManualBtn.addEventListener("click", () => {
+      const secret = (els.secretInput.value || "").replace(/\s+/g, "").toUpperCase();
+      if (secret.length < 16) {
+        toast("Secret looks too short");
+        return;
+      }
+      saveAccount({
+        secret,
+        issuer: "ServerManager",
+        account: (els.accountInput.value || "portal").trim() || "portal",
+      });
+      els.secretInput.value = "";
+      toast("Saved on this phone");
+      history.replaceState(null, "", location.pathname);
+    });
+
+    els.installBtn.addEventListener("click", async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      updateInstallUi();
+    });
+
+    window.addEventListener("beforeinstallprompt", (ev) => {
+      ev.preventDefault();
+      deferredPrompt = ev;
+      updateInstallUi();
+    });
+
+    const fromHash = parseHash();
+    if (fromHash) {
+      saveAccount(fromHash);
+      history.replaceState(null, "", location.pathname);
+      toast("Account saved on this phone");
+    } else {
+      account = loadAccount();
+      render();
+    }
+
+    setInterval(tick, 250);
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/static/auth-app-sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
