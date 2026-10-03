@@ -1004,9 +1004,11 @@
           allowed.forEach((row) => {
             const sealed = !!(row.sealed || row.hidden || row.source === "router");
             const isLan = row.kind === "lan" || String(row.ip || "").startsWith("192.168.8.");
+            const name = String(row.name || row.hostname || "").trim();
+            const title = name || row.ip;
             const detail = sealed
-              ? "sealed · always on"
-              : `allowlisted · ${isLan ? "LAN · " : ""}${esc(row.note || row.source || "—")}`;
+              ? `${esc(row.ip)} · sealed · always on`
+              : `${esc(row.ip)} · allowlisted${isLan ? " · LAN" : ""}${name ? "" : ` · ${esc(row.note || row.source || "—")}`}`;
             const actions = sealed
               ? `<div class="info">Cannot remove sealed router WAN</div>`
               : `<div class="row-actions">
@@ -1014,7 +1016,7 @@
               <button type="button" class="danger circle-revoke" data-ip="${esc(row.ip)}">Remove</button>
             </div>`;
             blocks.push(`<div class="circle-row">
-              <div class="ip">${esc(row.ip)}</div>
+              <div class="ip">${esc(title)}</div>
               <div class="info">${detail}</div>
               ${actions}
             </div>`);
@@ -1025,11 +1027,13 @@
         pending.forEach((row) => {
           const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
           const authApp = !!(row.auth_app || row.auth_app_enrolled);
+          const name = String(row.name || row.hostname || "").trim();
+          const title = name || row.ip;
           const detail = isLan
-            ? `${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled (access kept)" : ""}${row.online ? " · online" : " · offline"} · ${esc(row.name || row.note || "device")}`
-            : `${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
+            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${row.online ? " · online" : " · offline"}`
+            : `${esc(row.ip)} · ${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
           blocks.push(`<div class="circle-row">
-            <div class="ip">${esc(row.ip)}</div>
+            <div class="ip">${esc(title)}</div>
             <div class="info">${detail}</div>
             <div class="row-actions">
               <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>

@@ -11332,6 +11332,7 @@ def auth_app_enrolled_lan_ips() -> set[str]:
 
 def list_auth_app_devices() -> list[dict]:
     """Public-safe enrolled Authenticator device rows for the Security panel."""
+    names = _lan_device_name_by_ip()
     rows: list[dict] = []
     for row in _read_auth_app_devices().get("devices") or []:
         if not isinstance(row, dict):
@@ -11339,10 +11340,13 @@ def list_auth_app_devices() -> list[dict]:
         ip = _normalize_vpn_ip(row.get("ip", ""))
         if not _is_home_lan_ipv4(ip) or not row.get("enrolled", True):
             continue
+        name = str(row.get("name") or row.get("hostname") or names.get(ip) or "").strip()
         rows.append(
             {
                 "ip": ip,
-                "note": str(row.get("note") or "")[:120],
+                "name": name[:64],
+                "hostname": name[:64],
+                "note": str(row.get("note") or name or "")[:120],
                 "platform": str(row.get("platform") or "")[:40],
                 "first_seen": int(row.get("first_seen") or 0),
                 "last_seen": int(row.get("last_seen") or 0),
@@ -11591,6 +11595,49 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
     data["pending"] = pending
     data["attempts"] = attempts
     return data, changed
+
+
+def _lan_device_name_by_ip() -> dict[str, str]:
+    """Map home-LAN IPs → friendly hostnames from the live LAN inventory."""
+    out: dict[str, str] = {}
+    try:
+        lan = read_lan_devices()
+    except Exception:
+        return out
+    for d in list(lan.get("devices") or []) if lan.get("ok") else []:
+        if not isinstance(d, dict):
+            continue
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not _is_home_lan_ipv4(ip):
+            continue
+        name = str(d.get("hostname") or d.get("name") or "").strip()
+        if name:
+            out[ip] = name[:64]
+    return out
+
+
+def _attach_circle_device_names(rows: list, *, names: dict[str, str] | None = None) -> list:
+    """Ensure each circle row carries a display name when known."""
+    name_map = names if names is not None else _lan_device_name_by_ip()
+    out: list = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        existing = str(item.get("name") or item.get("hostname") or "").strip()
+        looked = name_map.get(ip, "") if ip else ""
+        name = existing or looked
+        if name:
+            item["name"] = name[:64]
+            item["hostname"] = name[:64]
+            # Keep a readable note for LAN rows that only say "from authenticator app".
+            note = str(item.get("note") or "").strip()
+            if item.get("kind") == "lan" or _is_home_lan_ipv4(ip):
+                if not note or note.lower().startswith("from authenticator") or note.lower().startswith("lan "):
+                    item["note"] = name[:120]
+        out.append(item)
+    return out
 
 
 def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dict:
@@ -12135,9 +12182,10 @@ def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
 def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
     data = sync_offline_lan_into_pending(_read_vpn_allowlist())
     view = _public_vpn_allowlist_view(data, for_auth_app=for_auth_app)
+    names = _lan_device_name_by_ip()
     enrolled = auth_app_enrolled_lan_ips()
     pending = []
-    for row in view.get("pending") or []:
+    for row in _attach_circle_device_names(view.get("pending") or [], names=names):
         if not isinstance(row, dict):
             continue
         item = dict(row)
@@ -12146,23 +12194,29 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
             item["auth_app"] = True
             item["auth_app_enrolled"] = True
         pending.append(item)
-    recent = list(reversed(list(view.get("attempts") or [])[-40:]))
+    allowed = _attach_circle_device_names(view.get("allowed") or [], names=names)
+    denied = _attach_circle_device_names(view.get("denied") or [], names=names)
+    recent = _attach_circle_device_names(
+        list(reversed(list(view.get("attempts") or [])[-40:])),
+        names=names,
+    )
     return {
         "ok": True,
-        "allowed": view.get("allowed") or [],
-        "denied": view.get("denied") or [],
+        "allowed": allowed,
+        "denied": denied,
         "pending": pending,
         "attempts": recent,
         "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
         "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
         "sticky_file": str(STICKY_VPN_IPS_PATH),
         "auth_app_devices": sorted(enrolled),
+        "device_names": names,
         "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
             "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
-            "Home LAN devices stay pending until approved; pending/denied LAN IPs "
-            "are blocked on the Flint router before NAT — except enrolled "
+            "Home LAN devices show by device name when known from DHCP/aliases; "
+            "pending/denied LAN IPs are blocked on the Flint router before NAT — except enrolled "
             "Authenticator phones, which keep portal access while remaining pending."
             + (
                 ""
@@ -12187,10 +12241,24 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     src = (source or "security-ui").strip()[:40] or "security-ui"
     is_lan = _is_home_lan_ipv4(ip_n)
     prev_hidden = False
-    for prev in list(data.get("allowed") or []):
-        if isinstance(prev, dict) and _normalize_vpn_ip(prev.get("ip", "")) == ip_n:
-            prev_hidden = bool(prev.get("hidden"))
-            break
+    prev_name = ""
+    prev_note = ""
+    for bucket in ("allowed", "pending", "denied"):
+        for prev in list(data.get(bucket) or []):
+            if isinstance(prev, dict) and _normalize_vpn_ip(prev.get("ip", "")) == ip_n:
+                if bucket == "allowed":
+                    prev_hidden = bool(prev.get("hidden"))
+                prev_name = str(prev.get("name") or prev.get("hostname") or "").strip() or prev_name
+                prev_note = str(prev.get("note") or "").strip() or prev_note
+                break
+    if is_lan and not prev_name:
+        prev_name = _lan_device_name_by_ip().get(ip_n, "")
+    device_name = prev_name
+    note_n = (note or "").strip()[:120]
+    if not note_n and device_name:
+        note_n = device_name[:120]
+    elif not note_n and prev_note:
+        note_n = prev_note[:120]
 
     def _without(rows: list, target: str) -> list:
         out = []
@@ -12219,10 +12287,13 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
         else:
             row = {
                 "ip": ip_n,
-                "note": (note or "").strip()[:120],
+                "note": note_n,
                 "approved_at": now,
                 "source": src,
             }
+            if device_name:
+                row["name"] = device_name[:64]
+                row["hostname"] = device_name[:64]
             if is_lan:
                 row["kind"] = "lan"
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
@@ -12230,33 +12301,38 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
                 row["hidden"] = True
             data["allowed"].append(row)
     elif action_n == "deny":
-        data["denied"].append(
-            {
-                "ip": ip_n,
-                "note": (note or "").strip()[:120],
-                "denied_at": now,
-                "source": src,
-                **({"kind": "lan"} if is_lan else {}),
-            }
-        )
-        data["pending"].append(
-            {
-                "ip": ip_n,
-                "status": "denied",
-                "first_seen": now,
-                "last_seen": now,
-                "count": 1,
-                **(
-                    {
-                        "source": "lan-offline",
-                        "kind": "lan",
-                        "vip": "",
-                    }
-                    if is_lan
-                    else {}
-                ),
-            }
-        )
+        deny_row = {
+            "ip": ip_n,
+            "note": note_n,
+            "denied_at": now,
+            "source": src,
+            **({"kind": "lan"} if is_lan else {}),
+        }
+        if device_name:
+            deny_row["name"] = device_name[:64]
+            deny_row["hostname"] = device_name[:64]
+        data["denied"].append(deny_row)
+        pend = {
+            "ip": ip_n,
+            "status": "denied",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": note_n,
+            **(
+                {
+                    "source": "lan-offline",
+                    "kind": "lan",
+                    "vip": "",
+                }
+                if is_lan
+                else {}
+            ),
+        }
+        if device_name:
+            pend["name"] = device_name[:64]
+            pend["hostname"] = device_name[:64]
+        data["pending"].append(pend)
     elif action_n == "pending":
         # Demote from allowlist back to pending (not denied).
         pending_row = {
@@ -12265,9 +12341,12 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
             "first_seen": now,
             "last_seen": now,
             "count": 1,
-            "note": (note or "").strip()[:120] or "moved from allowlist",
+            "note": note_n or "moved from allowlist",
             "source": src,
         }
+        if device_name:
+            pending_row["name"] = device_name[:64]
+            pending_row["hostname"] = device_name[:64]
         if is_lan:
             pending_row.update(
                 {
@@ -12289,6 +12368,7 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
         "ok": True,
         "action": action_n,
         "ip": ip_n,
+        "name": device_name or "",
         "sync": sync_msg,
         "vpn_allowlist": build_vpn_allowlist_status(for_auth_app=for_auth),
     }
