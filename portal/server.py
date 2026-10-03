@@ -8146,8 +8146,9 @@ def _security_attacker_stats(banned_ips: list[str]) -> dict:
 
     top_list = [
         {"ip": ip, "attempts": n}
-        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)[:20]
-    ]
+        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)
+        if ip not in banned_set
+    ][:20]
     banned_details = []
     for ip in banned_ips:
         row = by_banned.get(ip) or {
@@ -8299,6 +8300,7 @@ def _security_file_checks() -> list[dict]:
         ("/opt/servermanager/panel/ssh-panel-2fa.json", 0o600, False),
         ("/opt/servermanager/panel/auth-app-devices.json", 0o600, False),
         ("/opt/servermanager/panel/vpn-allowlist.json", 0o600, False),
+        ("/opt/servermanager/panel/ip-jail.json", 0o600, False),
         ("/opt/servermanager/panel/caddy-sticky-vpn-ips.txt", 0o600, False),
     ]
     for path, want_mode, required in targets:
@@ -8589,6 +8591,7 @@ def build_security_status() -> dict:
         "counts": counts,
         "findings": findings[:40],
         "fail2ban": f2b,
+        "ip_jail": build_ip_jail_status(),
         "attackers": attackers,
         "ssh": ssh,
         "firewall": ufw,
@@ -10951,7 +10954,13 @@ def portal_login_2fa_method() -> str:
 
 def begin_portal_login(*, username: str, password: str, client_ip: str = "") -> dict:
     """Step 1: password OK → issue pending login and request 2FA code."""
+    ip_jail_assert_allowed(client_ip)
     if not check_credentials(username, password):
+        st = ip_jail_record_failure(client_ip, reason="login_password")
+        if st.get("locked"):
+            raise PermissionError(
+                f"Too many failed sign-in attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            )
         raise PermissionError("Invalid username or password")
     method = portal_login_2fa_method()
     login_token = secrets.token_urlsafe(24)
@@ -10989,6 +10998,7 @@ def complete_portal_login(
     client_ip: str = "",
 ) -> dict:
     """Step 2: verify 2FA code for a pending login, then create session."""
+    ip_jail_assert_allowed(client_ip)
     token = str(login_token or "").strip()
     if not token:
         raise ValueError("Login session expired. Sign in again.")
@@ -11002,12 +11012,26 @@ def complete_portal_login(
     if method == "app":
         secret = str(_read_ssh_panel_2fa().get("totp_secret") or "")
         if not verify_totp_code(secret, code):
+            st = ip_jail_record_failure(client_ip, reason="login_totp")
             time.sleep(0.25)
+            if st.get("locked"):
+                raise ValueError(
+                    f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                )
             raise ValueError("Incorrect authenticator code")
     else:
-        verify_email_test_code(client_ip or "login", code, key=f"portal-login:{token}")
+        try:
+            verify_email_test_code(client_ip or "login", code, key=f"portal-login:{token}")
+        except Exception:
+            st = ip_jail_record_failure(client_ip, reason="login_email_code")
+            if st.get("locked"):
+                raise ValueError(
+                    f"Too many failed email codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                ) from None
+            raise
     with _pending_logins_lock:
         _pending_logins.pop(token, None)
+    ip_jail_clear_success(client_ip)
     session = create_session()
     return {
         "ok": True,
@@ -11250,13 +11274,36 @@ AUTH_APP_DEVICES_PATH = Path(
 AUTH_APP_ENROLL_UNLOCK_SECONDS = int(
     os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900")
 )  # auto-relock new-device enrollment
-AUTH_APP_TOTP_MAX_FAILS = int(os.environ.get("AUTH_APP_TOTP_MAX_FAILS", "8"))
-AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "300"))
-AUTH_APP_TOTP_LOCKOUT = int(os.environ.get("AUTH_APP_TOTP_LOCKOUT", "300"))
+# Portal / auth-app IP jail:
+#   3 fails → 10 min lockout; 5 lockout rounds in 1 UTC day → permanent ban.
+IP_JAIL_MAX_FAILS = int(
+    os.environ.get(
+        "IP_JAIL_MAX_FAILS",
+        os.environ.get("AUTH_APP_TOTP_MAX_FAILS", "3"),
+    )
+)
+IP_JAIL_LOCKOUT_SECONDS = int(
+    os.environ.get(
+        "IP_JAIL_LOCKOUT_SECONDS",
+        os.environ.get("AUTH_APP_TOTP_LOCKOUT", "600"),
+    )
+)
+IP_JAIL_ROUNDS_FOR_PERMANENT = int(
+    os.environ.get("IP_JAIL_ROUNDS_FOR_PERMANENT", "5")
+)
+IP_JAIL_PATH = Path(
+    os.environ.get(
+        "IP_JAIL_FILE",
+        "/opt/servermanager/panel/ip-jail.json",
+    )
+)
+# Legacy aliases (same values) for older env docs / call sites.
+AUTH_APP_TOTP_MAX_FAILS = IP_JAIL_MAX_FAILS
+AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "86400"))
+AUTH_APP_TOTP_LOCKOUT = IP_JAIL_LOCKOUT_SECONDS
 AUTH_APP_MAX_DEVICES = int(os.environ.get("AUTH_APP_MAX_DEVICES", "8"))
-_auth_app_totp_lock = threading.Lock()
-_auth_app_totp_fails: dict[str, list[float]] = {}
-_auth_app_totp_lockouts: dict[str, float] = {}
+_ip_jail_lock = threading.RLock()
+_auth_app_totp_lock = _ip_jail_lock  # backwards-compatible alias
 STICKY_VPN_IPS_PATH = Path(
     os.environ.get(
         "STICKY_VPN_IPS_FILE",
@@ -11266,11 +11313,12 @@ STICKY_VPN_IPS_PATH = Path(
 VPN_PEER_ACL_SCRIPT = Path(
     os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
 )
-# Always-on trust-circle members (router WAN, etc). Hidden from Authenticator apps.
-# Default seals the Flint public WAN; override with comma/space-separated IPv4s.
+# Always-on trust-circle members (hidden from Authenticator). Empty by default:
+# do NOT seal shared campus/ISP egress IPs (e.g. university NATs). Home access
+# without personal VPN should use real VPN pools / approved device IPs only.
 VPN_CIRCLE_SEALED_IPS = os.environ.get(
     "VPN_CIRCLE_SEALED_IPS",
-    "192.81.235.246",
+    "",
 )
 _ssh_panel_2fa_lock = threading.Lock()
 
@@ -11533,7 +11581,7 @@ def _sealed_vpn_row(ip: str) -> dict:
 
 
 def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
-    """Keep sealed router WAN IPs permanently allowed; never drop them."""
+    """Keep configured sealed IPs permanently allowed; drop obsolete sealed rows."""
     changed = False
     sealed = _sealed_vpn_ips()
     sealed_set = set(sealed)
@@ -11560,6 +11608,7 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
             changed = True
 
     # Preserve non-sealed entries after sealed ones.
+    # Drop rows that were sealed for IPs no longer in VPN_CIRCLE_SEALED_IPS.
     rebuilt: list[dict] = []
     seen: set[str] = set()
     for ip in sealed:
@@ -11571,6 +11620,14 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
             continue
         if ip in sealed_set:
             continue
+        # Obsolete sealed campus/WAN rows must not stay trusted.
+        if row.get("sealed") or (
+            str(row.get("source") or "") == "router"
+            and "sealed" in str(row.get("note") or "").lower()
+        ):
+            if ip not in sealed_set:
+                changed = True
+                continue
         rebuilt.append(row)
         seen.add(ip)
 
@@ -12486,36 +12543,256 @@ def _auth_app_totp_client_key(client_ip: str) -> str:
     return (_normalize_vpn_ip(client_ip) or str(client_ip or "unknown").strip() or "unknown")[:64]
 
 
-def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
-    """Validate auth-app TOTP with per-IP failure lockout (public @auth_app surface)."""
+def _ip_jail_today() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _ip_jail_empty() -> dict:
+    return {"day": _ip_jail_today(), "ips": {}}
+
+
+def _ip_jail_load() -> dict:
+    """Load jail state; roll to a fresh day when the UTC date changes."""
+    today = _ip_jail_today()
+    data = _ip_jail_empty()
+    if IP_JAIL_PATH.is_file():
+        try:
+            loaded = json.loads(IP_JAIL_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = _ip_jail_empty()
+    if str(data.get("day") or "") != today:
+        # Keep permanent bans + active timed lockouts; reset same-day fail/round counts.
+        now = time.time()
+        kept: dict[str, dict] = {}
+        for ip, row in (data.get("ips") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            permanent = bool(row.get("permanent"))
+            locked_until = float(row.get("locked_until") or 0)
+            if permanent:
+                kept[str(ip)] = {
+                    "fails": [],
+                    "fail_count": 0,
+                    "locked_until": 0,
+                    "lock_count": 0,
+                    "permanent": True,
+                    "permanent_at": float(row.get("permanent_at") or now),
+                    "reasons": list(row.get("reasons") or [])[-8:],
+                    "last_reason": str(row.get("last_reason") or "permanent"),
+                    "last_fail_at": float(row.get("last_fail_at") or 0),
+                }
+            elif locked_until > now:
+                kept[str(ip)] = {
+                    "fails": [],
+                    "fail_count": 0,
+                    "locked_until": locked_until,
+                    "lock_count": 0,
+                    "permanent": False,
+                    "reasons": list(row.get("reasons") or [])[-8:],
+                    "last_reason": str(row.get("last_reason") or ""),
+                    "last_fail_at": float(row.get("last_fail_at") or 0),
+                }
+        data = {"day": today, "ips": kept}
+    if not isinstance(data.get("ips"), dict):
+        data["ips"] = {}
+    return data
+
+
+def _ip_jail_save(data: dict) -> None:
+    IP_JAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = IP_JAIL_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(IP_JAIL_PATH)
+    try:
+        os.chmod(IP_JAIL_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def ip_jail_status_for(client_ip: str) -> dict:
+    """Return lock/fail status for one IP (same UTC day + permanent flag)."""
     key = _auth_app_totp_client_key(client_ip)
     now = time.time()
-    with _auth_app_totp_lock:
-        locked_until = float(_auth_app_totp_lockouts.get(key) or 0)
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        row = (data.get("ips") or {}).get(key) or {}
+        permanent = bool(row.get("permanent"))
+        locked_until = float(row.get("locked_until") or 0)
+        fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+        locked = permanent or locked_until > now
+        return {
+            "ip": key,
+            "day": data.get("day"),
+            "fail_count": len(fails),
+            "max_fails": max(1, IP_JAIL_MAX_FAILS),
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
+            "locked": locked,
+            "permanent": permanent,
+            "locked_until": 0 if permanent else (locked_until if locked_until > now else 0),
+            "retry_after": 0
+            if permanent
+            else (max(0, int(locked_until - now)) if locked_until > now else 0),
+            "lock_count_today": int(row.get("lock_count") or 0),
+            "last_reason": str(row.get("last_reason") or ""),
+        }
+
+
+def ip_jail_assert_allowed(client_ip: str) -> None:
+    """Raise ValueError if this IP is currently jailed."""
+    st = ip_jail_status_for(client_ip)
+    if st.get("permanent"):
+        raise ValueError("IP permanently banned after repeated lockouts today")
+    if st.get("locked"):
+        secs = int(st.get("retry_after") or 0) + 1
+        raise ValueError(
+            f"IP temporarily locked after too many failed attempts — try again in {secs}s"
+        )
+
+
+def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
+    """Record a failed auth attempt.
+
+    3 fails → 10 min lockout; 5 lockout rounds in the same UTC day → permanent.
+    """
+    key = _auth_app_totp_client_key(client_ip)
+    now = time.time()
+    reason = str(reason or "auth").strip()[:64] or "auth"
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        ips = data.setdefault("ips", {})
+        row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            row["last_reason"] = reason
+            row["last_fail_at"] = now
+            ips[key] = row
+            _ip_jail_save(data)
+            return ip_jail_status_for(key)
+
+        locked_until = float(row.get("locked_until") or 0)
         if locked_until > now:
-            raise ValueError(
-                f"Too many failed authenticator codes — try again in {int(locked_until - now) + 1}s"
-            )
-        # Drop stale failures outside the window.
-        fails = [
-            t
-            for t in (_auth_app_totp_fails.get(key) or [])
-            if now - float(t) <= max(30, AUTH_APP_TOTP_FAIL_WINDOW)
-        ]
-        _auth_app_totp_fails[key] = fails
-    if verify_auth_app_totp(code):
-        with _auth_app_totp_lock:
-            _auth_app_totp_fails.pop(key, None)
-            _auth_app_totp_lockouts.pop(key, None)
-        return
-    with _auth_app_totp_lock:
-        fails = list(_auth_app_totp_fails.get(key) or [])
+            # Still locked — do not grow fail list, just refresh reason.
+            row["last_reason"] = reason
+            row["last_fail_at"] = now
+            ips[key] = row
+            _ip_jail_save(data)
+            return ip_jail_status_for(key)
+
+        fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
         fails.append(now)
-        _auth_app_totp_fails[key] = fails[-40:]
-        if len(fails) >= max(3, AUTH_APP_TOTP_MAX_FAILS):
-            _auth_app_totp_lockouts[key] = now + max(30, AUTH_APP_TOTP_LOCKOUT)
-            _auth_app_totp_fails[key] = []
-    time.sleep(min(2.0, 0.35 + 0.15 * min(10, len(fails))))
+        # Cap stored fail timestamps for the day.
+        fails = fails[-40:]
+        reasons = list(row.get("reasons") or [])
+        reasons.append(reason)
+        row.update(
+            {
+                "fails": fails,
+                "fail_count": len(fails),
+                "reasons": reasons[-16:],
+                "last_reason": reason,
+                "last_fail_at": now,
+                "permanent": False,
+            }
+        )
+        threshold = max(1, IP_JAIL_MAX_FAILS)
+        if len(fails) >= threshold:
+            lock_for = max(30, IP_JAIL_LOCKOUT_SECONDS)
+            row["locked_until"] = now + lock_for
+            row["lock_count"] = int(row.get("lock_count") or 0) + 1
+            row["fails"] = []  # reset streak after locking; day lock_count remains
+            row["fail_count"] = 0
+            if int(row["lock_count"]) >= max(1, IP_JAIL_ROUNDS_FOR_PERMANENT):
+                row["permanent"] = True
+                row["permanent_at"] = now
+                row["locked_until"] = 0
+                row["last_reason"] = "permanent"
+        ips[key] = row
+        data["ips"] = ips
+        _ip_jail_save(data)
+        return ip_jail_status_for(key)
+
+
+def ip_jail_clear_success(client_ip: str) -> None:
+    """Clear today's fail streak (and timed lock) after successful auth.
+
+    Permanent bans are never cleared by success.
+    """
+    key = _auth_app_totp_client_key(client_ip)
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        ips = data.get("ips") or {}
+        if key not in ips:
+            return
+        row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            return
+        row["fails"] = []
+        row["fail_count"] = 0
+        row["locked_until"] = 0
+        # Keep lock_count_today for visibility / progression toward permanent.
+        ips[key] = row
+        data["ips"] = ips
+        _ip_jail_save(data)
+
+
+def build_ip_jail_status() -> dict:
+    """Security-tab summary of today's portal IP jail."""
+    now = time.time()
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        locked = []
+        watching = []
+        permanent_rows = []
+        for ip, row in sorted((data.get("ips") or {}).items()):
+            if not isinstance(row, dict):
+                continue
+            permanent = bool(row.get("permanent"))
+            locked_until = float(row.get("locked_until") or 0)
+            fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+            entry = {
+                "ip": ip,
+                "fail_count": len(fails),
+                "lock_count_today": int(row.get("lock_count") or 0),
+                "last_reason": str(row.get("last_reason") or ""),
+                "last_fail_at": int(float(row.get("last_fail_at") or 0) or 0),
+                "locked_until": int(locked_until) if locked_until > now else 0,
+                "retry_after": max(0, int(locked_until - now)) if locked_until > now else 0,
+                "permanent": permanent,
+            }
+            if permanent:
+                permanent_rows.append(entry)
+            elif locked_until > now:
+                locked.append(entry)
+            elif fails or entry["lock_count_today"]:
+                watching.append(entry)
+        return {
+            "ok": True,
+            "day": data.get("day"),
+            "max_fails": max(1, IP_JAIL_MAX_FAILS),
+            "lockout_seconds": max(30, IP_JAIL_LOCKOUT_SECONDS),
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
+            "currently_locked": len(locked),
+            "currently_permanent": len(permanent_rows),
+            "locked": locked[:50],
+            "permanent": permanent_rows[:50],
+            "watching": watching[:50],
+            "path": str(IP_JAIL_PATH),
+        }
+
+
+def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
+    """Validate auth-app TOTP with same-day IP jail (3 fails → 5 min)."""
+    ip_jail_assert_allowed(client_ip)
+    if verify_auth_app_totp(code):
+        ip_jail_clear_success(client_ip)
+        return
+    st = ip_jail_record_failure(client_ip, reason="auth_app_totp")
+    time.sleep(min(2.0, 0.35 + 0.15 * min(10, int(st.get("fail_count") or 1))))
+    if st.get("locked"):
+        raise ValueError(
+            f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+        )
     raise ValueError("Incorrect or missing authenticator code")
 
 
@@ -12721,7 +12998,16 @@ def unlock_ssh_panel(
     """Unlock SSH panel with !!password!! (+ authenticator or email code when 2FA on)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
-    _check_ssh_panel_password(password)
+    ip_jail_assert_allowed(client_ip)
+    try:
+        _check_ssh_panel_password(password)
+    except ValueError:
+        st = ip_jail_record_failure(client_ip, reason="ssh_panel_password")
+        if st.get("locked"):
+            raise ValueError(
+                f"Too many failed unlock attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            ) from None
+        raise
     cfg = _read_ssh_panel_2fa()
     two_factor = bool(cfg.get("enabled"))
     method = str(cfg.get("method") or "email")
@@ -12743,7 +13029,12 @@ def unlock_ssh_panel(
                     "message": "Enter the code from the Authenticator app.",
                 }
             if not verify_totp_code(secret, code):
+                st = ip_jail_record_failure(client_ip, reason="ssh_panel_totp")
                 time.sleep(0.25)
+                if st.get("locked"):
+                    raise ValueError(
+                        f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                    )
                 raise ValueError("Incorrect authenticator code")
         else:
             key = f"ssh-unlock:{token}"
@@ -12762,7 +13053,16 @@ def unlock_ssh_panel(
                     "message": sent.get("message")
                     or "Enter the email verification code to unlock.",
                 }
-            verify_email_test_code(client_ip or "panel", code, key=key)
+            try:
+                verify_email_test_code(client_ip or "panel", code, key=key)
+            except Exception:
+                st = ip_jail_record_failure(client_ip, reason="ssh_panel_email_code")
+                if st.get("locked"):
+                    raise ValueError(
+                        f"Too many failed email codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                    ) from None
+                raise
+    ip_jail_clear_success(client_ip)
     now = time.time()
     exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
     _purge_ssh_panel_unlocks(now)
@@ -17990,7 +18290,7 @@ document.getElementById('f').onsubmit = async (e) => {
                     result = complete_portal_login(
                         login_token=login_token,
                         code=code,
-                        client_ip=self.client_address[0],
+                        client_ip=request_client_ip(self),
                     )
                     self._json(
                         200,
@@ -18008,12 +18308,12 @@ document.getElementById('f').onsubmit = async (e) => {
                 result = begin_portal_login(
                     username=user,
                     password=password,
-                    client_ip=self.client_address[0],
+                    client_ip=request_client_ip(self),
                 )
                 # Never create a session until 2FA succeeds.
                 self._json(200, result)
             except PermissionError as exc:
-                log_failed_login(self.client_address[0], user or "?")
+                log_failed_login(request_client_ip(self), user or "?")
                 time.sleep(0.35)
                 self._json(401, {"error": str(exc) or "Invalid username or password"})
             except ValueError as exc:

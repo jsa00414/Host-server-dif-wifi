@@ -98,12 +98,14 @@ def load_allowlist() -> dict:
                 }
             )
             allowed_set.add(ip)
-    # Always reseal Flint router WAN (hidden from Authenticator apps).
-    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
+    # Always reseal configured WANs only (VPN_CIRCLE_SEALED_IPS; empty = none).
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
+    sealed_set = set()
     for part in re.split(r"[\s,;]+", sealed_raw):
         ip = normalize_ip(part)
         if not ip or not is_public_ipv4(ip):
             continue
+        sealed_set.add(ip)
         existing = next(
             (
                 r
@@ -132,6 +134,23 @@ def load_allowlist() -> dict:
                 }
             )
             allowed_set.add(ip)
+    # Drop obsolete sealed campus/WAN rows when no longer configured.
+    data["allowed"] = [
+        r
+        for r in data["allowed"]
+        if not (
+            isinstance(r, dict)
+            and (
+                r.get("sealed")
+                or (
+                    str(r.get("source") or "") == "router"
+                    and "sealed" in str(r.get("note") or "").lower()
+                )
+            )
+            and normalize_ip(r.get("ip", "")) not in sealed_set
+        )
+    ]
+    allowed_set = {normalize_ip(x.get("ip", "")) for x in data["allowed"] if isinstance(x, dict)}
     return data
 
 
