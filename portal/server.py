@@ -7120,7 +7120,14 @@ def _security_listeners_and_ufw() -> tuple[list[dict], dict]:
 
     fw = read_firewall_state()
     risky_allows: list[dict] = []
+    vpn_only_ports: set[int] = set()
     for r in fw.get("rules") or []:
+        try:
+            port_i = int(r.get("port") or 0)
+        except (TypeError, ValueError):
+            port_i = 0
+        if r.get("vpn_only") and port_i:
+            vpn_only_ports.add(port_i)
         if r.get("locked"):
             continue
         if r.get("vpn_only"):
@@ -7138,6 +7145,7 @@ def _security_listeners_and_ufw() -> tuple[list[dict], dict]:
         "active": bool(fw.get("active")),
         "default_incoming": fw.get("default_incoming"),
         "risky_public_allows": risky_allows,
+        "vpn_only_ports": sorted(vpn_only_ports),
         "rule_count": len(fw.get("rules") or []),
         "error": fw.get("error"),
     }
@@ -7321,6 +7329,9 @@ def build_security_status() -> dict:
         3389: "RDP forward",
         4000: "Windows RDP forward",
     }
+    vpn_only_ports = {
+        int(p) for p in (ufw.get("vpn_only_ports") or []) if str(p).isdigit() or isinstance(p, int)
+    }
     exposures: list[dict] = []
     for port, label in exposure_labels.items():
         listening_public = any(
@@ -7328,11 +7339,18 @@ def build_security_status() -> dict:
         )
         ufw_open = any(int(r.get("port") or 0) == port for r in ufw.get("risky_public_allows") or [])
         wan_open = bool(open_map.get(port))
+        vpn_scoped = port in vpn_only_ports and not ufw_open
         # Prefer UFW+listener as authority; raw connect can false-positive via hairpin.
         severity = "ok"
-        if ufw_open and (listening_public or wan_open):
+        if vpn_scoped:
+            # Explicit LAN/VPN UFW allows — public Internet denied by default deny.
+            severity = "ok"
+        elif ufw_open and (listening_public or wan_open):
             severity = "high"
-        elif listening_public and wan_open and port in (2121, 3016, 5001, 5002, 445, 1445, 3389):
+        elif listening_public and wan_open and port in (2121, 3016, 5001, 5002, 1445):
+            # Exclude 445/3389/4000: hairpin to public IP looks "open" even when UFW denies WAN.
+            severity = "high"
+        elif listening_public and port in (3016, 5001, 5002):
             severity = "high"
         elif listening_public or ufw_open or wan_open:
             severity = "medium"
@@ -7343,6 +7361,7 @@ def build_security_status() -> dict:
                 "listening_public": listening_public,
                 "ufw_anywhere": ufw_open,
                 "wan_open": wan_open,
+                "vpn_only": vpn_scoped,
                 "severity": severity,
             }
         )

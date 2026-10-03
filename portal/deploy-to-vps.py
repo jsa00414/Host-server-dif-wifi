@@ -88,6 +88,10 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/security/harden-secret-perms.sh",
         f"{REMOTE_UI}/scripts/security/harden-secret-perms.sh",
     ),
+    (
+        ROOT / "scripts/security/harden-smb-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-smb-vpn-only.sh",
+    ),
 ]
 
 

@@ -3483,9 +3483,9 @@
             <td>${secSev(e.severity)}</td>
             <td>${escHtml(e.label)}</td>
             <td><code>${escHtml(e.port)}</code></td>
-            <td>${e.wan_open ? "open" : "closed"}</td>
-            <td>${e.ufw_anywhere ? "Anywhere" : "—"}</td>
-            <td>${e.listening_public ? "0.0.0.0" : "—"}</td>
+            <td>${e.wan_open && !e.vpn_only ? "open" : (e.vpn_only ? "LAN/VPN" : "closed")}</td>
+            <td>${e.ufw_anywhere ? "Anywhere" : (e.vpn_only ? "LAN/VPN" : "—")}</td>
+            <td>${e.vpn_only ? "LAN/VPN" : (e.listening_public ? "0.0.0.0" : "—")}</td>
           </tr>`).join("")
         }</tbody></table>`;
       }
