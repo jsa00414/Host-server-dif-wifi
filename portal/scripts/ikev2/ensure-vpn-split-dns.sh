@@ -43,10 +43,10 @@ hosts = [
     # portal.vpstruelord.com stays on the public A record for VPN DNS too.
     # Rewriting it to 10.11.0.1 made OpenVPN/Windows time out (VIP not on the
     # client path); Caddy sticky WAN ACL covers gateway-IP exclusion → 403.
+    # router.vpstruelord.com is public (not vpn_only) — keep public A as well.
     "vpn.vpstruelord.com",
     "grafana.vpstruelord.com",
     "proxmox.vpstruelord.com",
-    "router.vpstruelord.com",
     "buffalo.vpstruelord.com",
     "files.vpstruelord.com",
     "dns.vpstruelord.com",
