@@ -2313,7 +2313,12 @@ VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
     "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 100.64.0.0/10 172.18.0.1/32 127.0.0.1/32",
 )
-VPN_UFW_FROM = os.environ.get("VPN_UFW_FROM", "10.8.0.0/24")
+# Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
+# Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
+VPN_UFW_FROM = os.environ.get(
+    "VPN_UFW_FROM",
+    "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24",
+).strip() or "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24"
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
 PIHOLE_SSO_URL = os.environ.get(
     "PIHOLE_SSO_URL", "https://pihole.vpstruelord.com/sm-autologin"
@@ -5593,11 +5598,24 @@ def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
     return None, "tcp", cleaned
 
 
+def _vpn_ufw_sources() -> list[str]:
+    """CIDRs used for vpn_only UFW allow-from rules."""
+    parts = [
+        p.strip()
+        for p in VPN_UFW_FROM.replace(",", " ").split()
+        if p.strip()
+    ]
+    return parts or ["10.8.0.0/24"]
+
+
 def _is_vpn_ufw_from(frm: str) -> bool:
     f = (frm or "").lower().replace(" ", "")
-    if f.startswith("anywhere"):
+    if not f or f.startswith("anywhere"):
         return False
-    return VPN_UFW_FROM.replace(" ", "") in f or f.startswith("10.8.0.")
+    for src in _vpn_ufw_sources():
+        if src.lower().replace(" ", "") in f:
+            return True
+    return f.startswith("10.8.0.") or f.startswith("10.9.0.") or f.startswith("100.64.")
 
 
 def _run_ufw(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
@@ -5765,26 +5783,37 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
     return cleaned
 
 
-def _ufw_allow_cmd(rule: dict) -> list[str]:
+def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
+    """One or more `ufw allow …` argv lists (without the leading binary)."""
     port = rule["port"]
     proto = rule["proto"]
     comment = rule["comment"]
     if rule.get("vpn_only") and (port, proto) not in UFW_PROTECTED:
-        return [
-            "ufw",
-            "allow",
-            "from",
-            VPN_UFW_FROM,
-            "to",
-            "any",
-            "port",
-            str(port),
-            "proto",
-            proto,
-            "comment",
-            comment,
-        ]
-    return ["ufw", "allow", f"{port}/{proto}", "comment", comment]
+        cmds: list[list[str]] = []
+        for src in _vpn_ufw_sources():
+            cmds.append(
+                [
+                    "allow",
+                    "from",
+                    src,
+                    "to",
+                    "any",
+                    "port",
+                    str(port),
+                    "proto",
+                    proto,
+                    "comment",
+                    comment,
+                ]
+            )
+        return cmds
+    return [["allow", f"{port}/{proto}", "comment", comment]]
+
+
+def _ufw_allow_cmd(rule: dict) -> list[str]:
+    """Back-compat single command (first VPN source only)."""
+    cmds = _ufw_allow_cmds(rule)
+    return ["ufw", *cmds[0]] if cmds else ["ufw", "allow", "22/tcp"]
 
 
 def write_firewall_state(rules: list[dict]) -> dict:
@@ -5857,12 +5886,19 @@ def write_firewall_state(rules: list[dict]) -> dict:
     for key, rule in desired_keys.items():
         if key in have and have[key] == bool(rule.get("vpn_only")):
             continue
-        cmd = _ufw_allow_cmd(rule)
-        proc = _run_ufw(cmd[1:] if cmd and cmd[0] == "ufw" else cmd)
         scope = "vpn" if rule.get("vpn_only") else "public"
-        logs.append(
-            f"allow {rule['port']}/{rule['proto']} ({scope}): rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
-        )
+        for cmd in _ufw_allow_cmds(rule):
+            proc = _run_ufw(cmd)
+            src = ""
+            if "from" in cmd:
+                try:
+                    src = " from " + cmd[cmd.index("from") + 1]
+                except Exception:
+                    src = ""
+            logs.append(
+                f"allow {rule['port']}/{rule['proto']} ({scope}{src}): "
+                f"rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
+            )
 
     # Ensure ufw enabled with deny incoming
     _run_ufw(["--force", "enable"])
