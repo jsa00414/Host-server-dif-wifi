@@ -235,12 +235,17 @@ fi
 PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
 PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
 PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
+LAN_GATE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-lan-circle-flint-gate.sh"
 if _ikev2_install_script "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"; then
   [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
   [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable --now sm-ikev2-peer-acl.timer >/dev/null 2>&1 || true
   bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
+fi
+if [[ -f "$LAN_GATE_SRC" ]]; then
+  _ikev2_install_script "$LAN_GATE_SRC" "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" || true
+  chmod +x "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" 2>/dev/null || true
 fi
 
 NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"

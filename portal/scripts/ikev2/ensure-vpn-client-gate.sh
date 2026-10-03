@@ -432,7 +432,13 @@ for row in preserved_lan:
         merged[ip] = row
 
 data["pending"] = sorted(
-    [v for v in merged.values() if int(v.get("last_seen") or 0) >= cutoff or str(v.get("source") or "") == "lan-offline"],
+    [
+        v
+        for v in merged.values()
+        if int(v.get("last_seen") or 0) >= cutoff
+        or str(v.get("source") or "") in ("lan-offline", "lan")
+        or str(v.get("kind") or "") == "lan"
+    ],
     key=lambda x: int(x.get("last_seen") or 0),
     reverse=True,
 )[:80]

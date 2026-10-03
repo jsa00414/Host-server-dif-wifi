@@ -14,7 +14,10 @@ STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
 STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
 ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
 GATE_SCRIPT="${VPN_CLIENT_GATE_SCRIPT:-/opt/ikev2/ensure-vpn-client-gate.sh}"
-BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
+LAN_GATE_SCRIPT="${LAN_CIRCLE_FLINT_GATE_SCRIPT:-/opt/ikev2/ensure-lan-circle-flint-gate.sh}"
+# No blanket 192.168.8.0/24 — only approved LAN /32s enter @vpn_clients.
+# Pending/denied LAN clients are blocked on Flint pre-NAT (see ensure-lan-circle-flint-gate.sh).
+BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
 export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE ALLOWLIST_FILE BASE_CIDRS_DEFAULT
 
@@ -39,7 +42,7 @@ allow_file = Path(
 )
 base_default = os.environ.get(
     "BASE_CIDRS_DEFAULT",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
+    "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 now = int(time.time())
 
@@ -56,6 +59,15 @@ def is_public_ipv4(ip: str) -> bool:
     if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
         return False
     return not any(p.match(ip) for p in PRIVATE)
+
+
+def is_home_lan_ipv4(ip: str) -> bool:
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 192 or parts[1] != 168 or parts[2] != 8:
+        return False
+    return parts[3] not in (0, 1, 255)
 
 
 def normalize_ip(raw: str) -> str:
@@ -101,6 +113,7 @@ def load_sticky_cidrs() -> list[str]:
 
 
 def load_allowlist_ips() -> set[str]:
+    """Public sticky/sealed WAN IPs that belong in @vpn_clients."""
     ips: set[str] = set()
     if not allow_file.is_file():
         return ips
@@ -114,10 +127,29 @@ def load_allowlist_ips() -> set[str]:
             if ip and is_public_ipv4(ip):
                 ips.add(ip)
     # Always keep sealed router WANs (env override) even if JSON was wiped.
+    # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
     sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
     for part in re.split(r"[\s,;]+", sealed_raw):
         ip = normalize_ip(part)
         if ip and is_public_ipv4(ip):
+            ips.add(ip)
+    return ips
+
+
+def load_allowlist_lan_ips() -> set[str]:
+    """Approved home-LAN client /32s (not the whole /24)."""
+    ips: set[str] = set()
+    if not allow_file.is_file():
+        return ips
+    try:
+        data = json.loads(allow_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ips
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = normalize_ip(row.get("ip", ""))
+        if ip and is_home_lan_ipv4(ip):
             ips.add(ip)
     return ips
 
@@ -207,15 +239,15 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             os.chmod(allow_file, 0o600)
         except Exception:
             pass
-        # Keep sticky file aligned so later runs don't drop sealed.
+        # Keep sticky file aligned so later runs don't drop sealed / LAN.
         sticky_file.parent.mkdir(parents=True, exist_ok=True)
         lines = [
-            "# Managed by vpn allowlist — approved sticky WAN IPs",
-            "# one IPv4 per line",
+            "# Managed by vpn allowlist — approved sticky WAN + LAN IPs",
+            "# one IPv4 /32 per line",
         ]
         for row in rebuilt:
             ip = normalize_ip(row.get("ip", ""))
-            if ip and is_public_ipv4(ip):
+            if ip and (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
                 lines.append(f"{ip}/32")
         sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return allowed
@@ -232,9 +264,13 @@ def vpn_clients_cidrs_in_caddy(text: str) -> set[str]:
     return found
 
 
-def load_base_cidrs(allowed_ips: set[str]) -> list[str]:
+def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
     base = base_default.split()
-    sticky = [c for c in load_sticky_cidrs() if normalize_ip(c) in allowed_ips]
+    sticky = [
+        c
+        for c in load_sticky_cidrs()
+        if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+    ]
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
             if line.startswith("VPN_CLIENT_CIDRS="):
@@ -242,15 +278,22 @@ def load_base_cidrs(allowed_ips: set[str]) -> list[str]:
                 parts = raw.split()
                 cleaned = []
                 for p in parts:
+                    # Never keep the blanket home LAN — approved LAN /32s only.
+                    if p == "192.168.8.0/24":
+                        continue
                     if p.endswith("/32"):
                         ip = p[:-3]
                         # Keep VPS public + allowlisted sticky only (drop transient peers)
                         if is_public_ipv4(ip) and ip != "74.208.76.213" and ip not in allowed_ips:
                             continue
+                        if is_home_lan_ipv4(ip) and ip not in lan_ips:
+                            continue
                     cleaned.append(p)
                 if cleaned:
                     base = cleaned
                 break
+    # Drop blanket LAN if it leaked in via defaults/env.
+    base = [c for c in base if c != "192.168.8.0/24"]
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
     if "10.11.0.1/32" not in base:
@@ -264,18 +307,31 @@ def load_base_cidrs(allowed_ips: set[str]) -> list[str]:
         cidr = f"{ip}/32"
         if cidr not in base:
             base.append(cidr)
+    for ip in sorted(lan_ips):
+        cidr = f"{ip}/32"
+        if cidr not in base:
+            base.append(cidr)
     return base
 
 
 peers = peer_ips()
 sticky_cidrs = load_sticky_cidrs()
 allowed_ips = ensure_allowlist_seeded(sticky_cidrs)
+lan_ips = load_allowlist_lan_ips()
 # Sticky file may include unapproved leftovers — only allowlisted count
-sticky_trusted = [c for c in sticky_cidrs if normalize_ip(c) in allowed_ips]
+sticky_trusted = [
+    c
+    for c in sticky_cidrs
+    if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+]
 # Re-read sticky after possible reseal write.
 sticky_cidrs = load_sticky_cidrs()
-sticky_trusted = [c for c in sticky_cidrs if normalize_ip(c) in allowed_ips]
-base = load_base_cidrs(allowed_ips)
+sticky_trusted = [
+    c
+    for c in sticky_cidrs
+    if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+]
+base = load_base_cidrs(allowed_ips, lan_ips)
 
 # IMPORTANT: do NOT auto-append live peer WANs. Only allowlisted sticky enter the circle.
 combined = base[:]
@@ -283,18 +339,25 @@ combined_s = " ".join(combined)
 
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
-trusted_needed = sorted({normalize_ip(c) for c in sticky_trusted} | set(allowed_ips))
+trusted_needed = sorted(
+    {normalize_ip(c) for c in sticky_trusted} | set(allowed_ips) | set(lan_ips)
+)
 if prev == cur and caddyfile.is_file():
     text = caddyfile.read_text()
     live = vpn_clients_cidrs_in_caddy(text)
     # Require every trusted sticky/allowlisted /32 on the live matcher lines
     # (do NOT match comments — that previously skipped reseeding the router WAN).
-    if trusted_needed and all(f"{ip}/32" in live for ip in trusted_needed):
+    blanket_lan_gone = "192.168.8.0/24" not in live
+    if (
+        trusted_needed
+        and all(f"{ip}/32" in live for ip in trusted_needed)
+        and blanket_lan_gone
+    ):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
         if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
             print(
                 f"OK unchanged ({len(peers)} peers seen, {len(sticky_trusted)} trusted sticky, "
-                f"{len(allowed_ips)} allowlisted)"
+                f"{len(allowed_ips)} allowlisted, {len(lan_ips)} lan)"
             )
             raise SystemExit(0)
 
@@ -337,6 +400,7 @@ else:
 print("peers_seen:", ", ".join(peers) if peers else "(none)")
 print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")
 print("allowlisted:", ", ".join(sorted(allowed_ips)) if allowed_ips else "(none)")
+print("lan_approved:", ", ".join(sorted(lan_ips)) if lan_ips else "(none)")
 print("cidrs:", combined_s)
 
 reload = subprocess.run(
@@ -366,4 +430,12 @@ if [[ -x "$GATE_SCRIPT" ]]; then
 elif [[ -f "$GATE_SCRIPT" ]]; then
   chmod +x "$GATE_SCRIPT" 2>/dev/null || true
   bash "$GATE_SCRIPT" || true
+fi
+
+# Block pending/denied LAN clients on Flint (pre-NAT) so Wi-Fi pending works.
+if [[ -x "$LAN_GATE_SCRIPT" ]]; then
+  bash "$LAN_GATE_SCRIPT" || true
+elif [[ -f "$LAN_GATE_SCRIPT" ]]; then
+  chmod +x "$LAN_GATE_SCRIPT" 2>/dev/null || true
+  bash "$LAN_GATE_SCRIPT" || true
 fi

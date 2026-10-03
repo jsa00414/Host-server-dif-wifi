@@ -2319,7 +2319,8 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
+    # No blanket 192.168.8.0/24 — approved LAN /32s are appended by peer-acl sync.
+    "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 # Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
 # Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
@@ -11586,10 +11587,11 @@ def _empty_vpn_allowlist() -> dict:
 
 
 def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
-    """Park known LAN devices that are not currently plugged in into pending.
+    """Park known LAN devices that are not allowed/denied into pending.
 
-    Online (ARP/neigh) LAN clients stay off the pending list. Offline DHCP/gl
-    leases that are not already allowed/denied are offered for circle approval.
+    Both online and offline DHCP/ARP entries are offered for circle approval.
+    (Home Wi-Fi NATs to the sealed router WAN, so pending is also enforced on
+    Flint pre-NAT via ensure-lan-circle-flint-gate.sh.)
     """
     data = dict(data or _read_vpn_allowlist())
     now = int(time.time())
@@ -11612,55 +11614,52 @@ def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
         if isinstance(x, dict)
     }
     pending_rows = [x for x in (data.get("pending") or []) if isinstance(x, dict)]
-    pending_by_ip = {
-        _normalize_vpn_ip(x.get("ip", "")): dict(x) for x in pending_rows if _normalize_vpn_ip(x.get("ip", ""))
-    }
     skip = _lan_circle_skip_ips()
     changed = False
 
-    online_lan: set[str] = set()
-    offline_lan: list[dict] = []
+    candidates: list[dict] = []
     for d in devices:
         ip = _normalize_vpn_ip(d.get("ip", ""))
         if not _is_home_lan_ipv4(ip) or ip in skip:
             continue
-        if d.get("online"):
-            online_lan.add(ip)
-        else:
-            offline_lan.append(d)
+        candidates.append(d)
 
-    # Drop auto LAN-pending rows once the device plugs back in (or is approved/denied).
-    keep_pending: list[dict] = []
+    # Drop auto LAN-pending rows once approved/denied.
+    pending_by_ip: dict = {}
     for row in pending_rows:
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if (
-            str(row.get("source") or "") == "lan-offline"
-            and _is_home_lan_ipv4(ip)
-            and (ip in online_lan or ip in allowed or ip in denied)
-        ):
+        is_lan_row = str(row.get("source") or "") in (
+            "lan-offline",
+            "lan",
+        ) or str(row.get("kind") or "") == "lan"
+        if is_lan_row and _is_home_lan_ipv4(ip) and (ip in allowed or ip in denied):
             changed = True
             continue
-        keep_pending.append(row)
-        pending_by_ip[ip] = row
+        if ip:
+            pending_by_ip[ip] = dict(row)
+        else:
+            pending_by_ip[f"_row_{id(row)}"] = dict(row)
 
-    for d in offline_lan:
+    for d in candidates:
         ip = _normalize_vpn_ip(d.get("ip", ""))
-        if not ip or ip in allowed or ip in denied or ip in online_lan:
+        if not ip or ip in allowed or ip in denied:
             continue
         name = str(d.get("hostname") or "").strip()
         mac = str(d.get("mac") or "").strip().lower()
+        online = bool(d.get("online"))
         note = name or (f"LAN {mac}" if mac else "LAN device")
+        source = "lan" if online else "lan-offline"
         existing = pending_by_ip.get(ip)
         if existing:
-            # Refresh metadata; keep counts/status.
             before = dict(existing)
             existing["last_seen"] = now
-            existing["source"] = "lan-offline"
+            existing["source"] = source
             existing["vip"] = existing.get("vip") or ""
             existing["note"] = note[:120]
             existing["name"] = name[:64]
             existing["mac"] = mac
             existing["kind"] = "lan"
+            existing["online"] = online
             if str(existing.get("status") or "") != "denied":
                 existing["status"] = "pending"
             if existing != before:
@@ -11673,16 +11672,17 @@ def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
             "last_seen": now,
             "count": 1,
             "status": "pending",
-            "source": "lan-offline",
+            "source": source,
             "kind": "lan",
             "note": note[:120],
             "name": name[:64],
             "mac": mac,
+            "online": online,
         }
         changed = True
 
     data["pending"] = sorted(
-        pending_by_ip.values(),
+        [v for v in pending_by_ip.values() if isinstance(v, dict)],
         key=lambda x: int(x.get("last_seen") or 0),
         reverse=True,
     )[:80]
@@ -11708,7 +11708,8 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
             "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
-            "LAN devices that are not currently plugged in appear in pending for approval."
+            "Home LAN devices stay pending until approved; pending/denied LAN IPs "
+            "are blocked on the Flint router before NAT so they cannot reach the portal."
             + (
                 ""
                 if for_auth_app
@@ -11878,14 +11879,15 @@ def _write_vpn_allowlist(data: dict) -> None:
     # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
     lines = [
         "# Managed by Security → VPN trust circle",
-        "# Approved sticky WAN IPs (one IPv4 /32 per line)",
+        "# Approved sticky WAN + LAN IPs (one IPv4 /32 per line)",
         "# Sealed router WAN IPs are always included and cannot be revoked from apps.",
+        "# Blanket 192.168.8.0/24 is never written — approved LAN /32s only.",
     ]
     for row in payload["allowed"]:
         if not isinstance(row, dict):
             continue
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if ip and _is_public_ipv4(ip):
+        if ip and (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
             lines.append(f"{ip}/32")
     STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -11900,7 +11902,7 @@ def _run_vpn_peer_acl_sync() -> str:
             ["bash", str(script)],
             capture_output=True,
             text=True,
-            timeout=45,
+            timeout=90,
         )
         out = ((proc.stdout or "") + (proc.stderr or "")).strip()
         return out[-500:] if out else ("ok" if proc.returncode == 0 else "failed")
