@@ -6912,29 +6912,102 @@ SSH_LOGIN_DROPIN = Path("/etc/ssh/sshd_config.d/00-servermanager-login.conf")
 SSH_LOGIN_DROPIN_LEGACY = Path("/etc/ssh/sshd_config.d/99-servermanager-login.conf")
 SSH_ROOT_AUTHORIZED_KEYS = Path("/root/.ssh/authorized_keys")
 SSH_LOGIN_METHODS = ("password_and_keys", "keys_only")
+SSH_ROOT_LOGIN_MODES = ("yes", "prohibit-password", "no")
+_SSH_PUBKEY_TYPES = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ssh-dss",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+)
 
 
-def _security_authorized_key_count(path: Path = SSH_ROOT_AUTHORIZED_KEYS) -> int:
-    """Count non-comment public keys in authorized_keys (root by default)."""
+def _security_is_authorized_key_line(line: str) -> bool:
+    s = (line or "").strip()
+    if not s or s.startswith("#"):
+        return False
+    return any(
+        s.startswith(t + " ") or f" {t} " in f" {s} " for t in _SSH_PUBKEY_TYPES
+    )
+
+
+def _security_list_authorized_keys(path: Path = SSH_ROOT_AUTHORIZED_KEYS) -> list[dict]:
+    """Parse root authorized_keys into fingerprint rows for the Security panel."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except (OSError, UnicodeError):
-        return 0
-    count = 0
+        return []
+    rows: list[dict] = []
+    idx = 0
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#"):
+        if not _security_is_authorized_key_line(line):
             continue
-        # ssh public key lines start with key type or options then key type
-        if (
-            line.startswith("ssh-")
-            or line.startswith("ecdsa-")
-            or line.startswith("sk-")
-            or " ssh-" in f" {line}"
-            or " ecdsa-" in f" {line}"
-        ):
-            count += 1
-    return count
+        idx += 1
+        fp = ""
+        bits = ""
+        key_type = ""
+        comment = ""
+        # ssh-keygen -lf reads a file; use a temp line file for accurate fingerprint.
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", prefix="sm-sshkey-", suffix=".pub", delete=False
+            ) as tmp:
+                tmp.write(line + "\n")
+                tmp_path = tmp.name
+            try:
+                proc = _security_run(["ssh-keygen", "-lf", tmp_path], timeout=6)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                # format: "256 SHA256:... comment (ED25519)"
+                parts = (proc.stdout or "").strip().split()
+                if len(parts) >= 2:
+                    bits = parts[0]
+                    fp = parts[1]
+                if parts:
+                    maybe_type = parts[-1].strip("()")
+                    if maybe_type and maybe_type.upper() == maybe_type:
+                        key_type = maybe_type
+                if len(parts) >= 4:
+                    comment = " ".join(parts[2:-1]).strip()
+        except Exception:
+            pass
+        if not key_type:
+            for t in _SSH_PUBKEY_TYPES:
+                if line.startswith(t + " ") or f" {t} " in f" {line} ":
+                    key_type = t
+                    break
+        if not comment:
+            toks = line.split()
+            if len(toks) >= 3 and not toks[0].startswith("ssh-") and "ssh-" not in toks[0]:
+                # options prefix — comment usually last token
+                comment = toks[-1] if not toks[-1].startswith("AAAA") else ""
+            elif len(toks) >= 3:
+                comment = toks[-1]
+        rows.append(
+            {
+                "index": idx,
+                "type": key_type or "unknown",
+                "fingerprint": fp or "—",
+                "bits": bits or "",
+                "comment": comment or "",
+                "line_preview": (line[:48] + "…") if len(line) > 48 else line,
+            }
+        )
+    return rows
+
+
+def _security_authorized_key_count(path: Path = SSH_ROOT_AUTHORIZED_KEYS) -> int:
+    return len(_security_list_authorized_keys(path))
 
 
 def _security_login_method_from_sshd(ssh: dict) -> str:
@@ -6951,8 +7024,70 @@ def _security_login_method_from_sshd(ssh: dict) -> str:
     return "unknown"
 
 
+def _security_root_login_meta(permit: str | None) -> dict:
+    val = str(permit or "").strip().lower()
+    if val == "yes":
+        return {
+            "root_login_mode": "yes",
+            "root_login_label": "Root password + keys",
+            "root_login_risk": "high",
+            "root_login_detail": "permitrootlogin=yes — root can use a password.",
+        }
+    if val in ("prohibit-password", "without-password"):
+        return {
+            "root_login_mode": "prohibit-password",
+            "root_login_label": "Root SSH keys only",
+            "root_login_risk": "medium",
+            "root_login_detail": (
+                f"permitrootlogin={val} — root login allowed with SSH keys "
+                "(medium finding)."
+            ),
+        }
+    if val in ("no", "off", "false"):
+        return {
+            "root_login_mode": "no",
+            "root_login_label": "Root SSH disabled",
+            "root_login_risk": "ok",
+            "root_login_detail": "permitrootlogin=no — root cannot SSH in.",
+        }
+    return {
+        "root_login_mode": val or "unknown",
+        "root_login_label": f"Root login: {val or 'unknown'}",
+        "root_login_risk": "medium",
+        "root_login_detail": f"permitrootlogin={val or 'unknown'}",
+    }
+
+
+def _normalize_root_login_mode(value: str) -> str:
+    chosen = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "password": "yes",
+        "password-and-keys": "yes",
+        "allow": "yes",
+        "keys": "prohibit-password",
+        "keys-only": "prohibit-password",
+        "keysonly": "prohibit-password",
+        "pubkey": "prohibit-password",
+        "without-password": "prohibit-password",
+        "withoutpassword": "prohibit-password",
+        "prohibitpassword": "prohibit-password",
+        "deny": "no",
+        "disabled": "no",
+        "disable": "no",
+        "off": "no",
+        "false": "no",
+    }
+    chosen = aliases.get(chosen, chosen)
+    if chosen not in SSH_ROOT_LOGIN_MODES:
+        raise ValueError(
+            "permit_root_login must be yes, prohibit-password, or no"
+        )
+    return chosen
+
+
 def _security_sshd_config() -> dict:
     proc = _security_run(["sshd", "-T"], timeout=6)
+    keys = _security_list_authorized_keys()
     out = {
         "ok": proc.returncode == 0,
         "permit_root_login": None,
@@ -6962,13 +7097,13 @@ def _security_sshd_config() -> dict:
         "permit_empty_passwords": None,
         "login_method": "unknown",
         "login_method_label": "Unknown",
-        "root_authorized_keys": 0,
-        "keys_only_ready": False,
+        "root_authorized_keys": len(keys),
+        "authorized_keys": keys,
+        "keys_only_ready": len(keys) > 0,
         "dropin_path": str(SSH_LOGIN_DROPIN),
         "dropin_present": SSH_LOGIN_DROPIN.is_file(),
     }
-    out["root_authorized_keys"] = _security_authorized_key_count()
-    out["keys_only_ready"] = out["root_authorized_keys"] > 0
+    out.update(_security_root_login_meta(None))
     if proc.returncode != 0:
         out["error"] = (proc.stderr or proc.stdout or "sshd -T failed")[:240]
         return out
@@ -6995,10 +7130,96 @@ def _security_sshd_config() -> dict:
         "password_only": "Password only",
         "unknown": "Unknown / custom",
     }.get(method, "Unknown / custom")
+    out.update(_security_root_login_meta(out.get("permit_root_login")))
     return out
 
 
-def apply_ssh_login_method(method: str) -> dict:
+def _ssh_login_dropin_body(*, password_auth: bool, permit_root: str) -> str:
+    root = _normalize_root_login_mode(permit_root)
+    if password_auth:
+        return (
+            "# Managed by ServerManager Security tab — VPS login method\n"
+            "# Do not edit by hand; change via the portal Security tab.\n"
+            "PasswordAuthentication yes\n"
+            "KbdInteractiveAuthentication yes\n"
+            "PubkeyAuthentication yes\n"
+            f"PermitRootLogin {root}\n"
+            "PermitEmptyPasswords no\n"
+        )
+    return (
+        "# Managed by ServerManager Security tab — VPS login method\n"
+        "# Do not edit by hand; change via the portal Security tab.\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PubkeyAuthentication yes\n"
+        f"PermitRootLogin {root}\n"
+        "PermitEmptyPasswords no\n"
+    )
+
+
+def _apply_ssh_login_dropin(*, password_auth: bool, permit_root: str) -> dict:
+    """Write 00-servermanager-login.conf, validate, reload, verify password flag."""
+    root = _normalize_root_login_mode(permit_root)
+    body = _ssh_login_dropin_body(password_auth=password_auth, permit_root=root)
+    SSH_LOGIN_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    previous = ""
+    if SSH_LOGIN_DROPIN.is_file():
+        try:
+            previous = SSH_LOGIN_DROPIN.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            previous = ""
+    SSH_LOGIN_DROPIN.write_text(body, encoding="utf-8")
+    try:
+        os.chmod(SSH_LOGIN_DROPIN, 0o644)
+    except OSError:
+        pass
+    try:
+        if SSH_LOGIN_DROPIN_LEGACY.is_file():
+            SSH_LOGIN_DROPIN_LEGACY.unlink()
+    except OSError:
+        pass
+
+    test = _security_run(["sshd", "-t"], timeout=8)
+    if test.returncode != 0:
+        try:
+            if previous:
+                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
+            else:
+                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
+        except OSError:
+            pass
+        err = (test.stderr or test.stdout or "sshd -t failed")[:400]
+        raise ValueError(f"sshd config invalid; not applied: {err}")
+
+    reload_proc = _security_run(["systemctl", "reload", "ssh"], timeout=15)
+    if reload_proc.returncode != 0:
+        reload_proc = _security_run(["systemctl", "reload", "sshd"], timeout=15)
+    if reload_proc.returncode != 0:
+        err = (reload_proc.stderr or reload_proc.stdout or "reload failed")[:400]
+        raise ValueError(f"sshd config written but reload failed: {err}")
+
+    after = _security_sshd_config()
+    expected_pw = "yes" if password_auth else "no"
+    actual_pw = str(after.get("password_authentication") or "").lower()
+    if actual_pw != expected_pw:
+        try:
+            if previous:
+                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
+            else:
+                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
+            _security_run(["systemctl", "reload", "ssh"], timeout=15)
+        except OSError:
+            pass
+        raise ValueError(
+            "sshd reload succeeded but PasswordAuthentication is still "
+            f"{actual_pw!r} (expected {expected_pw!r}). "
+            "Another sshd_config drop-in may be overriding ServerManager; "
+            "change was rolled back."
+        )
+    return after
+
+
+def apply_ssh_login_method(method: str, permit_root_login: str | None = None) -> dict:
     """Apply VPS SSH login method via sshd drop-in and reload sshd."""
     chosen = str(method or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
@@ -7022,86 +7243,23 @@ def apply_ssh_login_method(method: str) -> dict:
             "Add an SSH public key first to avoid lockout."
         )
 
-    if chosen == "keys_only":
-        body = (
-            "# Managed by ServerManager Security tab — VPS login method\n"
-            "# Do not edit by hand; change via the portal Security tab.\n"
-            "PasswordAuthentication no\n"
-            "KbdInteractiveAuthentication no\n"
-            "PubkeyAuthentication yes\n"
-            "PermitRootLogin prohibit-password\n"
-            "PermitEmptyPasswords no\n"
-        )
+    if permit_root_login:
+        root = _normalize_root_login_mode(permit_root_login)
+    elif chosen == "keys_only":
+        # Keep existing keys-only root mode if already prohibit-password/no.
+        cur = str(before.get("root_login_mode") or "")
+        root = cur if cur in ("prohibit-password", "no") else "prohibit-password"
     else:
-        body = (
-            "# Managed by ServerManager Security tab — VPS login method\n"
-            "# Do not edit by hand; change via the portal Security tab.\n"
-            "PasswordAuthentication yes\n"
-            "KbdInteractiveAuthentication yes\n"
-            "PubkeyAuthentication yes\n"
-            "PermitRootLogin yes\n"
-            "PermitEmptyPasswords no\n"
-        )
+        root = "yes"
 
-    SSH_LOGIN_DROPIN.parent.mkdir(parents=True, exist_ok=True)
-    previous = ""
-    if SSH_LOGIN_DROPIN.is_file():
-        try:
-            previous = SSH_LOGIN_DROPIN.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            previous = ""
-    SSH_LOGIN_DROPIN.write_text(body, encoding="utf-8")
-    try:
-        os.chmod(SSH_LOGIN_DROPIN, 0o644)
-    except OSError:
-        pass
-    # Older builds used 99-*; remove so it cannot confuse operators.
-    try:
-        if SSH_LOGIN_DROPIN_LEGACY.is_file():
-            SSH_LOGIN_DROPIN_LEGACY.unlink()
-    except OSError:
-        pass
+    if chosen == "keys_only" and root == "yes":
+        # Password auth is off; root "yes" still allows keys — normalize to keys-only root.
+        root = "prohibit-password"
 
-    test = _security_run(["sshd", "-t"], timeout=8)
-    if test.returncode != 0:
-        # Roll back drop-in on invalid config.
-        try:
-            if previous:
-                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
-            else:
-                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
-        except OSError:
-            pass
-        err = (test.stderr or test.stdout or "sshd -t failed")[:400]
-        raise ValueError(f"sshd config invalid; not applied: {err}")
-
-    reload_proc = _security_run(["systemctl", "reload", "ssh"], timeout=15)
-    if reload_proc.returncode != 0:
-        # Ubuntu/Debian sometimes use ssh.service; try sshd as fallback.
-        reload_proc = _security_run(["systemctl", "reload", "sshd"], timeout=15)
-    if reload_proc.returncode != 0:
-        err = (reload_proc.stderr or reload_proc.stdout or "reload failed")[:400]
-        raise ValueError(f"sshd config written but reload failed: {err}")
-
-    after = _security_sshd_config()
-    # OpenSSH uses first-obtained values; 00- must win over cloud-init 50-.
-    expected_pw = "no" if chosen == "keys_only" else "yes"
-    actual_pw = str(after.get("password_authentication") or "").lower()
-    if actual_pw != expected_pw:
-        try:
-            if previous:
-                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
-            else:
-                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
-            _security_run(["systemctl", "reload", "ssh"], timeout=15)
-        except OSError:
-            pass
-        raise ValueError(
-            "sshd reload succeeded but PasswordAuthentication is still "
-            f"{actual_pw!r} (expected {expected_pw!r}). "
-            "Another sshd_config drop-in may be overriding ServerManager; "
-            "change was rolled back."
-        )
+    after = _apply_ssh_login_dropin(
+        password_auth=(chosen == "password_and_keys"),
+        permit_root=root,
+    )
     return {
         "ok": True,
         "applied": chosen,
@@ -7117,6 +7275,149 @@ def apply_ssh_login_method(method: str) -> dict:
             if chosen == "keys_only"
             else "Password + SSH keys enabled for VPS login."
         ),
+    }
+
+
+def apply_ssh_root_login(permit_root_login: str) -> dict:
+    """Change PermitRootLogin while preserving current password-auth mode."""
+    root = _normalize_root_login_mode(permit_root_login)
+    before = _security_sshd_config()
+    method = before.get("login_method") or "unknown"
+    password_auth = method == "password_and_keys" or (
+        str(before.get("password_authentication") or "").lower() in ("yes", "true")
+    )
+    if root == "yes" and not password_auth:
+        # With password auth off, "yes" is equivalent to keys-only root.
+        root = "prohibit-password"
+    if root in ("prohibit-password", "yes") and int(before.get("root_authorized_keys") or 0) < 1:
+        raise ValueError(
+            "Cannot allow root SSH: /root/.ssh/authorized_keys has no keys."
+        )
+    after = _apply_ssh_login_dropin(password_auth=password_auth, permit_root=root)
+    labels = {
+        "yes": "Root password + keys enabled.",
+        "prohibit-password": "Root SSH limited to keys only (permitrootlogin=prohibit-password).",
+        "no": "Root SSH login disabled (permitrootlogin=no).",
+    }
+    return {
+        "ok": True,
+        "applied": root,
+        "ssh": after,
+        "message": labels.get(root, f"PermitRootLogin set to {root}."),
+    }
+
+
+def add_ssh_authorized_key(public_key: str) -> dict:
+    """Append a public key to root authorized_keys."""
+    raw = str(public_key or "").strip()
+    if not raw:
+        raise ValueError("public_key is required")
+    # Allow pasting multi-line; keep first key-looking line.
+    line = ""
+    for candidate in raw.splitlines():
+        s = candidate.strip()
+        if _security_is_authorized_key_line(s):
+            line = s
+            break
+    if not line:
+        raise ValueError("Not a valid SSH public key line")
+    if len(line) > 8192:
+        raise ValueError("public key too long")
+
+    SSH_ROOT_AUTHORIZED_KEYS.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if SSH_ROOT_AUTHORIZED_KEYS.is_file():
+        existing = SSH_ROOT_AUTHORIZED_KEYS.read_text(encoding="utf-8", errors="replace")
+    for raw_line in existing.splitlines():
+        if raw_line.strip() == line:
+            return {
+                "ok": True,
+                "added": False,
+                "message": "Key already present.",
+                "ssh": _security_sshd_config(),
+            }
+    with SSH_ROOT_AUTHORIZED_KEYS.open("a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write(line + "\n")
+    try:
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS, 0o600)
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS.parent, 0o700)
+    except OSError:
+        pass
+    return {
+        "ok": True,
+        "added": True,
+        "message": "SSH public key added for root.",
+        "ssh": _security_sshd_config(),
+    }
+
+
+def remove_ssh_authorized_key(*, index: int | None = None, fingerprint: str | None = None) -> dict:
+    """Remove one root authorized key by 1-based index or fingerprint."""
+    keys = _security_list_authorized_keys()
+    if not keys:
+        raise ValueError("No authorized keys to remove")
+    target_idx = None
+    if index is not None:
+        try:
+            target_idx = int(index)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("index must be an integer") from exc
+    elif fingerprint:
+        fp = str(fingerprint).strip()
+        for row in keys:
+            if row.get("fingerprint") == fp or fp in str(row.get("fingerprint") or ""):
+                target_idx = int(row["index"])
+                break
+        if target_idx is None:
+            raise ValueError("fingerprint not found")
+    else:
+        raise ValueError("index or fingerprint is required")
+
+    if target_idx < 1 or target_idx > len(keys):
+        raise ValueError(f"index out of range (1..{len(keys)})")
+
+    ssh = _security_sshd_config()
+    if (
+        ssh.get("login_method") == "keys_only"
+        and str(ssh.get("root_login_mode") or "") != "no"
+        and len(keys) <= 1
+    ):
+        raise ValueError(
+            "Refusing to remove the last root key while keys-only root login is enabled."
+        )
+
+    try:
+        text = SSH_ROOT_AUTHORIZED_KEYS.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"cannot read authorized_keys: {exc}") from exc
+    out_lines: list[str] = []
+    seen = 0
+    removed_line = ""
+    for raw in text.splitlines():
+        if _security_is_authorized_key_line(raw):
+            seen += 1
+            if seen == target_idx:
+                removed_line = raw.strip()
+                continue
+        out_lines.append(raw.rstrip("\n"))
+    if not removed_line:
+        raise ValueError("key not found")
+    new_text = "\n".join(out_lines)
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    SSH_ROOT_AUTHORIZED_KEYS.write_text(new_text, encoding="utf-8")
+    try:
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS, 0o600)
+    except OSError:
+        pass
+    return {
+        "ok": True,
+        "removed": True,
+        "index": target_idx,
+        "message": f"Removed key #{target_idx}.",
+        "ssh": _security_sshd_config(),
     }
 
 
@@ -7530,7 +7831,11 @@ def build_security_status() -> dict:
                 {
                     "severity": "medium",
                     "title": "SSH root login allowed",
-                    "detail": f"permitrootlogin={ssh.get('permit_root_login')}",
+                    "detail": (
+                        f"permitrootlogin={ssh.get('permit_root_login')}. "
+                        "Manage under Security → VPS login method "
+                        "(root keys only, or disable root SSH)."
+                    ),
                 }
             )
     if (
@@ -14863,7 +15168,7 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
-        if path == "/api/security/ssh-login":
+        if path in ("/api/security/ssh-login", "/api/security/ssh-keys"):
             if not self._require_auth(api=True):
                 return
             try:
@@ -15154,15 +15459,57 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/api/security/ssh-login":
             try:
                 payload = self._read_json()
-                method = ""
-                if isinstance(payload, dict):
-                    method = str(
-                        payload.get("method")
-                        or payload.get("login_method")
-                        or payload.get("mode")
-                        or ""
+                if not isinstance(payload, dict):
+                    payload = {}
+                method = str(
+                    payload.get("method")
+                    or payload.get("login_method")
+                    or payload.get("mode")
+                    or ""
+                ).strip()
+                root = payload.get("permit_root_login")
+                if root is None:
+                    root = payload.get("root_login")
+                if method:
+                    result = apply_ssh_login_method(
+                        method,
+                        permit_root_login=str(root) if root is not None else None,
                     )
-                result = apply_ssh_login_method(method)
+                elif root is not None:
+                    result = apply_ssh_root_login(str(root))
+                else:
+                    raise ValueError(
+                        "Provide method (password_and_keys|keys_only) "
+                        "and/or permit_root_login (yes|prohibit-password|no)"
+                    )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/ssh-keys":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                action = str(
+                    payload.get("action") or payload.get("op") or "add"
+                ).strip().lower()
+                if action in ("add", "create", "append"):
+                    result = add_ssh_authorized_key(
+                        str(payload.get("public_key") or payload.get("key") or "")
+                    )
+                elif action in ("remove", "delete", "del"):
+                    idx = payload.get("index")
+                    result = remove_ssh_authorized_key(
+                        index=int(idx) if idx is not None and str(idx) != "" else None,
+                        fingerprint=(
+                            str(payload.get("fingerprint") or "").strip() or None
+                        ),
+                    )
+                else:
+                    raise ValueError("action must be add or remove")
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})

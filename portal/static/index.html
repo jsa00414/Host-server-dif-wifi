@@ -847,6 +847,17 @@
     }
     .sec-login-method .method-sub { color: var(--muted); font-size: .78rem; margin-top: 4px; max-width: 42rem; line-height: 1.4; }
     .sec-login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sec-ssh-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .sec-ssh-section h4 {
+      margin: 0 0 8px; font-size: .82rem; font-weight: 600; color: var(--text);
+    }
+    .sec-ssh-add {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 10px;
+    }
+    .sec-ssh-add textarea {
+      flex: 1 1 280px; min-height: 64px; resize: vertical;
+      font-family: "IBM Plex Mono", monospace; font-size: .72rem;
+    }
     .sec-callout {
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
@@ -1574,7 +1585,7 @@
 
         <div class="panel" style="margin-bottom:14px">
           <div class="panel-head">
-            <h3>VPS login method</h3>
+            <h3>VPS login method &amp; SSH keys</h3>
           </div>
           <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
         </div>
@@ -3508,8 +3519,17 @@
         const methodLabel = ssh.login_method_label || method;
         const keysReady = !!ssh.keys_only_ready;
         const keyCount = ssh.root_authorized_keys ?? 0;
+        const authKeys = Array.isArray(ssh.authorized_keys) ? ssh.authorized_keys : [];
         const isKeys = method === "keys_only";
         const isPw = method === "password_and_keys";
+        const rootMode = ssh.root_login_mode || ssh.permit_root_login || "unknown";
+        const rootLabel = ssh.root_login_label || rootMode;
+        const rootRisk = ssh.root_login_risk || "medium";
+        const rootDetail = ssh.root_login_detail
+          || `permitrootlogin=${ssh.permit_root_login ?? "—"}`;
+        const rootKeysOnly = rootMode === "prohibit-password" || rootMode === "without-password";
+        const rootDenied = rootMode === "no";
+        const rootYes = rootMode === "yes";
         const rows = [
           ["PermitRootLogin", ssh.permit_root_login],
           ["PasswordAuthentication", ssh.password_authentication],
@@ -3518,13 +3538,24 @@
           ["PermitEmptyPasswords", ssh.permit_empty_passwords],
         ];
         const hint = isKeys
-          ? "Password login is off. Root can sign in with SSH keys only."
+          ? "Password login is off. Prefer managing root access and keys below."
           : (isPw
             ? "Password and SSH keys both work. Prefer keys only once your key is installed."
             : "Current sshd settings do not match a standard password/keys profile.");
         const lockHint = keysReady
-          ? `${keyCount} key(s) in /root/.ssh/authorized_keys — safe to switch to keys only.`
-          : "No keys in /root/.ssh/authorized_keys — add one before switching to keys only.";
+          ? `${keyCount} key(s) in /root/.ssh/authorized_keys.`
+          : "No keys in /root/.ssh/authorized_keys — add one before keys-only login.";
+        const keysTable = authKeys.length
+          ? `<table class="sec-table"><thead><tr><th>#</th><th>Type</th><th>Fingerprint</th><th>Comment</th><th></th></tr></thead><tbody>${
+              authKeys.map((k) => `<tr>
+                <td>${escHtml(k.index)}</td>
+                <td><code>${escHtml(k.type || "—")}</code></td>
+                <td><code>${escHtml(k.fingerprint || "—")}</code></td>
+                <td class="sec-users">${escHtml(k.comment || "—")}</td>
+                <td><button type="button" class="ghost danger sec-ssh-remove" data-index="${escHtml(k.index)}" data-fp="${escHtml(k.fingerprint || "")}">Remove</button></td>
+              </tr>`).join("")
+            }</tbody></table>`
+          : `<div class="sec-empty">No root authorized keys yet.</div>`;
         sshEl.innerHTML = `
           <div class="sec-login-method">
             <div>
@@ -3543,13 +3574,43 @@
             <div class="meta-box"><label>Root login</label><div>${escHtml(ssh.permit_root_login ?? "—")}</div></div>
             <div class="meta-box"><label>Root authorized keys</label><div>${escHtml(keyCount)}</div></div>
           </div>
-          <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
-            rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
-          }</tbody></table>`;
-        const keysBtn = document.getElementById("secSshKeysOnlyBtn");
-        const pwBtn = document.getElementById("secSshPasswordBtn");
-        keysBtn?.addEventListener("click", () => applySshLoginMethod("keys_only"));
-        pwBtn?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
+
+          <div class="sec-ssh-section">
+            <h4>Root SSH login ${secSev(rootRisk)}</h4>
+            <div class="method-label" style="font-size:.92rem">${escHtml(rootLabel)}</div>
+            <div class="method-sub">${escHtml(rootDetail)}</div>
+            <div class="sec-login-actions" style="margin-top:10px">
+              <button type="button" class="ghost" id="secRootKeysBtn" ${rootKeysOnly ? "disabled" : ""}>Root keys only</button>
+              <button type="button" class="ghost danger" id="secRootDenyBtn" ${rootDenied ? "disabled" : ""}>Disable root SSH</button>
+              <button type="button" class="ghost" id="secRootPasswordBtn" ${rootYes || isKeys ? "disabled" : ""}>Allow root password</button>
+            </div>
+          </div>
+
+          <div class="sec-ssh-section">
+            <h4>SSH key management</h4>
+            <div class="method-sub" style="margin-bottom:8px">Public keys in <code>/root/.ssh/authorized_keys</code></div>
+            ${keysTable}
+            <div class="sec-ssh-add">
+              <textarea id="secSshKeyInput" placeholder="ssh-ed25519 AAAA… comment" spellcheck="false"></textarea>
+              <button type="button" class="primary" id="secSshKeyAddBtn">Add key</button>
+            </div>
+          </div>
+
+          <div class="sec-ssh-section">
+            <h4>sshd settings</h4>
+            <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
+              rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
+            }</tbody></table>
+          </div>`;
+        document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
+        document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
+        document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
+        document.getElementById("secRootDenyBtn")?.addEventListener("click", () => applySshRootLogin("no"));
+        document.getElementById("secRootPasswordBtn")?.addEventListener("click", () => applySshRootLogin("yes"));
+        document.getElementById("secSshKeyAddBtn")?.addEventListener("click", () => addSshAuthorizedKey());
+        sshEl.querySelectorAll(".sec-ssh-remove").forEach((btn) => {
+          btn.addEventListener("click", () => removeSshAuthorizedKey(btn.getAttribute("data-index"), btn.getAttribute("data-fp")));
+        });
       }
 
       const domEl = document.getElementById("secDomains");
@@ -3616,6 +3677,71 @@
           timeoutMs: 30000,
         });
         setStatus(result.message || `Login method set to ${label}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function applySshRootLogin(mode) {
+      const labels = {
+        "prohibit-password": "root keys only",
+        no: "disable root SSH",
+        yes: "allow root password",
+      };
+      if (mode === "no") {
+        const ok = window.confirm(
+          "Disable root SSH login?\n\nRoot will not be able to sign in over SSH (even with keys). Only do this if another sudo user can still reach the VPS."
+        );
+        if (!ok) return;
+      }
+      setStatus(`Applying root login: ${labels[mode] || mode}…`);
+      try {
+        const result = await api("/api/security/ssh-login", {
+          method: "POST",
+          body: JSON.stringify({ permit_root_login: mode }),
+          timeoutMs: 30000,
+        });
+        setStatus(result.message || `Root login set to ${mode}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function addSshAuthorizedKey() {
+      const input = document.getElementById("secSshKeyInput");
+      const key = (input?.value || "").trim();
+      if (!key) {
+        setStatus("Paste an SSH public key first.", "err");
+        return;
+      }
+      setStatus("Adding SSH public key…");
+      try {
+        const result = await api("/api/security/ssh-keys", {
+          method: "POST",
+          body: JSON.stringify({ action: "add", public_key: key }),
+          timeoutMs: 20000,
+        });
+        if (input) input.value = "";
+        setStatus(result.message || "Key added", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function removeSshAuthorizedKey(index, fingerprint) {
+      const ok = window.confirm(`Remove SSH key #${index}?\n${fingerprint || ""}`);
+      if (!ok) return;
+      setStatus(`Removing SSH key #${index}…`);
+      try {
+        const result = await api("/api/security/ssh-keys", {
+          method: "POST",
+          body: JSON.stringify({ action: "remove", index: Number(index), fingerprint }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || "Key removed", "ok");
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
