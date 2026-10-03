@@ -127,6 +127,10 @@ if not WG_EASY_SSO_USER or not WG_EASY_SSO_PASS:
 OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients"))
 OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
 OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
+OVPN_WINDOWS_NAME = os.environ.get("OVPN_WINDOWS_NAME", "windows.ovpn")
+# Optional shared-secret download link (works without portal login / for Caddy
+# public path allow). Empty = token downloads disabled.
+OVPN_WINDOWS_DL_TOKEN = os.environ.get("OVPN_WINDOWS_DL_TOKEN", "").strip()
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
@@ -2273,7 +2277,7 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 100.64.0.0/10 172.18.0.1/32 127.0.0.1/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
 )
 VPN_UFW_FROM = os.environ.get("VPN_UFW_FROM", "10.8.0.0/24")
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
@@ -4736,6 +4740,15 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         # there so Caddy never buffers an entire movie to compress it.
         is_portal = domain == PORTAL_HOST or domain.startswith("portal.")
         if is_portal:
+            # Public Windows OpenVPN profile download (token enforced in portal app)
+            lines.append("\t@ovpn_windows_dl path /api/openvpn/windows /download/windows.ovpn")
+            lines.append("\thandle @ovpn_windows_dl {")
+            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\t\theader_up Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+            lines.append("\t\t}")
+            lines.append("\t}")
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -4750,7 +4763,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
             if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.append(f"\t\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -4776,7 +4789,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\tencode gzip")
             if r.get("vpn_only"):
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
-                lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
                 lines.append("\thandle @vpn_clients {")
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
@@ -7793,6 +7806,15 @@ def build_portal_settings() -> dict:
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
+        {
+            "id": "ovpn-windows",
+            "label": "OpenVPN Windows (.ovpn)",
+            "url": (
+                f"https://{host}/api/openvpn/windows?t={OVPN_WINDOWS_DL_TOKEN}"
+                if OVPN_WINDOWS_DL_TOKEN
+                else f"https://{host}/api/openvpn/windows"
+            ),
+        },
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
@@ -12891,6 +12913,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             pass  # public
+        elif path in (
+            "/api/openvpn/windows",
+            "/download/windows.ovpn",
+        ):
+            pass  # public Windows OpenVPN download (token checked below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif not self._is_authed():
@@ -13403,6 +13430,41 @@ document.getElementById('f').onsubmit = async (e) => {
 
                 body = load_openvpn_client_conf(OVPN_PHONE_NAME)
                 name = "james-iphone.ovpn"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/openvpn/windows",
+            "/download/windows.ovpn",
+        ):
+            # Allow either portal login OR shared download token (public Caddy path).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_WINDOWS_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_WINDOWS_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_openvpn_client_conf(OVPN_WINDOWS_NAME)
+                name = "windows.ovpn"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-openvpn-profile")
                 self.send_header(

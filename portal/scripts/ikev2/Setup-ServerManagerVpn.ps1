@@ -47,10 +47,17 @@ Set-VpnConnectionIPsecConfiguration `
   -AllUserConnection `
   -Force
 
+try {
+  Set-VpnConnection -Name $Name -AllUserConnection -DnsSuffix "vpstruelord.com" -Force -ErrorAction Stop
+} catch {
+  Write-Host "Note: could not set VpnConnection DnsSuffix ($($_.Exception.Message))"
+}
+
 Write-Host ""
 Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
 Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
+Write-Host "If portal is Forbidden after connect: flush DNS (ipconfig /flushdns) and retry."
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

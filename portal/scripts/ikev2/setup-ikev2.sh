@@ -7,7 +7,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 IKEV2_DIR="${IKEV2_DIR:-/opt/ikev2}"
 IKEV2_HOST="${IKEV2_HOST:-portal.vpstruelord.com}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
-IKEV2_DNS="${IKEV2_DNS:-10.9.0.1}"
+IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
@@ -117,8 +117,28 @@ for plug in eap-mschapv2 eap-identity openssl pem pkcs1 pubkey x509 revocation a
   fi
 done
 
-ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
-ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+# Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
+#   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  VIA_OVPN_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-via-openvpn.sh"
+  if [[ -f "$VIA_OVPN_SRC" ]]; then
+    cp -f "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
+    chmod 0755 "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
+    bash "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh" || true
+  fi
+else
+  PUBLIC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-public.sh"
+  if [[ -f "$PUBLIC_SRC" ]]; then
+    cp -f "$PUBLIC_SRC" "$IKEV2_DIR/ensure-ikev2-public.sh"
+    chmod 0755 "$IKEV2_DIR/ensure-ikev2-public.sh"
+    bash "$IKEV2_DIR/ensure-ikev2-public.sh" || true
+  else
+    ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
+    ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+  fi
+fi
+# Host INPUT for portal VIP / sslh (split-DNS points portal at 10.11.0.1)
+ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
@@ -143,6 +163,35 @@ if [[ -f "$SCRIPT_SRC" && "$SCRIPT_SRC" != "$IKEV2_DIR/Setup-ServerManagerVpn.ps
   cp -f "$SCRIPT_SRC" "$IKEV2_DIR/Setup-ServerManagerVpn.ps1"
 fi
 
+# VPN-only admin hostnames → 10.11.0.1 lo VIP (avoid public-IP exclusion → 403)
+SPLIT_DNS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-vpn-split-dns.sh"
+if [[ -f "$SPLIT_DNS_SRC" ]]; then
+  cp -f "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-vpn-split-dns.sh"
+  bash "$IKEV2_DIR/ensure-vpn-split-dns.sh" || true
+fi
+
+# Allow active IKEv2 peer WAN IPs in Caddy (Windows DoH / gateway exclusion)
+PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
+PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
+PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
+if [[ -f "$PEER_ACL_SRC" ]]; then
+  cp -f "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
+  [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
+  [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now sm-ikev2-peer-acl.timer >/dev/null 2>&1 || true
+  bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
+fi
+
+NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"
+if [[ -f "$NOH3_SRC" ]]; then
+  cp -f "$NOH3_SRC" "$IKEV2_DIR/ensure-caddy-no-h3.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-caddy-no-h3.sh"
+  bash "$IKEV2_DIR/ensure-caddy-no-h3.sh" || true
+fi
+
 systemctl enable strongswan-starter >/dev/null 2>&1 || true
 systemctl restart strongswan-starter
 sleep 1
@@ -156,3 +205,10 @@ echo "  Password: ${IKEV2_PASS}"
 echo "  Pool:     ${IKEV2_POOL}"
 echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
 echo "  Cert:     ${LE_LIVE}"
+echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
+echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  echo "  Mode:     IKEv2 via OpenVPN only (tun0)"
+else
+  echo "  Mode:     public IKEv2 (UDP 500/4500)"
+fi

@@ -1,0 +1,8 @@
+[Unit]
+Description=ServerManager sync IKEv2 peer WAN IPs into Caddy VPN ACL
+After=network-online.target strongswan-starter.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ikev2/ensure-ikev2-peer-acl.sh
