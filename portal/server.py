@@ -10671,12 +10671,13 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
 
 
 def unlock_ssh_panel(token: str | None, password: str) -> dict:
-    """Unlock SSH panel mutations by re-entering the portal admin password."""
+    """Unlock SSH panel mutations with !!<portal password>!!."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     if not AUTH_PASS:
         raise ValueError("Password is not configured")
-    if not hmac.compare_digest(str(password or ""), AUTH_PASS):
+    expected = f"!!{AUTH_PASS}!!"
+    if not hmac.compare_digest(str(password or ""), expected):
         time.sleep(0.35)
         raise ValueError("Incorrect password")
     now = time.time()
