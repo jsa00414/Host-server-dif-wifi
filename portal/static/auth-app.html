@@ -25,89 +25,119 @@
       --accent: #3ddea0;
       --danger: #ff6b6b;
       --safe-top: env(safe-area-inset-top, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
       --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
     }
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0; min-height: 100%;
+    html {
+      margin: 0;
+      height: 100%;
+      background: var(--bg0);
+    }
+    body {
+      margin: 0;
+      min-height: 100%;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow-x: hidden;
       background:
-        radial-gradient(120% 80% at 50% -10%, rgba(61,222,160,.16), transparent 55%),
-        linear-gradient(180deg, #0c1410 0%, var(--bg0) 45%, #070b09 100%);
+        radial-gradient(140% 70% at 50% -8%, rgba(61,222,160,.18), transparent 52%),
+        linear-gradient(180deg, #0c1410 0%, var(--bg0) 42%, #070b09 100%);
+      background-attachment: fixed;
       color: var(--text);
       font-family: "Sora", system-ui, sans-serif;
       -webkit-tap-highlight-color: transparent;
       -webkit-user-select: none;
       user-select: none;
+      overscroll-behavior: none;
     }
-    body {
-      min-height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      padding: calc(18px + var(--safe-top)) 20px calc(24px + var(--safe-bottom));
+    .top {
+      flex: 0 0 auto;
+      padding:
+        calc(10px + var(--safe-top))
+        calc(16px + var(--safe-right))
+        8px
+        calc(16px + var(--safe-left));
+      text-align: center;
     }
     .brand {
-      text-align: center;
       letter-spacing: .18em;
       text-transform: uppercase;
-      font-size: .72rem;
+      font-size: .7rem;
       font-weight: 700;
       color: var(--accent);
-      margin: 8px 0 4px;
+      margin: 0 0 4px;
     }
     .title {
-      text-align: center;
-      font-size: 1.35rem;
+      font-size: 1.25rem;
       font-weight: 700;
       letter-spacing: -.03em;
-      margin: 0 0 6px;
+      margin: 0;
     }
     .sub {
-      text-align: center;
       color: var(--muted);
-      font-size: .82rem;
-      line-height: 1.45;
-      margin: 0 auto 22px;
-      max-width: 28rem;
+      font-size: .78rem;
+      line-height: 1.4;
+      margin: 6px 0 0;
     }
+    body.has-account .sub { display: none; }
     .stage {
-      flex: 1;
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      min-height: 0;
+    }
+    .code-shell {
+      flex: 1 1 auto;
+      width: 100%;
+      margin: 0;
+      border: 0;
+      border-top: 1px solid rgba(61,222,160,.22);
+      border-bottom: 1px solid rgba(61,222,160,.22);
+      border-radius: 0;
+      background: rgba(8, 14, 11, .55);
+      padding:
+        28px
+        calc(12px + var(--safe-right))
+        28px
+        calc(12px + var(--safe-left));
+      text-align: center;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 18px;
-      width: min(420px, 100%);
-      margin: 0 auto;
-    }
-    .code-shell {
-      width: 100%;
-      border: 1px solid rgba(61,222,160,.28);
-      border-radius: 22px;
-      background: color-mix(in srgb, var(--bg1) 92%, black);
-      padding: 28px 18px 22px;
-      text-align: center;
-      box-shadow: 0 18px 50px rgba(0,0,0,.35);
+      min-height: 42dvh;
     }
     .acct {
       color: var(--muted);
-      font-size: .78rem;
-      margin-bottom: 14px;
+      font-size: .74rem;
+      margin-bottom: 18px;
       word-break: break-all;
+      max-width: 100%;
+      padding: 0 4px;
     }
     .code {
       font-family: "IBM Plex Mono", monospace;
-      font-size: clamp(2.4rem, 12vw, 3.2rem);
+      font-size: clamp(2.8rem, 14vw, 4rem);
       font-weight: 600;
-      letter-spacing: .28em;
-      margin-left: .28em;
+      letter-spacing: .22em;
+      margin-left: .22em;
       color: var(--text);
-      line-height: 1.1;
+      line-height: 1;
+      width: 100%;
     }
     .bar {
-      margin: 18px auto 0;
-      width: min(220px, 70%);
-      height: 4px;
-      border-radius: 999px;
+      margin: 22px 0 0;
+      width: 100%;
+      max-width: none;
+      height: 5px;
+      border-radius: 0;
       background: rgba(255,255,255,.08);
       overflow: hidden;
     }
@@ -119,12 +149,29 @@
       background: linear-gradient(90deg, var(--accent), #8af0c4);
       transition: transform .2s linear;
     }
+    .dock {
+      flex: 0 0 auto;
+      width: 100%;
+      padding:
+        14px
+        calc(14px + var(--safe-right))
+        calc(14px + var(--safe-bottom))
+        calc(14px + var(--safe-left));
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: stretch;
+    }
     .actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      justify-content: center;
+      gap: 8px;
+      justify-content: stretch;
       width: 100%;
+    }
+    .actions button {
+      flex: 1 1 calc(50% - 8px);
+      min-width: 0;
     }
     button, .btn {
       appearance: none;
@@ -132,9 +179,9 @@
       background: rgba(255,255,255,.04);
       color: var(--text);
       border-radius: 12px;
-      padding: 12px 16px;
+      padding: 14px 12px;
       font: inherit;
-      font-size: .88rem;
+      font-size: .86rem;
       font-weight: 600;
       cursor: pointer;
     }
@@ -146,39 +193,47 @@
     button.danger {
       border-color: rgba(255,107,107,.35);
       color: #ffb4b4;
+      flex: 1 1 100%;
     }
     button:disabled { opacity: .45; cursor: default; }
     .hint {
       color: var(--muted);
-      font-size: .78rem;
-      line-height: 1.45;
+      font-size: .74rem;
+      line-height: 1.4;
       text-align: center;
-      max-width: 28rem;
+      margin: 0;
     }
     .install {
       width: 100%;
       border: 1px dashed rgba(61,222,160,.35);
-      border-radius: 16px;
-      padding: 14px 16px;
+      border-radius: 14px;
+      padding: 12px 14px;
       background: rgba(61,222,160,.06);
       color: var(--text);
-      font-size: .82rem;
+      font-size: .8rem;
       line-height: 1.45;
       display: none;
     }
     .install.show { display: block; }
     .install strong { color: var(--accent); }
     .empty {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       text-align: center;
       color: var(--muted);
       font-size: .9rem;
       line-height: 1.5;
-      padding: 24px 8px;
+      padding: 24px calc(18px + var(--safe-right)) 24px calc(18px + var(--safe-left));
+      border-top: 1px solid rgba(170,210,185,.08);
+      border-bottom: 1px solid rgba(170,210,185,.08);
+      min-height: 36dvh;
     }
     .toast {
       position: fixed;
       left: 50%;
-      bottom: calc(24px + var(--safe-bottom));
+      bottom: calc(18px + var(--safe-bottom));
       transform: translateX(-50%) translateY(20px);
       background: #15231d;
       border: 1px solid rgba(61,222,160,.35);
@@ -190,6 +245,7 @@
       pointer-events: none;
       transition: opacity .2s ease, transform .2s ease;
       z-index: 20;
+      max-width: calc(100% - 24px);
     }
     .toast.show {
       opacity: 1;
@@ -218,12 +274,19 @@
       font-size: .78rem;
       color: var(--muted);
     }
+    @supports (padding: max(0px)) {
+      body {
+        /* keep full-bleed; safe areas applied on sections */
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="brand">ServerManager</div>
-  <h1 class="title">Authenticator</h1>
-  <p class="sub">Codes for unlocking the VPS login panel. Install this page as an app on your phone.</p>
+  <header class="top">
+    <div class="brand">ServerManager</div>
+    <h1 class="title">Authenticator</h1>
+    <p class="sub">Codes for unlocking the VPS login panel. Install this page as an app on your phone.</p>
+  </header>
 
   <div class="stage" id="stage">
     <div class="code-shell" id="codeShell" hidden>
@@ -232,21 +295,23 @@
       <div class="bar"><i id="tickBar"></i></div>
     </div>
     <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
-    <div class="install" id="installHint"></div>
-    <div class="actions">
-      <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
-      <button type="button" id="installBtn" hidden>Add to Home Screen</button>
-      <button type="button" id="manualBtn">Enter secret</button>
-      <button type="button" class="danger" id="clearBtn" hidden>Remove account</button>
+    <div class="dock">
+      <div class="install" id="installHint"></div>
+      <div class="actions">
+        <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+        <button type="button" id="installBtn" hidden>Add to Home Screen</button>
+        <button type="button" id="manualBtn">Enter secret</button>
+        <button type="button" class="danger" id="clearBtn" hidden>Remove account</button>
+      </div>
+      <div class="manual" id="manualForm">
+        <label for="secretInput">Base32 secret from portal</label>
+        <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP…" />
+        <label for="accountInput">Account label (optional)</label>
+        <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
+        <button type="button" class="primary" id="saveManualBtn">Save on this phone</button>
+      </div>
+      <p class="hint" id="hint">Works offline after install. Codes refresh every 30 seconds.</p>
     </div>
-    <div class="manual" id="manualForm">
-      <label for="secretInput">Base32 secret from portal</label>
-      <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP…" />
-      <label for="accountInput">Account label (optional)</label>
-      <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
-      <button type="button" class="primary" id="saveManualBtn">Save on this phone</button>
-    </div>
-    <p class="hint" id="hint">Works offline after install. Codes refresh every 30 seconds.</p>
   </div>
   <div class="toast" id="toast"></div>
 
@@ -426,6 +491,7 @@
     }
 
     function render() {
+      document.body.classList.toggle("has-account", !!account);
       if (account) {
         els.codeShell.hidden = false;
         els.emptyView.hidden = true;
