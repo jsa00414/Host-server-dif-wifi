@@ -16818,8 +16818,23 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/register-device",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
-        ) or path.startswith("/static/"):
+        ) or path.startswith("/static/auth-app"):
             pass  # public (/, /login.html serve the sign-in page when logged out)
+        elif path.startswith("/static/"):
+            # Panel HTML under /static/ requires a session — only auth-app assets
+            # are public (matched above). Other static files (icons/css) stay open
+            # so login/branding can load; sensitive dashboards are gated below.
+            rel = path[len("/static/") :]
+            if rel in (
+                "index.html",
+                "files.html",
+                "nas-windows.html",
+                "windows-vpn.html",
+                "openvpn.html",
+            ) and not self._is_authed():
+                self._unauthorized(api=False)
+                return
+            pass
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
