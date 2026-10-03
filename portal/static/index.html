@@ -3697,11 +3697,12 @@
         } else {
           allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>Note</th><th></th></tr></thead><tbody>${
             rows.map((r) => {
-              const sealed = !!(r.sealed || r.hidden || r.source === "router");
+              const sealed = !!(r.sealed || r.source === "router");
+              const hiddenFromApps = !!(!sealed && r.hidden);
               const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
               const note = sealed
                 ? (r.note || "Flint router WAN (sealed)")
-                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}`;
+                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
               const action = sealed
                 ? `<span class="sec-users">sealed</span>`
                 : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>

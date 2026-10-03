@@ -11445,14 +11445,18 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
 
 
 def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dict:
-    """Optionally hide sealed router entries from Authenticator apps."""
+    """Hide sealed/hidden allowlist rows from Authenticator apps (still sticky-allowed)."""
     def _vis(rows: list) -> list:
         out = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
             ip = _normalize_vpn_ip(row.get("ip", ""))
-            if for_auth_app and (row.get("sealed") or row.get("hidden") or _is_sealed_vpn_ip(ip)):
+            if for_auth_app and (
+                row.get("sealed")
+                or row.get("hidden")
+                or _is_sealed_vpn_ip(ip)
+            ):
                 continue
             out.append(row)
         return out
@@ -11463,6 +11467,39 @@ def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dic
         "pending": _vis(list(data.get("pending") or [])),
         "attempts": _vis(list(data.get("attempts") or [])),
     }
+
+
+def hide_vpn_allowlist_ips_from_apps(ips: list[str] | None = None) -> dict:
+    """Keep IPs allowlisted/sticky, but permanently hide them from Authenticator Allowed list."""
+    data = _read_vpn_allowlist()
+    want: set[str] | None = None
+    if ips is not None:
+        want = {_normalize_vpn_ip(x) for x in ips if _normalize_vpn_ip(x)}
+    changed = False
+    rebuilt = []
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if not ip:
+            continue
+        if _is_sealed_vpn_ip(ip):
+            item["sealed"] = True
+            item["hidden"] = True
+        elif want is None or ip in want:
+            if not item.get("hidden"):
+                changed = True
+            item["hidden"] = True
+            if not str(item.get("note") or "").strip():
+                item["note"] = "hidden from Authenticator list"
+        rebuilt.append(item)
+    data["allowed"] = rebuilt
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    if changed or sealed_changed:
+        _write_vpn_allowlist(data)
+        _run_vpn_peer_acl_sync()
+    return build_vpn_allowlist_status(for_auth_app=True)
 
 
 def _b32_encode_secret(raw: bytes) -> str:
@@ -11901,6 +11938,11 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     now = int(time.time())
     src = (source or "security-ui").strip()[:40] or "security-ui"
     is_lan = _is_home_lan_ipv4(ip_n)
+    prev_hidden = False
+    for prev in list(data.get("allowed") or []):
+        if isinstance(prev, dict) and _normalize_vpn_ip(prev.get("ip", "")) == ip_n:
+            prev_hidden = bool(prev.get("hidden"))
+            break
 
     def _without(rows: list, target: str) -> list:
         out = []
@@ -11936,6 +11978,8 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
             if is_lan:
                 row["kind"] = "lan"
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
+            if prev_hidden:
+                row["hidden"] = True
             data["allowed"].append(row)
     elif action_n == "deny":
         data["denied"].append(
