@@ -6908,7 +6908,8 @@ def _security_run(cmd: list[str], timeout: float = 8) -> subprocess.CompletedPro
         )
 
 
-SSH_LOGIN_DROPIN = Path("/etc/ssh/sshd_config.d/99-servermanager-login.conf")
+SSH_LOGIN_DROPIN = Path("/etc/ssh/sshd_config.d/00-servermanager-login.conf")
+SSH_LOGIN_DROPIN_LEGACY = Path("/etc/ssh/sshd_config.d/99-servermanager-login.conf")
 SSH_ROOT_AUTHORIZED_KEYS = Path("/root/.ssh/authorized_keys")
 SSH_LOGIN_METHODS = ("password_and_keys", "keys_only")
 
@@ -7054,6 +7055,12 @@ def apply_ssh_login_method(method: str) -> dict:
         os.chmod(SSH_LOGIN_DROPIN, 0o644)
     except OSError:
         pass
+    # Older builds used 99-*; remove so it cannot confuse operators.
+    try:
+        if SSH_LOGIN_DROPIN_LEGACY.is_file():
+            SSH_LOGIN_DROPIN_LEGACY.unlink()
+    except OSError:
+        pass
 
     test = _security_run(["sshd", "-t"], timeout=8)
     if test.returncode != 0:
@@ -7077,6 +7084,24 @@ def apply_ssh_login_method(method: str) -> dict:
         raise ValueError(f"sshd config written but reload failed: {err}")
 
     after = _security_sshd_config()
+    # OpenSSH uses first-obtained values; 00- must win over cloud-init 50-.
+    expected_pw = "no" if chosen == "keys_only" else "yes"
+    actual_pw = str(after.get("password_authentication") or "").lower()
+    if actual_pw != expected_pw:
+        try:
+            if previous:
+                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
+            else:
+                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
+            _security_run(["systemctl", "reload", "ssh"], timeout=15)
+        except OSError:
+            pass
+        raise ValueError(
+            "sshd reload succeeded but PasswordAuthentication is still "
+            f"{actual_pw!r} (expected {expected_pw!r}). "
+            "Another sshd_config drop-in may be overriding ServerManager; "
+            "change was rolled back."
+        )
     return {
         "ok": True,
         "applied": chosen,
