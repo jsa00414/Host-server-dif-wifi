@@ -1775,9 +1775,47 @@ GRAFANA_PUBLIC_HOST = (
     os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
     or "grafana.vpstruelord.com"
 )
-GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
-GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
+# Caddy (truemail network) reaches the container by name — not a public host port.
+GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "sm-grafana").strip() or "sm-grafana"
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000") or "3000")
+# Host-local upstream for portal SSO (compose publishes 127.0.0.1:3016 only).
+GRAFANA_UPSTREAM = os.environ.get(
+    "GRAFANA_UPSTREAM", "http://127.0.0.1:3016"
+).rstrip("/") or "http://127.0.0.1:3016"
+GRAFANA_ENV_FILE = Path(
+    os.environ.get("GRAFANA_ENV_FILE", "/opt/grafana/.env")
+)
+GRAFANA_COOKIE = "grafana_session"
+GRAFANA_COOKIE_EXPIRY = "grafana_session_expiry"
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
+
+
+def _load_grafana_admin() -> tuple[str, str]:
+    """Read Grafana admin user/password from env or /opt/grafana/.env."""
+    user = (os.environ.get("GRAFANA_ADMIN_USER") or os.environ.get("GF_ADMIN_USER") or "").strip()
+    password = (
+        os.environ.get("GRAFANA_ADMIN_PASSWORD")
+        or os.environ.get("GF_ADMIN_PASSWORD")
+        or ""
+    ).strip()
+    if GRAFANA_ENV_FILE.is_file():
+        parsed: dict[str, str] = {}
+        try:
+            raw_text = GRAFANA_ENV_FILE.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            raw_text = ""
+        for raw in raw_text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            parsed[key.strip()] = val.strip().strip("'\"")
+        user = user or (parsed.get("GF_ADMIN_USER") or "admin").strip() or "admin"
+        password = password or (parsed.get("GF_ADMIN_PASSWORD") or "").strip()
+    return (user or "admin"), password
+
+
+GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
 PROXMOX_SSH_USER = os.environ.get("PROXMOX_SSH_USER", "root").strip() or "root"
@@ -2275,7 +2313,12 @@ VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
     "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 100.64.0.0/10 172.18.0.1/32 127.0.0.1/32",
 )
-VPN_UFW_FROM = os.environ.get("VPN_UFW_FROM", "10.8.0.0/24")
+# Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
+# Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
+VPN_UFW_FROM = os.environ.get(
+    "VPN_UFW_FROM",
+    "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24",
+).strip() or "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24"
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
 PIHOLE_SSO_URL = os.environ.get(
     "PIHOLE_SSO_URL", "https://pihole.vpstruelord.com/sm-autologin"
@@ -5555,11 +5598,24 @@ def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
     return None, "tcp", cleaned
 
 
+def _vpn_ufw_sources() -> list[str]:
+    """CIDRs used for vpn_only UFW allow-from rules."""
+    parts = [
+        p.strip()
+        for p in VPN_UFW_FROM.replace(",", " ").split()
+        if p.strip()
+    ]
+    return parts or ["10.8.0.0/24"]
+
+
 def _is_vpn_ufw_from(frm: str) -> bool:
     f = (frm or "").lower().replace(" ", "")
-    if f.startswith("anywhere"):
+    if not f or f.startswith("anywhere"):
         return False
-    return VPN_UFW_FROM.replace(" ", "") in f or f.startswith("10.8.0.")
+    for src in _vpn_ufw_sources():
+        if src.lower().replace(" ", "") in f:
+            return True
+    return f.startswith("10.8.0.") or f.startswith("10.9.0.") or f.startswith("100.64.")
 
 
 def _run_ufw(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
@@ -5727,26 +5783,37 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
     return cleaned
 
 
-def _ufw_allow_cmd(rule: dict) -> list[str]:
+def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
+    """One or more `ufw allow …` argv lists (without the leading binary)."""
     port = rule["port"]
     proto = rule["proto"]
     comment = rule["comment"]
     if rule.get("vpn_only") and (port, proto) not in UFW_PROTECTED:
-        return [
-            "ufw",
-            "allow",
-            "from",
-            VPN_UFW_FROM,
-            "to",
-            "any",
-            "port",
-            str(port),
-            "proto",
-            proto,
-            "comment",
-            comment,
-        ]
-    return ["ufw", "allow", f"{port}/{proto}", "comment", comment]
+        cmds: list[list[str]] = []
+        for src in _vpn_ufw_sources():
+            cmds.append(
+                [
+                    "allow",
+                    "from",
+                    src,
+                    "to",
+                    "any",
+                    "port",
+                    str(port),
+                    "proto",
+                    proto,
+                    "comment",
+                    comment,
+                ]
+            )
+        return cmds
+    return [["allow", f"{port}/{proto}", "comment", comment]]
+
+
+def _ufw_allow_cmd(rule: dict) -> list[str]:
+    """Back-compat single command (first VPN source only)."""
+    cmds = _ufw_allow_cmds(rule)
+    return ["ufw", *cmds[0]] if cmds else ["ufw", "allow", "22/tcp"]
 
 
 def write_firewall_state(rules: list[dict]) -> dict:
@@ -5819,12 +5886,19 @@ def write_firewall_state(rules: list[dict]) -> dict:
     for key, rule in desired_keys.items():
         if key in have and have[key] == bool(rule.get("vpn_only")):
             continue
-        cmd = _ufw_allow_cmd(rule)
-        proc = _run_ufw(cmd[1:] if cmd and cmd[0] == "ufw" else cmd)
         scope = "vpn" if rule.get("vpn_only") else "public"
-        logs.append(
-            f"allow {rule['port']}/{rule['proto']} ({scope}): rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
-        )
+        for cmd in _ufw_allow_cmds(rule):
+            proc = _run_ufw(cmd)
+            src = ""
+            if "from" in cmd:
+                try:
+                    src = " from " + cmd[cmd.index("from") + 1]
+                except Exception:
+                    src = ""
+            logs.append(
+                f"allow {rule['port']}/{rule['proto']} ({scope}{src}): "
+                f"rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
+            )
 
     # Ensure ufw enabled with deny incoming
     _run_ufw(["--force", "enable"])
@@ -6660,6 +6734,113 @@ def _wg_easy_sso_cookie_headers(data: dict) -> list[str]:
     ]
 
 
+def _grafana_cookie_domain() -> str:
+    """Parent domain for sharing Grafana session with grafana.<domain> iframe."""
+    host = (GRAFANA_PUBLIC_HOST or "").strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        return "." + ".".join(parts[-2:])
+    return ""
+
+
+def grafana_sso_login() -> dict:
+    """Log into Grafana and return session cookies for the portal iframe SSO."""
+    global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
+    # Reload in case install-grafana.sh rotated the password after panel start.
+    GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
+    user = (GRAFANA_SSO_USER or "admin").strip() or "admin"
+    password = (GRAFANA_SSO_PASS or "").strip()
+    if not password:
+        raise RuntimeError("Grafana admin password missing (/opt/grafana/.env)")
+
+    url = f"{GRAFANA_UPSTREAM}/login"
+    payload = {"user": user, "password": password}
+    headers = {
+        "User-Agent": "ServerManager-GrafanaSso/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+            set_cookies: list[str] = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        raw = exc.read() if hasattr(exc, "read") else b""
+        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+        raise RuntimeError(
+            f"Grafana login failed ({getattr(exc, 'code', '?')}): {text[:300]}"
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Grafana login failed: {exc}") from exc
+
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    try:
+        body = json.loads(text) if text else {}
+    except Exception:
+        body = {}
+    if status >= 400:
+        raise RuntimeError(f"Grafana login failed ({status}): {text[:300]}")
+    if isinstance(body, dict) and body.get("message") and "Logged in" not in str(body.get("message")):
+        # Some versions return messageId on failure with 200 — treat unknown as error if no cookie.
+        pass
+
+    session = ""
+    expiry = ""
+    max_age = "2592000"
+    for raw_c in set_cookies:
+        if not raw_c:
+            continue
+        first = raw_c.split(";", 1)[0].strip()
+        name, _, val = first.partition("=")
+        lname = name.strip().lower()
+        if lname == GRAFANA_COOKIE.lower():
+            session = val
+            for part in raw_c.split(";")[1:]:
+                low = part.strip().lower()
+                if low.startswith("max-age="):
+                    max_age = part.strip().split("=", 1)[1].strip() or max_age
+        elif lname == GRAFANA_COOKIE_EXPIRY.lower():
+            expiry = val
+    if not session:
+        raise RuntimeError("Grafana login succeeded but no grafana_session cookie returned")
+
+    return {
+        "ok": True,
+        "user": user,
+        "cookie": session,
+        "expiry": expiry,
+        "max_age": max_age,
+        "url": f"https://{GRAFANA_PUBLIC_HOST}/",
+    }
+
+
+def _grafana_sso_cookie_headers(data: dict) -> list[str]:
+    """Set Grafana session cookies on .vpstruelord.com for the iframe embed."""
+    val = str(data.get("cookie") or "").strip()
+    if not val:
+        return []
+    max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
+    expiry = str(data.get("expiry") or "").strip()
+    domain = _grafana_cookie_domain()
+    dom = f"; Domain={domain}" if domain else ""
+    # SameSite=None; Secure required for cross-subdomain iframe embeds.
+    out = [
+        f"{GRAFANA_COOKIE}={val}; Path=/{dom}; Max-Age={max_age}; HttpOnly; Secure; SameSite=None",
+    ]
+    if expiry:
+        out.append(
+            f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path=/{dom}; Max-Age={max_age}; Secure; SameSite=None"
+        )
+    return out
+
+
 def _read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -6686,6 +6867,594 @@ def _docker_running(name: str) -> bool:
         timeout=6,
     )
     return out.strip().lower() == "true"
+
+
+def _security_run(cmd: list[str], timeout: float = 8) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr=str(exc)
+        )
+
+
+def _security_sshd_config() -> dict:
+    proc = _security_run(["sshd", "-T"], timeout=6)
+    out = {
+        "ok": proc.returncode == 0,
+        "permit_root_login": None,
+        "password_authentication": None,
+        "pubkey_authentication": None,
+        "permit_empty_passwords": None,
+    }
+    if proc.returncode != 0:
+        out["error"] = (proc.stderr or proc.stdout or "sshd -T failed")[:240]
+        return out
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        key, val = parts[0].lower(), parts[1].strip().lower()
+        if key == "permitrootlogin":
+            out["permit_root_login"] = val
+        elif key == "passwordauthentication":
+            out["password_authentication"] = val
+        elif key == "pubkeyauthentication":
+            out["pubkey_authentication"] = val
+        elif key == "permitemptypasswords":
+            out["permit_empty_passwords"] = val
+    return out
+
+
+def _security_fail2ban() -> dict:
+    status = _security_run(["fail2ban-client", "status"], timeout=6)
+    sshd = _security_run(["fail2ban-client", "status", "sshd"], timeout=6)
+    banip = _security_run(["fail2ban-client", "get", "sshd", "banip"], timeout=6)
+    active = status.returncode == 0
+    jails: list[str] = []
+    if active:
+        for line in (status.stdout or "").splitlines():
+            if "Jail list:" in line:
+                jails = [j.strip() for j in line.split(":", 1)[-1].split(",") if j.strip()]
+    banned: list[str] = []
+    if banip.returncode == 0 and (banip.stdout or "").strip():
+        banned = [x.strip() for x in (banip.stdout or "").split() if x.strip()]
+    currently_banned = 0
+    total_banned = 0
+    total_failed = 0
+    currently_failed = 0
+    if sshd.returncode == 0:
+        for line in (sshd.stdout or "").splitlines():
+            s = line.strip()
+            if s.startswith("Currently banned:"):
+                try:
+                    currently_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total banned:"):
+                try:
+                    total_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Currently failed:"):
+                try:
+                    currently_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total failed:"):
+                try:
+                    total_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif "Banned IP list:" in s and not banned:
+                banned = [x.strip() for x in s.split(":", 1)[-1].split() if x.strip()]
+    return {
+        "ok": active,
+        "active": active,
+        "jails": jails,
+        "sshd": {
+            "currently_banned": currently_banned or len(banned),
+            "total_banned": total_banned,
+            "currently_failed": currently_failed,
+            "total_failed": total_failed,
+            "banned_ips": banned,
+        },
+        "error": None
+        if active
+        else ((status.stderr or status.stdout or "fail2ban inactive")[:240]),
+    }
+
+
+def _security_attacker_stats(banned_ips: list[str]) -> dict:
+    """One journal pass: top attackers + per-banned-IP attempt breakdown."""
+    banned_set = {ip.strip() for ip in banned_ips if ip.strip()}
+    proc = _security_run(
+        [
+            "journalctl",
+            "-u",
+            "ssh",
+            "--since",
+            "7 days ago",
+            "--no-pager",
+            "-o",
+            "cat",
+        ],
+        timeout=25,
+    )
+    top: dict[str, int] = {}
+    by_banned: dict[str, dict] = {
+        ip: {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        for ip in banned_set
+    }
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": (proc.stderr or "journalctl failed")[:240],
+            "top_attackers": [],
+            "banned_details": list(by_banned.values()),
+            "window": "7d",
+        }
+
+    failed_re = re.compile(
+        r"Failed password for (?:invalid user )?(\S+) from (\d+\.\d+\.\d+\.\d+)"
+    )
+    invalid_re = re.compile(r"Invalid user (\S+) from (\d+\.\d+\.\d+\.\d+)")
+    for line in (proc.stdout or "").splitlines():
+        m = failed_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["failed_password"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+            continue
+        m = invalid_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["invalid_user"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+
+    top_list = [
+        {"ip": ip, "attempts": n}
+        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    ]
+    banned_details = []
+    for ip in banned_ips:
+        row = by_banned.get(ip) or {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        users_sorted = sorted(
+            [{"user": u, "count": c} for u, c in row["users"].items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:15]
+        banned_details.append(
+            {
+                "ip": ip,
+                "failed_password": row["failed_password"],
+                "invalid_user": row["invalid_user"],
+                "attempts": int(row["failed_password"]) + int(row["invalid_user"]),
+                "users": users_sorted,
+                "last_seen": row.get("last_seen") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "window": "7d",
+        "top_attackers": top_list,
+        "banned_details": banned_details,
+    }
+
+
+def _security_listeners_and_ufw() -> tuple[list[dict], dict]:
+    """Return public listeners of interest + UFW risk rules."""
+    watch = {
+        22,
+        80,
+        443,
+        445,
+        139,
+        2121,
+        1445,
+        3016,
+        5000,
+        5001,
+        5002,
+        3389,
+        4000,
+        8080,
+        2222,
+        8443,
+        25,
+        465,
+        587,
+        993,
+    }
+    ss = _security_run(["ss", "-lntH"], timeout=6)
+    listeners: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for line in (ss.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[3]
+        if local.count(":") < 1:
+            continue
+        host, _, port_s = local.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            continue
+        if port not in watch:
+            continue
+        public = host in ("0.0.0.0", "*", "[::]", "::")
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        listeners.append(
+            {
+                "addr": host,
+                "port": port,
+                "public_bind": public,
+            }
+        )
+
+    fw = read_firewall_state()
+    risky_allows: list[dict] = []
+    vpn_only_ports: set[int] = set()
+    for r in fw.get("rules") or []:
+        try:
+            port_i = int(r.get("port") or 0)
+        except (TypeError, ValueError):
+            port_i = 0
+        if r.get("vpn_only") and port_i:
+            vpn_only_ports.add(port_i)
+        if r.get("locked"):
+            continue
+        if r.get("vpn_only"):
+            continue
+        if str(r.get("from") or "").lower().startswith("anywhere"):
+            risky_allows.append(
+                {
+                    "port": r.get("port"),
+                    "proto": r.get("proto"),
+                    "comment": r.get("comment") or "",
+                    "id": r.get("id"),
+                }
+            )
+    return listeners, {
+        "active": bool(fw.get("active")),
+        "default_incoming": fw.get("default_incoming"),
+        "risky_public_allows": risky_allows,
+        "vpn_only_ports": sorted(vpn_only_ports),
+        "rule_count": len(fw.get("rules") or []),
+        "error": fw.get("error"),
+    }
+
+
+def _security_probe_ports(ports: list[int]) -> list[dict]:
+    """Best-effort connect to VPS public IP (external reachability approx)."""
+    import socket
+
+    host = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "127.0.0.1"
+    out: list[dict] = []
+    for port in ports:
+        open_ = False
+        err = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.2)
+            open_ = s.connect_ex((host, int(port))) == 0
+            s.close()
+        except Exception as exc:
+            err = str(exc)[:120]
+        out.append({"host": host, "port": int(port), "open": open_, "error": err})
+    return out
+
+
+def _security_file_checks() -> list[dict]:
+    checks: list[dict] = []
+    targets = [
+        ("/opt/wireguard/port-forward-ui.env", 0o600, True),
+        ("/opt/grafana/.env", 0o600, False),
+        ("/opt/wireguard/.env", 0o600, False),
+        ("/opt/truemail/config/ssl/key.pem", 0o600, False),
+        ("/opt/truemail/.env", 0o600, False),
+        ("/opt/wireguard/nas-smb-gateway/credentials", 0o600, False),
+    ]
+    for path, want_mode, required in targets:
+        p = Path(path)
+        if not p.exists():
+            if required:
+                checks.append(
+                    {
+                        "path": path,
+                        "ok": False,
+                        "severity": "medium",
+                        "detail": "missing",
+                    }
+                )
+            continue
+        try:
+            mode = p.stat().st_mode & 0o777
+        except OSError as exc:
+            checks.append(
+                {
+                    "path": path,
+                    "ok": False,
+                    "severity": "medium",
+                    "detail": str(exc)[:120],
+                }
+            )
+            continue
+        world_w = bool(mode & 0o002)
+        world_r = bool(mode & 0o004)
+        group_r = bool(mode & 0o040)
+        ok = mode <= want_mode and not world_w and not world_r
+        sev = "ok"
+        detail = f"mode {mode:03o}"
+        if world_w:
+            sev = "high"
+            detail += " (world-writable)"
+        elif world_r or (group_r and want_mode <= 0o600):
+            sev = "medium"
+            detail += " (overly readable)"
+        elif not ok:
+            sev = "low"
+        checks.append(
+            {
+                "path": path,
+                "ok": ok and sev == "ok",
+                "severity": sev if not ok or sev != "ok" else "ok",
+                "mode": f"{mode:03o}",
+                "detail": detail,
+            }
+        )
+    return checks
+
+
+def _security_domain_exposure() -> list[dict]:
+    sensitive = {
+        "router.vpstruelord.com",
+        "buffalo.vpstruelord.com",
+        "files.vpstruelord.com",
+        "proxmox.vpstruelord.com",
+        "grafana.vpstruelord.com",
+        "pihole.vpstruelord.com",
+        "dns.vpstruelord.com",
+    }
+    try:
+        state = read_hookups_state()
+        rules = state.get("rules") or []
+    except Exception:
+        rules = []
+    out: list[dict] = []
+    for r in rules:
+        domain = str(r.get("domain") or "").strip().lower()
+        if not domain:
+            continue
+        if domain not in sensitive and not r.get("enabled", True):
+            continue
+        if domain not in sensitive:
+            continue
+        out.append(
+            {
+                "domain": domain,
+                "name": r.get("name") or "",
+                "enabled": bool(r.get("enabled", True)),
+                "vpn_only": bool(r.get("vpn_only")),
+                "target": f"{r.get('target_host')}:{r.get('target_port')}",
+                "risk": "ok" if r.get("vpn_only") else "high",
+            }
+        )
+    return out
+
+
+def build_security_status() -> dict:
+    """Live security dashboard for the portal Security tab."""
+    findings: list[dict] = []
+    f2b = _security_fail2ban()
+    ssh = _security_sshd_config()
+    listeners, ufw = _security_listeners_and_ufw()
+    files = _security_file_checks()
+    domains = _security_domain_exposure()
+    banned = list((f2b.get("sshd") or {}).get("banned_ips") or [])
+    attackers = _security_attacker_stats(banned)
+
+    # WAN probes for high-interest ports
+    probe_ports = [22, 2121, 3016, 5001, 5002, 1445, 445, 3389, 4000]
+    probes = _security_probe_ports(probe_ports)
+    open_map = {p["port"]: p["open"] for p in probes}
+
+    if not f2b.get("active"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "fail2ban not active",
+                "detail": f2b.get("error") or "sshd jail missing",
+            }
+        )
+    if ssh.get("password_authentication") in ("yes", "true"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "SSH password login enabled",
+                "detail": "Disable PasswordAuthentication; use keys only.",
+            }
+        )
+    if ssh.get("permit_root_login") in ("yes", "prohibit-password", "without-password"):
+        if ssh.get("permit_root_login") == "yes":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": "SSH root login with password allowed",
+                    "detail": f"permitrootlogin={ssh.get('permit_root_login')}",
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": "SSH root login allowed",
+                    "detail": f"permitrootlogin={ssh.get('permit_root_login')}",
+                }
+            )
+
+    exposure_labels = {
+        2121: "NAS FTP gateway",
+        3016: "Grafana (should be 127.0.0.1 only)",
+        5001: "WireGuard Easy UI",
+        5002: "Portal cleartext HTTP",
+        1445: "NAS SMB gateway",
+        445: "Samba/SMB",
+        3389: "RDP forward",
+        4000: "Windows RDP forward",
+    }
+    vpn_only_ports = {
+        int(p) for p in (ufw.get("vpn_only_ports") or []) if str(p).isdigit() or isinstance(p, int)
+    }
+    exposures: list[dict] = []
+    for port, label in exposure_labels.items():
+        listening_public = any(
+            L.get("port") == port and L.get("public_bind") for L in listeners
+        )
+        ufw_open = any(int(r.get("port") or 0) == port for r in ufw.get("risky_public_allows") or [])
+        wan_open = bool(open_map.get(port))
+        vpn_scoped = port in vpn_only_ports and not ufw_open
+        # Prefer UFW+listener as authority; raw connect can false-positive via hairpin.
+        severity = "ok"
+        if vpn_scoped:
+            # Explicit LAN/VPN UFW allows — public Internet denied by default deny.
+            severity = "ok"
+        elif ufw_open and (listening_public or wan_open):
+            severity = "high"
+        elif listening_public and wan_open and port in (2121, 3016, 5001, 5002, 1445):
+            # Exclude 445/3389/4000: hairpin to public IP looks "open" even when UFW denies WAN.
+            severity = "high"
+        elif listening_public and port in (3016, 5001, 5002):
+            severity = "high"
+        elif listening_public or ufw_open or wan_open:
+            severity = "medium"
+        exposures.append(
+            {
+                "port": port,
+                "label": label,
+                "listening_public": listening_public,
+                "ufw_anywhere": ufw_open,
+                "wan_open": wan_open,
+                "vpn_only": vpn_scoped,
+                "severity": severity,
+            }
+        )
+        if severity == "high":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": f"{label} exposed on :{port}",
+                    "detail": "Close UFW or bind localhost / VPN-only.",
+                }
+            )
+        elif severity == "medium":
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{label} partially exposed (:{port})",
+                    "detail": "Listener or UFW allow present; confirm WAN path.",
+                }
+            )
+
+    for d in domains:
+        if d.get("risk") == "high" and d.get("enabled"):
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{d['domain']} is public (not VPN-only)",
+                    "detail": f"Upstream {d.get('target')}",
+                }
+            )
+
+    for f in files:
+        if f.get("severity") in ("high", "medium"):
+            findings.append(
+                {
+                    "severity": f["severity"],
+                    "title": f"Weak permissions: {f['path']}",
+                    "detail": f.get("detail") or "",
+                }
+            )
+
+    # Kernel reboot pending (needrestart), best-effort
+    kernel = {"ok": True, "detail": ""}
+    nr = _security_run(["needrestart", "-b"], timeout=8)
+    if nr.returncode == 0 and "NEEDRESTART-KSTA: 3" in (nr.stdout or ""):
+        kernel = {"ok": False, "detail": "Kernel update pending reboot"}
+        findings.append(
+            {
+                "severity": "low",
+                "title": "Kernel update pending reboot",
+                "detail": "needrestart reports a newer kernel is installed",
+            }
+        )
+
+    sev_rank = {"high": 0, "medium": 1, "low": 2, "ok": 3}
+    findings.sort(key=lambda x: sev_rank.get(str(x.get("severity")), 9))
+    counts = {"high": 0, "medium": 0, "low": 0}
+    for f in findings:
+        k = str(f.get("severity") or "")
+        if k in counts:
+            counts[k] += 1
+
+    score = 100
+    score -= counts["high"] * 18
+    score -= counts["medium"] * 8
+    score -= counts["low"] * 3
+    if score < 0:
+        score = 0
+    if counts["high"]:
+        grade = "at risk"
+    elif counts["medium"]:
+        grade = "needs attention"
+    else:
+        grade = "good"
+
+    return {
+        "ok": True,
+        "score": score,
+        "grade": grade,
+        "counts": counts,
+        "findings": findings[:40],
+        "fail2ban": f2b,
+        "attackers": attackers,
+        "ssh": ssh,
+        "firewall": ufw,
+        "listeners": listeners,
+        "exposures": exposures,
+        "domains": domains,
+        "files": files,
+        "kernel": kernel,
+        "probes": probes,
+        "generated_at": int(time.time()),
+    }
+
 
 
 BACKUP_ROOT = Path("/opt/servermanager-backup")
@@ -7912,7 +8681,146 @@ def apply_portal_settings(payload: dict) -> dict:
     }
 
 
-def build_backup_status() -> dict:
+def _github_api_json(
+    url: str, token: str, timeout: float = 8.0
+) -> tuple[int, dict]:
+    """GET a GitHub API URL with a bearer token. Returns (status, json_or_empty)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ServerManager-Backup",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = _json.loads(body) if body else {}
+            except Exception:
+                data = {}
+            return int(resp.status), data if isinstance(data, dict) else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+            data = _json.loads(body) if body else {}
+        except Exception:
+            data = {}
+        return int(exc.code), data if isinstance(data, dict) else {}
+    except Exception as exc:
+        return 0, {"message": str(exc)}
+
+
+def check_github_backup_token(
+    owner: str, repo: str, token: str
+) -> dict:
+    """Validate a GitHub token can reach the backup repo (contents:write ideally)."""
+    owner = (owner or "").strip()
+    repo = (repo or "").strip()
+    token = (token or "").strip()
+    if not token:
+        return {"ok": False, "error": "GitHub token is missing"}
+    if not owner or not repo:
+        return {"ok": False, "error": "GitHub owner/repo not set"}
+
+    status, data = _github_api_json("https://api.github.com/user", token)
+    if status in (401, 403) and "Bad credentials" in str(data.get("message") or ""):
+        return {
+            "ok": False,
+            "error": "GitHub token is invalid or revoked. Create a new classic PAT (repo scope) and save it here.",
+            "http_status": status,
+        }
+    if status == 401:
+        return {
+            "ok": False,
+            "error": "GitHub token rejected (401). Paste a fresh PAT with repo access.",
+            "http_status": status,
+        }
+    if status == 0:
+        return {
+            "ok": False,
+            "error": f"Could not reach GitHub API: {data.get('message') or 'network error'}",
+            "http_status": 0,
+        }
+
+    status, data = _github_api_json(
+        f"https://api.github.com/repos/{owner}/{repo}", token
+    )
+    if status == 404:
+        return {
+            "ok": False,
+            "error": f"Repo {owner}/{repo} not found for this token (wrong name, or token lacks access).",
+            "http_status": status,
+        }
+    if status in (401, 403):
+        msg = str(data.get("message") or "forbidden")
+        return {
+            "ok": False,
+            "error": f"GitHub denied access to {owner}/{repo}: {msg}",
+            "http_status": status,
+        }
+    if status != 200:
+        return {
+            "ok": False,
+            "error": f"GitHub API returned HTTP {status} for {owner}/{repo}",
+            "http_status": status,
+        }
+
+    perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
+    can_push = bool(perms.get("push") or perms.get("admin"))
+    if perms and not can_push:
+        return {
+            "ok": False,
+            "error": f"Token can see {owner}/{repo} but cannot push. Need a PAT with Contents: Read and write.",
+            "http_status": status,
+            "private": bool(data.get("private")),
+        }
+    return {
+        "ok": True,
+        "error": "",
+        "http_status": status,
+        "private": bool(data.get("private")),
+        "full_name": str(data.get("full_name") or f"{owner}/{repo}"),
+    }
+
+
+def set_backup_timer(enabled: bool) -> tuple[bool, str]:
+    """Enable or disable the daily sm-backup.timer."""
+    unit = "sm-backup.timer"
+    if not Path(f"/etc/systemd/system/{unit}").is_file() and not Path(
+        f"/lib/systemd/system/{unit}"
+    ).is_file():
+        return False, "sm-backup.timer is not installed"
+    if enabled:
+        proc = subprocess.run(
+            ["systemctl", "enable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    else:
+        proc = subprocess.run(
+            ["systemctl", "disable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        return False, out or f"systemctl failed ({proc.returncode})"
+    state = _sh_out(["systemctl", "is-enabled", unit], timeout=4).strip()
+    active = _sh_out(["systemctl", "is-active", unit], timeout=4).strip()
+    return True, f"{unit} enabled={state} active={active}"
+
+
+def build_backup_status(*, check_token: bool = True) -> dict:
     """GitHub backup agent status for the Backup portal tab (never returns the token)."""
     installed = BACKUP_SCRIPT.is_file()
     secrets_ok = BACKUP_SECRETS.is_file()
@@ -7921,7 +8829,8 @@ def build_backup_status() -> dict:
     repo = (env.get("GITHUB_REPO") or "").strip()
     branch = (env.get("GITHUB_BRANCH") or "main").strip() or "main"
     backup_name = (env.get("BACKUP_NAME") or "vps").strip() or "vps"
-    has_token = bool((env.get("GITHUB_TOKEN") or "").strip())
+    token = (env.get("GITHUB_TOKEN") or "").strip()
+    has_token = bool(token)
     configured = installed and secrets_ok and bool(owner and repo and has_token)
 
     log_text = _read_text(str(BACKUP_LOG))
@@ -7931,7 +8840,9 @@ def build_backup_status() -> dict:
     last_message = ""
     last_at = ""
     for line in reversed(lines):
-        if "Pushed backup" in line:
+        # Prefer the most recent success OR error (do not ignore new failures
+        # just because an older "Pushed backup" line exists further up).
+        if "Pushed backup" in line or "No changes to commit" in line:
             last_ok = True
             last_message = line
             last_at = line.split(" ", 1)[0] if " " in line else ""
@@ -7965,11 +8876,32 @@ def build_backup_status() -> dict:
 
     repo_url = f"https://github.com/{owner}/{repo}" if owner and repo else ""
 
+    token_ok: bool | None = None
+    token_error = ""
+    if check_token and configured:
+        probe = check_github_backup_token(owner, repo, token)
+        token_ok = bool(probe.get("ok"))
+        token_error = str(probe.get("error") or "")
+    elif configured:
+        token_ok = None
+    else:
+        token_ok = False
+        if not installed:
+            token_error = "Backup agent is not installed on this VPS"
+        elif not has_token:
+            token_error = "GitHub token is missing"
+        elif not owner or not repo:
+            token_error = "GitHub owner/repo not set"
+
+    healthy = bool(configured and token_ok is not False and last_ok is not False)
+
     return {
-        "ok": configured and last_ok is not False,
+        "ok": healthy,
         "installed": installed,
         "configured": configured,
         "has_token": has_token,
+        "token_ok": token_ok,
+        "token_error": token_error,
         "owner": owner,
         "repo": repo,
         "branch": branch,
@@ -7987,6 +8919,102 @@ def build_backup_status() -> dict:
     }
 
 
+def apply_backup_settings(payload: dict) -> dict:
+    """Update backup secrets / daily timer from the Backup tab."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid payload")
+
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    env = _parse_env_file(BACKUP_SECRETS) if BACKUP_SECRETS.is_file() else {}
+    updates: dict[str, str] = {}
+    changed: list[str] = []
+
+    if "owner" in payload:
+        owner = str(payload.get("owner") or "").strip()
+        if owner and (not re.match(r"^[A-Za-z0-9_.-]+$", owner) or len(owner) > 64):
+            raise ValueError("invalid GitHub owner")
+        if owner and owner != (env.get("GITHUB_OWNER") or "").strip():
+            updates["GITHUB_OWNER"] = owner
+            changed.append("owner")
+    if "repo" in payload:
+        repo = str(payload.get("repo") or "").strip()
+        if repo and (not re.match(r"^[A-Za-z0-9_.-]+$", repo) or len(repo) > 100):
+            raise ValueError("invalid GitHub repo")
+        if repo and repo != (env.get("GITHUB_REPO") or "").strip():
+            updates["GITHUB_REPO"] = repo
+            changed.append("repo")
+    if "branch" in payload:
+        branch = str(payload.get("branch") or "").strip() or "main"
+        if not re.match(r"^[A-Za-z0-9_./-]+$", branch) or len(branch) > 128:
+            raise ValueError("invalid GitHub branch")
+        if branch != (env.get("GITHUB_BRANCH") or "main").strip():
+            updates["GITHUB_BRANCH"] = branch
+            changed.append("branch")
+    if "backup_name" in payload:
+        name = str(payload.get("backup_name") or "").strip() or "vps"
+        if not re.match(r"^[A-Za-z0-9_.-]+$", name) or len(name) > 64:
+            raise ValueError("invalid backup_name")
+        if name != (env.get("BACKUP_NAME") or "vps").strip():
+            updates["BACKUP_NAME"] = name
+            changed.append("backup_name")
+
+    token = str(payload.get("token") or payload.get("github_token") or "").strip()
+    if token:
+        if len(token) < 20 or len(token) > 256:
+            raise ValueError("token looks invalid (unexpected length)")
+        if any(ch.isspace() for ch in token):
+            raise ValueError("token must not contain whitespace")
+        updates["GITHUB_TOKEN"] = token
+        changed.append("token")
+
+    # Always keep GIT_NAME quoted-safe when rewriting secrets.
+    if "GIT_NAME" not in env or " " in (env.get("GIT_NAME") or ""):
+        updates.setdefault("GIT_NAME", (env.get("GIT_NAME") or "ServerManager Backup").strip() or "ServerManager Backup")
+    if "GIT_EMAIL" not in env:
+        updates.setdefault("GIT_EMAIL", "servermanager-backup@local")
+
+    if updates:
+        # Preserve existing keys we are not changing.
+        merged = dict(env)
+        merged.update(updates)
+        # Ensure required defaults exist for a working secrets file.
+        merged.setdefault("GITHUB_OWNER", "jsa00414")
+        merged.setdefault("GITHUB_REPO", "ServerManagerBackup")
+        merged.setdefault("GITHUB_BRANCH", "main")
+        merged.setdefault("BACKUP_NAME", "vps")
+        merged.setdefault("GIT_NAME", "ServerManager Backup")
+        merged.setdefault("GIT_EMAIL", "servermanager-backup@local")
+        _upsert_env_file(BACKUP_SECRETS, merged)
+        try:
+            os.chmod(BACKUP_SECRETS, 0o600)
+        except Exception:
+            pass
+
+    timer_out = ""
+    if "timer_enabled" in payload:
+        ok_t, timer_out = set_backup_timer(bool(payload.get("timer_enabled")))
+        if not ok_t:
+            raise ValueError(timer_out or "failed to update backup timer")
+        changed.append("timer")
+
+    status = build_backup_status(check_token=True)
+    # If a new token was saved but is still bad, surface that clearly.
+    if "token" in changed and status.get("token_ok") is False:
+        return {
+            "ok": False,
+            "error": status.get("token_error") or "GitHub token still invalid",
+            "changed": changed,
+            "timer": timer_out,
+            "status": status,
+        }
+    return {
+        "ok": True,
+        "changed": changed,
+        "timer": timer_out,
+        "status": status,
+    }
+
+
 def run_backup_now() -> dict:
     """Run sm-backup.sh once; returns status + command output."""
     if not BACKUP_SCRIPT.is_file():
@@ -7994,7 +9022,29 @@ def run_backup_now() -> dict:
     if not BACKUP_SECRETS.is_file():
         return {"ok": False, "error": "Missing /opt/servermanager-backup/secrets.env"}
     if _backup_running():
-        return {"ok": False, "error": "A backup is already running", "status": build_backup_status()}
+        return {"ok": False, "error": "A backup is already running", "status": build_backup_status(check_token=False)}
+
+    # Fail fast with a clear message when the PAT is dead.
+    env = _parse_env_file(BACKUP_SECRETS)
+    probe = check_github_backup_token(
+        (env.get("GITHUB_OWNER") or "").strip(),
+        (env.get("GITHUB_REPO") or "").strip(),
+        (env.get("GITHUB_TOKEN") or "").strip(),
+    )
+    if not probe.get("ok"):
+        try:
+            BACKUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {probe.get('error')}\n"
+                )
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "error": str(probe.get("error") or "GitHub token check failed"),
+            "status": build_backup_status(check_token=True),
+        }
 
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
     proc = None
@@ -8018,25 +9068,37 @@ def run_backup_now() -> dict:
             return {
                 "ok": False,
                 "error": "Backup timed out after 5 minutes",
-                "status": build_backup_status(),
+                "status": build_backup_status(check_token=False),
             }
         stdout = (stdout or "").strip()
         stderr = (stderr or "").strip()
-        env = _parse_env_file(BACKUP_SECRETS)
         tok = (env.get("GITHUB_TOKEN") or "").strip()
         if tok:
             stdout = stdout.replace(tok, "***")
             stderr = stderr.replace(tok, "***")
         ok = proc.returncode == 0
+        err_msg = ""
+        if not ok:
+            err_msg = stderr or stdout or f"backup exited {proc.returncode}"
+            # Keep a one-line ERROR in the log if the script's trap missed it.
+            if "ERROR" not in (stdout + stderr):
+                try:
+                    with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {err_msg.splitlines()[-1][:300]}\n"
+                        )
+                except Exception:
+                    pass
         return {
             "ok": ok,
             "exit_code": proc.returncode,
+            "error": err_msg if not ok else "",
             "stdout": stdout[-8000:],
             "stderr": stderr[-4000:],
-            "status": build_backup_status(),
+            "status": build_backup_status(check_token=False),
         }
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "status": build_backup_status()}
+        return {"ok": False, "error": str(exc), "status": build_backup_status(check_token=False)}
     finally:
         try:
             BACKUP_LOCK.unlink(missing_ok=True)
@@ -13488,6 +14550,20 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/grafana-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = grafana_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"https://{GRAFANA_PUBLIC_HOST}/",
+                }
+                self._json(200, safe, extra_cookies=_grafana_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/tailscale":
             if not self._require_auth(api=True):
                 return
@@ -13501,6 +14577,14 @@ document.getElementById('f').onsubmit = async (e) => {
                 return
             try:
                 self._json(200, surfshark_status())
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_security_status())
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
@@ -13784,12 +14868,26 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/backup":
+            try:
+                payload = self._read_json()
+                result = apply_backup_settings(
+                    payload if isinstance(payload, dict) else {}
+                )
+                # Always 200 so the UI can render status + token errors.
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(200, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/backup/run":
             try:
                 result = run_backup_now()
-                self._json(200 if result.get("ok") else 400, result)
+                # Always 200 so the UI can show stdout/stderr on failure.
+                self._json(200, result)
             except Exception as exc:
-                self._json(500, {"error": str(exc)})
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/bond":
             try:
