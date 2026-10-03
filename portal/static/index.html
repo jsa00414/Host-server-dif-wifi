@@ -2936,7 +2936,7 @@
           headers: { "Content-Type": "application/json", ...(rest.headers || {}) },
         });
         if (res.status === 401) {
-          location.href = "/login.html";
+          location.href = "/";
           throw new Error("unauthorized");
         }
         const data = await res.json().catch(() => ({}));
@@ -4924,7 +4924,7 @@
           body: JSON.stringify({ current_password, new_password, confirm_password }),
         });
         setStatus("Password updated — sign in again", "ok");
-        location.href = "/login.html";
+        location.href = "/";
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);
@@ -4937,7 +4937,7 @@
           method: "POST",
           body: JSON.stringify({ logout_all_sessions: true }),
         });
-        location.href = "/login.html";
+        location.href = "/";
       } catch (e) {
         setStatus(String(e.message || e), "err");
       }

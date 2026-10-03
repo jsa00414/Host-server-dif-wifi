@@ -4952,7 +4952,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
             # otherwise a stolen session cookie can cat/download off-VPN while
-            # /login.html remains VPN-gated (403).
+            # /login (portal root) remains VPN-gated (403).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             if r.get("vpn_only"):
@@ -16588,7 +16588,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
             return
         self.send_response(302)
-        self.send_header("Location", "/login.html")
+        self.send_header("Location", "/")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
@@ -16655,10 +16655,10 @@ class Handler(BaseHTTPRequestHandler):
             body = (
                 b"<!DOCTYPE html><html><head>"
                 b'<meta charset="utf-8" />'
-                b'<meta http-equiv="refresh" content="0;url=/login.html" />'
+                b'<meta http-equiv="refresh" content="0;url=/" />'
                 b"<title>Signing out</title>"
-                b"<script>location.replace('/login.html');</script>"
-                b"</head><body>Signed out. <a href='/login.html'>Continue</a></body></html>"
+                b"<script>location.replace('/');</script>"
+                b"</head><body>Signed out. <a href='/'>Continue</a></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -16669,6 +16669,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path in (
+            "/",
             "/login.html",
             "/email-code-test.html",
             "/auth-app.html",
@@ -16681,7 +16682,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
         ) or path.startswith("/static/"):
-            pass  # public (auth-app is the phone authenticator PWA)
+            pass  # public (/, /login.html serve the sign-in page when logged out)
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
@@ -16825,7 +16826,16 @@ document.getElementById('f').onsubmit = async (e) => {
             self._json(200, {"ok": True})
             return
         if path in ("/", "/index.html"):
-            return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if self._is_authed():
+                return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if path == "/index.html":
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            # Root is the sign-in page when logged out.
+            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
         if path == "/openvpn.html":
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
@@ -16833,14 +16843,12 @@ document.getElementById('f').onsubmit = async (e) => {
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
-            # Always clear any stale session display path; if still authed, go home
-            if self._is_authed():
-                self.send_response(302)
-                self.send_header("Location", "/")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                return
-            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
+            # Keep old bookmarks working — login lives at /
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path == "/email-code-test.html":
             return self._serve_file(
                 STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
@@ -17526,6 +17534,7 @@ document.getElementById('f').onsubmit = async (e) => {
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
         if path in (
+            "/",
             "/login.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
