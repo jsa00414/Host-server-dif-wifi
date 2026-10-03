@@ -10727,17 +10727,17 @@ def _email_code_html(code: str, *, minutes: int) -> str:
       <td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;background:#ffffff;border:1px solid #d7e0db;border-radius:12px;">
           <tr>
-            <td style="padding:28px 28px 8px;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#3d7a5f;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
+            <td align="center" style="padding:28px 28px 8px;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#3d7a5f;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
               ServerManager
             </td>
           </tr>
           <tr>
-            <td style="padding:4px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:1.3;color:#14201b;font-weight:700;">
+            <td align="center" style="padding:4px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:1.3;color:#14201b;font-weight:700;">
               Your verification code
             </td>
           </tr>
           <tr>
-            <td style="padding:12px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#4a5c54;">
+            <td align="center" style="padding:12px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#4a5c54;">
               Use this code to continue signing in. It expires in {mins} minutes.
             </td>
           </tr>
