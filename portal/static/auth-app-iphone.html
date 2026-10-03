@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@600&family=Sora:wght@600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
   <title>SM Auth · iPhone</title>
   <style>
     :root {
@@ -49,26 +49,69 @@
       display: grid;
       grid-template-rows: auto 1fr auto;
       background:
-        radial-gradient(120% 55% at 50% -5%, rgba(61,222,160,.2), transparent 55%),
-        linear-gradient(180deg, #0a1210 0%, var(--bg) 46%, #030504 100%);
+        radial-gradient(110% 48% at 50% -8%, rgba(61,222,160,.22), transparent 52%),
+        radial-gradient(80% 40% at 80% 100%, rgba(20,70,50,.28), transparent 55%),
+        linear-gradient(180deg, #0b1410 0%, var(--bg) 42%, #030504 100%);
     }
     header {
-      padding: calc(8px + var(--sat)) calc(16px + var(--sar)) 8px calc(16px + var(--sal));
+      padding: calc(14px + var(--sat)) calc(20px + var(--sar)) 10px calc(20px + var(--sal));
       text-align: center;
+    }
+    .mark {
+      width: 42px;
+      height: 42px;
+      margin: 0 auto 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(61,222,160,.42);
+      background:
+        radial-gradient(circle at 35% 30%, rgba(138,240,196,.55), transparent 45%),
+        linear-gradient(160deg, rgba(61,222,160,.28), rgba(61,222,160,.06));
+      box-shadow: 0 10px 28px rgba(0,0,0,.28);
+      position: relative;
+    }
+    .mark::after {
+      content: "";
+      position: absolute;
+      inset: 12px;
+      border-radius: 50%;
+      border: 2px solid rgba(61,222,160,.9);
+      box-shadow: inset 0 0 0 5px rgba(5,8,7,.55);
     }
     .brand {
       margin: 0;
       color: var(--accent);
-      font-size: .68rem;
+      font-size: clamp(1.35rem, 6.2vw, 1.7rem);
       font-weight: 700;
-      letter-spacing: .2em;
-      text-transform: uppercase;
+      letter-spacing: -.045em;
+      line-height: 1.05;
+      text-transform: none;
     }
     h1 {
-      margin: 4px 0 0;
-      font-size: 1.15rem;
-      font-weight: 700;
+      margin: 6px 0 0;
+      font-size: .92rem;
+      font-weight: 500;
+      letter-spacing: .01em;
+      color: var(--muted);
+    }
+    body.is-unlocked .mark {
+      width: 28px;
+      height: 28px;
+      margin-bottom: 8px;
+      border-radius: 9px;
+    }
+    body.is-unlocked .mark::after {
+      inset: 8px;
+      border-width: 1.5px;
+      box-shadow: inset 0 0 0 3px rgba(5,8,7,.55);
+    }
+    body.is-unlocked .brand {
+      font-size: 1.05rem;
       letter-spacing: -.03em;
+    }
+    body.is-unlocked h1 { display: none; }
+    body.is-unlocked header {
+      padding-top: calc(8px + var(--sat));
+      padding-bottom: 4px;
     }
     main {
       min-height: 0;
@@ -141,17 +184,26 @@
       line-height: 1.45;
       padding: 24px calc(22px + var(--sar)) 24px calc(22px + var(--sal));
       gap: 16px;
+      animation: rise .45s ease both;
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .lock .face {
-      width: 72px;
-      height: 72px;
-      border-radius: 20px;
+      width: 78px;
+      height: 78px;
+      border-radius: 22px;
       border: 1px solid rgba(61,222,160,.4);
-      background: rgba(61,222,160,.1);
+      background:
+        radial-gradient(circle at 40% 30%, rgba(138,240,196,.35), transparent 50%),
+        rgba(61,222,160,.1);
       display: grid;
       place-items: center;
-      font-size: 2rem;
+      font-size: 1.55rem;
+      letter-spacing: .08em;
       color: var(--accent);
+      box-shadow: 0 16px 40px rgba(0,0,0,.28);
     }
     .lock h2 {
       margin: 0;
@@ -255,8 +307,9 @@
 </head>
 <body>
   <header>
+    <div class="mark" aria-hidden="true"></div>
     <p class="brand">ServerManager</p>
-    <h1>iPhone Authenticator</h1>
+    <h1>Authenticator</h1>
   </header>
 
   <main>
@@ -523,6 +576,7 @@
     function render() {
       const hasFace = !!loadFaceCredId();
       const hasPin = !!loadPinHash();
+      document.body.classList.toggle("is-unlocked", !!(account && unlocked));
       if (!account) {
         els.lockView.hidden = true;
         els.codePane.hidden = true;
