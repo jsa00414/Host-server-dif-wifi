@@ -392,21 +392,58 @@
     }
     .tabs {
       display: none;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       width: 100%;
-    }
-    body.has-account .tabs { display: grid; }
-    .tabs button {
+      padding: 2px 2px 2px 4px;
       min-height: 44px;
-      border-radius: 12px;
-      font-size: .8rem;
-      letter-spacing: .02em;
     }
-    .tabs button.active {
-      background: rgba(61,222,160,.2);
-      border-color: rgba(61,222,160,.55);
-      color: #d9ffe9;
+    body.has-account .tabs { display: flex; }
+    .tabs .tab-label {
+      font-size: .86rem;
+      font-weight: 600;
+      letter-spacing: .01em;
+      color: var(--text);
+    }
+    .tabs .tab-label span {
+      display: block;
+      margin-top: 2px;
+      font-size: .68rem;
+      font-weight: 500;
+      color: var(--muted);
+    }
+    .circle-toggle {
+      appearance: none;
+      position: relative;
+      width: 52px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.08);
+      flex: 0 0 auto;
+      cursor: pointer;
+      transition: background .18s ease, border-color .18s ease;
+    }
+    .circle-toggle::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #e8f2ec;
+      transition: transform .18s ease;
+    }
+    .circle-toggle[aria-checked="true"] {
+      background: rgba(61,222,160,.35);
+      border-color: rgba(61,222,160,.7);
+    }
+    .circle-toggle[aria-checked="true"]::after {
+      transform: translateX(20px);
     }
     body.tab-circle .code-shell > .acct,
     body.tab-circle .code-shell > .code,
@@ -463,8 +500,8 @@
     <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
     <div class="dock">
       <div class="tabs" id="tabBar" hidden>
-        <button type="button" class="active" id="tabCodesBtn" data-tab="codes">Codes</button>
-        <button type="button" id="tabCircleBtn" data-tab="circle">Circle</button>
+        <div class="tab-label">VPN trust circle<span>Guest DNS until approved</span></div>
+        <button type="button" class="circle-toggle" id="circleToggle" role="switch" aria-checked="false" aria-label="VPN trust circle"></button>
       </div>
       <div class="install" id="installHint"></div>
       <div class="actions">
@@ -515,8 +552,7 @@
       circleApproveBtn: document.getElementById("circleApproveBtn"),
       circleRefreshBtn: document.getElementById("circleRefreshBtn"),
       tabBar: document.getElementById("tabBar"),
-      tabCodesBtn: document.getElementById("tabCodesBtn"),
-      tabCircleBtn: document.getElementById("tabCircleBtn"),
+      circleToggle: document.getElementById("circleToggle"),
     };
 
     let account = null;
@@ -524,16 +560,17 @@
     let toastTimer = null;
     let circleData = null;
     let circleLoading = false;
-    let activeTab = "codes";
+    let circleOpen = false;
 
-    function setActiveTab(tab) {
-      activeTab = tab === "circle" ? "circle" : "codes";
-      document.body.classList.toggle("tab-circle", !!(account && activeTab === "circle"));
-      els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
-      els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
+    function setCircleOpen(open) {
+      circleOpen = !!open;
+      document.body.classList.toggle("tab-circle", !!(account && circleOpen));
+      if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", circleOpen ? "true" : "false");
       if (account) {
-        els.copyBtn.hidden = activeTab !== "codes";
-        if (activeTab === "circle") {
+        els.copyBtn.hidden = circleOpen;
+        els.clearBtn.hidden = circleOpen;
+        els.manualBtn.hidden = circleOpen;
+        if (circleOpen) {
           renderCircle();
           if (!circleData && !circleLoading) fetchCircle();
         } else if (els.circlePane) {
@@ -575,8 +612,9 @@
       localStorage.removeItem(STORE_KEY);
       account = null;
       circleData = null;
-      activeTab = "codes";
+      circleOpen = false;
       document.body.classList.remove("tab-circle");
+      if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", "false");
       render();
       toast("Account removed");
     }
@@ -702,7 +740,7 @@
 
     function renderCircle() {
       if (!els.circlePane) return;
-      if (!account || activeTab !== "circle") {
+      if (!account || !circleOpen) {
         els.circlePane.hidden = true;
         return;
       }
@@ -802,21 +840,20 @@
 
     function render() {
       document.body.classList.toggle("has-account", !!account);
-      document.body.classList.toggle("tab-circle", !!(account && activeTab === "circle"));
+      document.body.classList.toggle("tab-circle", !!(account && circleOpen));
       if (account) {
         els.codeShell.hidden = false;
         els.emptyView.hidden = true;
-        els.copyBtn.hidden = activeTab !== "codes";
-        els.clearBtn.hidden = activeTab !== "codes";
-        els.manualBtn.hidden = activeTab !== "codes";
+        els.copyBtn.hidden = circleOpen;
+        els.clearBtn.hidden = circleOpen;
+        els.manualBtn.hidden = circleOpen;
         if (els.tabBar) els.tabBar.hidden = false;
-        els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
-        els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
+        if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", circleOpen ? "true" : "false");
         els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
-        if (activeTab !== "codes") els.manualForm.classList.remove("show");
+        if (circleOpen) els.manualForm.classList.remove("show");
         tick();
         renderCircle();
-        if (activeTab === "circle" && !circleData && !circleLoading) fetchCircle();
+        if (circleOpen && !circleData && !circleLoading) fetchCircle();
       } else {
         els.codeShell.hidden = true;
         els.emptyView.hidden = false;
@@ -827,14 +864,15 @@
         els.codeView.textContent = "------";
         if (els.circlePane) els.circlePane.hidden = true;
         circleData = null;
-        activeTab = "codes";
+        circleOpen = false;
         document.body.classList.remove("tab-circle");
+        if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", "false");
       }
       updateInstallUi();
     }
 
     els.copyBtn.addEventListener("click", async () => {
-      if (activeTab !== "codes") return;
+      if (circleOpen) return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try {
@@ -850,7 +888,7 @@
     });
 
     els.manualBtn.addEventListener("click", () => {
-      if (activeTab !== "codes") setActiveTab("codes");
+      if (circleOpen) setCircleOpen(false);
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
     });
@@ -879,8 +917,7 @@
       updateInstallUi();
     });
 
-    els.tabCodesBtn?.addEventListener("click", () => setActiveTab("codes"));
-    els.tabCircleBtn?.addEventListener("click", () => setActiveTab("circle"));
+    els.circleToggle?.addEventListener("click", () => setCircleOpen(!circleOpen));
     els.circleRefreshBtn?.addEventListener("click", async () => {
       await fetchCircle();
       toast("Refreshed");
