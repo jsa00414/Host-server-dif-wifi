@@ -14,12 +14,11 @@ Portal downloads (login required, VPN-only):
 
 ## Portal through OpenVPN
 
-Full-tunnel clients push:
+Full-tunnel clients push (OpenVPN Connect–compatible):
 
 ```
 dhcp-option DNS 10.9.0.1
-block-outside-dns
-redirect-gateway def1 bypass-dhcp
+redirect-gateway def1
 ```
 
 AdGuard rewrites `portal.vpstruelord.com` → `10.9.0.1`, so HTTPS stays on-tunnel
