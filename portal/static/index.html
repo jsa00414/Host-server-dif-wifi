@@ -1749,25 +1749,7 @@
           <div class="panel-head">
             <h3>VPS login method &amp; SSH keys</h3>
           </div>
-          <div class="panel-body">
-            <div id="secSsh"><div class="sec-empty">Loading…</div></div>
-            <div class="sec-ssh-section" id="secVpnCircleBlock">
-              <h4>VPN trust circle</h4>
-              <p class="sec-users" id="secVpnCircleHint" style="margin:0 0 10px">
-                Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP (unlock this panel with Authenticator) to enter sticky / admin circle. LAN devices that are not currently plugged in also show in pending.
-              </p>
-              <div class="meta-grid" id="secVpnCircleMeta"></div>
-              <h4 style="margin:14px 0 6px;font-size:13px">Allowed list</h4>
-              <div id="secVpnAllowed"><div class="sec-empty">Loading…</div></div>
-              <h4 style="margin:14px 0 6px;font-size:13px">Pending / recent attempts</h4>
-              <div id="secVpnPending"><div class="sec-empty">Loading…</div></div>
-              <div class="toolbar" style="margin-top:12px;gap:8px;flex-wrap:wrap;justify-content:flex-start">
-                <input type="text" id="secVpnApproveIp" placeholder="Public WAN IP" style="min-width:160px" autocomplete="off" spellcheck="false" />
-                <input type="text" id="secVpnApproveNote" placeholder="Note (optional)" style="min-width:140px" autocomplete="off" />
-                <button type="button" class="primary" id="secVpnApproveBtn">Approve into circle</button>
-              </div>
-            </div>
-          </div>
+          <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
         </div>
       </section>
 
@@ -3678,78 +3660,6 @@
       }
 
       const circle = data.vpn_allowlist || {};
-      const circleMeta = document.getElementById("secVpnCircleMeta");
-      if (circleMeta) {
-        circleMeta.innerHTML = `
-          <div class="meta-box"><label>Allowlisted</label><div>${escHtml((circle.allowed || []).length)}</div></div>
-          <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
-          <div class="meta-box"><label>Guest DNS</label><div><code>${escHtml(circle.guest_dns || "1.1.1.1")}</code></div></div>
-          <div class="meta-box"><label>Circle DNS</label><div><code>${escHtml(circle.circle_dns || "10.42.42.44")}</code></div></div>`;
-      }
-      const hint = document.getElementById("secVpnCircleHint");
-      if (hint && circle.detail) hint.textContent = circle.detail;
-      const allowedEl = document.getElementById("secVpnAllowed");
-      if (allowedEl) {
-        const rows = circle.allowed || [];
-        if (!rows.length) {
-          allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
-        } else {
-          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>Note</th><th></th></tr></thead><tbody>${
-            rows.map((r) => {
-              const sealed = !!(r.sealed || r.source === "router");
-              const hiddenFromApps = !!(!sealed && r.hidden);
-              const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
-              const note = sealed
-                ? (r.note || "Flint router WAN (sealed)")
-                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
-              const action = sealed
-                ? `<span class="sec-users">sealed</span>`
-                : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
-                   <button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Remove</button>`;
-              return `<tr>
-              <td><code>${escHtml(r.ip)}</code></td>
-              <td class="sec-users">${escHtml(note)}</td>
-              <td style="white-space:nowrap">${action}</td>
-            </tr>`;
-            }).join("")
-          }</tbody></table>`;
-        }
-      }
-      const pendingEl = document.getElementById("secVpnPending");
-      if (pendingEl) {
-        const pending = circle.pending || [];
-        const attempts = circle.attempts || [];
-        const pendingRows = pending.length
-          ? pending.map((r) => {
-              const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
-              const authApp = !!(r.auth_app || r.auth_app_enrolled);
-              return `<tr>
-              <td><code>${escHtml(r.ip)}</code></td>
-              <td class="sec-users">${escHtml(isLan ? (r.name || r.note || "LAN device") : (r.vip || "—"))}</td>
-              <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
-              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN${authApp ? " · Authenticator" : ""}` : (r.status || "pending"))}</td>
-              <td>
-                <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
-                <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
-              </td>
-            </tr>`;
-            }).join("")
-          : "";
-        const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
-            <td><code>${escHtml(a.ip)}</code></td>
-            <td class="sec-users">${escHtml(a.vip || "—")}</td>
-            <td colspan="2" class="sec-users">${escHtml(a.ts ? new Date(a.ts * 1000).toLocaleString() : "—")}</td>
-            <td class="sec-users">${a.trusted ? "trusted" : "guest DNS"}</td>
-          </tr>`).join("");
-        if (!pendingRows && !attemptRows) {
-          pendingEl.innerHTML = `<div class="sec-empty">No pending WAN or offline LAN devices.</div>`;
-        } else {
-          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>VIP / name</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
-            ${pendingRows || `<tr><td colspan="5" class="sec-users">No pending — recent attempts below.</td></tr>`}
-            ${attemptRows ? `<tr><td colspan="5" class="sec-users" style="padding-top:10px">Recent attempts</td></tr>${attemptRows}` : ""}
-          </tbody></table>`;
-        }
-      }
 
       const expEl = document.getElementById("secExposures");
       if (expEl) {
@@ -3986,8 +3896,31 @@
             <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
               rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
             }</tbody></table>
+          </div>
+
+          <div class="sec-ssh-section" id="secVpnCircleBlock">
+            <h4>VPN trust circle</h4>
+            <p class="sec-users" id="secVpnCircleHint" style="margin:0 0 10px">
+              Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle. LAN devices that are not currently plugged in also show in pending.
+            </p>
+            <div class="meta-grid" id="secVpnCircleMeta"></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Allowed list</h4>
+            <div id="secVpnAllowed"><div class="sec-empty">Loading…</div></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Pending / recent attempts</h4>
+            <div id="secVpnPending"><div class="sec-empty">Loading…</div></div>
+            <div class="toolbar" style="margin-top:12px;gap:8px;flex-wrap:wrap;justify-content:flex-start">
+              <input type="text" id="secVpnApproveIp" placeholder="Public WAN IP" style="min-width:160px" autocomplete="off" spellcheck="false" />
+              <input type="text" id="secVpnApproveNote" placeholder="Note (optional)" style="min-width:140px" autocomplete="off" />
+              <button type="button" class="primary" id="secVpnApproveBtn">Approve into circle</button>
+            </div>
           </div>`;
+        fillVpnTrustCircle(circle);
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("secVpnApproveBtn")?.addEventListener("click", () => {
+          const ip = document.getElementById("secVpnApproveIp")?.value || "";
+          const note = document.getElementById("secVpnApproveNote")?.value || "";
+          mutateVpnAllowlist("approve", ip.trim(), note.trim());
+        });
         document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
           setSshPanel2fa(!!ev.target.checked);
         });
@@ -4083,6 +4016,80 @@
       } catch (e) {
         setStatus(String(e.message || e), "err");
         await refreshSecurity(true);
+      }
+    }
+    function fillVpnTrustCircle(circle) {
+      const circleMeta = document.getElementById("secVpnCircleMeta");
+      if (!circleMeta) return;
+      circle = circle || {};
+      circleMeta.innerHTML = `
+        <div class="meta-box"><label>Allowlisted</label><div>${escHtml((circle.allowed || []).length)}</div></div>
+        <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
+        <div class="meta-box"><label>Guest DNS</label><div><code>${escHtml(circle.guest_dns || "1.1.1.1")}</code></div></div>
+        <div class="meta-box"><label>Circle DNS</label><div><code>${escHtml(circle.circle_dns || "10.42.42.44")}</code></div></div>`;
+      const hint = document.getElementById("secVpnCircleHint");
+      if (hint && circle.detail) hint.textContent = circle.detail;
+      const allowedEl = document.getElementById("secVpnAllowed");
+      if (allowedEl) {
+        const rows = circle.allowed || [];
+        if (!rows.length) {
+          allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
+        } else {
+          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>Note</th><th></th></tr></thead><tbody>${
+            rows.map((r) => {
+              const sealed = !!(r.sealed || r.source === "router");
+              const hiddenFromApps = !!(!sealed && r.hidden);
+              const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
+              const note = sealed
+                ? (r.note || "Flint router WAN (sealed)")
+                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
+              const action = sealed
+                ? `<span class="sec-users">sealed</span>`
+                : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
+                   <button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Remove</button>`;
+              return `<tr>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td class="sec-users">${escHtml(note)}</td>
+              <td style="white-space:nowrap">${action}</td>
+            </tr>`;
+            }).join("")
+          }</tbody></table>`;
+        }
+      }
+      const pendingEl = document.getElementById("secVpnPending");
+      if (pendingEl) {
+        const pending = circle.pending || [];
+        const attempts = circle.attempts || [];
+        const pendingRows = pending.length
+          ? pending.map((r) => {
+              const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
+              const authApp = !!(r.auth_app || r.auth_app_enrolled);
+              return `<tr>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td class="sec-users">${escHtml(isLan ? (r.name || r.note || "LAN device") : (r.vip || "—"))}</td>
+              <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
+              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN${authApp ? " · Authenticator" : ""}` : (r.status || "pending"))}</td>
+              <td>
+                <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
+                <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
+              </td>
+            </tr>`;
+            }).join("")
+          : "";
+        const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
+            <td><code>${escHtml(a.ip)}</code></td>
+            <td class="sec-users">${escHtml(a.vip || "—")}</td>
+            <td colspan="2" class="sec-users">${escHtml(a.ts ? new Date(a.ts * 1000).toLocaleString() : "—")}</td>
+            <td class="sec-users">${a.trusted ? "trusted" : "guest DNS"}</td>
+          </tr>`).join("");
+        if (!pendingRows && !attemptRows) {
+          pendingEl.innerHTML = `<div class="sec-empty">No pending WAN or offline LAN devices.</div>`;
+        } else {
+          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>VIP / name</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
+            ${pendingRows || `<tr><td colspan="5" class="sec-users">No pending — recent attempts below.</td></tr>`}
+            ${attemptRows ? `<tr><td colspan="5" class="sec-users" style="padding-top:10px">Recent attempts</td></tr>${attemptRows}` : ""}
+          </tbody></table>`;
+        }
       }
     }
     function bindVpnAllowlistButtons() {
@@ -4623,11 +4630,6 @@
       }
     }
     document.getElementById("secRefreshBtn")?.addEventListener("click", () => refreshSecurity());
-    document.getElementById("secVpnApproveBtn")?.addEventListener("click", () => {
-      const ip = document.getElementById("secVpnApproveIp")?.value || "";
-      const note = document.getElementById("secVpnApproveNote")?.value || "";
-      mutateVpnAllowlist("approve", ip.trim(), note.trim());
-    });
 
     let backupState = null;
     function fillBackupForm(data) {
