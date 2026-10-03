@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install / update Grafana for ServerManager portal embed.
+# Install / update Grafana + Prometheus monitoring for ServerManager portal.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -8,12 +8,20 @@ PORT="${GRAFANA_PORT:-3016}"
 DOMAIN="${GF_DOMAIN:-grafana.vpstruelord.com}"
 ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}}"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" \
+  "$DEST/prometheus" \
+  "$DEST/provisioning/datasources" \
+  "$DEST/provisioning/dashboards" \
+  "$DEST/dashboards"
+
 cp -f "$ROOT/docker-compose.yml" "$DEST/docker-compose.yml"
+cp -f "$ROOT/prometheus/prometheus.yml" "$DEST/prometheus/prometheus.yml"
+cp -f "$ROOT/provisioning/datasources/datasource.yml" "$DEST/provisioning/datasources/datasource.yml"
+cp -f "$ROOT/provisioning/dashboards/dashboards.yml" "$DEST/provisioning/dashboards/dashboards.yml"
+cp -f "$ROOT/dashboards/"*.json "$DEST/dashboards/"
 
 ENV_FILE="$DEST/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-  # Prefer portal panel password when available
   ADMIN_PASS=""
   if [[ -f /opt/wireguard/port-forward-ui.env ]]; then
     # shellcheck disable=SC1091
@@ -37,7 +45,17 @@ fi
 cd "$DEST"
 docker compose pull
 docker compose up -d
-sleep 2
+sleep 4
 docker compose ps
+
 echo "Grafana listening on 0.0.0.0:${PORT} → ${ROOT_URL}"
-curl -sS -o /dev/null -w "health_http=%{http_code}\n" "http://127.0.0.1:${PORT}/api/health" || true
+curl -sS -o /dev/null -w "grafana_health=%{http_code}\n" "http://127.0.0.1:${PORT}/api/health" || true
+curl -sS -o /dev/null -w "prometheus_health=%{http_code}\n" "http://127.0.0.1:9090/-/healthy" || true
+curl -sS -o /dev/null -w "node_exporter=%{http_code}\n" "http://127.0.0.1:9100/metrics" || true
+curl -sS -o /dev/null -w "cadvisor=%{http_code}\n" "http://127.0.0.1:9101/metrics" || true
+
+echo
+echo "Dashboards:"
+echo "  ServerManager — VPS Overview"
+echo "  ServerManager — Docker Containers"
+echo "Login: admin / (portal password or generated in $ENV_FILE)"
