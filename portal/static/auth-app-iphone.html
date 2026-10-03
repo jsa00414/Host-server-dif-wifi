@@ -81,10 +81,12 @@
       flex: 1;
       display: flex;
       flex-direction: column;
+      align-items: center;
       justify-content: center;
       width: 100%;
       position: relative;
-      padding-bottom: 10px;
+      gap: 22px;
+      padding: 0 0 24px;
     }
     .code-pane[hidden],
     .empty[hidden],
@@ -109,11 +111,13 @@
       margin: 0;
     }
     .bar {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      height: 7px;
+      position: relative;
+      left: auto;
+      right: auto;
+      bottom: auto;
+      width: min(220px, 56%);
+      height: 5px;
+      border-radius: 999px;
       background: rgba(255,255,255,.08);
       overflow: hidden;
     }
