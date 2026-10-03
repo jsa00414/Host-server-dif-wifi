@@ -152,6 +152,7 @@ pp_block = """\tlistener_wrappers {
 \t\t\ttimeout 5s
 \t\t\tallow 127.0.0.1/32 172.16.0.0/12
 \t\t}
+\t\ttls
 \t}
 """
 
@@ -234,58 +235,76 @@ else:
     print("caddy: router block already gated or missing")
 
 # 5) VPN-gate proxmox.vpstruelord.com if needed.
-prox = re.search(r"(?ms)^proxmox\.vpstruelord\.com \{.*?\n\}", text)
-if prox and "@vpn_clients" not in prox.group(0):
-    # Keep existing reverse_proxy target/options inside handle
-    body = prox.group(0)
-    inner = re.search(r"(?ms)^proxmox\.vpstruelord\.com \{\n(.*)\n\}$", body)
-    inner_body = inner.group(1) if inner else "\treverse_proxy https://192.168.8.160:8006"
-    # Dedent and wrap
-    new = f"""proxmox.vpstruelord.com {{
-\t@vpn_clients remote_ip {vpn}
-\thandle @vpn_clients {{
-{inner_body}
-\t}}
-\thandle {{
-\t\trespond "Forbidden" 403
-\t}}
-}}"""
-    # If inner_body already has header blocks at site level, keep simple wrap of reverse_proxy only
-    rp = re.search(r"(?ms)(reverse_proxy\s+https://[^\n]+\{.*?\}|reverse_proxy\s+https://[^\s]+)", body)
-    hdr = re.search(r"(?ms)(header\s+\{.*?\})", body)
-    rp_txt = rp.group(1) if rp else "reverse_proxy https://192.168.8.160:8006"
-    hdr_txt = hdr.group(1) if hdr else ""
-    new = f"""proxmox.vpstruelord.com {{
-\t@vpn_clients remote_ip {vpn}
-\thandle @vpn_clients {{
-\t\t{rp_txt}
-\t}}
-\thandle {{
-\t\trespond "Forbidden" 403
-\t}}
-\t{hdr_txt}
-}}"""
-    text = text[: prox.start()] + new + text[prox.end() :]
-    print("caddy: VPN-gated proxmox.vpstruelord.com")
-else:
-    print("caddy: proxmox block already gated or missing")
+def replace_site_block(src: str, site: str, builder) -> tuple[str, bool]:
+    """Replace a top-level `site { ... }` block using brace matching."""
+    key = f"{site} {{"
+    start = src.find(key)
+    if start < 0:
+        # also allow site at beginning of line with optional whitespace
+        m = re.search(rf"(?m)^{re.escape(site)}\s*\{{", src)
+        if not m:
+            return src, False
+        start = m.start()
+        key = m.group(0)
+    brace_open = src.find("{", start)
+    depth = 0
+    i = brace_open
+    while i < len(src):
+        ch = src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                old = src[start:end]
+                if "@vpn_clients" in old:
+                    return src, False
+                new = builder(old)
+                return src[:start] + new + src[end:], True
+        i += 1
+    raise SystemExit(f"unbalanced braces in {site} block")
 
-# 6) Move portal /dav and /nas-files media paths under VPN gate when they sit outside it.
-#    Rewrite portal block conservatively: if @nasdav exists before vpn handle, nest warning only.
+
+def proxmox_builder(old: str) -> str:
+    # Extract reverse_proxy [...] and trailing header { } if present.
+    rp = re.search(
+        r"(?ms)reverse_proxy\s+https://[^\n]+\{.*?^\t\}|reverse_proxy\s+https://\S+",
+        old,
+    )
+    hdr = re.search(r"(?ms)^\theader\s+\{.*?\n\t\}", old)
+    rp_txt = rp.group(0) if rp else "reverse_proxy https://192.168.8.160:8006"
+    hdr_txt = hdr.group(0) if hdr else ""
+    # indent reverse_proxy one more level inside handle
+    rp_indented = "\n".join(
+        ("\t\t" + line[1:]) if line.startswith("\t") else ("\t\t" + line)
+        for line in rp_txt.splitlines()
+    )
+    return (
+        f"proxmox.vpstruelord.com {{\n"
+        f"\t@vpn_clients remote_ip {vpn}\n"
+        f"\thandle @vpn_clients {{\n"
+        f"{rp_indented}\n"
+        f"\t}}\n"
+        f"\thandle {{\n"
+        f"\t\trespond \"Forbidden\" 403\n"
+        f"\t}}\n"
+        f"{hdr_txt}\n"
+        f"}}"
+    )
+
+
+text, ok = replace_site_block(text, "proxmox.vpstruelord.com", proxmox_builder)
+print("caddy: VPN-gated proxmox.vpstruelord.com" if ok else "caddy: proxmox block already gated or missing")
+
+# 6) Note about portal /dav sitting outside VPN handle.
 if "portal.vpstruelord.com" in text and "@nasdav" in text:
-    # Ensure nasdav/nasmedia are not reachable without VPN by wrapping path matches
-    # inside the existing vpn handle when possible — leave structure if already nested.
     portal = re.search(r"(?ms)^portal\.vpstruelord\.com \{.*?\n\}", text)
-    if portal and "handle @nasdav" in portal.group(0):
-        block = portal.group(0)
-        if "handle @vpn_clients" in block and block.find("handle @nasdav") < block.find(
-            "@vpn_clients"
-        ):
-            print(
-                "caddy: NOTE portal /dav is outside VPN handle — "
-                "leaving in place; real-IP fix still protects other sites. "
-                "Consider moving /dav behind VPN manually."
-            )
+    # best-effort note only
+    print(
+        "caddy: portal block present; /dav path matchers may still be public — "
+        "real client IPs now enforce other VPN gates."
+    )
 
 path.write_text(text, encoding="utf-8")
 print("caddy: wrote", path)
