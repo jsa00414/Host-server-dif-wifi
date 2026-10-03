@@ -26,7 +26,7 @@ No private CA install is required.
 | Protocol | IKEv2 + EAP-MSCHAPv2 |
 | Ports | UDP 500, 4500 |
 | Pool | `10.10.0.0/24` |
-| DNS | `10.9.0.1` → AdGuard → Pi-hole |
+| DNS | AdGuard `10.42.42.44` (portal VIP `10.11.0.1`) |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 
 ## IKEv2 via OpenVPN (optional nested mode)
@@ -57,7 +57,7 @@ Fix (VPN DNS only — public DNS unchanged):
 bash /opt/ikev2/ensure-vpn-split-dns.sh
 ```
 
-AdGuard rewrites VPN-gated hostnames to `10.9.0.1` so traffic stays on-tunnel
+AdGuard rewrites VPN-gated hostnames to `10.11.0.1` (lo VIP) so traffic stays on-tunnel
 with a private source IP that matches Caddy `@vpn_clients`.
 
 After applying: **disconnect/reconnect VPN** (or flush DNS), then open the portal.

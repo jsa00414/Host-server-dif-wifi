@@ -7,7 +7,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 IKEV2_DIR="${IKEV2_DIR:-/opt/ikev2}"
 IKEV2_HOST="${IKEV2_HOST:-portal.vpstruelord.com}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
-IKEV2_DNS="${IKEV2_DNS:-10.9.0.1}"
+IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
@@ -137,7 +137,7 @@ else
     ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
   fi
 fi
-# Host INPUT for tun VIP / sslh (split-DNS points portal at 10.9.0.1)
+# Host INPUT for portal VIP / sslh (split-DNS points portal at 10.11.0.1)
 ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
@@ -163,7 +163,7 @@ if [[ -f "$SCRIPT_SRC" && "$SCRIPT_SRC" != "$IKEV2_DIR/Setup-ServerManagerVpn.ps
   cp -f "$SCRIPT_SRC" "$IKEV2_DIR/Setup-ServerManagerVpn.ps1"
 fi
 
-# VPN-only admin hostnames → 10.9.0.1 (avoid gateway-IP tunnel exclusion → 403)
+# VPN-only admin hostnames → 10.11.0.1 lo VIP (avoid public-IP exclusion → 403)
 SPLIT_DNS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-vpn-split-dns.sh"
 if [[ -f "$SPLIT_DNS_SRC" ]]; then
   cp -f "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"

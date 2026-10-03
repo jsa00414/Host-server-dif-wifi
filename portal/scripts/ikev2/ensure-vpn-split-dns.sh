@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-# Rewrite VPN-gated hostnames to the VPS OpenVPN/tun IP so IKEv2 (and other
-# VPN) clients hit Caddy via the tunnel source IP (10.10.0.x / 10.9.0.x / …).
+# Rewrite VPN-gated hostnames to an internal lo VIP (10.11.0.1) so IKEv2 and
+# OpenVPN clients hit Caddy via the tunnel with their VPN source IP.
 #
-# Why: phones/Windows exclude the VPN gateway public IP from the tunnel to
-# avoid routing loops. If DNS returns 74.208.76.213, HTTPS to portal goes
-# over cellular/Wi-Fi WAN → Caddy @vpn_clients → 403 Forbidden.
+# Why not the public IP: phones/Windows exclude the VPN gateway public IP from
+# the tunnel; HTTPS then arrives from WAN → Caddy @vpn_clients → 403.
+# Why not 10.9.0.1: IKEv2 clients time out on tun0's POINTOPOINT address.
 #
 # Only AdGuard (VPN DNS) is rewritten; public DNS is unchanged.
 set -euo pipefail
 
 export ADGUARD_API="${ADGUARD_API:-http://127.0.0.1:3000}"
-export VPN_INTERNAL_IP="${VPN_INTERNAL_IP:-10.9.0.1}"
+# 10.11.0.1 = lo VIP (see ensure-ikev2-forward.sh). Do NOT use 10.9.0.1 —
+# IKEv2 clients time out reaching tun0's POINTOPOINT address.
+export VPN_INTERNAL_IP="${VPN_INTERNAL_IP:-10.11.0.1}"
 
 echo "==> AdGuard VPN split-DNS → ${VPN_INTERNAL_IP}"
 
-# IKEv2 clients must reach host INPUT (sslh on 10.9.0.1:443)
+# Ensure VIP exists before clients resolve to it
+if [[ -x /opt/ikev2/ensure-ikev2-forward.sh ]]; then
+  PORTAL_VIP="${VPN_INTERNAL_IP}" bash /opt/ikev2/ensure-ikev2-forward.sh >/dev/null || true
+elif ! ip -4 addr show dev lo 2>/dev/null | grep -q "inet ${VPN_INTERNAL_IP}/"; then
+  ip addr add "${VPN_INTERNAL_IP}/32" dev lo 2>/dev/null || true
+fi
+
+# IKEv2 clients must reach host INPUT (sslh on VIP:443)
 if command -v ufw >/dev/null 2>&1; then
   if ! ufw status 2>/dev/null | grep -F 'Anywhere                   ALLOW       10.10.0.0/24' | grep -q 'IKEv2 clients to host'; then
     ufw allow from 10.10.0.0/24 comment 'IKEv2 clients to host' >/dev/null 2>&1 || true
