@@ -47,10 +47,25 @@ Set-VpnConnectionIPsecConfiguration `
   -AllUserConnection `
   -Force
 
+# Prefer VPN DNS so AdGuard can rewrite portal/admin → 10.9.0.1 (on-tunnel).
+# Edge/Chrome DoH can still bypass this; the server also allows active IKEv2
+# peer WAN IPs while the tunnel is up.
+try {
+  Set-VpnConnection -Name $Name -AllUserConnection -DnsSuffix "vpstruelord.com" -Force -ErrorAction Stop
+} catch {
+  Write-Host "Note: could not set VpnConnection DnsSuffix ($($_.Exception.Message))"
+}
+
 Write-Host ""
 Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
 Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
+Write-Host ""
+Write-Host "If portal shows Forbidden while VPN is connected:"
+Write-Host "  1) Disconnect/reconnect the VPN"
+Write-Host "  2) In elevated CMD: ipconfig /flushdns"
+Write-Host "  3) Disable Secure DNS / DoH in the browser (Edge/Chrome) for this test"
+Write-Host "  4) Or open https://10.9.0.1 and accept the cert name mismatch"
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

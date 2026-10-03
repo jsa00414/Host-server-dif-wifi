@@ -153,6 +153,20 @@ if [[ -f "$SPLIT_DNS_SRC" ]]; then
   bash "$IKEV2_DIR/ensure-vpn-split-dns.sh" || true
 fi
 
+# Allow active IKEv2 peer WAN IPs in Caddy (Windows DoH / gateway exclusion)
+PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
+PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
+PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
+if [[ -f "$PEER_ACL_SRC" ]]; then
+  cp -f "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
+  [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
+  [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now sm-ikev2-peer-acl.timer >/dev/null 2>&1 || true
+  bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
+fi
+
 systemctl enable strongswan-starter >/dev/null 2>&1 || true
 systemctl restart strongswan-starter
 sleep 1
@@ -167,3 +181,4 @@ echo "  Pool:     ${IKEV2_POOL}"
 echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
 echo "  Cert:     ${LE_LIVE}"
 echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
+echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"

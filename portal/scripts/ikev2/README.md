@@ -45,3 +45,17 @@ AdGuard rewrites VPN-gated hostnames to `10.9.0.1` so traffic stays on-tunnel
 with a private source IP that matches Caddy `@vpn_clients`.
 
 After applying: **disconnect/reconnect VPN** (or flush DNS), then open the portal.
+
+## Windows still Forbidden (DoH / gateway exclusion)
+
+Windows often keeps talking to `74.208.76.213` on the WAN even while IKEv2 is up
+(browser Secure DNS / DoH, or gateway-IP exclusion).
+
+```bash
+bash /opt/ikev2/ensure-ikev2-peer-acl.sh
+systemctl enable --now sm-ikev2-peer-acl.timer
+```
+
+This syncs each **active IKEv2 peer public IP** into Caddy `@vpn_clients` every 30s
+so portal works for the connected Windows/phone WAN IP without opening it to the world.
+
