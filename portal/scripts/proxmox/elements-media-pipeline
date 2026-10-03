@@ -59,17 +59,56 @@ count_videos() {
   find "$dir" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" 2>/dev/null | wc -l
 }
 
-# Count TV series folders (Show Name/), not episode files.
+# Count TV series folders that contain video (fallback when Plex is unavailable).
 count_shows() {
-  local dir="$1"
+  local dir="$1" n=0 d vids
   [[ -d "$dir" ]] || { echo 0; return; }
-  find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name ".*" ! -name "@*" 2>/dev/null | wc -l
+  while IFS= read -r d; do
+    vids=$(find "$d" -maxdepth 4 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" 2>/dev/null | wc -l)
+    [[ "$vids" -gt 0 ]] && n=$((n + 1))
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name ".*" ! -name "@*" 2>/dev/null)
+  echo "$n"
+}
+
+# Prefer Plex library show count (matches what Plex displays).
+count_plex_shows() {
+  local title="$1"
+  pct exec "$CTID" -- python3 - "$title" <<'PY' 2>/dev/null || true
+import re, sys, pathlib, urllib.request, urllib.parse
+title = sys.argv[1]
+p = pathlib.Path("/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml")
+try:
+    token = re.search(r'PlexOnlineToken="([^"]+)"', p.read_text(errors="replace")).group(1)
+except Exception:
+    raise SystemExit(0)
+xml = urllib.request.urlopen(
+    f"http://127.0.0.1:32400/library/sections?X-Plex-Token={token}", timeout=20
+).read().decode()
+key = ""
+for m in re.finditer(r"<Directory\b([^>]*)>", xml):
+    attrs = m.group(1)
+    tm = re.search(r'title="([^"]*)"', attrs)
+    km = re.search(r'key="([^"]*)"', attrs)
+    typ = re.search(r'type="([^"]*)"', attrs)
+    if tm and km and typ and tm.group(1) == title and typ.group(1) == "show":
+        key = km.group(1)
+        break
+if not key:
+    raise SystemExit(0)
+sec = urllib.request.urlopen(
+    f"http://127.0.0.1:32400/library/sections/{key}/all?X-Plex-Container-Size=0&X-Plex-Token={token}",
+    timeout=30,
+).read().decode()
+m = re.search(r'totalSize="(\d+)"', sec) or re.search(r'size="(\d+)"', sec)
+print(m.group(1) if m else "")
+PY
 }
 
 cmd_status() {
   local mounted=0
   local movies_inbox=0 kids_movies_inbox=0 tv_inbox=0 kids_tv_inbox=0
   local movies_lib=0 kids_movies_lib=0 tv_lib=0 kids_tv_lib=0
+  local plex_tv="" plex_kids_tv=""
   mountpoint -q "$HOST_MNT" 2>/dev/null && mounted=1
   if [[ "$mounted" -eq 1 ]]; then
     movies_inbox=$(count_videos "$INBOX_MOVIES")
@@ -78,8 +117,18 @@ cmd_status() {
     kids_tv_inbox=$(count_videos "$INBOX_KIDS_TV")
     movies_lib=$(count_videos "$LIB_MOVIES")
     kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
-    tv_lib=$(count_shows "$LIB_TV")
-    kids_tv_lib=$(count_shows "$LIB_KIDS_TV")
+    plex_tv=$(count_plex_shows "TV Shows" | tr -d '[:space:]')
+    plex_kids_tv=$(count_plex_shows "Kids TV Shows" | tr -d '[:space:]')
+    if [[ "$plex_tv" =~ ^[0-9]+$ ]]; then
+      tv_lib="$plex_tv"
+    else
+      tv_lib=$(count_shows "$LIB_TV")
+    fi
+    if [[ "$plex_kids_tv" =~ ^[0-9]+$ ]]; then
+      kids_tv_lib="$plex_kids_tv"
+    else
+      kids_tv_lib=$(count_shows "$LIB_KIDS_TV")
+    fi
   fi
   local last_ok=0 last_at="" last_detail=""
   if [[ -f "$STATE_PATH" ]]; then
