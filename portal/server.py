@@ -1707,7 +1707,7 @@ _sessions_lock = threading.Lock()
 # Timed unlock for Security → VPS login method & SSH keys mutations.
 SSH_PANEL_UNLOCK_SECONDS = int(os.environ.get("SSH_PANEL_UNLOCK_SECONDS", "300"))
 _ssh_panel_unlocks: dict[str, float] = {}
-_ssh_panel_unlocks_lock = threading.Lock()
+_ssh_panel_unlocks_lock = threading.RLock()
 NAS_DL_TOKEN_TTL = float(os.environ.get("NAS_DL_TOKEN_TTL", "600"))
 _nas_dl_tokens: dict[str, float] = {}
 _nas_dl_tokens_lock = threading.Lock()
@@ -10681,8 +10681,8 @@ def unlock_ssh_panel(token: str | None, password: str) -> dict:
         raise ValueError("Incorrect portal password")
     now = time.time()
     exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
+    _purge_ssh_panel_unlocks(now)
     with _ssh_panel_unlocks_lock:
-        _purge_ssh_panel_unlocks(now)
         _ssh_panel_unlocks[token] = exp
     return {
         "ok": True,
