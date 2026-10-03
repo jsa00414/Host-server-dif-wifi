@@ -40,8 +40,10 @@ import urllib.request
 api = os.environ["ADGUARD_API"].rstrip("/")
 want_ip = os.environ["VPN_INTERNAL_IP"]
 hosts = [
-    # portal.vpstruelord.com intentionally omitted: must stay on public A
-    # so Windows IKEv2 can dial the VPS before the tunnel is up.
+    # VPN DNS only (public DNS stays 74.208.76.213). Before connect, Windows/phone
+    # use ISP DNS to dial IKEv2/OpenVPN; after connect AdGuard rewrites so HTTPS
+    # stays on-tunnel (gateway public-IP exclusion would otherwise → 403).
+    "portal.vpstruelord.com",
     "vpn.vpstruelord.com",
     "grafana.vpstruelord.com",
     "proxmox.vpstruelord.com",

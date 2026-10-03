@@ -15,7 +15,7 @@ ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 STATE_DIR="${IKEV2_PEER_ACL_DIR:-/var/lib/servermanager}"
 STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
 STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
-BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32"
+BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
 export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE BASE_CIDRS_DEFAULT
 
@@ -35,7 +35,7 @@ sticky_file = Path(
 )
 base_default = os.environ.get(
     "BASE_CIDRS_DEFAULT",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 
 PRIVATE = [
@@ -109,9 +109,11 @@ def load_base_cidrs() -> list[str]:
                 if cleaned:
                     base = cleaned
                 break
-    # Ensure IKEv2 pool + VPS public IP (hairpin) always present
+    # Ensure IKEv2 pool + portal VIP + VPS public IP (hairpin) always present
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
+    if "10.11.0.1/32" not in base:
+        base.append("10.11.0.1/32")
     if "74.208.76.213/32" not in base:
         base.append("74.208.76.213/32")
     for s in sticky:

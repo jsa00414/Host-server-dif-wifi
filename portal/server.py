@@ -2319,7 +2319,7 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 # Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
 # Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
