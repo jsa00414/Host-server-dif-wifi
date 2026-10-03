@@ -1438,10 +1438,11 @@
         unlocked = false;
         render();
       }
-      // Refresh enroll lock occasionally while empty so lock/unlock shows without reload.
+      // Keep polling enroll-status even after account save so expire/relock
+      // runs server-side (and Flint gate can close) without waiting for TTL alone.
       setInterval(() => {
-        if (!account) fetchEnrollStatus();
-      }, 8000);
+        fetchEnrollStatus();
+      }, 15000);
     })();
 
     setInterval(tick, 250);

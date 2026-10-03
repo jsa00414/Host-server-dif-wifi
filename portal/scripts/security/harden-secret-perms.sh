@@ -34,6 +34,13 @@ fix_mode /opt/truemail/.env 600
 fix_mode /opt/servermanager-backup/secrets.env 600
 fix_mode /opt/wireguard/nas-smb-gateway/credentials 600
 
+# Panel state that can hold TOTP seed / circle membership.
+fix_mode /opt/servermanager/panel/ssh-panel-2fa.json 600
+fix_mode /opt/servermanager/panel/auth-app-devices.json 600
+fix_mode /opt/servermanager/panel/vpn-allowlist.json 600
+fix_mode /opt/servermanager/panel/caddy-sticky-vpn-ips.txt 600
+fix_mode /opt/servermanager/panel/lan-circle-block.txt 600
+
 fix_mode /opt/truemail/config/ssl/key.pem 600
 fix_mode /opt/truemail/config/ssl/cert.pem 644
 if [[ -d /opt/truemail/config/ssl ]]; then

@@ -4938,6 +4938,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 "\t@auth_app path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
                 "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
                 "/static/auth-app.html /static/auth-app-iphone.html "
+                "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+                "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+                "/static/auth-app-icon-512.png "
                 "/download/ServerManagerAuthenticator.exe "
                 "/api/auth-app/windows-exe"
             )
@@ -8293,6 +8296,10 @@ def _security_file_checks() -> list[dict]:
         ("/opt/truemail/config/ssl/key.pem", 0o600, False),
         ("/opt/truemail/.env", 0o600, False),
         ("/opt/wireguard/nas-smb-gateway/credentials", 0o600, False),
+        ("/opt/servermanager/panel/ssh-panel-2fa.json", 0o600, False),
+        ("/opt/servermanager/panel/auth-app-devices.json", 0o600, False),
+        ("/opt/servermanager/panel/vpn-allowlist.json", 0o600, False),
+        ("/opt/servermanager/panel/caddy-sticky-vpn-ips.txt", 0o600, False),
     ]
     for path, want_mode, required in targets:
         p = Path(path)
@@ -11350,6 +11357,7 @@ def touch_auth_app_device(
     }
     existing = by_ip.get(ip)
     already = bool(existing and existing.get("enrolled", True))
+    newly_enrolled = False
     if mode_n == "refresh":
         if not already:
             raise ValueError("LAN IP is not an enrolled Authenticator device")
@@ -11366,6 +11374,7 @@ def touch_auth_app_device(
         )
         if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
             raise ValueError("Too many enrolled Authenticator devices")
+        newly_enrolled = True
     row = existing or {"ip": ip, "first_seen": now}
     row.update(
         {
@@ -11383,6 +11392,20 @@ def touch_auth_app_device(
         reverse=True,
     )[:80]
     _write_auth_app_devices(data)
+    # Auto-relock enrollment after a successful new-device registration so the
+    # Flint pending window does not stay open until the TTL expires.
+    if newly_enrolled:
+        try:
+            st = _read_ssh_panel_2fa()
+            if st.get("device_enroll_unlocked"):
+                _write_ssh_panel_2fa(
+                    enabled=bool(st.get("enabled")),
+                    method=str(st.get("method") or "app"),
+                    totp_secret=str(st.get("totp_secret") or ""),
+                    device_enroll_unlocked=False,
+                )
+        except Exception:
+            pass
     # Refresh Flint gate so enrolled phones are not blocked while pending.
     lan_gate = Path(
         os.environ.get(
@@ -11400,7 +11423,13 @@ def touch_auth_app_device(
             )
         except Exception:
             pass
-    return {"ok": True, "ip": ip, "devices": data["devices"], "mode": mode_n}
+    return {
+        "ok": True,
+        "ip": ip,
+        "devices": data["devices"],
+        "mode": mode_n,
+        "newly_enrolled": newly_enrolled,
+    }
 
 
 def _sealed_vpn_row(ip: str) -> dict:
@@ -11813,6 +11842,43 @@ def _normalize_vpn_ip(raw: str) -> str:
     if "/" in ip:
         ip = ip.split("/", 1)[0].strip()
     return ip
+
+
+def _is_loopback_or_link_local(ip: str) -> bool:
+    ip = _normalize_vpn_ip(ip)
+    if not ip:
+        return False
+    if ip.startswith("127.") or ip == "::1":
+        return True
+    # Docker / local bridge peers that forward via Caddy.
+    if ip.startswith("172.") and re.fullmatch(r"172\.\d{1,3}\.\d{1,3}\.\d{1,3}", ip):
+        parts = [int(x) for x in ip.split(".")]
+        if 16 <= parts[1] <= 31:
+            return True
+    return False
+
+
+def request_client_ip(handler: "Handler") -> str:
+    """Best-effort real client IP when Caddy proxies to the portal.
+
+    Prefer X-Real-IP / first X-Forwarded-For hop only when the TCP peer is a
+    local proxy (loopback/docker). Otherwise use the socket peer address so
+    spoofed forwarding headers from direct clients are ignored.
+    """
+    peer = ""
+    try:
+        peer = _normalize_vpn_ip(handler.client_address[0])
+    except Exception:
+        peer = ""
+    if _is_loopback_or_link_local(peer):
+        real = _normalize_vpn_ip(handler.headers.get("X-Real-IP") or "")
+        if real and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", real):
+            return real
+        xff = str(handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        xff_ip = _normalize_vpn_ip(xff)
+        if xff_ip and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", xff_ip):
+            return xff_ip
+    return peer or "unknown"
 
 
 def _is_public_ipv4(ip: str) -> bool:
@@ -17600,7 +17666,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 # Header-only TOTP — never accept codes from query strings (logs/Referer).
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
-                    client_ip=self.client_address[0],
+                    client_ip=request_client_ip(self),
                 )
                 # Refresh-only: never enroll a new LAN IP from a Circle GET.
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
@@ -17623,7 +17689,7 @@ document.getElementById('f').onsubmit = async (e) => {
             try:
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
-                    client_ip=self.client_address[0],
+                    client_ip=request_client_ip(self),
                 )
                 lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 platform = str(self.headers.get("X-SM-Platform") or "")
@@ -17783,7 +17849,7 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/email-code/send":
             try:
-                result = send_email_test_code(self.client_address[0])
+                result = send_email_test_code(request_client_ip(self))
                 self._json(200, result)
             except ValueError as exc:
                 self._json(429, {"ok": False, "error": str(exc)})
@@ -17794,7 +17860,7 @@ document.getElementById('f').onsubmit = async (e) => {
             try:
                 payload = self._read_json()
                 code = str((payload or {}).get("code") or "")
-                result = verify_email_test_code(self.client_address[0], code)
+                result = verify_email_test_code(request_client_ip(self), code)
                 self._json(200, result)
             except ValueError as exc:
                 time.sleep(0.25)
@@ -17808,7 +17874,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
-                require_auth_app_totp(code, client_ip=self.client_address[0])
+                require_auth_app_totp(code, client_ip=request_client_ip(self))
                 # Circle mutations refresh enrolled IPs only — never register new LAN.
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 if lan_hint and _is_home_lan_ipv4(lan_hint):
@@ -17844,7 +17910,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
-                require_auth_app_totp(code, client_ip=self.client_address[0])
+                require_auth_app_totp(code, client_ip=request_client_ip(self))
                 # Prefer header LAN IP; body lan_ip is fallback for older clients.
                 lan_ip = _normalize_vpn_ip(
                     self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""

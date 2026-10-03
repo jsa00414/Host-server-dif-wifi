@@ -1330,8 +1330,8 @@
         render();
       }
       setInterval(() => {
-        if (!account) fetchEnrollStatus();
-      }, 8000);
+        fetchEnrollStatus();
+      }, 15000);
     })();
     setInterval(tick, 250);
     if ("serviceWorker" in navigator) {

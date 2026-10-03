@@ -100,11 +100,34 @@ if auth_dev.is_file():
 
 # While new-device enrollment is unlocked, do not block pending LAN (phones must
 # reach /auth-app to paste the secret). Denied IPs stay blocked.
+# Honor device_enroll_unlocked_at + AUTH_APP_ENROLL_UNLOCK_SECONDS so an
+# abandoned unlock cannot leave Flint open indefinitely.
 enroll_unlocked = False
+enroll_ttl = int(os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900") or "900")
+enroll_ttl = max(60, enroll_ttl)
 if ssh_2fa.is_file():
     try:
         st = json.loads(ssh_2fa.read_text(encoding="utf-8"))
-        enroll_unlocked = bool(isinstance(st, dict) and st.get("device_enroll_unlocked"))
+        if isinstance(st, dict) and st.get("device_enroll_unlocked"):
+            unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+            import time as _time
+
+            if unlocked_at > 0 and (_time.time() - unlocked_at) <= enroll_ttl:
+                enroll_unlocked = True
+            else:
+                # Expired or legacy unlock without timestamp — relock on disk
+                # so subsequent gate runs and portal reads stay consistent.
+                st["device_enroll_unlocked"] = False
+                st["device_enroll_unlocked_at"] = 0
+                st["updated_at"] = int(_time.time())
+                tmp = ssh_2fa.with_suffix(".tmp")
+                tmp.write_text(json.dumps(st, indent=2) + "\n", encoding="utf-8")
+                tmp.replace(ssh_2fa)
+                try:
+                    os.chmod(ssh_2fa, 0o600)
+                except Exception:
+                    pass
+                enroll_unlocked = False
     except Exception:
         enroll_unlocked = False
 
