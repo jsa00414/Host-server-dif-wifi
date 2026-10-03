@@ -113,11 +113,17 @@ def load_allowlist_ips() -> set[str]:
             ip = normalize_ip(row.get("ip", ""))
             if ip and is_public_ipv4(ip):
                 ips.add(ip)
+    # Always keep sealed router WANs (env override) even if JSON was wiped.
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
+    for part in re.split(r"[\s,;]+", sealed_raw):
+        ip = normalize_ip(part)
+        if ip and is_public_ipv4(ip):
+            ips.add(ip)
     return ips
 
 
 def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
-    """Ensure sticky WANs exist as allowed entries; return allowed IP set."""
+    """Ensure sticky + sealed WANs exist as allowed entries; return allowed IP set."""
     allowed = load_allowlist_ips()
     data = {"allowed": [], "denied": [], "attempts": [], "pending": []}
     if allow_file.is_file():
@@ -130,27 +136,100 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
         except Exception:
             pass
     changed = False
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
+    sealed_ips = []
+    for part in re.split(r"[\s,;]+", sealed_raw):
+        ip = normalize_ip(part)
+        if ip and is_public_ipv4(ip) and ip not in sealed_ips:
+            sealed_ips.append(ip)
+
+    by_ip = {
+        normalize_ip(r.get("ip", "")): dict(r)
+        for r in (data.get("allowed") or [])
+        if isinstance(r, dict) and normalize_ip(r.get("ip", ""))
+    }
+    for ip in sealed_ips:
+        row = by_ip.get(ip) or {
+            "ip": ip,
+            "note": "Flint router WAN (sealed)",
+            "approved_at": now,
+            "source": "router",
+            "sealed": True,
+            "hidden": True,
+        }
+        before = dict(row)
+        row.update(
+            {
+                "ip": ip,
+                "sealed": True,
+                "hidden": True,
+                "source": "router",
+                "note": row.get("note")
+                if str(row.get("note") or "").strip()
+                and "seeded from sticky" not in str(row.get("note") or "")
+                else "Flint router WAN (sealed)",
+            }
+        )
+        if not row.get("approved_at"):
+            row["approved_at"] = now
+        by_ip[ip] = row
+        if before != row or ip not in allowed:
+            changed = True
+        allowed.add(ip)
+
     for cidr in sticky:
         ip = normalize_ip(cidr)
         if ip and is_public_ipv4(ip) and ip not in allowed:
-            data["allowed"].append(
-                {
-                    "ip": ip,
-                    "note": "seeded from sticky WAN",
-                    "approved_at": now,
-                    "source": "sticky",
-                }
-            )
+            by_ip[ip] = {
+                "ip": ip,
+                "note": "seeded from sticky WAN",
+                "approved_at": now,
+                "source": "sticky",
+            }
             allowed.add(ip)
             changed = True
+
     if changed or not allow_file.is_file():
+        rebuilt = []
+        seen = set()
+        for ip in sealed_ips:
+            rebuilt.append(by_ip[ip])
+            seen.add(ip)
+        for ip, row in by_ip.items():
+            if ip in seen:
+                continue
+            rebuilt.append(row)
+            seen.add(ip)
+        data["allowed"] = rebuilt
         allow_file.parent.mkdir(parents=True, exist_ok=True)
         allow_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         try:
             os.chmod(allow_file, 0o600)
         except Exception:
             pass
+        # Keep sticky file aligned so later runs don't drop sealed.
+        sticky_file.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Managed by vpn allowlist — approved sticky WAN IPs",
+            "# one IPv4 per line",
+        ]
+        for row in rebuilt:
+            ip = normalize_ip(row.get("ip", ""))
+            if ip and is_public_ipv4(ip):
+                lines.append(f"{ip}/32")
+        sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return allowed
+
+
+def vpn_clients_cidrs_in_caddy(text: str) -> set[str]:
+    """CIDRs currently present on live @vpn_clients matcher lines (ignore comments)."""
+    found: set[str] = set()
+    for m in re.finditer(
+        r"^[ \t]*@vpn_clients (?:client_ip|remote_ip) (.+)$", text, re.M
+    ):
+        for tok in m.group(1).split():
+            found.add(tok.strip())
+    return found
 
 
 def load_base_cidrs(allowed_ips: set[str]) -> list[str]:
@@ -193,6 +272,9 @@ sticky_cidrs = load_sticky_cidrs()
 allowed_ips = ensure_allowlist_seeded(sticky_cidrs)
 # Sticky file may include unapproved leftovers — only allowlisted count
 sticky_trusted = [c for c in sticky_cidrs if normalize_ip(c) in allowed_ips]
+# Re-read sticky after possible reseal write.
+sticky_cidrs = load_sticky_cidrs()
+sticky_trusted = [c for c in sticky_cidrs if normalize_ip(c) in allowed_ips]
 base = load_base_cidrs(allowed_ips)
 
 # IMPORTANT: do NOT auto-append live peer WANs. Only allowlisted sticky enter the circle.
@@ -201,14 +283,15 @@ combined_s = " ".join(combined)
 
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
-trusted_needed = [c[:-3] for c in sticky_trusted if c.endswith("/32")]
+trusted_needed = sorted({normalize_ip(c) for c in sticky_trusted} | set(allowed_ips))
 if prev == cur and caddyfile.is_file():
     text = caddyfile.read_text()
-    # Still patch if allowlist changed relative to Caddy
-    if trusted_needed and all(f"{ip}/32" in text for ip in trusted_needed):
-        # Also ensure no unapproved peer /32 remains from older runs
+    live = vpn_clients_cidrs_in_caddy(text)
+    # Require every trusted sticky/allowlisted /32 on the live matcher lines
+    # (do NOT match comments — that previously skipped reseeding the router WAN).
+    if trusted_needed and all(f"{ip}/32" in live for ip in trusted_needed):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
-        if not unapproved or all(f"{ip}/32" not in text for ip in unapproved):
+        if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
             print(
                 f"OK unchanged ({len(peers)} peers seen, {len(sticky_trusted)} trusted sticky, "
                 f"{len(allowed_ips)} allowlisted)"
