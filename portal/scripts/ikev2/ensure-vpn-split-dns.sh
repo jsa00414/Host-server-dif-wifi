@@ -70,13 +70,20 @@ for row in list(existing):
 
 for host in hosts:
     req("POST", "/control/rewrite/add", {"domain": host, "answer": want_ip})
-    print(f"  + {host} -> {want_ip}")
+    print(f"  + rewrite {host} -> {want_ip}")
 
-final = req("GET", "/control/rewrite/list") or []
-ours = [r for r in final if (r.get("domain") or "").lower() in hosts]
-print(f"OK {len(ours)} VPN split-DNS rewrites")
-for row in ours:
-    print(f"  {row.get('domain')} -> {row.get('answer')}")
+# Exclusive answers (avoid dual A: rewrite + public IP)
+status = req("GET", "/control/filtering/status") or {}
+rules = list(status.get("user_rules") or [])
+rules = [
+    r
+    for r in rules
+    if not any(h in r and "dnsrewrite" in r for h in hosts)
+]
+for host in hosts:
+    rules.append(f"||{host}^$dnsrewrite=NOERROR;A;{want_ip}")
+req("POST", "/control/filtering/set_rules", {"rules": rules})
+print(f"OK dnsrewrite rules for {len(hosts)} hosts -> {want_ip}")
 PY
 
 if command -v dig >/dev/null 2>&1; then

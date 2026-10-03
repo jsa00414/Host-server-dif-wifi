@@ -120,16 +120,20 @@ if env_file.is_file():
     env_file.write_text("\n".join(out_lines) + "\n")
     print(f"updated {env_file}")
 
-# Patch every @vpn_clients remote_ip line
+# Patch every @vpn_clients client_ip/remote_ip line (prefer client_ip + PROXY)
 if not caddyfile.is_file():
     print(f"missing {caddyfile}")
     raise SystemExit(1)
 
 text = caddyfile.read_text()
-pat = re.compile(r"^([ \t]*@vpn_clients remote_ip )(.+)$", re.M)
-new_text, n = pat.subn(rf"\g<1>{combined_s}", text)
+
+def _repl(m):
+    return f"{m.group(1)}@vpn_clients client_ip {combined_s}"
+
+pat = re.compile(r"^([ \t]*)@vpn_clients (?:client_ip|remote_ip) (.+)$", re.M)
+new_text, n = pat.subn(_repl, text)
 if n == 0:
-    print("WARN: no @vpn_clients remote_ip lines found")
+    print("WARN: no @vpn_clients client_ip/remote_ip lines found")
 else:
     caddyfile.write_text(new_text)
     print(f"patched {n} Caddy @vpn_clients lines")
