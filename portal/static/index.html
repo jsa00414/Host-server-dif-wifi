@@ -874,20 +874,29 @@
     }
     .sec-ssh-check input { width: auto; }
     .sec-ssh-lock {
-      margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--line);
+      margin-bottom: 12px; padding: 16px 14px; border: 1px solid var(--line);
       border-radius: 12px; background: rgba(226,180,90,.08);
+      text-align: center;
     }
     .sec-ssh-lock.unlocked {
       background: rgba(61,222,160,.06); border-color: rgba(61,222,160,.28);
     }
     .sec-ssh-lock .lock-title {
-      font-family: "IBM Plex Mono", monospace; font-size: .86rem; font-weight: 600; margin-bottom: 4px;
+      font-family: "IBM Plex Mono", monospace; font-size: 1rem; font-weight: 600;
+      letter-spacing: .08em; margin-bottom: 10px; text-transform: uppercase;
     }
-    .sec-ssh-lock .lock-sub { color: var(--muted); font-size: .76rem; line-height: 1.4; margin-bottom: 10px; }
-    .sec-ssh-lock-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sec-ssh-lock .lock-sub {
+      color: var(--muted); font-size: .76rem; line-height: 1.4; margin-bottom: 10px;
+      text-align: center;
+    }
+    .sec-ssh-lock-form {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
+    }
     .sec-ssh-lock-form input[type="password"] {
-      flex: 1 1 180px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+      flex: 1 1 180px; max-width: 280px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+      text-align: center;
     }
+    .sec-ssh-lock.unlocked .sec-login-actions { justify-content: center; }
     .sec-ssh-controls[data-locked="1"] {
       opacity: .55; pointer-events: none; user-select: none; filter: grayscale(.15);
     }
@@ -3608,7 +3617,8 @@
         if (!unlocked) {
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
-              <div class="lock-title">Locked ${secSev("medium")}</div>
+              <div class="lock-title">Locked</div>
+              <div class="lock-sub">!! password to unlock the panel !!</div>
               <div class="sec-ssh-lock-form">
                 <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" />
                 <button type="button" class="primary" id="secSshUnlockBtn">Unlock</button>
