@@ -1037,9 +1037,8 @@
         const lanIp = await detectHomeLanIp();
         const headers = { "X-SM-Totp": code, Accept: "application/json" };
         if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
-        const q = new URLSearchParams({ code });
-        if (lanIp) q.set("lan_ip", lanIp);
-        const res = await fetch(`/api/auth-app/vpn-allowlist?${q}`, {
+        // TOTP stays in headers only — never put codes in the URL/query string.
+        const res = await fetch("/api/auth-app/vpn-allowlist", {
           headers,
           cache: "no-store",
         });
@@ -1067,10 +1066,18 @@
       }
       try {
         const code = await currentTotpCode();
+        const lanIp = await detectHomeLanIp();
+        const headers = {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-SM-Totp": code,
+          "X-SM-Platform": "android",
+        };
+        if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
         const res = await fetch("/api/auth-app/vpn-allowlist", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ code, action, ip, note: note || "" }),
+          headers,
+          body: JSON.stringify({ action, ip, note: note || "" }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);

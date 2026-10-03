@@ -6183,14 +6183,14 @@ def write_firewall_state(rules: list[dict]) -> dict:
 
 def _cookie_clear_header() -> str:
     return (
-        f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; "
+        f"{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; "
         "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
     )
 
 
 def _cookie_set_header(token: str) -> str:
     return (
-        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; "
+        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; "
         f"Max-Age={int(SESSION_HOURS * 3600)}"
     )
 
@@ -11240,6 +11240,16 @@ AUTH_APP_DEVICES_PATH = Path(
         "/opt/servermanager/panel/auth-app-devices.json",
     )
 )
+AUTH_APP_ENROLL_UNLOCK_SECONDS = int(
+    os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900")
+)  # auto-relock new-device enrollment
+AUTH_APP_TOTP_MAX_FAILS = int(os.environ.get("AUTH_APP_TOTP_MAX_FAILS", "8"))
+AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "300"))
+AUTH_APP_TOTP_LOCKOUT = int(os.environ.get("AUTH_APP_TOTP_LOCKOUT", "300"))
+AUTH_APP_MAX_DEVICES = int(os.environ.get("AUTH_APP_MAX_DEVICES", "8"))
+_auth_app_totp_lock = threading.Lock()
+_auth_app_totp_fails: dict[str, list[float]] = {}
+_auth_app_totp_lockouts: dict[str, float] = {}
 STICKY_VPN_IPS_PATH = Path(
     os.environ.get(
         "STICKY_VPN_IPS_FILE",
@@ -11308,7 +11318,7 @@ def auth_app_enrolled_lan_ips() -> set[str]:
     out: set[str] = set()
     for row in _read_auth_app_devices().get("devices") or []:
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if _is_home_lan_ipv4(ip):
+        if _is_home_lan_ipv4(ip) and row.get("enrolled", True):
             out.add(ip)
     return out
 
@@ -11318,11 +11328,18 @@ def touch_auth_app_device(
     lan_ip: str = "",
     note: str = "",
     platform: str = "",
+    mode: str = "register",
 ) -> dict:
-    """Record an enrolled Authenticator's home-LAN IP so Flint pending can exempt it."""
+    """Record/refresh an enrolled Authenticator LAN IP for Flint pending exemption.
+
+    mode=refresh — only bump last_seen for already-enrolled IPs (never trust a
+    new client-supplied IP). mode=register — allow a new IP only while Security
+    has new-device enrollment unlocked (limits spoofed X-SM-Lan-Ip abuse).
+    """
     ip = _normalize_vpn_ip(lan_ip)
     if not ip or not _is_home_lan_ipv4(ip):
         raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    mode_n = "refresh" if str(mode).lower() == "refresh" else "register"
     now = int(time.time())
     data = _read_auth_app_devices()
     devices = [dict(x) for x in (data.get("devices") or []) if isinstance(x, dict)]
@@ -11331,7 +11348,25 @@ def touch_auth_app_device(
         for x in devices
         if _normalize_vpn_ip(x.get("ip", ""))
     }
-    row = by_ip.get(ip) or {"ip": ip, "first_seen": now}
+    existing = by_ip.get(ip)
+    already = bool(existing and existing.get("enrolled", True))
+    if mode_n == "refresh":
+        if not already:
+            raise ValueError("LAN IP is not an enrolled Authenticator device")
+    elif not already:
+        if not auth_app_device_enroll_unlocked():
+            raise ValueError(
+                "New Authenticator device enrollment is locked in Security"
+            )
+        enrolled_count = sum(
+            1
+            for row in by_ip.values()
+            if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
+            and row.get("enrolled", True)
+        )
+        if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
+            raise ValueError("Too many enrolled Authenticator devices")
+    row = existing or {"ip": ip, "first_seen": now}
     row.update(
         {
             "ip": ip,
@@ -11348,7 +11383,7 @@ def touch_auth_app_device(
         reverse=True,
     )[:80]
     _write_auth_app_devices(data)
-    # Refresh Flint gate so this enrolled phone is no longer blocked while pending.
+    # Refresh Flint gate so enrolled phones are not blocked while pending.
     lan_gate = Path(
         os.environ.get(
             "LAN_CIRCLE_FLINT_GATE_SCRIPT",
@@ -11365,7 +11400,7 @@ def touch_auth_app_device(
             )
         except Exception:
             pass
-    return {"ok": True, "ip": ip, "devices": data["devices"]}
+    return {"ok": True, "ip": ip, "devices": data["devices"], "mode": mode_n}
 
 
 def _sealed_vpn_row(ip: str) -> dict:
@@ -11553,6 +11588,7 @@ def _read_ssh_panel_2fa() -> dict:
                 "enabled": False,
                 "method": "email",
                 "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
             }
         data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -11560,6 +11596,7 @@ def _read_ssh_panel_2fa() -> dict:
                 "enabled": False,
                 "method": "email",
                 "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
             }
         method = str(data.get("method") or "email").strip().lower()
         if method not in ("email", "app"):
@@ -11571,12 +11608,14 @@ def _read_ssh_panel_2fa() -> dict:
             "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
             "updated_at": data.get("updated_at"),
             "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
+            "device_enroll_unlocked_at": int(data.get("device_enroll_unlocked_at") or 0),
         }
     except Exception:
         return {
             "enabled": False,
             "method": "email",
             "device_enroll_unlocked": False,
+            "device_enroll_unlocked_at": 0,
         }
 
 
@@ -11590,20 +11629,70 @@ def ssh_panel_2fa_method() -> str:
 
 def auth_app_device_enroll_unlocked() -> bool:
     """Whether phones may add a new authenticator account via Enter secret."""
-    return bool(_read_ssh_panel_2fa().get("device_enroll_unlocked"))
+    st = _read_ssh_panel_2fa()
+    if not bool(st.get("device_enroll_unlocked")):
+        return False
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    if unlocked_at <= 0:
+        # Legacy unlock without timestamp — treat as expired and relock.
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+        except Exception:
+            pass
+        return False
+    age = int(time.time()) - unlocked_at
+    if age > max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS):
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+            lan_gate = Path(
+                os.environ.get(
+                    "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+                    "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+                )
+            )
+            if lan_gate.is_file():
+                subprocess.run(
+                    ["bash", str(lan_gate)],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                )
+        except Exception:
+            pass
+        return False
+    return True
 
 
 def auth_app_enroll_status() -> dict:
     """Public status for Authenticator PWAs (no secret material)."""
     unlocked = auth_app_device_enroll_unlocked()
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    expires_in = 0
+    if unlocked and unlocked_at > 0:
+        expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
     return {
         "enroll_unlocked": unlocked,
         "device_enroll_unlocked": unlocked,
+        "enroll_expires_in": expires_in,
         "auth_app_path": "/auth-app-iphone.html",
         "auth_app_android_path": "/auth-app.html",
         "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "message": (
             "Enrollment unlocked — Enter secret is available in the Authenticator app."
+            + (f" Auto-locks in ~{max(1, expires_in // 60)} min." if expires_in else "")
             if unlocked
             else "Enrollment locked — Enter secret is hidden until unlocked in Security."
         ),
@@ -11628,6 +11717,11 @@ def _write_ssh_panel_2fa(
         if device_enroll_unlocked is not None
         else bool(prev.get("device_enroll_unlocked"))
     )
+    unlocked_at = int(prev.get("device_enroll_unlocked_at") or 0)
+    if device_enroll_unlocked is not None:
+        unlocked_at = int(time.time()) if enroll_flag else 0
+    elif not enroll_flag:
+        unlocked_at = 0
     payload = {
         "enabled": bool(enabled),
         "method": method_n,
@@ -11635,6 +11729,7 @@ def _write_ssh_panel_2fa(
         "updated_at": int(time.time()),
         "email_to": EMAIL_CODE_TO,
         "device_enroll_unlocked": enroll_flag,
+        "device_enroll_unlocked_at": unlocked_at if enroll_flag else 0,
     }
     if not enabled:
         # Keep secret only while enabled as app; wipe on disable for safety.
@@ -11701,13 +11796,15 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
         "auth_app_android_path": "/auth-app.html",
         "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "message": (
-            "New-device enrollment unlocked. Enter secret is visible in the Authenticator app until you lock it again."
+            "New-device enrollment unlocked. Enter secret is visible in the Authenticator app "
+            f"for ~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min (or until you lock it)."
             if want
             else "New-device enrollment locked. Enter secret is hidden in the Authenticator app."
         ),
     }
     if want and secret:
         out["enroll"] = _totp_provisioning(secret)
+        out["enroll_expires_in"] = max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS)
     return out
 
 
@@ -12154,9 +12251,49 @@ def verify_auth_app_totp(code: str) -> bool:
     return verify_totp_code(secret, code, window=1)
 
 
-def require_auth_app_totp(code: str) -> None:
-    if not verify_auth_app_totp(code):
-        raise ValueError("Incorrect or missing authenticator code")
+def _auth_app_totp_client_key(client_ip: str) -> str:
+    return (_normalize_vpn_ip(client_ip) or str(client_ip or "unknown").strip() or "unknown")[:64]
+
+
+def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
+    """Validate auth-app TOTP with per-IP failure lockout (public @auth_app surface)."""
+    key = _auth_app_totp_client_key(client_ip)
+    now = time.time()
+    with _auth_app_totp_lock:
+        locked_until = float(_auth_app_totp_lockouts.get(key) or 0)
+        if locked_until > now:
+            raise ValueError(
+                f"Too many failed authenticator codes — try again in {int(locked_until - now) + 1}s"
+            )
+        # Drop stale failures outside the window.
+        fails = [
+            t
+            for t in (_auth_app_totp_fails.get(key) or [])
+            if now - float(t) <= max(30, AUTH_APP_TOTP_FAIL_WINDOW)
+        ]
+        _auth_app_totp_fails[key] = fails
+    if verify_auth_app_totp(code):
+        with _auth_app_totp_lock:
+            _auth_app_totp_fails.pop(key, None)
+            _auth_app_totp_lockouts.pop(key, None)
+        return
+    with _auth_app_totp_lock:
+        fails = list(_auth_app_totp_fails.get(key) or [])
+        fails.append(now)
+        _auth_app_totp_fails[key] = fails[-40:]
+        if len(fails) >= max(3, AUTH_APP_TOTP_MAX_FAILS):
+            _auth_app_totp_lockouts[key] = now + max(30, AUTH_APP_TOTP_LOCKOUT)
+            _auth_app_totp_fails[key] = []
+    time.sleep(min(2.0, 0.35 + 0.15 * min(10, len(fails))))
+    raise ValueError("Incorrect or missing authenticator code")
+
+
+def _auth_app_totp_from_request(handler: "Handler") -> str:
+    """TOTP must come from X-SM-Totp (or JSON body on POST) — never from query strings."""
+    hdr = str(handler.headers.get("X-SM-Totp") or "").strip()
+    if hdr:
+        return hdr
+    return ""
 
 
 def _totp_provisioning(secret_b32: str) -> dict:
@@ -17445,22 +17582,20 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/auth-app/vpn-allowlist":
             try:
-                qs = parse_qs(urlparse(self.path).query)
-                code = (
-                    self.headers.get("X-SM-Totp")
-                    or (qs.get("code") or [""])[0]
-                    or ""
+                # Header-only TOTP — never accept codes from query strings (logs/Referer).
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=self.client_address[0],
                 )
-                require_auth_app_totp(str(code))
-                # Refresh enrolled-device LAN sticky when Circle is opened.
-                lan_hint = _normalize_vpn_ip(
-                    self.headers.get("X-SM-Lan-Ip")
-                    or (qs.get("lan_ip") or [""])[0]
-                    or ""
-                )
+                # Refresh-only: never enroll a new LAN IP from a Circle GET.
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 if lan_hint and _is_home_lan_ipv4(lan_hint):
                     try:
-                        touch_auth_app_device(lan_ip=lan_hint, note="Authenticator Circle")
+                        touch_auth_app_device(
+                            lan_ip=lan_hint,
+                            note="Authenticator Circle",
+                            mode="refresh",
+                        )
                     except Exception:
                         pass
                 self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
@@ -17471,27 +17606,17 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/auth-app/register-device":
             try:
-                qs = parse_qs(urlparse(self.path).query)
-                code = (
-                    self.headers.get("X-SM-Totp")
-                    or (qs.get("code") or [""])[0]
-                    or ""
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=self.client_address[0],
                 )
-                require_auth_app_totp(str(code))
-                lan_ip = _normalize_vpn_ip(
-                    self.headers.get("X-SM-Lan-Ip")
-                    or (qs.get("lan_ip") or [""])[0]
-                    or ""
-                )
-                platform = str(
-                    self.headers.get("X-SM-Platform")
-                    or (qs.get("platform") or [""])[0]
-                    or ""
-                )
+                lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                platform = str(self.headers.get("X-SM-Platform") or "")
                 result = touch_auth_app_device(
                     lan_ip=lan_ip,
                     note="Authenticator app",
                     platform=platform,
+                    mode="register",
                 )
                 self._json(200, result)
             except ValueError as exc:
@@ -17667,16 +17792,21 @@ document.getElementById('f').onsubmit = async (e) => {
                 payload = self._read_json()
                 if not isinstance(payload, dict):
                     payload = {}
-                require_auth_app_totp(str(payload.get("code") or ""))
-                lan_hint = _normalize_vpn_ip(
-                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
-                )
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(code, client_ip=self.client_address[0])
+                # Circle mutations refresh enrolled IPs only — never register new LAN.
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 if lan_hint and _is_home_lan_ipv4(lan_hint):
                     try:
                         touch_auth_app_device(
                             lan_ip=lan_hint,
                             note="Authenticator Circle",
-                            platform=str(payload.get("platform") or ""),
+                            platform=str(
+                                self.headers.get("X-SM-Platform")
+                                or payload.get("platform")
+                                or ""
+                            ),
+                            mode="refresh",
                         )
                     except Exception:
                         pass
@@ -17698,14 +17828,21 @@ document.getElementById('f').onsubmit = async (e) => {
                 payload = self._read_json()
                 if not isinstance(payload, dict):
                     payload = {}
-                require_auth_app_totp(str(payload.get("code") or ""))
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(code, client_ip=self.client_address[0])
+                # Prefer header LAN IP; body lan_ip is fallback for older clients.
                 lan_ip = _normalize_vpn_ip(
                     self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
                 )
                 result = touch_auth_app_device(
                     lan_ip=lan_ip,
                     note=str(payload.get("note") or "Authenticator app"),
-                    platform=str(payload.get("platform") or ""),
+                    platform=str(
+                        self.headers.get("X-SM-Platform")
+                        or payload.get("platform")
+                        or ""
+                    ),
+                    mode="register",
                 )
                 self._json(200, result)
             except ValueError as exc:
