@@ -161,6 +161,7 @@
       gap: 10px;
       width: min(280px, 100%);
     }
+    .pin-row[hidden] { display: none !important; }
     .pin-row input {
       width: 100%;
       text-align: center;
@@ -256,13 +257,15 @@
 
   <main>
     <section class="lock" id="lockView" hidden>
-      <div class="face" aria-hidden="true">••</div>
-      <h2 id="lockTitle">Enter PIN</h2>
-      <p id="lockSub">Unlock with your app PIN to see ServerManager codes.</p>
-      <div class="pin-row">
+      <div class="face" aria-hidden="true">◉</div>
+      <h2 id="lockTitle">Face ID required</h2>
+      <p id="lockSub">Unlock with Face ID to see your ServerManager codes.</p>
+      <button type="button" class="primary" id="faceUnlockBtn" style="width:min(280px,100%)">Unlock with Face ID</button>
+      <button type="button" id="setupFaceBtn" style="width:min(280px,100%)" hidden>Set up Face ID</button>
+      <button type="button" id="usePinBtn" style="width:min(280px,100%)" hidden>Use PIN instead</button>
+      <div class="pin-row" id="pinRow" hidden>
         <input id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="••••" />
-        <button type="button" class="primary" id="pinSubmitBtn">Unlock</button>
-        <button type="button" id="pinSetupBtn" hidden>Set PIN</button>
+        <button type="button" class="primary" id="pinSubmitBtn">Unlock with PIN</button>
       </div>
     </section>
     <section class="code-pane" id="codePane" hidden>
@@ -283,6 +286,7 @@
 
   <script>
     const STORE_KEY = "sm.auth.totp.v1";
+    const FACE_KEY = "sm.auth.face.cred.v1";
     const PIN_KEY = "sm.auth.pin.hash.v1";
     const PERIOD = 30;
     const DIGITS = 6;
@@ -298,9 +302,12 @@
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
       lockNowBtn: document.getElementById("lockNowBtn"),
+      faceUnlockBtn: document.getElementById("faceUnlockBtn"),
+      setupFaceBtn: document.getElementById("setupFaceBtn"),
+      usePinBtn: document.getElementById("usePinBtn"),
+      pinRow: document.getElementById("pinRow"),
       pinInput: document.getElementById("pinInput"),
       pinSubmitBtn: document.getElementById("pinSubmitBtn"),
-      pinSetupBtn: document.getElementById("pinSetupBtn"),
       installHint: document.getElementById("installHint"),
       toast: document.getElementById("toast"),
     };
@@ -310,7 +317,7 @@
     let toastTimer = null;
     let idleTimer = null;
     let busy = false;
-    let setupMode = false;
+    let pinMode = false;
 
     function toast(msg) {
       els.toast.textContent = msg;
@@ -319,8 +326,83 @@
       toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
     }
 
-    // Drop old passkey Face ID credential if present.
-    try { localStorage.removeItem("sm.auth.face.cred.v1"); } catch (_) {}
+    function b64urlFromBuf(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function bufFromB64url(s) {
+      const pad = "=".repeat((4 - (s.length % 4)) % 4);
+      const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function randomBytes(n) {
+      const out = new Uint8Array(n);
+      crypto.getRandomValues(out);
+      return out;
+    }
+    function loadFaceCredId() {
+      return localStorage.getItem(FACE_KEY) || "";
+    }
+    function saveFaceCredId(id) {
+      localStorage.setItem(FACE_KEY, id);
+    }
+    async function faceAvailable() {
+      try {
+        if (!window.PublicKeyCredential) return false;
+        if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+          return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    async function enrollFaceId() {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32),
+          rp: { name: "ServerManager Auth", id: location.hostname },
+          user: {
+            id: randomBytes(16),
+            name: "sm-auth-iphone",
+            displayName: "SM Auth",
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+            residentKey: "preferred",
+          },
+          timeout: 90_000,
+        },
+      });
+      if (!cred || !cred.rawId) throw new Error("Face ID setup failed");
+      saveFaceCredId(b64urlFromBuf(cred.rawId));
+      return true;
+    }
+    async function verifyFaceId() {
+      const id = loadFaceCredId();
+      if (!id) throw new Error("Face ID is not set up yet");
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: randomBytes(32),
+          rpId: location.hostname,
+          allowCredentials: [{ type: "public-key", id: bufFromB64url(id) }],
+          userVerification: "required",
+          timeout: 90_000,
+        },
+      });
+      if (!assertion) throw new Error("Face ID cancelled");
+      return true;
+    }
 
     async function hashPin(pin) {
       const data = new TextEncoder().encode(`sm-auth-iphone:${pin}`);
@@ -329,12 +411,6 @@
     }
     function loadPinHash() {
       return localStorage.getItem(PIN_KEY) || "";
-    }
-    function savePinHash(hash) {
-      localStorage.setItem(PIN_KEY, hash);
-    }
-    function clearPinHash() {
-      localStorage.removeItem(PIN_KEY);
     }
 
     function loadAccount() {
@@ -354,7 +430,7 @@
       localStorage.setItem(STORE_KEY, JSON.stringify(next));
       account = next;
       unlocked = false;
-      setupMode = !loadPinHash();
+      pinMode = false;
       render();
     }
     function parseHash() {
@@ -433,7 +509,7 @@
     }
     function lockNow(msg) {
       unlocked = false;
-      setupMode = false;
+      pinMode = false;
       els.codeView.textContent = "------";
       els.pinInput.value = "";
       clearTimeout(idleTimer);
@@ -441,6 +517,7 @@
       if (msg) toast(msg);
     }
     function render() {
+      const hasFace = !!loadFaceCredId();
       const hasPin = !!loadPinHash();
       if (!account) {
         els.lockView.hidden = true;
@@ -458,15 +535,25 @@
         els.codePane.hidden = true;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
-        const needSetup = setupMode || !hasPin;
-        els.lockTitle.textContent = needSetup ? "Create PIN" : "Enter PIN";
-        els.lockSub.textContent = needSetup
-          ? "Choose a 4–8 digit PIN. Stored only on this iPhone — no passkey."
-          : "Unlock with your app PIN to see ServerManager codes.";
-        els.pinSubmitBtn.textContent = needSetup ? "Save PIN" : "Unlock";
-        els.pinSetupBtn.hidden = needSetup || !hasPin;
-        els.pinSetupBtn.textContent = "Change PIN";
-        setTimeout(() => els.pinInput.focus(), 40);
+        if (pinMode && hasPin) {
+          els.lockTitle.textContent = "Enter PIN";
+          els.lockSub.textContent = "Unlock with your app PIN.";
+          els.faceUnlockBtn.hidden = true;
+          els.setupFaceBtn.hidden = true;
+          els.usePinBtn.hidden = true;
+          els.pinRow.hidden = false;
+          setTimeout(() => els.pinInput.focus(), 40);
+        } else {
+          els.lockTitle.textContent = "Face ID required";
+          els.lockSub.textContent = hasFace
+            ? "Unlock with Face ID to see your ServerManager codes."
+            : "Set up Face ID once (uses Apple Passkey), then unlock with Face ID.";
+          els.faceUnlockBtn.hidden = !hasFace;
+          els.setupFaceBtn.hidden = hasFace;
+          els.setupFaceBtn.textContent = "Set up Face ID";
+          els.usePinBtn.hidden = !hasPin;
+          els.pinRow.hidden = true;
+        }
       } else {
         els.lockView.hidden = true;
         els.codePane.hidden = false;
@@ -485,24 +572,46 @@
       finally { busy = false; }
     }
 
-    async function submitPin() {
-      const pin = String(els.pinInput.value || "").replace(/\D+/g, "");
-      if (pin.length < 4 || pin.length > 8) {
-        toast("PIN must be 4–8 digits");
-        return;
-      }
-      const hasPin = !!loadPinHash();
-      const needSetup = setupMode || !hasPin;
-      const hashed = await hashPin(pin);
-      if (needSetup) {
-        savePinHash(hashed);
-        setupMode = false;
+    els.faceUnlockBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        await verifyFaceId();
         unlocked = true;
-        els.pinInput.value = "";
+        pinMode = false;
         render();
-        toast("PIN saved");
+        toast("Unlocked");
+      } catch (err) {
+        unlocked = false;
+        render();
+        toast(String(err?.message || err || "Face ID failed"));
+      }
+    }));
+    els.setupFaceBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        if (!(await faceAvailable())) {
+          toast("Face ID not available in this browser");
+          return;
+        }
+        await enrollFaceId();
+        unlocked = true;
+        pinMode = false;
+        render();
+        toast("Face ID enabled");
+      } catch (err) {
+        toast(String(err?.message || err || "Face ID setup cancelled"));
+      }
+    }));
+    els.usePinBtn.addEventListener("click", () => {
+      pinMode = true;
+      els.pinInput.value = "";
+      render();
+    });
+    els.pinSubmitBtn.addEventListener("click", () => withBusy(async () => {
+      const pin = String(els.pinInput.value || "").replace(/\D+/g, "");
+      if (pin.length < 4) {
+        toast("Enter your PIN");
         return;
       }
+      const hashed = await hashPin(pin);
       if (hashed !== loadPinHash()) {
         els.pinInput.value = "";
         toast("Incorrect PIN");
@@ -510,22 +619,15 @@
         return;
       }
       unlocked = true;
+      pinMode = false;
       els.pinInput.value = "";
       render();
       toast("Unlocked");
-    }
-
-    els.pinSubmitBtn.addEventListener("click", () => withBusy(submitPin));
-    els.pinSetupBtn.addEventListener("click", () => {
-      setupMode = true;
-      unlocked = false;
-      els.pinInput.value = "";
-      render();
-    });
+    }));
     els.pinInput.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
         ev.preventDefault();
-        withBusy(submitPin);
+        els.pinSubmitBtn.click();
       }
     });
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
@@ -555,11 +657,10 @@
     if (fromHash) {
       saveAccount(fromHash);
       history.replaceState(null, "", location.pathname);
-      toast(loadPinHash() ? "Account saved" : "Account saved — create a PIN");
+      toast(loadFaceCredId() ? "Account saved" : "Account saved — set up Face ID");
     } else {
       account = loadAccount();
       unlocked = false;
-      setupMode = !!(account && !loadPinHash());
       render();
     }
     setInterval(tick, 250);
