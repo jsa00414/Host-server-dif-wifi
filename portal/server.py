@@ -7329,9 +7329,12 @@ def build_security_status() -> dict:
         3389: "RDP forward",
         4000: "Windows RDP forward",
     }
-    vpn_only_ports = {
-        int(p) for p in (ufw.get("vpn_only_ports") or []) if str(p).isdigit() or isinstance(p, int)
-    }
+    vpn_only_ports: set[int] = set()
+    for p in ufw.get("vpn_only_ports") or []:
+        try:
+            vpn_only_ports.add(int(p))
+        except (TypeError, ValueError):
+            continue
     exposures: list[dict] = []
     for port, label in exposure_labels.items():
         listening_public = any(
@@ -8682,35 +8685,49 @@ def apply_portal_settings(payload: dict) -> dict:
 
 
 def _github_api_json(
-    url: str, token: str, timeout: float = 8.0
+    url: str,
+    token: str,
+    timeout: float = 8.0,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
 ) -> tuple[int, dict]:
-    """GET a GitHub API URL with a bearer token. Returns (status, json_or_empty)."""
+    """Call a GitHub API URL with a bearer token. Returns (status, json_or_empty)."""
     import json as _json
     import urllib.error
     import urllib.request
 
+    data_bytes = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ServerManager-Backup",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    method = (method or "GET").upper()
+    if body is not None:
+        data_bytes = _json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        if method == "GET":
+            method = "POST"
     req = urllib.request.Request(
         url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "ServerManager-Backup",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        method="GET",
+        data=data_bytes,
+        headers=headers,
+        method=method,
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+            raw = resp.read().decode("utf-8", errors="replace")
             try:
-                data = _json.loads(body) if body else {}
+                data = _json.loads(raw) if raw else {}
             except Exception:
                 data = {}
             return int(resp.status), data if isinstance(data, dict) else {}
     except urllib.error.HTTPError as exc:
         try:
-            body = exc.read().decode("utf-8", errors="replace")
-            data = _json.loads(body) if body else {}
+            raw = exc.read().decode("utf-8", errors="replace")
+            data = _json.loads(raw) if raw else {}
         except Exception:
             data = {}
         return int(exc.code), data if isinstance(data, dict) else {}
@@ -8782,6 +8799,38 @@ def check_github_backup_token(
             "http_status": status,
             "private": bool(data.get("private")),
         }
+
+    # Fine-grained PATs often report repo permissions.push=true (account role) while
+    # the token itself lacks Contents: Read and write — prove write with a blob create.
+    blob_status, blob_data = _github_api_json(
+        f"https://api.github.com/repos/{owner}/{repo}/git/blobs",
+        token,
+        method="POST",
+        body={"content": "c20=", "encoding": "base64"},  # "sm"
+    )
+    if blob_status in (401, 403):
+        msg = str((blob_data or {}).get("message") or "forbidden")
+        kind = "fine-grained" if token.startswith("github_pat_") else "PAT"
+        return {
+            "ok": False,
+            "error": (
+                f"Token authenticates but cannot write to {owner}/{repo} ({msg}). "
+                f"For a {kind} token: grant Contents: Read and write on that repo "
+                "(or use a classic PAT with repo scope), then save again."
+            ),
+            "http_status": blob_status,
+            "private": bool(data.get("private")),
+        }
+    if blob_status not in (200, 201) and blob_status != 0:
+        # Non-auth failures (422 etc.) still mean the token reached Contents write.
+        if blob_status >= 500 or blob_status == 404:
+            return {
+                "ok": False,
+                "error": f"GitHub Contents check failed (HTTP {blob_status}) for {owner}/{repo}",
+                "http_status": blob_status,
+                "private": bool(data.get("private")),
+            }
+
     return {
         "ok": True,
         "error": "",
