@@ -1,71 +1,69 @@
-# USB encrypted key vault (Windows)
+# USB encrypted key vault
 
-Creates a **private virtual drive (VHDX)** on a USB stick and stores your SSH
-private key inside it. Mount the vault only when you need admin access; dismount
-when done so the key is not sitting unlocked on the PC.
+Creates a **private virtual drive** on a USB stick and stores your SSH private
+key inside it. Mount only when you need admin access; dismount when done so the
+key is not sitting unlocked.
 
 ## Important limitation
 
 This is **not** the same as a YubiKey / TPM hardware key.
 
-| | USB VHDX vault (this) | YubiKey / TPM |
+| | USB vault (this) | YubiKey / TPM |
 |---|---|---|
 | Key leaves the device? | Yes, while vault is unlocked | No (signs inside the chip) |
 | If malware runs while unlocked | Key can be stolen | Much harder |
-| Offline theft of USB | Protected if BitLocker password is strong | PIN + touch still required |
+| Offline theft of USB | Protected by LUKS / BitLocker password | PIN + touch still required |
 
-Use this as a **strong improvement** over keys living in `C:\Users\…\.ssh`.
-For true hardware-backed portal step-up, add WebAuthn / YubiKey later.
+## Proxmox host (primary — ~128GB Norelsys stick)
 
-## Requirements
+Your key stick is the **Norelsys ~128GB** flash drive on the Proxmox PC
+(`/dev/disk/by-id/usb-NORELSYS_1081_…`). The **WD Elements** Plex drive is
+never used.
 
-- Windows 10/11
-- PowerShell **as Administrator** (creating/mounting VHDX + BitLocker)
-- OpenSSH Client optional (`ssh-keygen`, `ssh-add`) — Windows optional feature
-- A USB drive with ~1 GB free
+Requires root on Proxmox (or run via VPS hop).
 
-## Quick start (on the PC where the USB is plugged in)
+```bash
+# From this repo (cloud agent / laptop with VPS access):
+python3 portal/scripts/security/usb-key-vault/run-usb-key-vault-via-vps.py setup
 
-```powershell
-cd path\to\repo\portal\scripts\security\usb-key-vault
+# Or on the Proxmox host directly:
+cd /path/to/usb-key-vault
+USB_BY_ID=/dev/disk/by-id/usb-NORELSYS_1081_F9CB2147CF3A-0:0 \
+  bash ./new-sm-usb-key-vault.sh          # prints LUKS passphrase once — save it
+bash ./new-sm-usb-ssh-key.sh             # prints public key for portal
+bash ./dismount-sm-usb-key-vault.sh
 
-# 1) Create 256 MB encrypted virtual drive on the USB
-.\New-SmUsbKeyVault.ps1 -SizeMB 256 -BitLocker
-
-# 2) Generate an ed25519 key inside the vault (do not copy the private key off it)
-.\New-SmUsbSshKey.ps1 -Comment "james@vpstruelord-usb"
-
-# 3) When you need SSH: mount + load into agent (asks confirmation)
-.\Mount-SmUsbKeyVault.ps1 -AddToSshAgent
-
-# 4) When finished: unload agent key + dismount vault
-.\Dismount-SmUsbKeyVault.ps1
+# Later, when you need SSH:
+PASSPHRASE='…' bash ./mount-sm-usb-key-vault.sh
+# optional: ADD_TO_SSH_AGENT=1 …
+bash ./dismount-sm-usb-key-vault.sh
 ```
 
-Copy the **public** key (`.pub`) into the portal Security → VPS SSH keys panel
-(or `authorized_keys`). Keep the **private** key only on the USB vault.
-
-## Files created on the USB
+### Layout on the USB
 
 ```
-<USB>:\ServerManagerKeyVault\
-  ServerManagerKeys.vhdx          # virtual drive image
-  vault-meta.json                 # mount hints (no secrets)
+<USB>:/ServerManagerKeyVault/
+  ServerManagerKeys.img     # LUKS2 virtual drive (~256 MB)
+  vault-meta.json           # mount hints (no secrets)
 ```
 
-Inside the mounted vault volume (drive letter varies):
+Inside the unlocked vault (`/mnt/sm-key-vault`):
 
 ```
-\ssh\
-  id_ed25519                      # private key (never leave the vault)
-  id_ed25519.pub                  # public key (safe to copy)
+/ssh/
+  id_ed25519                # private key (never leave the vault)
+  id_ed25519.pub            # public key (safe to copy)
   README.txt
 ```
 
-## Tips
+Copy the **public** key into portal Security → VPS SSH keys. Keep the
+**private** key only on the USB vault.
 
-- Prefer **BitLocker** (`-BitLocker`) so a lost USB is not readable.
-- After mounting, confirm the vault drive letter in Explorer before generating keys.
-- Use `ssh-add -D` (or `Dismount-SmUsbKeyVault.ps1`) so keys do not stay in the agent.
-- For portal login step-up, this vault does not replace Authenticator TOTP yet —
-  that needs WebAuthn in the portal (separate work).
+## Windows PC (optional)
+
+PowerShell scripts (`New-SmUsbKeyVault.ps1`, etc.) create a VHDX + BitLocker
+vault the same way if the stick is plugged into a Windows machine instead.
+
+## Out of scope
+
+True hardware-backed portal step-up (WebAuthn / YubiKey) is separate work.
