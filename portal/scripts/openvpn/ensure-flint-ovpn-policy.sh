@@ -28,7 +28,20 @@ for s in $(uci show ovpnclient 2>/dev/null | sed -n "s/^\(ovpnclient\.[^=]*\)\.l
 done
 uci commit route_policy
 uci commit ovpnclient
+# Firmware 4.11+ gl-dns-v2: keep Automatic mode. Do not force server=10.9.0.1
+# (VPS has no DNS on the OVPN VIP). Disable override_vpn so VPN-marked
+# traffic can use pushed AdGuard (10.42.42.44) when policy uses the tunnel.
+uci set gl-dns-v2.@dns[0].mode='auto' 2>/dev/null || true
+uci set gl-dns-v2.@dns[0].override_vpn='0' 2>/dev/null || true
+uci set gl-dns-v2.@dns[0].manual_enable='0' 2>/dev/null || true
+uci commit gl-dns-v2 2>/dev/null || true
+# Drop legacy forced upstream to OVPN VIP if present
+while uci -q delete dhcp.@dnsmasq[0].server; do :; done
+uci set dhcp.@dnsmasq[0].noresolv='0' 2>/dev/null || true
+uci commit dhcp 2>/dev/null || true
+/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true
+ip route replace 10.42.42.0/24 dev ovpnclient1 table 1011 2>/dev/null || true
 /etc/init.d/vpn-client reload 2>/dev/null || true
 ip rule del from all iif br-lan blackhole 2>/dev/null || true
-echo "flint ovpn policy mode=$(uci get route_policy.global.mode) local_access=1"
+echo "flint ovpn policy mode=$(uci get route_policy.global.mode) local_access=1 dns=$(uci get gl-dns-v2.@dns[0].mode 2>/dev/null) override_vpn=$(uci get gl-dns-v2.@dns[0].override_vpn 2>/dev/null)"
 REMOTE
