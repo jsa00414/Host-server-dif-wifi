@@ -5582,6 +5582,7 @@ UFW_REQUIRED = {
     (5002, "tcp"),  # portal cleartext HTTP — VPN/LAN only by default
     (2121, "tcp"),  # NAS FTP gateway
     (1445, "tcp"),  # NAS SMB gateway forward
+    (5001, "tcp"),  # WireGuard Easy UI (not the :5000/udp tunnel)
 }
 
 UFW_ROW_RE = re.compile(
