@@ -10639,7 +10639,10 @@ def check_credentials(username: str, password: str) -> bool:
 EMAIL_CODE_TO = os.environ.get(
     "EMAIL_CODE_TO", "portalvpsserver@truemailor.com"
 ).strip()
-EMAIL_CODE_FROM = os.environ.get("EMAIL_CODE_FROM", "admin@truemailor.com").strip()
+EMAIL_CODE_FROM = os.environ.get(
+    "EMAIL_CODE_FROM", "portal@truemailor.com"
+).strip()
+PORTAL_SMTP_USER = os.environ.get("PORTAL_SMTP_USER", EMAIL_CODE_FROM).strip()
 EMAIL_CODE_TTL_SECONDS = int(os.environ.get("EMAIL_CODE_TTL_SECONDS", "600"))
 EMAIL_CODE_COOLDOWN_SECONDS = int(os.environ.get("EMAIL_CODE_COOLDOWN_SECONDS", "45"))
 _email_codes: dict[str, dict] = {}
@@ -10647,7 +10650,18 @@ _email_codes_lock = threading.Lock()
 _email_code_last_send: dict[str, float] = {}
 
 
-def _truemail_admin_password() -> str:
+def _portal_smtp_password() -> str:
+    """Password for the portal-only send mailbox (portal@…), not admin webmail."""
+    direct = (os.environ.get("PORTAL_SMTP_PASS") or "").strip()
+    if direct:
+        return direct
+    b64 = (os.environ.get("PORTAL_SMTP_PASS_B64") or "").strip()
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    # Legacy fallback while migrating off admin@
     for path in (
         Path(os.environ.get("TRUEMAIL_ENV", "/opt/truemail/.env")),
         Path(__file__).resolve().parent.parent / "truemail" / ".env",
@@ -10675,9 +10689,10 @@ def _smtp_send_email(
     from email.message import EmailMessage
     from email.utils import formatdate, make_msgid
 
-    pw = _truemail_admin_password()
+    user = PORTAL_SMTP_USER or EMAIL_CODE_FROM
+    pw = _portal_smtp_password()
     if not pw:
-        raise RuntimeError("True Mail admin password not configured")
+        raise RuntimeError("Portal SMTP password not configured (PORTAL_SMTP_PASS)")
 
     msg = EmailMessage()
     msg["From"] = f"ServerManager <{EMAIL_CODE_FROM}>"
@@ -10700,7 +10715,7 @@ def _smtp_send_email(
         s.ehlo()
         s.starttls(context=ctx)
         s.ehlo()
-        s.login(EMAIL_CODE_FROM, pw)
+        s.login(user, pw)
         s.send_message(msg)
 
 
