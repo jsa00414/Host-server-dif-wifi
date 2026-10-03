@@ -4954,7 +4954,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 "/static/auth-app.html /static/auth-app-iphone.html "
                 "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
                 "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
-                "/static/auth-app-icon-512.png "
+                "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
                 "/download/ServerManagerAuthenticator.exe "
                 "/api/auth-app/windows-exe"
             )
@@ -10968,9 +10968,21 @@ def portal_login_2fa_method() -> str:
     return "email"
 
 
-def begin_portal_login(*, username: str, password: str, client_ip: str = "") -> dict:
+def begin_portal_login(
+    *,
+    username: str,
+    password: str,
+    client_ip: str = "",
+    circle_lease_ok: bool = False,
+) -> dict:
     """Step 1: password OK → issue pending login and request 2FA code."""
     ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        # Key-bound sticky WAN must present Authenticator circle lease cookie.
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
     if not check_credentials(username, password):
         st = ip_jail_record_failure(client_ip, reason="login_password")
         if st.get("locked"):
@@ -11318,8 +11330,13 @@ AUTH_APP_TOTP_MAX_FAILS = IP_JAIL_MAX_FAILS
 AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "86400"))
 AUTH_APP_TOTP_LOCKOUT = IP_JAIL_LOCKOUT_SECONDS
 AUTH_APP_MAX_DEVICES = int(os.environ.get("AUTH_APP_MAX_DEVICES", "8"))
+CIRCLE_LEASE_COOKIE = "sm_circle_lease"
+CIRCLE_LEASE_HOURS = float(os.environ.get("CIRCLE_LEASE_HOURS", "12"))
+CIRCLE_PROOF_MAX_SKEW = int(os.environ.get("CIRCLE_PROOF_MAX_SKEW", "120"))
 _ip_jail_lock = threading.RLock()
 _auth_app_totp_lock = _ip_jail_lock  # backwards-compatible alias
+_circle_nonces_lock = threading.Lock()
+_circle_nonces: dict[str, float] = {}
 STICKY_VPN_IPS_PATH = Path(
     os.environ.get(
         "STICKY_VPN_IPS_FILE",
@@ -11500,6 +11517,295 @@ def _caddy_denied_wan_lines(indent: str) -> list[str]:
     ]
 
 
+def _b64url_decode(raw: str) -> bytes:
+    s = str(raw or "").strip()
+    if not s:
+        return b""
+    pad = "=" * ((4 - len(s) % 4) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("ascii"))
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _normalize_ed25519_pubkey(raw: str) -> str:
+    """Return canonical urlsafe-b64 of a 32-byte Ed25519 public key."""
+    s = str(raw or "").strip()
+    if not s:
+        raise ValueError("public key required")
+    # Accept raw base64/base64url or SSH-style "ssh-ed25519 AAAA... comment"
+    if s.startswith("ssh-ed25519 "):
+        parts = s.split()
+        if len(parts) < 2:
+            raise ValueError("invalid ssh-ed25519 public key")
+        blob = base64.b64decode(parts[1])
+        # OpenSSH wire: string "ssh-ed25519" + string key(32)
+        if len(blob) < 4:
+            raise ValueError("invalid ssh-ed25519 public key")
+        # Find last 32 bytes as key material (common layout)
+        if len(blob) >= 51:
+            key = blob[-32:]
+        else:
+            raise ValueError("invalid ssh-ed25519 public key length")
+    else:
+        try:
+            key = _b64url_decode(s)
+        except Exception as exc:
+            raise ValueError("invalid public key encoding") from exc
+        if len(key) != 32:
+            # try standard base64
+            try:
+                key = base64.b64decode(s + "==")
+            except Exception as exc:
+                raise ValueError("public key must be 32-byte Ed25519") from exc
+        if len(key) != 32:
+            raise ValueError("public key must be 32-byte Ed25519")
+    return _b64url_encode(key)
+
+
+def _circle_key_id(pub_b64: str) -> str:
+    raw = _b64url_decode(_normalize_ed25519_pubkey(pub_b64))
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _circle_lease_secret() -> bytes:
+    # Derive from panel password material when present; else stable host secret file.
+    material = (AUTH_PASS or os.environ.get("CIRCLE_LEASE_SECRET") or "").encode()
+    if not material:
+        material = b"servermanager-circle-lease"
+    return hashlib.sha256(b"sm-circle-lease-v1:" + material).digest()
+
+
+def _verify_ed25519(*, pubkey_b64: str, message: str, signature_b64: str) -> bool:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(
+            _b64url_decode(_normalize_ed25519_pubkey(pubkey_b64))
+        )
+        pub.verify(_b64url_decode(signature_b64), message.encode("utf-8"))
+        return True
+    except (InvalidSignature, ValueError, TypeError, Exception):
+        return False
+
+
+def _circle_proof_message(
+    *,
+    ts: int,
+    nonce: str,
+    ip: str,
+    method: str,
+    path: str,
+    body_sha256: str,
+) -> str:
+    return "\n".join(
+        [
+            "SM-CIRCLE-V1",
+            str(int(ts)),
+            str(nonce),
+            str(ip or ""),
+            str(method or "GET").upper(),
+            str(path or "/"),
+            str(body_sha256 or ""),
+        ]
+    )
+
+
+def _purge_circle_nonces(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    with _circle_nonces_lock:
+        dead = [k for k, exp in _circle_nonces.items() if exp <= ts]
+        for k in dead:
+            _circle_nonces.pop(k, None)
+
+
+def _circle_pubkey_for_ip(ip: str) -> str:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n:
+        return ""
+    # Prefer allowlist binding.
+    try:
+        data = _read_vpn_allowlist()
+        for row in data.get("allowed") or []:
+            if isinstance(row, dict) and _normalize_vpn_ip(row.get("ip", "")) == ip_n:
+                pub = str(row.get("pubkey") or "").strip()
+                if pub:
+                    return _normalize_ed25519_pubkey(pub)
+    except Exception:
+        pass
+    # Auth-app enrolled LAN devices.
+    try:
+        for row in _read_auth_app_devices().get("devices") or []:
+            if not isinstance(row, dict):
+                continue
+            if _normalize_vpn_ip(row.get("ip", "")) != ip_n:
+                continue
+            pub = str(row.get("pubkey") or "").strip()
+            if pub:
+                return _normalize_ed25519_pubkey(pub)
+    except Exception:
+        pass
+    return ""
+
+
+def _is_vpn_pool_client_ip(ip: str) -> bool:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip_n):
+        return False
+    parts = [int(x) for x in ip_n.split(".")]
+    if parts[0] == 10 and parts[1] in (8, 9, 10, 11, 42):
+        return True
+    if parts[0] == 100 and 64 <= parts[1] <= 127:
+        return True
+    if parts[0] == 127:
+        return True
+    return False
+
+
+def client_needs_circle_lease(client_ip: str) -> bool:
+    """Public sticky WAN with a bound key must present a circle lease (anti-spoof)."""
+    ip_n = _normalize_vpn_ip(client_ip)
+    if not ip_n or _is_vpn_pool_client_ip(ip_n) or _is_home_lan_ipv4(ip_n):
+        return False
+    if not _is_public_ipv4(ip_n):
+        return False
+    if _is_denied_vpn_ip(ip_n):
+        return False
+    return bool(_circle_pubkey_for_ip(ip_n))
+
+
+def parse_circle_lease_cookie(header: str | None) -> dict | None:
+    if not header:
+        return None
+    jar = SimpleCookie()
+    try:
+        jar.load(header)
+    except Exception:
+        return None
+    morsel = jar.get(CIRCLE_LEASE_COOKIE)
+    if not morsel or not morsel.value:
+        return None
+    raw = str(morsel.value)
+    if "." not in raw:
+        return None
+    payload_b64, sig = raw.rsplit(".", 1)
+    expect = hmac.new(
+        _circle_lease_secret(), payload_b64.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expect, sig):
+        return None
+    try:
+        data = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if float(data.get("exp") or 0) <= time.time():
+        return None
+    return data
+
+
+def circle_lease_valid_for_request(handler: "Handler") -> bool:
+    client_ip = request_client_ip(handler)
+    if not client_needs_circle_lease(client_ip):
+        return True
+    lease = parse_circle_lease_cookie(handler.headers.get("Cookie"))
+    if not lease:
+        return False
+    return _normalize_vpn_ip(lease.get("ip", "")) == _normalize_vpn_ip(client_ip)
+
+
+def issue_circle_lease(*, ip: str, key_id: str) -> tuple[str, dict]:
+    ip_n = _normalize_vpn_ip(ip)
+    pub = _circle_pubkey_for_ip(ip_n)
+    if not pub:
+        raise ValueError("No circle key is bound to this IP yet — approve/enroll with a key first")
+    if key_id and key_id != _circle_key_id(pub):
+        raise ValueError("Circle key id does not match the key bound to this IP")
+    now = time.time()
+    payload = {
+        "ip": ip_n,
+        "kid": _circle_key_id(pub),
+        "iat": int(now),
+        "exp": int(now + max(300.0, CIRCLE_LEASE_HOURS * 3600)),
+    }
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(
+        _circle_lease_secret(), payload_b64.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    token = f"{payload_b64}.{sig}"
+    cookie = (
+        f"{CIRCLE_LEASE_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; "
+        f"Max-Age={int(max(300.0, CIRCLE_LEASE_HOURS * 3600))}"
+    )
+    return cookie, payload
+
+
+def verify_circle_device_proof(
+    handler: "Handler",
+    *,
+    body_text: str = "",
+    claimed_ip: str = "",
+    require_existing_bind: bool = True,
+) -> dict:
+    """Verify Ed25519 proof headers; optionally require pubkey already bound to IP."""
+    pub_h = str(handler.headers.get("X-SM-Circle-Pub") or "").strip()
+    sig_h = str(handler.headers.get("X-SM-Circle-Sig") or "").strip()
+    ts_h = str(handler.headers.get("X-SM-Circle-Ts") or "").strip()
+    nonce_h = str(handler.headers.get("X-SM-Circle-Nonce") or "").strip()
+    ip_h = _normalize_vpn_ip(
+        claimed_ip
+        or handler.headers.get("X-SM-Circle-Ip")
+        or handler.headers.get("X-SM-Lan-Ip")
+        or ""
+    )
+    if not pub_h or not sig_h or not ts_h or not nonce_h or not ip_h:
+        raise ValueError(
+            "Circle crypto proof required (X-SM-Circle-Pub/Sig/Ts/Nonce/Ip)"
+        )
+    try:
+        ts = int(ts_h)
+    except ValueError as exc:
+        raise ValueError("invalid circle proof timestamp") from exc
+    now = int(time.time())
+    if abs(now - ts) > max(30, CIRCLE_PROOF_MAX_SKEW):
+        raise ValueError("circle proof timestamp skew too large")
+    pub = _normalize_ed25519_pubkey(pub_h)
+    if require_existing_bind:
+        bound = _circle_pubkey_for_ip(ip_h)
+        if not bound:
+            raise ValueError("No circle key bound to this IP")
+        if bound != pub:
+            raise ValueError("Circle public key does not match the key bound to this IP")
+    path = urlparse(handler.path).path
+    method = str(handler.command or "GET").upper()
+    body_sha = hashlib.sha256((body_text or "").encode("utf-8")).hexdigest()
+    msg = _circle_proof_message(
+        ts=ts,
+        nonce=nonce_h,
+        ip=ip_h,
+        method=method,
+        path=path,
+        body_sha256=body_sha,
+    )
+    if not _verify_ed25519(pubkey_b64=pub, message=msg, signature_b64=sig_h):
+        raise ValueError("Circle signature verification failed")
+    _purge_circle_nonces(now)
+    nonce_key = f"{pub}:{nonce_h}"
+    with _circle_nonces_lock:
+        if nonce_key in _circle_nonces:
+            raise ValueError("Circle proof nonce reused")
+        _circle_nonces[nonce_key] = float(now + max(30, CIRCLE_PROOF_MAX_SKEW) + 30)
+    return {
+        "ok": True,
+        "ip": ip_h,
+        "pubkey": pub,
+        "key_id": _circle_key_id(pub),
+    }
+
+
 def _read_auth_app_devices() -> dict:
     data = {"devices": [], "updated_at": 0}
     if AUTH_APP_DEVICES_PATH.is_file():
@@ -11559,6 +11865,8 @@ def list_auth_app_devices() -> list[dict]:
                 "first_seen": int(row.get("first_seen") or 0),
                 "last_seen": int(row.get("last_seen") or 0),
                 "enrolled": True,
+                "key_bound": bool(str(row.get("pubkey") or "").strip()),
+                "key_id": str(row.get("key_id") or ""),
             }
         )
     rows.sort(key=lambda x: int(x.get("last_seen") or 0), reverse=True)
@@ -11618,18 +11926,25 @@ def touch_auth_app_device(
     note: str = "",
     platform: str = "",
     mode: str = "register",
+    pubkey: str = "",
 ) -> dict:
     """Record/refresh an enrolled Authenticator LAN IP for Flint pending exemption.
 
     mode=refresh — only bump last_seen for already-enrolled IPs (never trust a
     new client-supplied IP). mode=register — allow a new IP only while Security
     has new-device enrollment unlocked (limits spoofed X-SM-Lan-Ip abuse).
+
+    New registrations require an Ed25519 pubkey so the LAN IP is cryptographically
+    bound to this Authenticator install (prevents header spoofing later).
     """
     ip = _normalize_vpn_ip(lan_ip)
     if not ip or not _is_home_lan_ipv4(ip):
         raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
     mode_n = "refresh" if str(mode).lower() == "refresh" else "register"
     now = int(time.time())
+    pub_n = ""
+    if pubkey:
+        pub_n = _normalize_ed25519_pubkey(pubkey)
     data = _read_auth_app_devices()
     devices = [dict(x) for x in (data.get("devices") or []) if isinstance(x, dict)]
     by_ip = {
@@ -11643,7 +11958,14 @@ def touch_auth_app_device(
     if mode_n == "refresh":
         if not already:
             raise ValueError("LAN IP is not an enrolled Authenticator device")
+        # Refresh must prove possession of the bound key when one exists.
+        bound = str((existing or {}).get("pubkey") or "").strip()
+        if bound:
+            if not pub_n or _normalize_ed25519_pubkey(bound) != pub_n:
+                raise ValueError("Circle key required to refresh this enrolled LAN IP")
     elif not already:
+        if not pub_n:
+            raise ValueError("Ed25519 public key required to enroll Authenticator device")
         if not auth_app_device_enroll_unlocked():
             raise ValueError(
                 "New Authenticator device enrollment is locked in Security"
@@ -11672,6 +11994,12 @@ def touch_auth_app_device(
                     "lock and unlock again in Security to add another"
                 )
         newly_enrolled = True
+    elif pub_n and existing:
+        # Re-bind / rotate key on already-enrolled device when Security unlocks enrollment.
+        bound = str(existing.get("pubkey") or "").strip()
+        if bound and _normalize_ed25519_pubkey(bound) != pub_n:
+            if not auth_app_device_enroll_unlocked():
+                raise ValueError("Unlock new-device enrollment in Security to rotate circle keys")
     row = existing or {"ip": ip, "first_seen": now}
     row.update(
         {
@@ -11682,6 +12010,10 @@ def touch_auth_app_device(
             "platform": (platform or row.get("platform") or "")[:40],
         }
     )
+    if pub_n:
+        row["pubkey"] = pub_n
+        row["key_id"] = _circle_key_id(pub_n)
+        row["key_bound_at"] = now
     by_ip[ip] = row
     data["devices"] = sorted(
         by_ip.values(),
@@ -11726,6 +12058,8 @@ def touch_auth_app_device(
         "devices": data["devices"],
         "mode": mode_n,
         "newly_enrolled": newly_enrolled,
+        "key_id": str(row.get("key_id") or ""),
+        "key_bound": bool(row.get("pubkey")),
     }
 
 
@@ -12420,6 +12754,25 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
             item["auth_app_enrolled"] = True
         pending.append(item)
     allowed = _attach_circle_device_names(view.get("allowed") or [], names=names)
+    # Surface crypto binding status (fingerprint only — never raw material beyond kid).
+    enriched_allowed = []
+    for row in allowed:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        pub = str(item.pop("pubkey", "") or "").strip()
+        if pub:
+            try:
+                item["key_bound"] = True
+                item["key_id"] = str(item.get("key_id") or _circle_key_id(pub))
+            except Exception:
+                item["key_bound"] = True
+                item["key_id"] = str(item.get("key_id") or "")
+        else:
+            item["key_bound"] = False
+            item["key_id"] = ""
+        enriched_allowed.append(item)
+    allowed = enriched_allowed
     denied = _attach_circle_device_names(view.get("denied") or [], names=names)
     recent = _attach_circle_device_names(
         list(reversed(list(view.get("attempts") or [])[-40:])),
@@ -12452,7 +12805,14 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
     }
 
 
-def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = "security-ui") -> dict:
+def mutate_vpn_allowlist(
+    *,
+    action: str,
+    ip: str,
+    note: str = "",
+    source: str = "security-ui",
+    pubkey: str = "",
+) -> dict:
     ip_n = _normalize_vpn_ip(ip)
     if not ip_n or not _is_circle_candidate_ip(ip_n):
         raise ValueError("A public WAN or home LAN (192.168.8.x) IPv4 address is required")
@@ -12465,6 +12825,13 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
         )
     if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny", "pending"):
         raise ValueError("Sealed router WAN cannot be revoked, denied, or moved to pending")
+    pub_n = ""
+    if pubkey:
+        pub_n = _normalize_ed25519_pubkey(pubkey)
+    if action_n == "approve" and str(source).startswith("auth-app") and not pub_n:
+        raise ValueError(
+            "Ed25519 public key required — each circle IP must be cryptographically bound"
+        )
     data = _read_vpn_allowlist()
     now = int(time.time())
     src = (source or "security-ui").strip()[:40] or "security-ui"
@@ -12528,6 +12895,10 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
             if prev_hidden:
                 row["hidden"] = True
+            if pub_n:
+                row["pubkey"] = pub_n
+                row["key_id"] = _circle_key_id(pub_n)
+                row["key_bound_at"] = now
             data["allowed"].append(row)
     elif action_n == "deny":
         deny_row = {
@@ -17529,8 +17900,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/vpn-allowlist",
             "/api/auth-app/enroll-status",
             "/api/auth-app/register-device",
+            "/api/auth-app/circle-lease",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
+            "/static/sm-circle-crypto.js",
         ) or path.startswith("/static/auth-app"):
             pass  # public (/, /login.html serve the sign-in page when logged out)
         elif path.startswith("/static/"):
@@ -18319,11 +18692,27 @@ document.getElementById('f').onsubmit = async (e) => {
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 if lan_hint and _is_home_lan_ipv4(lan_hint):
                     try:
-                        touch_auth_app_device(
-                            lan_ip=lan_hint,
-                            note="Authenticator Circle",
-                            mode="refresh",
-                        )
+                        # Prefer crypto-bound refresh when proof headers present.
+                        pub = str(self.headers.get("X-SM-Circle-Pub") or "").strip()
+                        if pub and self.headers.get("X-SM-Circle-Sig"):
+                            verify_circle_device_proof(
+                                self,
+                                body_text="",
+                                claimed_ip=lan_hint,
+                                require_existing_bind=True,
+                            )
+                            touch_auth_app_device(
+                                lan_ip=lan_hint,
+                                note="Authenticator Circle",
+                                mode="refresh",
+                                pubkey=pub,
+                            )
+                        else:
+                            touch_auth_app_device(
+                                lan_ip=lan_hint,
+                                note="Authenticator Circle",
+                                mode="refresh",
+                            )
                     except Exception:
                         pass
                 self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
@@ -18340,13 +18729,52 @@ document.getElementById('f').onsubmit = async (e) => {
                 )
                 lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 platform = str(self.headers.get("X-SM-Platform") or "")
+                pub = str(self.headers.get("X-SM-Circle-Pub") or "").strip()
+                if pub and self.headers.get("X-SM-Circle-Sig"):
+                    verify_circle_device_proof(
+                        self,
+                        body_text="",
+                        claimed_ip=lan_ip,
+                        require_existing_bind=False,
+                    )
                 result = touch_auth_app_device(
                     lan_ip=lan_ip,
                     note="Authenticator app",
                     platform=platform,
                     mode="register",
+                    pubkey=pub,
                 )
                 self._json(200, result)
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/circle-lease":
+            try:
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                )
+                client_ip = request_client_ip(self)
+                proof = verify_circle_device_proof(
+                    self,
+                    body_text="",
+                    claimed_ip=client_ip,
+                    require_existing_bind=True,
+                )
+                if proof["ip"] != _normalize_vpn_ip(client_ip):
+                    raise ValueError("Circle proof IP must match this connection")
+                cookie, payload = issue_circle_lease(ip=proof["ip"], key_id=proof["key_id"])
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "lease": payload,
+                        "message": "This network is authorized for portal access on this browser",
+                    },
+                    extra_cookies=[cookie],
+                )
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:
@@ -18481,6 +18909,7 @@ document.getElementById('f').onsubmit = async (e) => {
                     username=user,
                     password=password,
                     client_ip=request_client_ip(self),
+                    circle_lease_ok=circle_lease_valid_for_request(self),
                 )
                 # Never create a session until 2FA succeeds.
                 self._json(200, result)
@@ -18517,12 +18946,47 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/auth-app/vpn-allowlist":
             try:
-                payload = self._read_json()
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b"{}"
+                body_text = raw.decode("utf-8") if raw else "{}"
+                try:
+                    payload = json.loads(body_text or "{}")
+                except Exception:
+                    payload = {}
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
                 require_auth_app_totp(code, client_ip=request_client_ip(self))
-                # Circle mutations refresh enrolled IPs only — never register new LAN.
+                action = str(payload.get("action") or "").strip().lower()
+                target_ip = _normalize_vpn_ip(payload.get("ip") or "")
+                pub = str(
+                    payload.get("pubkey")
+                    or self.headers.get("X-SM-Circle-Pub")
+                    or ""
+                ).strip()
+                # Approve binds a unique Ed25519 key to the IP (anti-spoof).
+                if action == "approve":
+                    if not pub:
+                        raise ValueError("pubkey required to bind circle IP")
+                    # First bind: verify signature against provided pubkey (not yet stored).
+                    verify_circle_device_proof(
+                        self,
+                        body_text=body_text,
+                        claimed_ip=target_ip,
+                        require_existing_bind=False,
+                    )
+                elif self.headers.get("X-SM-Circle-Sig"):
+                    # Mutations with an existing bind must prove key possession.
+                    claim = target_ip or _normalize_vpn_ip(
+                        self.headers.get("X-SM-Lan-Ip") or ""
+                    )
+                    if claim and _circle_pubkey_for_ip(claim):
+                        verify_circle_device_proof(
+                            self,
+                            body_text=body_text,
+                            claimed_ip=claim,
+                            require_existing_bind=True,
+                        )
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 if lan_hint and _is_home_lan_ipv4(lan_hint):
                     try:
@@ -18535,14 +18999,16 @@ document.getElementById('f').onsubmit = async (e) => {
                                 or ""
                             ),
                             mode="refresh",
+                            pubkey=pub if _circle_pubkey_for_ip(lan_hint) else "",
                         )
                     except Exception:
                         pass
                 result = mutate_vpn_allowlist(
-                    action=str(payload.get("action") or ""),
+                    action=action,
                     ip=str(payload.get("ip") or ""),
                     note=str(payload.get("note") or "from authenticator app"),
                     source="auth-app",
+                    pubkey=pub,
                 )
                 self._json(200, result)
             except ValueError as exc:
@@ -18553,7 +19019,13 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/auth-app/register-device":
             try:
-                payload = self._read_json()
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b"{}"
+                body_text = raw.decode("utf-8") if raw else "{}"
+                try:
+                    payload = json.loads(body_text or "{}")
+                except Exception:
+                    payload = {}
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
@@ -18562,6 +19034,18 @@ document.getElementById('f').onsubmit = async (e) => {
                 lan_ip = _normalize_vpn_ip(
                     self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
                 )
+                pub = str(
+                    payload.get("pubkey")
+                    or self.headers.get("X-SM-Circle-Pub")
+                    or ""
+                ).strip()
+                if pub:
+                    verify_circle_device_proof(
+                        self,
+                        body_text=body_text,
+                        claimed_ip=lan_ip,
+                        require_existing_bind=bool(_circle_pubkey_for_ip(lan_ip)),
+                    )
                 result = touch_auth_app_device(
                     lan_ip=lan_ip,
                     note=str(payload.get("note") or "Authenticator app"),
@@ -18571,10 +19055,44 @@ document.getElementById('f').onsubmit = async (e) => {
                         or ""
                     ),
                     mode="register",
+                    pubkey=pub,
                 )
                 self._json(200, result)
             except ValueError as exc:
                 time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/circle-lease":
+            try:
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b""
+                body_text = raw.decode("utf-8") if raw else ""
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                )
+                client_ip = request_client_ip(self)
+                proof = verify_circle_device_proof(
+                    self,
+                    body_text=body_text,
+                    claimed_ip=client_ip,
+                    require_existing_bind=True,
+                )
+                if proof["ip"] != _normalize_vpn_ip(client_ip):
+                    raise ValueError("Circle proof IP must match this connection")
+                cookie, payload = issue_circle_lease(ip=proof["ip"], key_id=proof["key_id"])
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "lease": payload,
+                        "message": "This network is authorized for portal access on this browser",
+                    },
+                    extra_cookies=[cookie],
+                )
+            except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
