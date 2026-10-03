@@ -5793,6 +5793,7 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
                 (5002, "tcp"): "portal-http-vpn",
                 (2121, "tcp"): "nas-ftp-vpn",
                 (1445, "tcp"): "nas-smb-vpn",
+                (5001, "tcp"): "wg-easy-ui-vpn",
             }
             cleaned.append(
                 {
@@ -7377,10 +7378,10 @@ def build_security_status() -> dict:
             severity = "ok"
         elif ufw_open and (listening_public or wan_open):
             severity = "high"
-        elif listening_public and wan_open and port in (3016, 5001):
-            # Exclude VPN-scoped NAS/RDP/portal ports: hairpin to public IP looks "open".
+        elif listening_public and wan_open and port in (3016,):
+            # Exclude VPN-scoped admin ports: hairpin to public IP looks "open".
             severity = "high"
-        elif listening_public and port in (3016, 5001):
+        elif listening_public and port in (3016,):
             severity = "high"
         elif listening_public or ufw_open or wan_open:
             severity = "medium"
