@@ -96,6 +96,7 @@
     .code-shell {
       flex: 1 1 auto;
       width: 100%;
+      max-width: none;
       margin: 0;
       border: 0;
       border-top: 1px solid rgba(61,222,160,.22);
@@ -112,7 +113,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 42dvh;
+      min-height: 48dvh;
     }
     .acct {
       color: var(--muted);
@@ -229,6 +230,12 @@
       border-top: 1px solid rgba(170,210,185,.08);
       border-bottom: 1px solid rgba(170,210,185,.08);
       min-height: 36dvh;
+    }
+    .empty[hidden],
+    .code-shell[hidden],
+    button[hidden],
+    .install:not(.show) {
+      display: none !important;
     }
     .toast {
       position: fixed;
