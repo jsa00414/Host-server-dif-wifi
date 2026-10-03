@@ -5572,10 +5572,14 @@ def write_and_apply(payload: dict) -> dict:
     }
 
 
+# Always-public ports the Firewall tab must never delete or VPN-restrict.
 UFW_PROTECTED = {
     (22, "tcp"),  # SSH
-    (5002, "tcp"),  # this admin UI
     (5000, "udp"),  # WireGuard tunnel
+}
+# Ports that must keep a UFW allow (never mass-deleted) but MAY be vpn_only.
+UFW_REQUIRED = {
+    (5002, "tcp"),  # portal cleartext HTTP — VPN/LAN only by default
 }
 
 UFW_ROW_RE = re.compile(
@@ -5751,7 +5755,7 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         seen.add(key)
         locked = key in UFW_PROTECTED
         if locked:
-            vpn_only = False  # never VPN-restrict SSH / UI / WG listen
+            vpn_only = False  # never VPN-restrict SSH / WG listen
         cleaned.append(
             {
                 "port": port,
@@ -5767,7 +5771,6 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         if (port, proto) not in seen:
             labels = {
                 (22, "tcp"): "SSH",
-                (5002, "tcp"): "Port forward UI",
                 (5000, "udp"): "WireGuard VPN tunnel",
             }
             cleaned.append(
@@ -5778,6 +5781,22 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
                     "comment": labels.get((port, proto), f"protected-{port}"),
                     "locked": True,
                     "vpn_only": False,
+                }
+            )
+    # Ensure required admin ports remain (VPN-only by default)
+    for port, proto in UFW_REQUIRED:
+        if (port, proto) not in seen:
+            labels = {
+                (5002, "tcp"): "portal-http-vpn",
+            }
+            cleaned.append(
+                {
+                    "port": port,
+                    "proto": proto,
+                    "action": "allow",
+                    "comment": labels.get((port, proto), f"required-{port}"),
+                    "locked": False,
+                    "vpn_only": True,
                 }
             )
     return cleaned
@@ -5851,12 +5870,15 @@ def write_firewall_state(rules: list[dict]) -> dict:
         vpn_only = _is_vpn_ufw_from(frm)
         rows.append((int(m.group("num")), port, proto, ipv6, vpn_only))
 
-    # Candidates to delete (unmanaged / vpn_only flip). Skip protected.
+    # Candidates to delete (unmanaged / vpn_only flip). Skip protected/required
+    # ports unless we are intentionally recreating them from desired state.
     delete_nums: list[tuple[int, int, str]] = []
     for num, port, proto, _ipv6, cur_vpn in rows:
         if (port, proto) in UFW_PROTECTED:
             continue
         want = desired_keys.get((port, proto))
+        if want is None and (port, proto) in UFW_REQUIRED:
+            continue  # never wipe portal HTTP allow during partial saves
         if want is None or bool(want.get("vpn_only")) != bool(cur_vpn):
             delete_nums.append((num, port, proto))
 
