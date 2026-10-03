@@ -20,6 +20,16 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/files.html", f"{REMOTE_UI}/static/files.html"),
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
+    (ROOT / "static/email-code-test.html", f"{REMOTE_UI}/static/email-code-test.html"),
+    (ROOT / "static/auth-app.html", f"{REMOTE_UI}/static/auth-app.html"),
+    (ROOT / "static/auth-app.webmanifest", f"{REMOTE_UI}/static/auth-app.webmanifest"),
+    (ROOT / "static/auth-app-sw.js", f"{REMOTE_UI}/static/auth-app-sw.js"),
+    (ROOT / "static/auth-app-iphone.html", f"{REMOTE_UI}/static/auth-app-iphone.html"),
+    (ROOT / "static/auth-app-iphone.webmanifest", f"{REMOTE_UI}/static/auth-app-iphone.webmanifest"),
+    (ROOT / "static/auth-app-iphone-sw.js", f"{REMOTE_UI}/static/auth-app-iphone-sw.js"),
+    (ROOT / "static/auth-app-icon-180.png", f"{REMOTE_UI}/static/auth-app-icon-180.png"),
+    (ROOT / "static/auth-app-icon-192.png", f"{REMOTE_UI}/static/auth-app-icon-192.png"),
+    (ROOT / "static/auth-app-icon-512.png", f"{REMOTE_UI}/static/auth-app-icon-512.png"),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
@@ -150,9 +160,25 @@ def _client() -> paramiko.SSHClient:
         "look_for_keys": False,
     }
     if key_text:
-        connect_kwargs["pkey"] = paramiko.RSAKey.from_private_key(
-            __import__("io").StringIO(key_text)
-        )
+        import io as _io
+
+        key_file = _io.StringIO(key_text)
+        last_exc: Exception | None = None
+        pkey = None
+        for loader in (
+            paramiko.Ed25519Key.from_private_key,
+            paramiko.ECDSAKey.from_private_key,
+            paramiko.RSAKey.from_private_key,
+        ):
+            try:
+                key_file.seek(0)
+                pkey = loader(key_file)
+                break
+            except Exception as exc:  # noqa: BLE001 — try next key type
+                last_exc = exc
+        if pkey is None:
+            raise RuntimeError(f"Unsupported SSH private key format: {last_exc}")
+        connect_kwargs["pkey"] = pkey
     else:
         connect_kwargs["password"] = password
     client.connect(**connect_kwargs)

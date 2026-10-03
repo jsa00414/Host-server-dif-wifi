@@ -892,9 +892,129 @@
     .sec-ssh-lock-form {
       display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
     }
-    .sec-ssh-lock-form input[type="password"] {
+    .sec-ssh-lock-form input[type="password"],
+    .sec-ssh-lock-form input[type="text"] {
       flex: 1 1 180px; max-width: 280px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
       text-align: center;
+    }
+    .sec-ssh-lock-form input[type="text"] {
+      letter-spacing: .22em; font-size: 1rem;
+    }
+    .sec-2fa-row {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+      margin: 8px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px;
+      background: rgba(0,0,0,.16);
+    }
+    .sec-2fa-row .method-label { font-size: .92rem; }
+    .sec-2fa-row .method-sub { margin-top: 4px; }
+    .sec-toggle {
+      position: relative; width: 46px; height: 26px; flex: 0 0 auto;
+    }
+    .sec-toggle input {
+      opacity: 0; width: 0; height: 0; position: absolute;
+    }
+    .sec-toggle span {
+      position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+      background: rgba(255,255,255,.08); border: 1px solid var(--line);
+      transition: background .15s ease, border-color .15s ease;
+    }
+    .sec-toggle span::before {
+      content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+      border-radius: 50%; background: #c5d5cc; transition: transform .15s ease, background .15s ease;
+    }
+    .sec-toggle input:checked + span {
+      background: rgba(61,222,160,.28); border-color: rgba(61,222,160,.55);
+    }
+    .sec-toggle input:checked + span::before {
+      transform: translateX(20px); background: var(--accent);
+    }
+    .sec-code-modal-backdrop {
+      position: fixed; inset: 0; z-index: 1200;
+      background: rgba(4, 10, 8, .72);
+      display: flex; align-items: center; justify-content: center;
+      padding: 18px;
+    }
+    .sec-code-modal {
+      width: min(360px, 100%);
+      border-radius: 16px;
+      border: 1px solid rgba(61,222,160,.28);
+      background: color-mix(in srgb, #0e1a15 94%, black);
+      box-shadow: 0 24px 60px rgba(0,0,0,.5);
+      padding: 22px 20px 18px;
+      text-align: center;
+    }
+    .sec-code-modal h3 {
+      margin: 0 0 6px; font-size: 1.05rem; letter-spacing: -.02em;
+    }
+    .sec-code-modal p {
+      margin: 0 0 14px; color: var(--muted); font-size: .8rem; line-height: 1.4;
+    }
+    .sec-code-modal input[type="text"] {
+      width: 100%; text-align: center; letter-spacing: .28em;
+      font-family: "IBM Plex Mono", monospace; font-size: 1.15rem;
+      padding: 12px 14px; border-radius: 12px;
+      border: 1px solid var(--line); background: rgba(0,0,0,.28); color: var(--text);
+    }
+    .sec-code-modal .sec-login-actions {
+      margin-top: 12px; justify-content: center;
+    }
+    .sec-2fa-methods {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+    }
+    .sec-2fa-methods button {
+      flex: 1 1 140px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      font-size: .8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sec-2fa-methods button.active {
+      border-color: rgba(61,222,160,.5);
+      background: rgba(61,222,160,.14);
+      color: #d8ffe9;
+    }
+    .sec-enroll-box {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(61,222,160,.28);
+      background: rgba(0,0,0,.22);
+      text-align: center;
+    }
+    .sec-enroll-box canvas,
+    .sec-enroll-box img {
+      width: min(200px, 70vw);
+      height: auto;
+      margin: 8px auto;
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+      display: block;
+    }
+    .sec-enroll-box .secret {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .72rem;
+      letter-spacing: .04em;
+      word-break: break-all;
+      color: var(--muted);
+      margin: 8px 0;
+    }
+    .sec-enroll-box a.primary-link {
+      display: inline-block;
+      margin: 6px 0 10px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(61,222,160,.18);
+      border: 1px solid rgba(61,222,160,.45);
+      color: #d8ffe9;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: .86rem;
     }
     .sec-ssh-lock.unlocked .sec-login-actions { justify-content: center; }
     .sec-ssh-controls[data-locked="1"] {
@@ -3614,6 +3734,10 @@
         const unlocked = !!panelLock.unlocked;
         const unlockSecs = panelLock.unlock_seconds || 300;
         const expiresIn = panelLock.expires_in || 0;
+        const twoFactor = !!panelLock.two_factor_enabled;
+        const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
+        const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
+        const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
@@ -3630,6 +3754,16 @@
           });
           scheduleSshPanelRelock(0);
         } else {
+        window.__sshUnlockNeedCode = false;
+        closeEmailCodePopup();
+        const methodLabel2fa = twoFactor
+          ? (twoFactorMethod === "app" ? "Authenticator app" : "Email")
+          : "Off";
+        const methodSub2fa = twoFactor
+          ? (twoFactorMethod === "app"
+              ? `Require a code from the phone Authenticator app when unlocking.`
+              : `Require an email code when unlocking this panel.`)
+          : `Turn on to require a second step when unlocking. Phone app recommended.`;
         sshEl.innerHTML = `
           <div class="sec-ssh-lock unlocked">
             <div class="lock-title">Unlocked ${secSev("ok")}</div>
@@ -3637,6 +3771,17 @@
             <div class="sec-login-actions">
               <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
             </div>
+          </div>
+          <div class="sec-2fa-row">
+            <div>
+              <div class="method-label">Two-factor · ${escHtml(methodLabel2fa)}</div>
+              <div class="method-sub">${escHtml(methodSub2fa)}</div>
+              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a></div>` : ""}
+            </div>
+            <label class="sec-toggle" title="Toggle two-factor">
+              <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
+              <span></span>
+            </label>
           </div>
           <div class="meta-grid">
             <div class="meta-box"><label>Login method</label><div>${escHtml(methodLabel)}</div></div>
@@ -3708,6 +3853,9 @@
             }</tbody></table>
           </div>`;
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
+          setSshPanel2fa(!!ev.target.checked);
+        });
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -3780,23 +3928,266 @@
         refreshSecurity(true);
       }, (sec + 1) * 1000);
     }
-    async function unlockSshPanel() {
-      const pass = document.getElementById("secSshUnlockPass")?.value || "";
+    function closeEmailCodePopup() {
+      document.getElementById("secCodeModal")?.remove();
+    }
+    function openEmailCodePopup({ title, subtitle, onSubmit, onCancel, enroll }) {
+      closeEmailCodePopup();
+      const backdrop = document.createElement("div");
+      backdrop.id = "secCodeModal";
+      backdrop.className = "sec-code-modal-backdrop";
+      const enrollHtml = enroll
+        ? `<div class="sec-enroll-box">
+            <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows.</div>
+            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+            <canvas id="secEnrollQr" width="180" height="180" aria-label="Authenticator QR"></canvas>
+            <div class="secret">${escHtml(enroll.secret || "")}</div>
+          </div>`
+        : "";
+      backdrop.innerHTML = `
+        <div class="sec-code-modal" role="dialog" aria-modal="true">
+          <h3>${escHtml(title || "Verification code")}</h3>
+          <p>${escHtml(subtitle || "Enter the 6-digit code.")}</p>
+          ${enrollHtml}
+          <input type="text" id="secCodeModalInput" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" />
+          <div class="sec-login-actions">
+            <button type="button" class="ghost" id="secCodeModalCancel">Cancel</button>
+            <button type="button" class="primary" id="secCodeModalSubmit">Verify</button>
+          </div>
+        </div>`;
+      document.body.appendChild(backdrop);
+      if (enroll?.otpauth_url) {
+        drawTotpQr("secEnrollQr", enroll.otpauth_url);
+      }
+      const input = document.getElementById("secCodeModalInput");
+      const submit = () => {
+        const code = input?.value || "";
+        if (!code) {
+          setStatus("Enter the verification code.", "err");
+          input?.focus();
+          return;
+        }
+        onSubmit?.(code);
+      };
+      document.getElementById("secCodeModalSubmit")?.addEventListener("click", submit);
+      document.getElementById("secCodeModalCancel")?.addEventListener("click", () => {
+        closeEmailCodePopup();
+        onCancel?.();
+      });
+      backdrop.addEventListener("click", (ev) => {
+        if (ev.target === backdrop) {
+          closeEmailCodePopup();
+          onCancel?.();
+        }
+      });
+      input?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          submit();
+        } else if (ev.key === "Escape") {
+          closeEmailCodePopup();
+          onCancel?.();
+        }
+      });
+      setTimeout(() => input?.focus(), 30);
+    }
+    function drawTotpQr(canvasId, text) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas || !text) return;
+      const run = () => {
+        if (typeof QRCode === "undefined") return;
+        QRCode.toCanvas(canvas, text, {
+          width: 180,
+          margin: 1,
+          color: { dark: "#0a0f0d", light: "#ffffff" },
+        }, () => {});
+      };
+      if (typeof QRCode !== "undefined") {
+        run();
+        return;
+      }
+      if (window.__smQrLoading) {
+        window.__smQrLoading.then(run);
+        return;
+      }
+      window.__smQrLoading = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js";
+        s.onload = () => resolve();
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+      window.__smQrLoading.then(run).catch(() => {});
+    }
+    function openEnable2faChooser({ onChoose, onCancel }) {
+      closeEmailCodePopup();
+      const backdrop = document.createElement("div");
+      backdrop.id = "secCodeModal";
+      backdrop.className = "sec-code-modal-backdrop";
+      backdrop.innerHTML = `
+        <div class="sec-code-modal" role="dialog" aria-modal="true">
+          <h3>Enable two-factor</h3>
+          <p>Use the phone Authenticator app (recommended) or email codes.</p>
+          <div class="sec-2fa-methods">
+            <button type="button" class="active" id="sec2faPickApp">Phone Authenticator app</button>
+            <button type="button" id="sec2faPickEmail">Email codes</button>
+          </div>
+          <div class="sec-login-actions">
+            <button type="button" class="ghost" id="secCodeModalCancel">Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(backdrop);
+      const finish = (method) => {
+        closeEmailCodePopup();
+        onChoose?.(method);
+      };
+      document.getElementById("sec2faPickApp")?.addEventListener("click", () => finish("app"));
+      document.getElementById("sec2faPickEmail")?.addEventListener("click", () => finish("email"));
+      document.getElementById("secCodeModalCancel")?.addEventListener("click", () => {
+        closeEmailCodePopup();
+        onCancel?.();
+      });
+      backdrop.addEventListener("click", (ev) => {
+        if (ev.target === backdrop) {
+          closeEmailCodePopup();
+          onCancel?.();
+        }
+      });
+    }
+    async function unlockSshPanel(codeFromPopup) {
+      const pass = window.__sshUnlockPassCache || document.getElementById("secSshUnlockPass")?.value || "";
+      const code = codeFromPopup || "";
       if (!pass) {
         setStatus("Enter the password to unlock.", "err");
         return;
       }
-      setStatus("Unlocking VPS login panel…");
+      const methodHint = window.__lastSecurityData?.ssh?.panel_lock?.two_factor_method || "email";
+      setStatus(code ? "Verifying code…" : "Unlocking VPS login panel…");
       try {
         const result = await api("/api/security/ssh-unlock", {
           method: "POST",
-          body: JSON.stringify({ action: "unlock", password: pass }),
-          timeoutMs: 20000,
+          body: JSON.stringify({ action: "unlock", password: pass, code }),
+          timeoutMs: 30000,
         });
+        if (result.need_code) {
+          window.__sshUnlockNeedCode = true;
+          window.__sshUnlockPassCache = pass;
+          const isApp = (result.two_factor_method || methodHint) === "app";
+          setStatus(result.message || (isApp ? "Enter authenticator code." : "Code sent."), "ok");
+          openEmailCodePopup({
+            title: isApp ? "Authenticator code" : "Email code",
+            subtitle: isApp
+              ? "Open the ServerManager Authenticator app on your phone and enter the 6-digit code."
+              : "Enter the verification code from your email.",
+            onSubmit: (c) => unlockSshPanel(c),
+            onCancel: () => {
+              window.__sshUnlockNeedCode = false;
+              window.__sshUnlockPassCache = "";
+            },
+          });
+          return;
+        }
+        window.__sshUnlockNeedCode = false;
+        window.__sshUnlockPassCache = "";
+        closeEmailCodePopup();
         setStatus(result.message || "Panel unlocked", "ok");
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
+      }
+    }
+    async function setSshPanel2fa(enabled, codeFromPopup, opts) {
+      const toggle = document.getElementById("sec2faToggle");
+      if (!enabled) {
+        if (toggle) toggle.disabled = true;
+        setStatus("Disabling two-factor…");
+        try {
+          const result = await api("/api/security/ssh-unlock", {
+            method: "POST",
+            body: JSON.stringify({ action: "2fa", enabled: false }),
+            timeoutMs: 20000,
+          });
+          window.__ssh2faEnrollSecret = "";
+          setStatus(result.message || "Two-factor disabled", "ok");
+          await refreshSecurity(true);
+        } catch (e) {
+          if (toggle) toggle.checked = true;
+          setStatus(String(e.message || e), "err");
+        } finally {
+          if (toggle) toggle.disabled = false;
+        }
+        return;
+      }
+      const method = (opts && opts.method) || window.__ssh2faMethod || "app";
+      if (!opts?.method && !codeFromPopup && !window.__ssh2faEnrollSecret) {
+        openEnable2faChooser({
+          onChoose: (picked) => setSshPanel2fa(true, "", { method: picked }),
+          onCancel: () => {
+            if (toggle) toggle.checked = false;
+          },
+        });
+        return;
+      }
+      window.__ssh2faMethod = method;
+      const pass = window.__ssh2faPassCache || prompt("Enter !!password!! to enable two-factor") || "";
+      if (!pass) {
+        if (toggle) toggle.checked = false;
+        window.__ssh2faMethod = "";
+        return;
+      }
+      window.__ssh2faPassCache = pass;
+      if (toggle) toggle.disabled = true;
+      setStatus(codeFromPopup ? "Confirming two-factor…" : (method === "app" ? "Preparing Authenticator app…" : "Sending verification code…"));
+      try {
+        const body = {
+          action: "2fa",
+          enabled: true,
+          password: pass,
+          code: codeFromPopup || "",
+          method,
+        };
+        if (window.__ssh2faEnrollSecret) {
+          body.enroll_secret = window.__ssh2faEnrollSecret;
+        }
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify(body),
+          timeoutMs: 30000,
+        });
+        if (result.need_code) {
+          if (toggle) toggle.checked = false;
+          if (result.enroll_secret) {
+            window.__ssh2faEnrollSecret = result.enroll_secret;
+          }
+          const isApp = (result.two_factor_method || method) === "app";
+          setStatus(result.message || (isApp ? "Open the Authenticator app." : "Code sent."), "ok");
+          openEmailCodePopup({
+            title: isApp ? "Set up Authenticator" : "Enable two-factor",
+            subtitle: isApp
+              ? "Open the app on your phone (or scan the QR), then enter the 6-digit code."
+              : "Enter the verification code from your email.",
+            enroll: isApp ? (result.enroll || null) : null,
+            onSubmit: (c) => setSshPanel2fa(true, c, { method }),
+            onCancel: () => {
+              window.__ssh2faPassCache = "";
+              window.__ssh2faEnrollSecret = "";
+              window.__ssh2faMethod = "";
+              if (toggle) toggle.checked = false;
+            },
+          });
+          return;
+        }
+        window.__ssh2faPassCache = "";
+        window.__ssh2faEnrollSecret = "";
+        window.__ssh2faMethod = "";
+        closeEmailCodePopup();
+        setStatus(result.message || "Two-factor enabled", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        if (toggle) toggle.checked = false;
+        setStatus(String(e.message || e), "err");
+      } finally {
+        if (toggle) toggle.disabled = false;
       }
     }
     async function lockSshPanel() {
@@ -3807,6 +4198,9 @@
           body: JSON.stringify({ action: "lock" }),
           timeoutMs: 15000,
         });
+        window.__sshUnlockNeedCode = false;
+        window.__sshUnlockPassCache = "";
+        closeEmailCodePopup();
         setStatus(result.message || "Panel locked", "ok");
         await refreshSecurity(true);
       } catch (e) {
