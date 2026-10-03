@@ -4150,9 +4150,10 @@ def _normalize_hookup_rule(rule: dict) -> dict:
     out = dict(rule)
     domain = str(out.get("domain") or "").strip().lower()
     if domain == "router.vpstruelord.com":
-        out["target_host"] = ROUTER_ADMIN_HOST
+        out["target_host"] = OVPN_FLINT_VPN_IP or ROUTER_ADMIN_HOST
         out["target_port"] = int(out.get("target_port") or 80)
-        out["target_hosts"] = [ROUTER_ADMIN_HOST]
+        out["target_hosts"] = _router_hookup_targets()
+        out["vpn_only"] = True if out.get("vpn_only") is None else out.get("vpn_only")
     elif domain == PROXMOX_PUBLIC_HOST.lower():
         out["target_host"] = PROXMOX_HOST
         out["target_port"] = int(out.get("target_port") or PROXMOX_PORT)
@@ -4281,30 +4282,66 @@ def _hookup_proxy_upstream(rule: dict) -> str:
 
 
 def _router_hookup_site_lines(rule: dict) -> list[str]:
-    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects."""
-    host = ROUTER_ADMIN_HOST
+    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects.
+
+    Prefer the OpenVPN VIP (10.9.0.2) as upstream: after router reboots/firmware
+    updates, LAN iroute to 192.168.8.1 can flap while the VIP stays reachable.
+    """
+    lan_host = ROUTER_ADMIN_HOST
+    proxy_host = OVPN_FLINT_VPN_IP or lan_host
     port = int(rule.get("target_port") or 80)
     public = ROUTER_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     lines = [
         f"{public} {{",
-        f"\treverse_proxy {host}:{port} {{",
-        f"\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto https",
-        f"\t\theader_down Location http://{host} https://{public}",
-        f"\t\theader_down Location http://{host}/ https://{public}/",
-        "\t\theader_down -X-Frame-Options",
-        "\t\theader_down -Content-Security-Policy",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
+        "\tencode gzip",
     ]
+    if vpn_only:
+        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.append("\thandle @vpn_clients {")
+        indent = "\t\t"
+    else:
+        indent = "\t"
+    lines.extend(
+        [
+            f"{indent}reverse_proxy {proxy_host}:{port} {{",
+            f"{indent}\theader_up Host {lan_host}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto https",
+            f"{indent}\theader_down Location http://{lan_host} https://{public}",
+            f"{indent}\theader_down Location http://{lan_host}/ https://{public}/",
+            f"{indent}\theader_down Location http://{proxy_host} https://{public}",
+            f"{indent}\theader_down Location http://{proxy_host}/ https://{public}/",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                '\t\trespond "Forbidden" 403',
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
