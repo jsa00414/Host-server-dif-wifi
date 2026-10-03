@@ -44,6 +44,17 @@ def is_public_ipv4(ip: str) -> bool:
     return not any(p.match(ip) for p in PRIVATE)
 
 
+def is_home_lan_ipv4(ip: str) -> bool:
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 192 or parts[1] != 168 or parts[2] != 8:
+        return False
+    if parts[3] in (0, 255, 1):
+        return False
+    return True
+
+
 def normalize_ip(raw: str) -> str:
     raw = (raw or "").strip()
     if "/" in raw:
