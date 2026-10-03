@@ -4861,16 +4861,35 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\t}")
             lines.append("\t}")
+            # NAS media streams skip gzip, but must still honor vpn_only —
+            # otherwise a stolen session cookie can cat/download off-VPN while
+            # /login.html remains VPN-gated (403).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
-            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-            lines.append("\t\t\theader_up Host {host}")
-            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
-            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\t\theader_down -X-Frame-Options")
-            lines.append("\t\t\theader_down -Content-Security-Policy")
-            lines.append("\t\t\tflush_interval -1")
-            lines.append("\t\t}")
+            if r.get("vpn_only"):
+                lines.append(f"\t\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+                lines.append("\t\thandle @vpn_clients {")
+                lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\t\theader_up Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\t\tflush_interval -1")
+                lines.append("\t\t\t}")
+                lines.append("\t\t}")
+                lines.append("\t\thandle {")
+                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.append("\t\t}")
+            else:
+                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\theader_up Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\tflush_interval -1")
+                lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
@@ -5668,9 +5687,14 @@ UFW_REQUIRED = {
 }
 
 UFW_ROW_RE = re.compile(
-    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN)\s{2,}"
+    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN|LIMIT IN)\s{2,}"
     r"(?P<frm>.+?)(?:\s+#\s*(?P<comment>.*))?$"
 )
+
+# Protected ports that stay public but use UFW "limit" (rate-cap) instead of bare allow.
+UFW_RATE_LIMITED = {
+    (22, "tcp"),  # SSH — complements fail2ban + MaxAuthTries 3
+}
 
 
 def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
@@ -5777,7 +5801,8 @@ def read_firewall_state() -> dict:
         to_raw = m.group("to")
         if "(v6)" in to_raw or "(v6)" in frm.lower():
             continue  # manage IPv4 rules; ufw allow adds v6 twin
-        if "ALLOW" not in m.group("action"):
+        action = m.group("action")
+        if "ALLOW" not in action and "LIMIT" not in action:
             continue
         port, proto, to_disp = _parse_ufw_to(to_raw)
         if port is None:
@@ -5789,17 +5814,19 @@ def read_firewall_state() -> dict:
         comment = (m.group("comment") or "").strip() or f"port-{port}"
         locked = key in UFW_PROTECTED
         vpn_only = (not locked) and _is_vpn_ufw_from(frm)
+        rate_limited = "LIMIT" in action or key in UFW_RATE_LIMITED
         rules.append(
             {
                 "id": int(m.group("num")),
                 "port": port,
                 "proto": proto,
-                "action": "allow",
+                "action": "limit" if rate_limited else "allow",
                 "from": "Anywhere" if frm.lower().startswith("anywhere") else frm,
                 "comment": comment,
                 "to": to_disp,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     return {
@@ -5828,8 +5855,8 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
             raise ValueError(f"Firewall rule {i + 1}: invalid fields") from exc
         if proto not in ("tcp", "udp"):
             raise ValueError(f"Firewall rule {i + 1}: proto must be tcp or udp")
-        if action not in ("allow",):
-            raise ValueError(f"Firewall rule {i + 1}: only allow rules are supported")
+        if action not in ("allow", "limit"):
+            raise ValueError(f"Firewall rule {i + 1}: only allow/limit rules are supported")
         if not (1 <= port <= 65535):
             raise ValueError(f"Firewall rule {i + 1}: invalid port")
         if not re.match(r"^[A-Za-z0-9 _.:/-]{1,60}$", comment):
@@ -5841,31 +5868,36 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         locked = key in UFW_PROTECTED
         if locked:
             vpn_only = False  # never VPN-restrict SSH / WG listen
+        rate_limited = key in UFW_RATE_LIMITED or str(rule.get("action", "")).lower() == "limit"
+        if rate_limited:
+            action = "limit"
         cleaned.append(
             {
                 "port": port,
                 "proto": proto,
                 "action": action,
-                "comment": comment,
+                "comment": "SSH-ratecap" if key == (22, "tcp") else comment,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     # Ensure protected rules always remain (public)
     for port, proto in UFW_PROTECTED:
         if (port, proto) not in seen:
             labels = {
-                (22, "tcp"): "SSH",
+                (22, "tcp"): "SSH-ratecap",
                 (5000, "udp"): "WireGuard VPN tunnel",
             }
             cleaned.append(
                 {
                     "port": port,
                     "proto": proto,
-                    "action": "allow",
+                    "action": "limit" if (port, proto) in UFW_RATE_LIMITED else "allow",
                     "comment": labels.get((port, proto), f"protected-{port}"),
                     "locked": True,
                     "vpn_only": False,
+                    "rate_limited": (port, proto) in UFW_RATE_LIMITED,
                 }
             )
     # Ensure required admin ports remain (VPN-only by default)
@@ -5891,7 +5923,7 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
 
 
 def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
-    """One or more `ufw allow …` argv lists (without the leading binary)."""
+    """One or more `ufw allow|limit …` argv lists (without the leading binary)."""
     port = rule["port"]
     proto = rule["proto"]
     comment = rule["comment"]
@@ -5914,7 +5946,12 @@ def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
                 ]
             )
         return cmds
-    return [["allow", f"{port}/{proto}", "comment", comment]]
+    verb = "limit" if (
+        rule.get("rate_limited")
+        or str(rule.get("action", "")).lower() == "limit"
+        or (port, proto) in UFW_RATE_LIMITED
+    ) else "allow"
+    return [[verb, f"{port}/{proto}", "comment", comment]]
 
 
 def _ufw_allow_cmd(rule: dict) -> list[str]:
@@ -5960,15 +5997,38 @@ def write_firewall_state(rules: list[dict]) -> dict:
 
     # Candidates to delete (unmanaged / vpn_only flip). Skip protected/required
     # ports unless we are intentionally recreating them from desired state.
+    # Exception: SSH ALLOW → LIMIT upgrade (UFW_RATE_LIMITED).
     delete_nums: list[tuple[int, int, str]] = []
     for num, port, proto, _ipv6, cur_vpn in rows:
-        if (port, proto) in UFW_PROTECTED:
+        key = (port, proto)
+        if key in UFW_PROTECTED:
+            if key in UFW_RATE_LIMITED:
+                # Recreate bare ALLOW as LIMIT when rate-cap is required.
+                # Detect via raw numbered status line action.
+                continue  # handled below via rate-limit upgrade pass
             continue
-        want = desired_keys.get((port, proto))
-        if want is None and (port, proto) in UFW_REQUIRED:
+        want = desired_keys.get(key)
+        if want is None and key in UFW_REQUIRED:
             continue  # never wipe portal HTTP allow during partial saves
         if want is None or bool(want.get("vpn_only")) != bool(cur_vpn):
             delete_nums.append((num, port, proto))
+
+    # Upgrade SSH (and other UFW_RATE_LIMITED) from unlimited ALLOW → LIMIT.
+    numbered_raw = numbered.stdout or ""
+    for line in numbered_raw.splitlines():
+        line_s = line.strip()
+        if not line_s.startswith("["):
+            continue
+        m = UFW_ROW_RE.match(line_s)
+        if not m:
+            continue
+        port, proto, _ = _parse_ufw_to(m.group("to"))
+        if port is None:
+            continue
+        if (port, proto) not in UFW_RATE_LIMITED:
+            continue
+        if "ALLOW" in m.group("action") and "LIMIT" not in m.group("action"):
+            delete_nums.append((int(m.group("num")), port, proto))
 
     # Guard: never mass-delete when the portal only knows a tiny rule set
     # (e.g. after a partial load). That previously wiped HTTP/HTTPS/forwards.
@@ -5991,12 +6051,23 @@ def write_firewall_state(rules: list[dict]) -> dict:
     # Refresh and add missing / recreated
     after = read_firewall_state()
     have = {
-        (r["port"], r["proto"]): bool(r.get("vpn_only")) for r in after["rules"]
+        (r["port"], r["proto"]): (
+            bool(r.get("vpn_only")),
+            str(r.get("action") or "allow").lower(),
+        )
+        for r in after["rules"]
     }
     for key, rule in desired_keys.items():
-        if key in have and have[key] == bool(rule.get("vpn_only")):
-            continue
-        scope = "vpn" if rule.get("vpn_only") else "public"
+        want_action = "limit" if (
+            rule.get("rate_limited")
+            or str(rule.get("action", "")).lower() == "limit"
+            or key in UFW_RATE_LIMITED
+        ) else "allow"
+        if key in have:
+            cur_vpn, cur_action = have[key]
+            if cur_vpn == bool(rule.get("vpn_only")) and cur_action == want_action:
+                continue
+        scope = "vpn" if rule.get("vpn_only") else ("limit" if want_action == "limit" else "public")
         for cmd in _ufw_allow_cmds(rule):
             proc = _run_ufw(cmd)
             src = ""
@@ -6006,7 +6077,7 @@ def write_firewall_state(rules: list[dict]) -> dict:
                 except Exception:
                     src = ""
             logs.append(
-                f"allow {rule['port']}/{rule['proto']} ({scope}{src}): "
+                f"{cmd[0]} {rule['port']}/{rule['proto']} ({scope}{src}): "
                 f"rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
             )
 
