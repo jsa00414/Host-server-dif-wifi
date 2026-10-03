@@ -250,10 +250,12 @@ Client code cannot be stronger than API authorization - the server-side checks i
 | W1 | Medium | VPN/HTTP rate caps default off | Document runbook to enable loose under abuse; alert on conntrack spikes |
 | W2 | Medium | No WebAuthn / hardware step-up yet | Add portal WebAuthn; keep TOTP as backup |
 | W3 | Medium | Trust-circle state distributed | Single reconciler metrics: sticky vs allowlist vs Flint vs Caddy |
-| W4 | Low | USB vault != HSM | Optional YubiKey PIV/SSH; treat USB as transport encryption |
-| W5 | Low | Stego on same USB as LUKS | Keep recovery image offline (print / other media) |
-| W6 | Info | Public SSH retained | Keep; ensure key-only, MaxAuthTries, consider port knock only if ops allow |
-| W7 | Info | Large server.py monolith | Harder to audit; split auth/vpn modules over time |
+| W4 | Medium | Sessions, TOTP lockouts, SSH unlocks are in-memory | Persist or accept restart=reset; document failover behavior |
+| W5 | Medium | Enroll-unlock temporarily opens Flint pending for ALL pending LAN IPs | Narrow exemption to the registering device only |
+| W6 | Medium | Portal-login TOTP path lacks require_auth_app_totp lockout | Reuse the same per-IP lockout helper on complete_portal_login |
+| W7 | Low | USB vault != HSM; stego on same USB as LUKS | YubiKey path; keep recovery image offline |
+| W8 | Low | Auth-app is intentionally Internet-reachable | Accept; rests on TOTP + enroll gate - monitor fail lockouts |
+| W9 | Info | Public SSH retained; large server.py monolith | Keep SSH capped; split auth/vpn modules over time |
 
 ---
 
@@ -389,11 +391,27 @@ It is a design-and-code review, not a penetration test. No adversarial exploitat
 | Observability | 5 | Syslog login fails; little drift alerting |
 | Documentation | 7 | READMEs and this review; runbooks still thin |
 
-**Composite:** about 8.0 / 10 for the intended threat model (opportunistic internet + curious LAN + lost USB), lower against nation-state or malware-on-host-while-unlocked.
+**Composite:** about 7.8 / 10 for the intended threat model (opportunistic internet + curious LAN + lost USB), lower against nation-state or malware-on-host-while-unlocked. Score nudged down slightly after deeper code survey of in-memory auth state and enroll-unlock LAN breadth.
 
 ---
 
-Document control: Generated 2026-10-03 for download from Cloud Agent artifacts and portal/docs/ on branch cursor/usb-key-vault-a9a6.
+## Appendix G - Deeper code survey notes (follow-up)
+
+Cross-checks from focused code surveys of harden scripts and portal auth (same day as this review):
+
+1. Peer ACL sync (ensure-ikev2-peer-acl.sh) correctly does NOT auto-add live IKEv2 peer WANs - only allowlisted sticky + approved LAN /32s enter @vpn_clients.
+2. Flint SM-LAN-CIRCLE only REJECTS pending/denied LAN to VPS :80,:443 - other LAN services still need host firewalls.
+3. Guest VPN clients keep full internet; DNS guest mode is bypassable if the client ignores pushed DNS.
+4. Approving a public WAN trusts that NAT egress for every device behind it (home CGNAT / cafe Wi-Fi nuance).
+5. Auth-app circle approve with TOTP alone (no portal session) is intentional so phones can manage pending while LAN gate is on.
+6. Sibling branch work may add harden-mail-ports-rate-cap.sh (465/587/993) - not on usb-key-vault tip at review time.
+7. Marker-based UFW before.rules edits + loosen-* wrappers are the right ops pattern for reversible edge policy.
+
+These notes refine residual risk; they do not change the operator checklist in section 10.
+
+---
+
+Document control: Generated 2026-10-03 for download from Cloud Agent artifacts and portal/docs/ on branch cursor/usb-key-vault-a9a6. Regenerated after auth/edge survey follow-up.
 
 End of review.
 """
