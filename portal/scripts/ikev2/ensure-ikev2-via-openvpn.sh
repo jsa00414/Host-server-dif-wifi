@@ -15,16 +15,36 @@ if ! ip -4 addr show dev "$IKEV2_VIA_OVPN_IF" 2>/dev/null | grep -q "inet ${IKEV
   echo "WARN: ${IKEV2_VIA_OVPN_IF} does not have ${IKEV2_VIA_OVPN_ADDR} — is OpenVPN server up?"
 fi
 
-# strongSwan: only bind the OpenVPN interface (not public ens6)
+# strongSwan: only bind the OpenVPN interface (not public ens6).
+# On Ubuntu, interfaces_use must be set in /etc/strongswan.d/charon.conf
+# (plugin snippets under charon/*.conf do not apply this daemon option).
+CHARON_MAIN="${CHARON_MAIN:-/etc/strongswan.d/charon.conf}"
+if [[ -f "$CHARON_MAIN" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path("/etc/strongswan.d/charon.conf")
+t = p.read_text()
+if re.search(r"(?m)^\s*interfaces_use\s*=", t):
+    t = re.sub(r"(?m)^\s*#?\s*interfaces_use\s*=.*$", "    interfaces_use = tun0", t, count=1)
+else:
+    t2, n = re.subn(
+        r"(?m)^\s*#\s*interfaces_use\s*=\s*$",
+        "    interfaces_use = tun0",
+        t,
+        count=1,
+    )
+    if n:
+        t = t2
+    else:
+        t = t.replace("charon {\n", "charon {\n    interfaces_use = tun0\n", 1)
+p.write_text(t)
+print(f"set interfaces_use = tun0 in {p}")
+PY
+fi
 cat > "$CHARON_CONF" << EOF
-# Managed by ensure-ikev2-via-openvpn.sh — IKEv2 only on OpenVPN tun
-charon {
-    # Prefer tun0 so IKE is not offered on the public WAN NIC.
-    interfaces_use = ${IKEV2_VIA_OVPN_IF}
-    # Still answer when clients hit the VIP explicitly.
-    port = 500
-    port_nat_t = 4500
-}
+# Managed by ensure-ikev2-via-openvpn.sh (see also /etc/strongswan.d/charon.conf)
+# IKEv2 is intended to be reached only via OpenVPN (10.9.0.1 on tun0).
 EOF
 chmod 644 "$CHARON_CONF"
 echo "wrote ${CHARON_CONF}"
