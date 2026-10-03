@@ -59,6 +59,13 @@ count_videos() {
   find "$dir" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" 2>/dev/null | wc -l
 }
 
+# Count TV series folders (Show Name/), not episode files.
+count_shows() {
+  local dir="$1"
+  [[ -d "$dir" ]] || { echo 0; return; }
+  find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name ".*" ! -name "@*" 2>/dev/null | wc -l
+}
+
 cmd_status() {
   local mounted=0
   local movies_inbox=0 kids_movies_inbox=0 tv_inbox=0 kids_tv_inbox=0
@@ -71,8 +78,8 @@ cmd_status() {
     kids_tv_inbox=$(count_videos "$INBOX_KIDS_TV")
     movies_lib=$(count_videos "$LIB_MOVIES")
     kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
-    tv_lib=$(count_videos "$LIB_TV")
-    kids_tv_lib=$(count_videos "$LIB_KIDS_TV")
+    tv_lib=$(count_shows "$LIB_TV")
+    kids_tv_lib=$(count_shows "$LIB_KIDS_TV")
   fi
   local last_ok=0 last_at="" last_detail=""
   if [[ -f "$STATE_PATH" ]]; then
