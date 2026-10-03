@@ -392,58 +392,23 @@
     }
     .tabs {
       display: none;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
       width: 100%;
-      padding: 2px 2px 2px 4px;
-      min-height: 44px;
+      gap: 0;
     }
-    body.has-account .tabs { display: flex; }
-    .tabs .tab-label {
-      font-size: .86rem;
-      font-weight: 600;
-      letter-spacing: .01em;
-      color: var(--text);
-    }
-    .tabs .tab-label span {
-      display: block;
-      margin-top: 2px;
-      font-size: .68rem;
-      font-weight: 500;
-      color: var(--muted);
-    }
+    body.has-account .tabs { display: grid; }
     .circle-toggle {
-      appearance: none;
-      position: relative;
-      width: 52px;
-      height: 32px;
-      min-height: 32px;
-      padding: 0;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,.08);
-      flex: 0 0 auto;
+      width: 100%;
+      min-height: 48px;
+      border-radius: 12px;
+      font-size: .86rem;
+      letter-spacing: .02em;
+      font-weight: 600;
       cursor: pointer;
-      transition: background .18s ease, border-color .18s ease;
     }
-    .circle-toggle::after {
-      content: "";
-      position: absolute;
-      top: 3px;
-      left: 3px;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: #e8f2ec;
-      transition: transform .18s ease;
-    }
-    .circle-toggle[aria-checked="true"] {
-      background: rgba(61,222,160,.35);
-      border-color: rgba(61,222,160,.7);
-    }
-    .circle-toggle[aria-checked="true"]::after {
-      transform: translateX(20px);
+    .circle-toggle[aria-pressed="true"] {
+      background: rgba(61,222,160,.22);
+      border-color: rgba(61,222,160,.6);
+      color: #d9ffe9;
     }
     body.tab-circle .code-shell > .acct,
     body.tab-circle .code-shell > .code,
@@ -500,8 +465,7 @@
     <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
     <div class="dock">
       <div class="tabs" id="tabBar" hidden>
-        <div class="tab-label">VPN trust circle<span>Guest DNS until approved</span></div>
-        <button type="button" class="circle-toggle" id="circleToggle" role="switch" aria-checked="false" aria-label="VPN trust circle"></button>
+        <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
       </div>
       <div class="install" id="installHint"></div>
       <div class="actions">
@@ -565,7 +529,10 @@
     function setCircleOpen(open) {
       circleOpen = !!open;
       document.body.classList.toggle("tab-circle", !!(account && circleOpen));
-      if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", circleOpen ? "true" : "false");
+      if (els.circleToggle) {
+        els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
+        els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
+      }
       if (account) {
         els.copyBtn.hidden = circleOpen;
         els.clearBtn.hidden = circleOpen;
@@ -614,7 +581,10 @@
       circleData = null;
       circleOpen = false;
       document.body.classList.remove("tab-circle");
-      if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", "false");
+      if (els.circleToggle) {
+        els.circleToggle.setAttribute("aria-pressed", "false");
+        els.circleToggle.textContent = "VPN trust circle";
+      }
       render();
       toast("Account removed");
     }
@@ -848,7 +818,10 @@
         els.clearBtn.hidden = circleOpen;
         els.manualBtn.hidden = circleOpen;
         if (els.tabBar) els.tabBar.hidden = false;
-        if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", circleOpen ? "true" : "false");
+        if (els.circleToggle) {
+          els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
+          els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
+        }
         els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
         if (circleOpen) els.manualForm.classList.remove("show");
         tick();
@@ -866,7 +839,10 @@
         circleData = null;
         circleOpen = false;
         document.body.classList.remove("tab-circle");
-        if (els.circleToggle) els.circleToggle.setAttribute("aria-checked", "false");
+        if (els.circleToggle) {
+          els.circleToggle.setAttribute("aria-pressed", "false");
+          els.circleToggle.textContent = "VPN trust circle";
+        }
       }
       updateInstallUi();
     }
