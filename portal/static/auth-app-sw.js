@@ -1,5 +1,5 @@
 /* ServerManager Authenticator — offline cache for the phone app. */
-const CACHE = "sm-auth-app-v9";
+const CACHE = "sm-auth-app-v10";
 const ASSETS = [
   "/auth-app.html",
   "/static/auth-app.webmanifest",
