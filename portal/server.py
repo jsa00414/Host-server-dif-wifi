@@ -10635,6 +10635,131 @@ def check_credentials(username: str, password: str) -> bool:
     )
 
 
+# --- Email verification code test (portalvpsserver@truemailor.com → Gmail) ---
+EMAIL_CODE_TO = os.environ.get(
+    "EMAIL_CODE_TO", "portalvpsserver@truemailor.com"
+).strip()
+EMAIL_CODE_FROM = os.environ.get("EMAIL_CODE_FROM", "admin@truemailor.com").strip()
+EMAIL_CODE_TTL_SECONDS = int(os.environ.get("EMAIL_CODE_TTL_SECONDS", "600"))
+EMAIL_CODE_COOLDOWN_SECONDS = int(os.environ.get("EMAIL_CODE_COOLDOWN_SECONDS", "45"))
+_email_codes: dict[str, dict] = {}
+_email_codes_lock = threading.Lock()
+_email_code_last_send: dict[str, float] = {}
+
+
+def _truemail_admin_password() -> str:
+    for path in (
+        Path(os.environ.get("TRUEMAIL_ENV", "/opt/truemail/.env")),
+        Path(__file__).resolve().parent.parent / "truemail" / ".env",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("FIRST_MAIL_PASS="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            continue
+    return (os.environ.get("TRUEMAIL_ADMIN_PASS") or "").strip()
+
+
+def _smtp_send_email(*, to_addr: str, subject: str, body: str) -> None:
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import formatdate, make_msgid
+
+    pw = _truemail_admin_password()
+    if not pw:
+        raise RuntimeError("True Mail admin password not configured")
+
+    msg = EmailMessage()
+    msg["From"] = f"ServerManager <{EMAIL_CODE_FROM}>"
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=False)
+    msg["Message-ID"] = make_msgid(domain="truemailor.com")
+    msg.set_content(body)
+
+    ctx = ssl._create_unverified_context()
+    host = os.environ.get("SMTP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    with smtplib.SMTP(host, port, timeout=30) as s:
+        s.ehlo()
+        s.starttls(context=ctx)
+        s.ehlo()
+        s.login(EMAIL_CODE_FROM, pw)
+        s.send_message(msg)
+
+
+def send_email_test_code(client_ip: str) -> dict:
+    """Generate + email a 6-digit test code (rate-limited per IP)."""
+    ip = (client_ip or "unknown").strip() or "unknown"
+    now = time.time()
+    with _email_codes_lock:
+        last = float(_email_code_last_send.get(ip) or 0)
+        wait = EMAIL_CODE_COOLDOWN_SECONDS - (now - last)
+        if wait > 0:
+            raise ValueError(f"Wait {int(wait) + 1}s before sending another code")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        _email_codes[ip] = {
+            "hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "expires": now + max(60, EMAIL_CODE_TTL_SECONDS),
+            "attempts": 0,
+        }
+        _email_code_last_send[ip] = now
+
+    subject = "Portal login code"
+    body = (
+        f"Your ServerManager test code is: {code}\n\n"
+        f"Sent to {EMAIL_CODE_TO}\n"
+        f"Expires in {EMAIL_CODE_TTL_SECONDS // 60} minutes.\n"
+        "If you did not request this, ignore this message.\n"
+    )
+    try:
+        _smtp_send_email(to_addr=EMAIL_CODE_TO, subject=subject, body=body)
+    except Exception as exc:
+        with _email_codes_lock:
+            _email_codes.pop(ip, None)
+        raise RuntimeError(f"Failed to send email: {exc}") from exc
+
+    return {
+        "ok": True,
+        "to": EMAIL_CODE_TO,
+        "expires_in": EMAIL_CODE_TTL_SECONDS,
+        "message": f"Code sent to {EMAIL_CODE_TO}. Check Gmail.",
+    }
+
+
+def verify_email_test_code(client_ip: str, code: str) -> dict:
+    ip = (client_ip or "unknown").strip() or "unknown"
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6:
+        raise ValueError("Enter the 6-digit code")
+    now = time.time()
+    with _email_codes_lock:
+        entry = _email_codes.get(ip)
+        if not entry:
+            raise ValueError("No code pending — send a new one")
+        if float(entry.get("expires") or 0) <= now:
+            _email_codes.pop(ip, None)
+            raise ValueError("Code expired — send a new one")
+        attempts = int(entry.get("attempts") or 0) + 1
+        entry["attempts"] = attempts
+        if attempts > 8:
+            _email_codes.pop(ip, None)
+            raise ValueError("Too many attempts — send a new code")
+        expect = str(entry.get("hash") or "")
+        got = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(expect, got):
+            raise ValueError("Incorrect code")
+        _email_codes.pop(ip, None)
+    return {
+        "ok": True,
+        "message": "Code accepted. Email path works.",
+    }
+
+
 def _purge_ssh_panel_unlocks(now: float | None = None) -> None:
     ts = now if now is not None else time.time()
     with _ssh_panel_unlocks_lock:
@@ -14956,10 +15081,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+        if path in ("/login.html", "/email-code-test.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             pass  # public
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
+        elif path in ("/api/email-code/send", "/api/email-code/verify"):
+            pass  # public email-code test form APIs (rate-limited)
         elif not self._is_authed():
             if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
@@ -15110,6 +15237,10 @@ document.getElementById('f').onsubmit = async (e) => {
                 self.end_headers()
                 return
             return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
+        if path == "/email-code-test.html":
+            return self._serve_file(
+                STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
+            )
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
@@ -15705,6 +15836,27 @@ document.getElementById('f').onsubmit = async (e) => {
                 return
             token = create_session()
             self._json(200, {"ok": True, "user": AUTH_USER}, set_cookie=token)
+            return
+        if path == "/api/email-code/send":
+            try:
+                result = send_email_test_code(self.client_address[0])
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(429, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/email-code/verify":
+            try:
+                payload = self._read_json()
+                code = str((payload or {}).get("code") or "")
+                result = verify_email_test_code(self.client_address[0], code)
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.25)
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/logout":
             destroy_session(parse_session_cookie(self.headers.get("Cookie")))
