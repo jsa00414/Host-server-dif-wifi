@@ -543,7 +543,6 @@
     <div class="tabs" id="tabBar" hidden>
       <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
     </div>
-    <div class="install" id="installHint"></div>
     <div class="actions">
       <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
       <button type="button" id="lockNowBtn" hidden>Lock</button>
@@ -588,7 +587,6 @@
       pinRow: document.getElementById("pinRow"),
       pinInput: document.getElementById("pinInput"),
       pinSubmitBtn: document.getElementById("pinSubmitBtn"),
-      installHint: document.getElementById("installHint"),
       toast: document.getElementById("toast"),
       circlePane: document.getElementById("circlePane"),
       circleList: document.getElementById("circleList"),
@@ -931,18 +929,6 @@
         els.codeView.textContent = "------";
       }
     }
-    function isStandalone() {
-      return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-    }
-    function updateInstallUi() {
-      if (isStandalone()) {
-        els.installHint.classList.remove("show");
-        return;
-      }
-      els.installHint.classList.add("show");
-      els.installHint.innerHTML =
-        "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>, then open <strong>SM Auth</strong>.";
-    }
     function bumpIdle() {
       clearTimeout(idleTimer);
       if (!unlocked || !account) return;
@@ -981,7 +967,6 @@
         if (!enrollUnlocked && els.manualForm) els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
-        updateInstallUi();
         return;
       }
       els.emptyView.hidden = true;
@@ -1029,7 +1014,6 @@
         renderCircle();
         if (circleOpen && !circleData && !circleLoading) fetchCircle();
       }
-      updateInstallUi();
     }
 
     async function withBusy(fn) {

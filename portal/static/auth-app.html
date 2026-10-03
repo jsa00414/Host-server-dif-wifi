@@ -513,7 +513,6 @@
     }
     body.tab-circle .dock .actions #copyBtn,
     body.tab-circle .dock .actions #manualBtn,
-    body.tab-circle .dock .actions #installBtn,
     body.tab-circle .dock .manual,
     body.tab-circle .dock .install {
       display: none !important;
@@ -569,11 +568,9 @@
       <div class="tabs" id="tabBar" hidden>
         <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
       </div>
-      <div class="install" id="installHint"></div>
       <div class="actions">
         <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
         <button type="button" id="lockNowBtn" hidden>Lock</button>
-        <button type="button" id="installBtn" hidden>Add to Home Screen</button>
         <button type="button" id="manualBtn" hidden>Enter secret</button>
       </div>
       <div class="manual" id="manualForm">
@@ -611,8 +608,6 @@
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
       lockNowBtn: document.getElementById("lockNowBtn"),
-      installBtn: document.getElementById("installBtn"),
-      installHint: document.getElementById("installHint"),
       manualBtn: document.getElementById("manualBtn"),
       manualForm: document.getElementById("manualForm"),
       secretInput: document.getElementById("secretInput"),
@@ -631,7 +626,6 @@
     };
 
     let account = null;
-    let deferredPrompt = null;
     let toastTimer = null;
     let idleTimer = null;
     let busy = false;
@@ -1049,39 +1043,7 @@
       }
     }
 
-    function isIos() {
-      return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
-        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    }
 
-    function isStandalone() {
-      return window.matchMedia("(display-mode: standalone)").matches ||
-        window.navigator.standalone === true;
-    }
-
-    function updateInstallUi() {
-      if (isStandalone()) {
-        els.installHint.classList.remove("show");
-        els.installBtn.hidden = true;
-        return;
-      }
-      if (deferredPrompt) {
-        els.installBtn.hidden = false;
-        els.installHint.classList.remove("show");
-        return;
-      }
-      if (isIos()) {
-        els.installBtn.hidden = true;
-        els.installHint.classList.add("show");
-        els.installHint.innerHTML =
-          "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>. Then open SM Auth from your home screen.";
-      } else {
-        els.installBtn.hidden = true;
-        els.installHint.classList.add("show");
-        els.installHint.innerHTML =
-          "On Android/Chrome use the browser menu → <strong>Install app</strong> / <strong>Add to Home screen</strong>.";
-      }
-    }
 
     function render() {
       const hasBio = !!loadBioCredId();
@@ -1106,7 +1068,6 @@
         circleData = null;
         circleOpen = false;
         unlocked = false;
-        updateInstallUi();
         return;
       }
       els.emptyView.hidden = true;
@@ -1156,7 +1117,6 @@
         renderCircle();
         if (circleOpen && !circleData && !circleLoading) fetchCircle();
       }
-      updateInstallUi();
     }
 
     els.copyBtn.addEventListener("click", async () => {
@@ -1202,13 +1162,6 @@
       history.replaceState(null, "", location.pathname);
     });
 
-    els.installBtn.addEventListener("click", async () => {
-      if (!deferredPrompt) return;
-      deferredPrompt.prompt();
-      await deferredPrompt.userChoice;
-      deferredPrompt = null;
-      updateInstallUi();
-    });
 
     els.bioUnlockBtn.addEventListener("click", () => withBusy(async () => {
       try {
@@ -1285,11 +1238,6 @@
       if (els.circleIpInput) els.circleIpInput.value = "";
     });
 
-    window.addEventListener("beforeinstallprompt", (ev) => {
-      ev.preventDefault();
-      deferredPrompt = ev;
-      updateInstallUi();
-    });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden && unlocked) lockNow();
     });
