@@ -128,7 +128,7 @@ def load_allowlist_ips() -> set[str]:
                 ips.add(ip)
     # Always keep sealed router WANs (env override) even if JSON was wiped.
     # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
-    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
     for part in re.split(r"[\s,;]+", sealed_raw):
         ip = normalize_ip(part)
         if ip and is_public_ipv4(ip):
@@ -168,7 +168,7 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
         except Exception:
             pass
     changed = False
-    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "192.81.235.246")
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
     sealed_ips = []
     for part in re.split(r"[\s,;]+", sealed_raw):
         ip = normalize_ip(part)
@@ -180,6 +180,16 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
         for r in (data.get("allowed") or [])
         if isinstance(r, dict) and normalize_ip(r.get("ip", ""))
     }
+    # Drop obsolete sealed rows when VPN_CIRCLE_SEALED_IPS no longer includes them.
+    for ip, row in list(by_ip.items()):
+        if ip in sealed_ips:
+            continue
+        if row.get("sealed") or (
+            str(row.get("source") or "") == "router"
+            and "sealed" in str(row.get("note") or "").lower()
+        ):
+            del by_ip[ip]
+            changed = True
     for ip in sealed_ips:
         row = by_ip.get(ip) or {
             "ip": ip,

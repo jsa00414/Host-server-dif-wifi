@@ -11313,11 +11313,12 @@ STICKY_VPN_IPS_PATH = Path(
 VPN_PEER_ACL_SCRIPT = Path(
     os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
 )
-# Always-on trust-circle members (router WAN, etc). Hidden from Authenticator apps.
-# Default seals the Flint public WAN; override with comma/space-separated IPv4s.
+# Always-on trust-circle members (hidden from Authenticator). Empty by default:
+# do NOT seal shared campus/ISP egress IPs (e.g. university NATs). Home access
+# without personal VPN should use real VPN pools / approved device IPs only.
 VPN_CIRCLE_SEALED_IPS = os.environ.get(
     "VPN_CIRCLE_SEALED_IPS",
-    "192.81.235.246",
+    "",
 )
 _ssh_panel_2fa_lock = threading.Lock()
 
@@ -11580,7 +11581,7 @@ def _sealed_vpn_row(ip: str) -> dict:
 
 
 def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
-    """Keep sealed router WAN IPs permanently allowed; never drop them."""
+    """Keep configured sealed IPs permanently allowed; drop obsolete sealed rows."""
     changed = False
     sealed = _sealed_vpn_ips()
     sealed_set = set(sealed)
@@ -11607,6 +11608,7 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
             changed = True
 
     # Preserve non-sealed entries after sealed ones.
+    # Drop rows that were sealed for IPs no longer in VPN_CIRCLE_SEALED_IPS.
     rebuilt: list[dict] = []
     seen: set[str] = set()
     for ip in sealed:
@@ -11618,6 +11620,14 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
             continue
         if ip in sealed_set:
             continue
+        # Obsolete sealed campus/WAN rows must not stay trusted.
+        if row.get("sealed") or (
+            str(row.get("source") or "") == "router"
+            and "sealed" in str(row.get("note") or "").lower()
+        ):
+            if ip not in sealed_set:
+                changed = True
+                continue
         rebuilt.append(row)
         seen.add(ip)
 
