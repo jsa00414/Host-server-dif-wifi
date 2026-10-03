@@ -33,36 +33,45 @@ if ! command -v ufw >/dev/null 2>&1; then
   exit 1
 fi
 
-# Delete existing allows for FTP control, FTP PASV range, and SMB gateway.
-# Match 2121, 1445, and 50100:50200 (with or without /tcp|/udp), IPv4+IPv6.
-delete_matching() {
-  local pattern="$1"
-  for _ in $(seq 1 60); do
-    numbered="$(ufw status numbered 2>/dev/null || true)"
-    num="$(
-      printf '%s\n' "$numbered" | awk -v re="$pattern" '
-        /^\[[[:space:]]*[0-9]+\]/ {
-          line=$0
-          if (line ~ re) {
-            if (match(line, /\[[[:space:]]*[0-9]+\]/)) {
-              n=substr(line, RSTART+1, RLENGTH-2)
-              gsub(/[[:space:]]/, "", n)
-              print n+0
-            }
-          }
-        }' | sort -nr | head -1
-    )"
-    [[ -z "${num:-}" ]] && break
-    ufw --force delete "$num" >/dev/null || true
-  done
-}
+needles=(
+  "${FTP_PORT}/tcp"
+  "${FTP_PORT}/udp"
+  "${SMB_PORT}/tcp"
+  "${SMB_PORT}/udp"
+  "${PASV_START}:${PASV_END}/tcp"
+  "nas-ftp-gateway"
+  "nas-ftp-pasv"
+  "nas-ftp-vpn"
+  "nas-ftp-pasv-vpn"
+  "nas-smb-vpn"
+  "GL forward nas-smb"
+)
 
-delete_matching "(^|[[:space:]])${FTP_PORT}/(tcp|udp)([[:space:]]|\\()"
-delete_matching "(^|[[:space:]])${FTP_PORT}([[:space:]]|\\()"
-delete_matching "(^|[[:space:]])${SMB_PORT}/(tcp|udp)([[:space:]]|\\()"
-delete_matching "(^|[[:space:]])${SMB_PORT}([[:space:]]|\\()"
-delete_matching "${PASV_START}:${PASV_END}/tcp"
-delete_matching "nas-ftp-gateway|nas-ftp-pasv|GL forward nas-smb|nas-smb"
+# Delete highest matching rule number repeatedly (stable under renumbering).
+for _ in $(seq 1 80); do
+  numbered="$(ufw status numbered 2>/dev/null || true)"
+  num=""
+  while IFS= read -r line; do
+    [[ "$line" == \[* ]] || continue
+    hit=0
+    for n in "${needles[@]}"; do
+      if [[ "$line" == *"$n"* ]]; then
+        hit=1
+        break
+      fi
+    done
+    [[ "$hit" -eq 1 ]] || continue
+    nraw="${line%%]*}"
+    nraw="${nraw#[}"
+    nraw="${nraw// /}"
+    [[ "$nraw" =~ ^[0-9]+$ ]] || continue
+    if [[ -z "$num" || "$nraw" -gt "$num" ]]; then
+      num="$nraw"
+    fi
+  done <<< "$numbered"
+  [[ -z "${num:-}" ]] && break
+  ufw --force delete "$num" >/dev/null || true
+done
 
 for src in "${sources[@]}"; do
   ufw allow from "$src" to any port "$FTP_PORT" proto tcp comment "nas-ftp-vpn" >/dev/null || true
@@ -72,6 +81,32 @@ for src in "${sources[@]}"; do
 done
 
 echo "ufw: ${FTP_PORT}/tcp + ${PASV_START}-${PASV_END}/tcp + ${SMB_PORT}/tcp|udp → VPN/LAN"
+
+# :1445 is DNAT'd to the NAS (FORWARD path). UFW INPUT alone cannot lock it —
+# rewrite SERVERMANAGER_DNAT so only VPN/LAN sources are redirected.
+VPS_IP="${VPS_PUBLIC_IP:-$(curl -4 -fsS --max-time 5 ifconfig.me 2>/dev/null || true)}"
+VPS_IP="${VPS_IP:-74.208.76.213}"
+NAS_SMB_HOST="${NAS_SMB_HOST:-192.168.8.159}"
+NAS_SMB_DEST_PORT="${NAS_SMB_DEST_PORT:-445}"
+CHAIN="SERVERMANAGER_DNAT"
+
+if iptables -t nat -L "$CHAIN" >/dev/null 2>&1; then
+  # Drop every existing 1445 DNAT in the managed chain (scoped or not).
+  while iptables -t nat -S "$CHAIN" 2>/dev/null | grep -qE -- "--dport ${SMB_PORT} "; do
+    line="$(iptables -t nat -S "$CHAIN" | grep -E -- "--dport ${SMB_PORT} " | head -1 || true)"
+    [[ -z "$line" ]] && break
+    eval "iptables -t nat ${line/-A/-D}" 2>/dev/null || break
+  done
+  for src in "${sources[@]}"; do
+    iptables -t nat -A "$CHAIN" -s "$src" -d "$VPS_IP" -p tcp --dport "$SMB_PORT" \
+      -j DNAT --to-destination "${NAS_SMB_HOST}:${NAS_SMB_DEST_PORT}"
+  done
+  echo "dnat: ${SMB_PORT}/tcp → ${NAS_SMB_HOST}:${NAS_SMB_DEST_PORT} (VPN/LAN sources only)"
+  iptables -t nat -S "$CHAIN" | grep -E -- "--dport ${SMB_PORT} " || true
+else
+  echo "dnat: chain $CHAIN missing (skip ${SMB_PORT} rewrite)"
+fi
+
 ufw status numbered | grep -E "${FTP_PORT}|${SMB_PORT}|${PASV_START}|nas-ftp|nas-smb" || true
 ss -lntp 2>/dev/null | grep -E ":${FTP_PORT}|:${SMB_PORT}" || true
 echo "NAS FTP/SMB gateway VPN-only harden complete"

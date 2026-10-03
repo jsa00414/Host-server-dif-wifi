@@ -100,6 +100,10 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/security/harden-nas-gateways-vpn-only.sh",
         f"{REMOTE_UI}/scripts/security/harden-nas-gateways-vpn-only.sh",
     ),
+    (
+        ROOT / "scripts/forwards/apply-lan-forwards.sh",
+        "/opt/wireguard/scripts/apply-lan-forwards.sh",
+    ),
 ]
 
 
