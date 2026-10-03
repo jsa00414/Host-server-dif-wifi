@@ -68,6 +68,10 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-webdav-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
     ),
+    (
+        ROOT / "scripts/security/harden-secret-perms.sh",
+        f"{REMOTE_UI}/scripts/security/harden-secret-perms.sh",
+    ),
 ]
 
 
