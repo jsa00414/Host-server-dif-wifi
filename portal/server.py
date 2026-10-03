@@ -7088,6 +7088,7 @@ def _normalize_root_login_mode(value: str) -> str:
 def _security_sshd_config() -> dict:
     proc = _security_run(["sshd", "-T"], timeout=6)
     keys = _security_list_authorized_keys()
+    login_users = _security_list_login_users()
     out = {
         "ok": proc.returncode == 0,
         "permit_root_login": None,
@@ -7099,6 +7100,7 @@ def _security_sshd_config() -> dict:
         "login_method_label": "Unknown",
         "root_authorized_keys": len(keys),
         "authorized_keys": keys,
+        "login_users": login_users,
         "keys_only_ready": len(keys) > 0,
         "dropin_path": str(SSH_LOGIN_DROPIN),
         "dropin_present": SSH_LOGIN_DROPIN.is_file(),
@@ -7419,6 +7421,317 @@ def remove_ssh_authorized_key(*, index: int | None = None, fingerprint: str | No
         "message": f"Removed key #{target_idx}.",
         "ssh": _security_sshd_config(),
     }
+
+
+def _security_list_login_users() -> list[dict]:
+    """Human login-capable local users (uid >= 1000) for the Security panel."""
+    out: list[dict] = []
+    try:
+        text = Path("/etc/passwd").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    skip_shells = {
+        "/usr/sbin/nologin",
+        "/sbin/nologin",
+        "/bin/false",
+        "/usr/bin/false",
+        "/bin/sync",
+    }
+    for raw in text.splitlines():
+        parts = raw.split(":")
+        if len(parts) < 7:
+            continue
+        name, _pw, uid_s, _gid, gecos, home, shell = parts[:7]
+        try:
+            uid = int(uid_s)
+        except ValueError:
+            continue
+        if uid < 1000 or uid >= 65534:
+            continue
+        shell_n = (shell or "").strip() or "/bin/sh"
+        login_ok = shell_n not in skip_shells
+        groups: list[str] = []
+        gproc = _security_run(["id", "-nG", name], timeout=4)
+        if gproc.returncode == 0:
+            groups = [g for g in (gproc.stdout or "").split() if g]
+        key_path = Path(home) / ".ssh" / "authorized_keys"
+        key_count = _security_authorized_key_count(key_path) if key_path.is_file() else 0
+        out.append(
+            {
+                "username": name,
+                "uid": uid,
+                "home": home,
+                "shell": shell_n,
+                "login_enabled": login_ok,
+                # Only real privilege groups — not a primary group that happens to be named admin.
+                "sudo": any(g in {"sudo", "wheel"} for g in groups),
+                "groups": groups[:12],
+                "authorized_keys": key_count,
+            }
+        )
+    out.sort(key=lambda r: (0 if r.get("login_enabled") else 1, r.get("username") or ""))
+    return out
+
+
+def _validate_linux_username(username: str) -> str:
+    name = str(username or "").strip().lower()
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name):
+        raise ValueError(
+            "username must be 1–32 chars: start with a-z/_, then a-z 0-9 _ -"
+        )
+    reserved = {
+        "root",
+        "daemon",
+        "bin",
+        "sys",
+        "sync",
+        "games",
+        "man",
+        "mail",
+        "news",
+        "www-data",
+        "nobody",
+        "systemd-network",
+        "messagebus",
+        "sshd",
+        "ubuntu",
+    }
+    if name in reserved:
+        raise ValueError(f"username {name!r} is reserved")
+    # Reject if already in passwd
+    try:
+        for raw in Path("/etc/passwd").read_text(encoding="utf-8", errors="replace").splitlines():
+            if raw.split(":", 1)[0] == name:
+                raise ValueError(f"user {name!r} already exists")
+    except ValueError:
+        raise
+    except OSError:
+        pass
+    return name
+
+
+def _authorized_keys_path_for_user(username: str) -> Path:
+    if username == "root":
+        return SSH_ROOT_AUTHORIZED_KEYS
+    try:
+        import pwd
+
+        home = pwd.getpwnam(username).pw_dir
+    except (KeyError, ImportError) as exc:
+        raise ValueError(f"user {username!r} not found") from exc
+    return Path(home) / ".ssh" / "authorized_keys"
+
+
+def _install_authorized_key_line(path: Path, line: str, *, owner: str | None = None) -> bool:
+    """Append pubkey line; return True if newly added."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if path.is_file():
+        existing = path.read_text(encoding="utf-8", errors="replace")
+        for raw in existing.splitlines():
+            if raw.strip() == line:
+                return False
+    with path.open("a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write(line + "\n")
+    try:
+        os.chmod(path.parent, 0o700)
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if owner and owner != "root":
+        _security_run(["chown", "-R", f"{owner}:{owner}", str(path.parent)], timeout=8)
+    return True
+
+
+def _generate_ed25519_keypair(comment: str) -> dict:
+    """Create a temporary ed25519 keypair; private key is returned and temp files removed."""
+    import tempfile
+
+    comment = (comment or "servermanager").strip()[:80] or "servermanager"
+    tmp_dir = tempfile.mkdtemp(prefix="sm-sshkey-")
+    priv_path = Path(tmp_dir) / "id_ed25519"
+    pub_path = Path(str(priv_path) + ".pub")
+    try:
+        proc = _security_run(
+            [
+                "ssh-keygen",
+                "-t",
+                "ed25519",
+                "-f",
+                str(priv_path),
+                "-N",
+                "",
+                "-C",
+                comment,
+                "-q",
+            ],
+            timeout=15,
+        )
+        if proc.returncode != 0 or not priv_path.is_file() or not pub_path.is_file():
+            err = (proc.stderr or proc.stdout or "ssh-keygen failed")[:300]
+            raise ValueError(err)
+        private_key = priv_path.read_text(encoding="utf-8")
+        public_key = pub_path.read_text(encoding="utf-8").strip()
+        fp_proc = _security_run(["ssh-keygen", "-lf", str(pub_path)], timeout=6)
+        fingerprint = ""
+        if fp_proc.returncode == 0 and (fp_proc.stdout or "").strip():
+            parts = (fp_proc.stdout or "").split()
+            if len(parts) >= 2:
+                fingerprint = parts[1]
+        return {
+            "private_key": private_key,
+            "public_key": public_key,
+            "fingerprint": fingerprint,
+            "comment": comment,
+            "type": "ed25519",
+            "filename": "id_ed25519",
+        }
+    finally:
+        for p in (priv_path, pub_path):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+
+
+def generate_ssh_authorized_key(
+    *,
+    comment: str = "",
+    username: str = "root",
+    also_root: bool = False,
+) -> dict:
+    """Auto-create an SSH keypair, install the public key, return private key once."""
+    user = str(username or "root").strip() or "root"
+    if user != "root":
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
+            raise ValueError("invalid username")
+        try:
+            import pwd
+
+            pwd.getpwnam(user)
+        except KeyError as exc:
+            raise ValueError(f"user {user!r} not found") from exc
+    cmt = (comment or f"servermanager-{user}-{int(time.time())}").strip()
+    keypair = _generate_ed25519_keypair(cmt)
+    path = _authorized_keys_path_for_user(user)
+    added = _install_authorized_key_line(
+        path, keypair["public_key"], owner=None if user == "root" else user
+    )
+    if also_root and user != "root":
+        _install_authorized_key_line(SSH_ROOT_AUTHORIZED_KEYS, keypair["public_key"])
+    return {
+        "ok": True,
+        "generated": True,
+        "added": added,
+        "username": user,
+        "private_key": keypair["private_key"],
+        "public_key": keypair["public_key"],
+        "fingerprint": keypair["fingerprint"],
+        "comment": keypair["comment"],
+        "filename": f"id_ed25519_{user}",
+        "message": (
+            f"Created ed25519 key for {user}. Download the private key now — "
+            "it is not stored on the VPS."
+        ),
+        "ssh": _security_sshd_config(),
+    }
+
+
+def create_ssh_login_user(
+    username: str,
+    *,
+    sudo: bool = True,
+    generate_key: bool = True,
+    public_key: str = "",
+    comment: str = "",
+    also_root: bool = False,
+) -> dict:
+    """Create a login-capable Linux user, optionally with sudo and an SSH key."""
+    name = _validate_linux_username(username)
+    # Prefer adduser on Debian/Ubuntu when available.
+    if Path("/usr/sbin/adduser").is_file():
+        proc = _security_run(
+            [
+                "adduser",
+                "--disabled-password",
+                "--gecos",
+                name,
+                "--shell",
+                "/bin/bash",
+                name,
+            ],
+            timeout=60,
+        )
+    else:
+        proc = _security_run(
+            ["useradd", "-m", "-s", "/bin/bash", name],
+            timeout=60,
+        )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "user create failed")[:400]
+        raise ValueError(err)
+
+    if sudo:
+        for grp in ("sudo", "admin"):
+            g = _security_run(["getent", "group", grp], timeout=4)
+            if g.returncode == 0:
+                _security_run(["usermod", "-aG", grp, name], timeout=10)
+                break
+
+    key_info = None
+    pub = str(public_key or "").strip()
+    if generate_key:
+        key_info = generate_ssh_authorized_key(
+            comment=comment or f"{name}@vps",
+            username=name,
+            also_root=also_root,
+        )
+    elif pub:
+        line = ""
+        for candidate in pub.splitlines():
+            s = candidate.strip()
+            if _security_is_authorized_key_line(s):
+                line = s
+                break
+        if not line:
+            raise ValueError("Not a valid SSH public key line")
+        path = _authorized_keys_path_for_user(name)
+        _install_authorized_key_line(path, line, owner=name)
+        if also_root:
+            _install_authorized_key_line(SSH_ROOT_AUTHORIZED_KEYS, line)
+
+    users = _security_list_login_users()
+    created = next((u for u in users if u.get("username") == name), None)
+    result = {
+        "ok": True,
+        "created": True,
+        "username": name,
+        "sudo": bool(sudo),
+        "user": created,
+        "login_users": users,
+        "ssh": _security_sshd_config(),
+        "message": f"Created user {name}"
+        + (" with sudo" if sudo else "")
+        + (" and SSH key" if key_info else "")
+        + ".",
+    }
+    if key_info:
+        result.update(
+            {
+                "private_key": key_info.get("private_key"),
+                "public_key": key_info.get("public_key"),
+                "fingerprint": key_info.get("fingerprint"),
+                "filename": key_info.get("filename") or f"id_ed25519_{name}",
+                "key_message": key_info.get("message"),
+            }
+        )
+    return result
 
 
 def _security_fail2ban() -> dict:
@@ -15168,7 +15481,11 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
-        if path in ("/api/security/ssh-login", "/api/security/ssh-keys"):
+        if path in (
+            "/api/security/ssh-login",
+            "/api/security/ssh-keys",
+            "/api/security/ssh-users",
+        ):
             if not self._require_auth(api=True):
                 return
             try:
@@ -15500,6 +15817,12 @@ document.getElementById('f').onsubmit = async (e) => {
                     result = add_ssh_authorized_key(
                         str(payload.get("public_key") or payload.get("key") or "")
                     )
+                elif action in ("generate", "auto", "auto_create", "autocreate"):
+                    result = generate_ssh_authorized_key(
+                        comment=str(payload.get("comment") or ""),
+                        username=str(payload.get("username") or "root"),
+                        also_root=bool(payload.get("also_root")),
+                    )
                 elif action in ("remove", "delete", "del"):
                     idx = payload.get("index")
                     result = remove_ssh_authorized_key(
@@ -15509,7 +15832,36 @@ document.getElementById('f').onsubmit = async (e) => {
                         ),
                     )
                 else:
-                    raise ValueError("action must be add or remove")
+                    raise ValueError("action must be add, generate, or remove")
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/ssh-users":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                result = create_ssh_login_user(
+                    str(payload.get("username") or payload.get("user") or ""),
+                    sudo=bool(
+                        payload.get("sudo", True)
+                        if "sudo" in payload
+                        else True
+                    ),
+                    generate_key=bool(
+                        payload.get("generate_key", True)
+                        if "generate_key" in payload
+                        else True
+                    ),
+                    public_key=str(
+                        payload.get("public_key") or payload.get("key") or ""
+                    ),
+                    comment=str(payload.get("comment") or ""),
+                    also_root=bool(payload.get("also_root")),
+                )
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
