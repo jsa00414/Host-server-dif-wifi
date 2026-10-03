@@ -14,16 +14,84 @@ services:
       GF_SECURITY_COOKIE_SAMESITE: none
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/servermanager-overview.json
     ports:
-      # Bind on all interfaces so Caddy (Docker bridge → 172.18.0.1) can reach it
-      - "3016:3000"
+      # Host-local only (portal SSO / health). Caddy reaches sm-grafana:3000 on truemail net.
+      - "127.0.0.1:3016:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - sm-monitor
+      - caddy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
 
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: sm-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - sm-monitor
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.0
+    container_name: sm-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    pid: host
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - sm-monitor
+
+  docker-stats:
+    image: wywywywy/docker_stats_exporter:latest
+    container_name: sm-docker-stats
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9101:9487"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - sm-monitor
+
+networks:
+  sm-monitor:
+    name: sm-monitor
+  caddy:
+    # Same network as truemail-caddy so reverse_proxy sm-grafana:3000 works
+    # without publishing Grafana on a public interface.
+    external: true
+    name: truemail_truemail
+
 volumes:
   grafana-data:
+  prometheus-data:

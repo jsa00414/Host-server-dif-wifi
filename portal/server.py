@@ -1775,9 +1775,47 @@ GRAFANA_PUBLIC_HOST = (
     os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
     or "grafana.vpstruelord.com"
 )
-GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
-GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
+# Caddy (truemail network) reaches the container by name — not a public host port.
+GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "sm-grafana").strip() or "sm-grafana"
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000") or "3000")
+# Host-local upstream for portal SSO (compose publishes 127.0.0.1:3016 only).
+GRAFANA_UPSTREAM = os.environ.get(
+    "GRAFANA_UPSTREAM", "http://127.0.0.1:3016"
+).rstrip("/") or "http://127.0.0.1:3016"
+GRAFANA_ENV_FILE = Path(
+    os.environ.get("GRAFANA_ENV_FILE", "/opt/grafana/.env")
+)
+GRAFANA_COOKIE = "grafana_session"
+GRAFANA_COOKIE_EXPIRY = "grafana_session_expiry"
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
+
+
+def _load_grafana_admin() -> tuple[str, str]:
+    """Read Grafana admin user/password from env or /opt/grafana/.env."""
+    user = (os.environ.get("GRAFANA_ADMIN_USER") or os.environ.get("GF_ADMIN_USER") or "").strip()
+    password = (
+        os.environ.get("GRAFANA_ADMIN_PASSWORD")
+        or os.environ.get("GF_ADMIN_PASSWORD")
+        or ""
+    ).strip()
+    if GRAFANA_ENV_FILE.is_file():
+        parsed: dict[str, str] = {}
+        try:
+            raw_text = GRAFANA_ENV_FILE.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            raw_text = ""
+        for raw in raw_text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            parsed[key.strip()] = val.strip().strip("'\"")
+        user = user or (parsed.get("GF_ADMIN_USER") or "admin").strip() or "admin"
+        password = password or (parsed.get("GF_ADMIN_PASSWORD") or "").strip()
+    return (user or "admin"), password
+
+
+GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
 PROXMOX_SSH_USER = os.environ.get("PROXMOX_SSH_USER", "root").strip() or "root"
@@ -6660,6 +6698,113 @@ def _wg_easy_sso_cookie_headers(data: dict) -> list[str]:
     ]
 
 
+def _grafana_cookie_domain() -> str:
+    """Parent domain for sharing Grafana session with grafana.<domain> iframe."""
+    host = (GRAFANA_PUBLIC_HOST or "").strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        return "." + ".".join(parts[-2:])
+    return ""
+
+
+def grafana_sso_login() -> dict:
+    """Log into Grafana and return session cookies for the portal iframe SSO."""
+    global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
+    # Reload in case install-grafana.sh rotated the password after panel start.
+    GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
+    user = (GRAFANA_SSO_USER or "admin").strip() or "admin"
+    password = (GRAFANA_SSO_PASS or "").strip()
+    if not password:
+        raise RuntimeError("Grafana admin password missing (/opt/grafana/.env)")
+
+    url = f"{GRAFANA_UPSTREAM}/login"
+    payload = {"user": user, "password": password}
+    headers = {
+        "User-Agent": "ServerManager-GrafanaSso/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+            set_cookies: list[str] = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        raw = exc.read() if hasattr(exc, "read") else b""
+        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+        raise RuntimeError(
+            f"Grafana login failed ({getattr(exc, 'code', '?')}): {text[:300]}"
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Grafana login failed: {exc}") from exc
+
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    try:
+        body = json.loads(text) if text else {}
+    except Exception:
+        body = {}
+    if status >= 400:
+        raise RuntimeError(f"Grafana login failed ({status}): {text[:300]}")
+    if isinstance(body, dict) and body.get("message") and "Logged in" not in str(body.get("message")):
+        # Some versions return messageId on failure with 200 — treat unknown as error if no cookie.
+        pass
+
+    session = ""
+    expiry = ""
+    max_age = "2592000"
+    for raw_c in set_cookies:
+        if not raw_c:
+            continue
+        first = raw_c.split(";", 1)[0].strip()
+        name, _, val = first.partition("=")
+        lname = name.strip().lower()
+        if lname == GRAFANA_COOKIE.lower():
+            session = val
+            for part in raw_c.split(";")[1:]:
+                low = part.strip().lower()
+                if low.startswith("max-age="):
+                    max_age = part.strip().split("=", 1)[1].strip() or max_age
+        elif lname == GRAFANA_COOKIE_EXPIRY.lower():
+            expiry = val
+    if not session:
+        raise RuntimeError("Grafana login succeeded but no grafana_session cookie returned")
+
+    return {
+        "ok": True,
+        "user": user,
+        "cookie": session,
+        "expiry": expiry,
+        "max_age": max_age,
+        "url": f"https://{GRAFANA_PUBLIC_HOST}/",
+    }
+
+
+def _grafana_sso_cookie_headers(data: dict) -> list[str]:
+    """Set Grafana session cookies on .vpstruelord.com for the iframe embed."""
+    val = str(data.get("cookie") or "").strip()
+    if not val:
+        return []
+    max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
+    expiry = str(data.get("expiry") or "").strip()
+    domain = _grafana_cookie_domain()
+    dom = f"; Domain={domain}" if domain else ""
+    # SameSite=None; Secure required for cross-subdomain iframe embeds.
+    out = [
+        f"{GRAFANA_COOKIE}={val}; Path=/{dom}; Max-Age={max_age}; HttpOnly; Secure; SameSite=None",
+    ]
+    if expiry:
+        out.append(
+            f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path=/{dom}; Max-Age={max_age}; Secure; SameSite=None"
+        )
+    return out
+
+
 def _read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -7132,7 +7277,7 @@ def build_security_status() -> dict:
 
     exposure_labels = {
         2121: "NAS FTP gateway",
-        3016: "Grafana (direct, bypasses Caddy)",
+        3016: "Grafana (should be 127.0.0.1 only)",
         5001: "WireGuard Easy UI",
         5002: "Portal cleartext HTTP",
         1445: "NAS SMB gateway",
@@ -14347,6 +14492,20 @@ document.getElementById('f').onsubmit = async (e) => {
                     "url": data.get("url") or f"{WG_UI_PREFIX}/",
                 }
                 self._json(200, safe, extra_cookies=_wg_easy_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/grafana-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = grafana_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"https://{GRAFANA_PUBLIC_HOST}/",
+                }
+                self._json(200, safe, extra_cookies=_grafana_sso_cookie_headers(data))
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return

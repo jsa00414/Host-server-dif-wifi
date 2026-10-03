@@ -2379,6 +2379,24 @@
         showLog(String(e.message || e), true);
       }
     }
+    async function loadGrafanaFrame(force) {
+      const frame = document.getElementById("frameGrafana");
+      if (!frame) return;
+      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      const fallback = frame.dataset.src || "https://grafana.vpstruelord.com/";
+      try {
+        frame.dataset.authed = "0";
+        if (force) frame.src = "about:blank";
+        const data = await api("/api/grafana-sso");
+        const url = (data && data.url) || fallback;
+        frame.src = url + (String(url).includes("?") ? "&" : "?") + "_sm=" + Date.now();
+        frame.dataset.authed = "1";
+      } catch (e) {
+        frame.src = fallback;
+        frame.dataset.authed = "0";
+        showLog(String(e.message || e), true);
+      }
+    }
     async function loadNasFilesFrame(force) {
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
@@ -2545,10 +2563,7 @@
         }
       }
       if (name === "grafana") {
-        const f = document.getElementById("frameGrafana");
-        if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
-          f.src = (f.dataset.src || "https://grafana.vpstruelord.com/") + "?_sm=" + Date.now();
-        }
+        loadGrafanaFrame(false);
       }
       if (name === "files") {
         loadNasFilesFrame(true);
