@@ -3653,7 +3653,6 @@
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
               <div class="lock-title">Locked</div>
-              ${twoFactor ? `<div class="lock-sub">Two-factor on · code → <code>${escHtml(emailTo)}</code></div>` : ""}
               <div class="sec-ssh-lock-form">
                 <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" ${needCode ? "readonly" : ""} />
                 ${needCode || twoFactor ? `<input type="text" id="secSshUnlockCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="${needCode ? "Email code" : "Email code (after password)"}" />` : ""}
