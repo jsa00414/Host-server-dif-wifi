@@ -10742,16 +10742,10 @@ def _email_code_html(code: str, *, minutes: int) -> str:
             </td>
           </tr>
           <tr>
-            <td align="center" style="padding:26px 28px 8px;">
+            <td align="center" style="padding:26px 28px 28px;">
               <div style="display:inline-block;padding:16px 22px;border:1px solid #cfe0d7;border-radius:10px;background:#f7faf8;font-family:Consolas,'Courier New',monospace;font-size:32px;font-weight:700;letter-spacing:0.28em;color:#0f3d2c;">
                 {digits}
               </div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:18px 28px 28px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:#6b7c74;">
-              This message was sent to {EMAIL_CODE_TO} because a verification code was requested for the ServerManager portal ({PORTAL_HOST}).
-              If you did not request it, you can ignore this email.
             </td>
           </tr>
         </table>
@@ -10788,8 +10782,6 @@ def send_email_test_code(client_ip: str) -> dict:
     body = (
         f"Your ServerManager verification code is: {code}\n\n"
         f"This code expires in {minutes} minutes.\n"
-        f"Requested for the portal at {PORTAL_HOST}.\n\n"
-        "If you did not request this code, you can ignore this message.\n"
     )
     html = _email_code_html(code, minutes=minutes)
     try:
