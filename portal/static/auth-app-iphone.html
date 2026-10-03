@@ -536,7 +536,7 @@
         </div>
       </section>
     </section>
-    <div class="empty" id="emptyView">Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.</div>
+    <div class="empty" id="emptyView" hidden></div>
   </main>
 
   <footer>
@@ -760,9 +760,9 @@
     }
     function emptyCopy() {
       if (enrollUnlocked) {
-        return "No account saved yet. Enrollment is unlocked — tap Enter secret and paste the Base32 secret from the portal Security tab.";
+        return "Enrollment unlocked — tap Enter secret and paste the Base32 secret from Security.";
       }
-      return "Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.";
+      return "";
     }
     function parseHash() {
       const hash = (location.hash || "").replace(/^#/, "");
@@ -959,8 +959,9 @@
       if (!account) {
         els.lockView.hidden = true;
         els.codePane.hidden = true;
-        els.emptyView.hidden = false;
-        els.emptyView.textContent = emptyCopy();
+        const copy = emptyCopy();
+        els.emptyView.textContent = copy;
+        els.emptyView.hidden = !copy;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
         if (els.manualBtn) els.manualBtn.hidden = !(enrollStatusLoaded && enrollUnlocked);

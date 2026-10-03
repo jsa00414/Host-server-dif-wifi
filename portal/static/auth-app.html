@@ -563,7 +563,7 @@
         </div>
       </section>
     </div>
-    <div class="empty" id="emptyView">No account saved yet. Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.</div>
+    <div class="empty" id="emptyView" hidden></div>
     <div class="dock">
       <div class="tabs" id="tabBar" hidden>
         <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
@@ -845,9 +845,9 @@
 
     function emptyCopy() {
       if (enrollUnlocked) {
-        return "No account saved yet. Enrollment is unlocked — tap Enter secret and paste the Base32 secret from the portal Security tab.";
+        return "Enrollment unlocked — tap Enter secret and paste the Base32 secret from Security.";
       }
-      return "No account saved yet. Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.";
+      return "";
     }
 
     function parseHash() {
@@ -1055,8 +1055,9 @@
       if (!account) {
         els.lockView.hidden = true;
         els.codeShell.hidden = true;
-        els.emptyView.hidden = false;
-        els.emptyView.textContent = emptyCopy();
+        const copy = emptyCopy();
+        els.emptyView.textContent = copy;
+        els.emptyView.hidden = !copy;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
         // Only show Enter secret when Security unlocks new-device enrollment.
