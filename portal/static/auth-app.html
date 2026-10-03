@@ -527,7 +527,8 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand">ServerManager</div>
+    <div class="mark" aria-hidden="true"></div>
+    <p class="brand">ServerManager</p>
     <h1 class="title">Authenticator</h1>
     <p class="sub">Codes for unlocking the VPS login panel. Install this page as an app on your phone.</p>
   </header>
@@ -563,7 +564,7 @@
         </div>
       </section>
     </div>
-    <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
+    <div class="empty" id="emptyView">No account saved yet. Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.</div>
     <div class="dock">
       <div class="tabs" id="tabBar" hidden>
         <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
@@ -639,6 +640,8 @@
     let circleData = null;
     let circleLoading = false;
     let circleOpen = false;
+    let enrollUnlocked = false;
+    let enrollStatusLoaded = false;
 
     function isWindows() {
       return /Windows/i.test(navigator.userAgent || "") || /Win/.test(navigator.platform || "");
@@ -828,6 +831,29 @@
       }
       render();
       toast("Account removed");
+    }
+
+    async function fetchEnrollStatus() {
+      try {
+        const res = await fetch("/api/auth-app/enroll-status", {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        enrollUnlocked = !!(data && (data.enroll_unlocked || data.device_enroll_unlocked));
+      } catch (_) {
+        enrollUnlocked = false;
+      }
+      enrollStatusLoaded = true;
+      render();
+      return enrollUnlocked;
+    }
+
+    function emptyCopy() {
+      if (enrollUnlocked) {
+        return "No account saved yet. Enrollment is unlocked — tap Enter secret and paste the Base32 secret from the portal Security tab.";
+      }
+      return "No account saved yet. Enrollment is locked on the VPS — unlock “New authenticator devices” in Security to show Enter secret.";
     }
 
     function parseHash() {
@@ -1068,9 +1094,12 @@
         els.lockView.hidden = true;
         els.codeShell.hidden = true;
         els.emptyView.hidden = false;
+        els.emptyView.textContent = emptyCopy();
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
-        els.manualBtn.hidden = false;
+        // Only show Enter secret when Security unlocks new-device enrollment.
+        els.manualBtn.hidden = !(enrollStatusLoaded && enrollUnlocked);
+        if (!enrollUnlocked) els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
         if (els.circlePane) els.circlePane.hidden = true;
@@ -1146,12 +1175,17 @@
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
 
     els.manualBtn.addEventListener("click", () => {
-      if (account) return;
+      if (account || !enrollUnlocked) return;
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
     });
 
     els.saveManualBtn.addEventListener("click", () => {
+      if (!enrollUnlocked) {
+        toast("Enrollment is locked on the VPS");
+        els.manualForm.classList.remove("show");
+        return;
+      }
       const secret = (els.secretInput.value || "").replace(/\s+/g, "").toUpperCase();
       if (secret.length < 16) {
         toast("Secret looks too short");
@@ -1163,6 +1197,7 @@
         account: (els.accountInput.value || "portal").trim() || "portal",
       });
       els.secretInput.value = "";
+      els.manualForm.classList.remove("show");
       toast(loadBioCredId() ? "Saved on this phone" : `Saved — set up ${bioLabel()}`);
       history.replaceState(null, "", location.pathname);
     });
@@ -1268,16 +1303,31 @@
       document.addEventListener(ev, bumpIdle, { passive: true });
     });
 
-    const fromHash = parseHash();
-    if (fromHash) {
-      saveAccount(fromHash);
-      history.replaceState(null, "", location.pathname);
-      toast(loadBioCredId() ? "Account saved on this phone" : `Account saved — set up ${bioLabel()}`);
-    } else {
-      account = loadAccount();
-      unlocked = false;
-      render();
-    }
+    (async () => {
+      await fetchEnrollStatus();
+      const fromHash = parseHash();
+      if (fromHash) {
+        if (!enrollUnlocked) {
+          history.replaceState(null, "", location.pathname);
+          account = loadAccount();
+          unlocked = false;
+          render();
+          toast("Enrollment is locked — unlock new devices in Security first");
+        } else {
+          saveAccount(fromHash);
+          history.replaceState(null, "", location.pathname);
+          toast(loadBioCredId() ? "Account saved on this phone" : `Account saved — set up ${bioLabel()}`);
+        }
+      } else {
+        account = loadAccount();
+        unlocked = false;
+        render();
+      }
+      // Refresh enroll lock occasionally while empty so lock/unlock shows without reload.
+      setInterval(() => {
+        if (!account) fetchEnrollStatus();
+      }, 8000);
+    })();
 
     setInterval(tick, 250);
 

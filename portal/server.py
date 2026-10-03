@@ -11352,10 +11352,18 @@ def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
 def _read_ssh_panel_2fa() -> dict:
     try:
         if not SSH_PANEL_2FA_PATH.is_file():
-            return {"enabled": False, "method": "email"}
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+            }
         data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return {"enabled": False, "method": "email"}
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+            }
         method = str(data.get("method") or "email").strip().lower()
         if method not in ("email", "app"):
             method = "email"
@@ -11365,9 +11373,14 @@ def _read_ssh_panel_2fa() -> dict:
             "totp_secret": str(data.get("totp_secret") or ""),
             "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
             "updated_at": data.get("updated_at"),
+            "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
         }
     except Exception:
-        return {"enabled": False, "method": "email"}
+        return {
+            "enabled": False,
+            "method": "email",
+            "device_enroll_unlocked": False,
+        }
 
 
 def ssh_panel_2fa_enabled() -> bool:
@@ -11378,11 +11391,33 @@ def ssh_panel_2fa_method() -> str:
     return str(_read_ssh_panel_2fa().get("method") or "email")
 
 
+def auth_app_device_enroll_unlocked() -> bool:
+    """Whether phones may add a new authenticator account via Enter secret."""
+    return bool(_read_ssh_panel_2fa().get("device_enroll_unlocked"))
+
+
+def auth_app_enroll_status() -> dict:
+    """Public status for Authenticator PWAs (no secret material)."""
+    unlocked = auth_app_device_enroll_unlocked()
+    return {
+        "enroll_unlocked": unlocked,
+        "device_enroll_unlocked": unlocked,
+        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "message": (
+            "Enrollment unlocked — Enter secret is available in the Authenticator app."
+            if unlocked
+            else "Enrollment locked — Enter secret is hidden until unlocked in Security."
+        ),
+    }
+
+
 def _write_ssh_panel_2fa(
     *,
     enabled: bool,
     method: str = "email",
     totp_secret: str = "",
+    device_enroll_unlocked: bool | None = None,
 ) -> None:
     SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
     method_n = "app" if str(method).lower() == "app" else "email"
@@ -11390,17 +11425,25 @@ def _write_ssh_panel_2fa(
     secret = totp_secret or str(prev.get("totp_secret") or "")
     if method_n != "app":
         secret = ""
+    enroll_flag = (
+        bool(device_enroll_unlocked)
+        if device_enroll_unlocked is not None
+        else bool(prev.get("device_enroll_unlocked"))
+    )
     payload = {
         "enabled": bool(enabled),
         "method": method_n,
         "totp_secret": secret if enabled and method_n == "app" else secret,
         "updated_at": int(time.time()),
         "email_to": EMAIL_CODE_TO,
+        "device_enroll_unlocked": enroll_flag,
     }
     if not enabled:
         # Keep secret only while enabled as app; wipe on disable for safety.
         payload["totp_secret"] = ""
         payload["method"] = method_n
+        # Disabling 2FA also locks new-device enrollment.
+        payload["device_enroll_unlocked"] = False
     with _ssh_panel_2fa_lock:
         SSH_PANEL_2FA_PATH.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
@@ -11409,6 +11452,47 @@ def _write_ssh_panel_2fa(
             os.chmod(SSH_PANEL_2FA_PATH, 0o600)
         except Exception:
             pass
+
+
+def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
+    """Lock/unlock Enter-secret enrollment for new Authenticator devices."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before changing device enrollment")
+    cfg = _read_ssh_panel_2fa()
+    want = bool(unlocked)
+    if want and not (cfg.get("enabled") and cfg.get("method") == "app"):
+        raise ValueError(
+            "Enable Authenticator app two-factor before unlocking new-device enrollment"
+        )
+    secret = str(cfg.get("totp_secret") or "").strip()
+    if want and not secret:
+        raise ValueError("No authenticator secret is enrolled yet")
+    _write_ssh_panel_2fa(
+        enabled=bool(cfg.get("enabled")),
+        method=str(cfg.get("method") or "app"),
+        totp_secret=secret,
+        device_enroll_unlocked=want,
+    )
+    out: dict = {
+        "ok": True,
+        "device_enroll_unlocked": want,
+        "enroll_unlocked": want,
+        "two_factor_enabled": bool(cfg.get("enabled")),
+        "two_factor_method": str(cfg.get("method") or "app"),
+        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "message": (
+            "New-device enrollment unlocked. Enter secret is visible in the Authenticator app until you lock it again."
+            if want
+            else "New-device enrollment locked. Enter secret is hidden in the Authenticator app."
+        ),
+    }
+    if want and secret:
+        out["enroll"] = _totp_provisioning(secret)
+    return out
 
 
 def _normalize_vpn_ip(raw: str) -> str:
@@ -11786,13 +11870,17 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     _purge_ssh_panel_unlocks(now)
     two_factor = ssh_panel_2fa_enabled()
     method = ssh_panel_2fa_method() if two_factor else "email"
+    enroll_unlocked = auth_app_device_enroll_unlocked()
     required = ["portal_password"]
     if two_factor:
         required.append("app_code" if method == "app" else "email_code")
     base = {
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
+        "device_enroll_unlocked": enroll_unlocked,
+        "enroll_unlocked": enroll_unlocked,
         "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -16164,6 +16252,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/branding",
             "/api/health",
             "/api/auth-app/vpn-allowlist",
+            "/api/auth-app/enroll-status",
         ) or path.startswith("/static/"):
             pass  # public (auth-app is the phone authenticator PWA)
         elif path in (
@@ -16891,6 +16980,12 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/auth-app/enroll-status":
+            try:
+                self._json(200, {"ok": True, **auth_app_enroll_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/auth-app/vpn-allowlist":
             try:
                 qs = parse_qs(urlparse(self.path).query)
@@ -17328,6 +17423,32 @@ document.getElementById('f').onsubmit = async (e) => {
                             or ""
                         ),
                     )
+                elif action in (
+                    "device_enroll",
+                    "auth_enroll",
+                    "enroll_devices",
+                    "new_devices",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    unlocked_raw = payload.get(
+                        "unlocked",
+                        payload.get(
+                            "device_enroll_unlocked",
+                            payload.get("enroll_unlocked", payload.get("enabled")),
+                        ),
+                    )
+                    if isinstance(unlocked_raw, str):
+                        unlocked = unlocked_raw.strip().lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "unlock",
+                        )
+                    else:
+                        unlocked = bool(unlocked_raw)
+                    result = set_auth_app_device_enroll(tok, unlocked=unlocked)
                 else:
                     result = unlock_ssh_panel(
                         tok,

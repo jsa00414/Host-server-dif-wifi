@@ -3820,7 +3820,9 @@
         const expiresIn = panelLock.expires_in || 0;
         const twoFactor = !!panelLock.two_factor_enabled;
         const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
+        const deviceEnrollUnlocked = !!panelLock.device_enroll_unlocked;
         const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
+        const authAppAndroidPath = panelLock.auth_app_android_path || "/auth-app.html";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
@@ -3860,10 +3862,34 @@
             <div>
               <div class="method-label">Two-factor · ${escHtml(methodLabel2fa)}</div>
               <div class="method-sub">${escHtml(methodSub2fa)}</div>
-              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a></div>` : ""}
+              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a><a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a></div>` : ""}
             </div>
             <label class="sec-toggle" title="Toggle two-factor">
               <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
+              <span></span>
+            </label>
+          </div>
+          <div class="sec-2fa-row">
+            <div>
+              <div class="method-label">New authenticator devices · ${deviceEnrollUnlocked ? "Unlocked" : "Locked"}</div>
+              <div class="method-sub">${
+                deviceEnrollUnlocked
+                  ? "Enter secret is visible in the Authenticator app so a new phone can enroll. Lock when finished."
+                  : "Locked — Enter secret is hidden in the Authenticator app. Unlock only while adding a new device."
+              }</div>
+              ${deviceEnrollUnlocked ? `<div class="sec-enroll-box" id="secDeviceEnrollBox" style="margin-top:10px;text-align:left">
+                <div class="method-sub" style="margin:0 0 8px">Enrollment open — use Enter secret in the app, or open a setup link:</div>
+                <div class="sec-login-actions">
+                  <a class="primary-link" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+                  <a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a>
+                </div>
+                <div class="method-sub" style="margin-top:8px">Secret and QR load below after unlock so you can type or scan on the new device.</div>
+                <canvas id="secDeviceEnrollQr" width="180" height="180" hidden></canvas>
+                <div class="secret" id="secDeviceEnrollSecret" hidden></div>
+              </div>` : ""}
+            </div>
+            <label class="sec-toggle" title="Unlock new authenticator devices">
+              <input type="checkbox" id="secDeviceEnrollToggle" ${deviceEnrollUnlocked ? "checked" : ""} ${twoFactor && twoFactorMethod === "app" ? "" : "disabled"} />
               <span></span>
             </label>
           </div>
@@ -3940,6 +3966,13 @@
         document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
           setSshPanel2fa(!!ev.target.checked);
         });
+        document.getElementById("secDeviceEnrollToggle")?.addEventListener("change", (ev) => {
+          setAuthDeviceEnroll(!!ev.target.checked);
+        });
+        if (deviceEnrollUnlocked) {
+          // Re-fetch enroll material so QR/secret appear after unlock.
+          setAuthDeviceEnroll(true, { silent: true });
+        }
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -4215,6 +4248,45 @@
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
+      }
+    }
+    async function setAuthDeviceEnroll(unlocked, opts) {
+      const toggle = document.getElementById("secDeviceEnrollToggle");
+      const silent = !!(opts && opts.silent);
+      if (toggle) toggle.disabled = true;
+      if (!silent) setStatus(unlocked ? "Unlocking new-device enrollment…" : "Locking new-device enrollment…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "device_enroll", unlocked: !!unlocked }),
+          timeoutMs: 20000,
+        });
+        if (!silent) setStatus(result.message || (unlocked ? "Enrollment unlocked" : "Enrollment locked"), "ok");
+        const enroll = result.enroll || null;
+        const secretEl = document.getElementById("secDeviceEnrollSecret");
+        const qrEl = document.getElementById("secDeviceEnrollQr");
+        if (unlocked && enroll) {
+          if (secretEl) {
+            secretEl.hidden = false;
+            secretEl.textContent = enroll.secret || "";
+          }
+          if (enroll.otpauth_url) {
+            drawTotpQr("secDeviceEnrollQr", enroll.otpauth_url);
+            if (qrEl) qrEl.hidden = false;
+          }
+          if (enroll.auth_app_path) {
+            const box = document.getElementById("secDeviceEnrollBox");
+            const link = box?.querySelector('a.primary-link');
+            if (link) link.href = enroll.auth_app_path;
+          }
+        }
+        if (!silent) await refreshSecurity(true);
+        else if (toggle) toggle.checked = !!result.device_enroll_unlocked;
+      } catch (e) {
+        if (toggle) toggle.checked = !unlocked;
+        if (!silent) setStatus(String(e.message || e), "err");
+      } finally {
+        if (toggle) toggle.disabled = false;
       }
     }
     async function setSshPanel2fa(enabled, codeFromPopup, opts) {
