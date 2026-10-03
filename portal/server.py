@@ -11330,6 +11330,76 @@ def auth_app_enrolled_lan_ips() -> set[str]:
     return out
 
 
+def list_auth_app_devices() -> list[dict]:
+    """Public-safe enrolled Authenticator device rows for the Security panel."""
+    rows: list[dict] = []
+    for row in _read_auth_app_devices().get("devices") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not _is_home_lan_ipv4(ip) or not row.get("enrolled", True):
+            continue
+        rows.append(
+            {
+                "ip": ip,
+                "note": str(row.get("note") or "")[:120],
+                "platform": str(row.get("platform") or "")[:40],
+                "first_seen": int(row.get("first_seen") or 0),
+                "last_seen": int(row.get("last_seen") or 0),
+                "enrolled": True,
+            }
+        )
+    rows.sort(key=lambda x: int(x.get("last_seen") or 0), reverse=True)
+    return rows
+
+
+def remove_auth_app_device(token: str | None, *, ip: str) -> dict:
+    """Drop an enrolled Authenticator LAN exemption (requires unlocked Security panel)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before removing authenticator devices")
+    want = _normalize_vpn_ip(ip)
+    if not want or not _is_home_lan_ipv4(want):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    data = _read_auth_app_devices()
+    before = list(data.get("devices") or [])
+    kept = [
+        row
+        for row in before
+        if isinstance(row, dict) and _normalize_vpn_ip(row.get("ip", "")) != want
+    ]
+    if len(kept) == len(before):
+        raise ValueError(f"{want} is not an enrolled Authenticator device")
+    data["devices"] = kept
+    _write_auth_app_devices(data)
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    devices = list_auth_app_devices()
+    return {
+        "ok": True,
+        "removed": want,
+        "devices": devices,
+        "auth_app_devices": devices,
+        "message": f"Removed enrolled Authenticator device {want}. Flint gate refreshed.",
+    }
+
+
 def touch_auth_app_device(
     *,
     lan_ip: str = "",
@@ -11374,6 +11444,21 @@ def touch_auth_app_device(
         )
         if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
             raise ValueError("Too many enrolled Authenticator devices")
+        # One new LAN IP per unlock window — spoofed X-SM-Lan-Ip cannot mass-exempt.
+        unlocked_at = int(_read_ssh_panel_2fa().get("device_enroll_unlocked_at") or 0)
+        if unlocked_at > 0:
+            registered_this_window = sum(
+                1
+                for row in by_ip.values()
+                if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
+                and row.get("enrolled", True)
+                and int(row.get("first_seen") or 0) >= unlocked_at
+            )
+            if registered_this_window >= 1:
+                raise ValueError(
+                    "Only one new Authenticator device can enroll per unlock — "
+                    "lock and unlock again in Security to add another"
+                )
         newly_enrolled = True
     row = existing or {"ip": ip, "first_seen": now}
     row.update(
@@ -12500,11 +12585,21 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     required = ["portal_password"]
     if two_factor:
         required.append("app_code" if method == "app" else "email_code")
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    enroll_expires_in = 0
+    if enroll_unlocked and unlocked_at > 0:
+        enroll_expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
+    devices = list_auth_app_devices()
     base = {
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
         "device_enroll_unlocked": enroll_unlocked,
         "enroll_unlocked": enroll_unlocked,
+        "enroll_expires_in": enroll_expires_in,
+        "auth_app_devices": devices,
         "auth_app_path": "/auth-app-iphone.html",
         "auth_app_android_path": "/auth-app.html",
         "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
@@ -18199,6 +18294,17 @@ document.getElementById('f').onsubmit = async (e) => {
                     else:
                         unlocked = bool(unlocked_raw)
                     result = set_auth_app_device_enroll(tok, unlocked=unlocked)
+                elif action in (
+                    "remove_device",
+                    "device_remove",
+                    "revoke_device",
+                    "auth_app_remove",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    result = remove_auth_app_device(
+                        tok, ip=str(payload.get("ip") or payload.get("lan_ip") or "")
+                    )
                 else:
                     result = unlock_ssh_panel(
                         tok,
@@ -18209,7 +18315,7 @@ document.getElementById('f').onsubmit = async (e) => {
                             or payload.get("app_code")
                             or ""
                         ),
-                        client_ip=self.client_address[0],
+                        client_ip=request_client_ip(self),
                     )
                 # Attach fresh ssh snapshot for UI refresh (read-only).
                 ssh = _security_sshd_config()

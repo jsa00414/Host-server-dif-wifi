@@ -3884,7 +3884,7 @@
               <div class="method-label">New authenticator devices · ${deviceEnrollUnlocked ? "Unlocked" : "Locked"}</div>
               <div class="method-sub">${
                 deviceEnrollUnlocked
-                  ? "Enter secret is visible in the Authenticator app so a new phone can enroll. Lock when finished."
+                  ? `Enter secret is visible in the Authenticator app so a new phone can enroll${panelLock.enroll_expires_in ? ` · auto-locks in ~${Math.max(1, Math.ceil(panelLock.enroll_expires_in / 60))} min` : ""}. Lock when finished.`
                   : "Locked — Enter secret is hidden in the Authenticator app. Unlock only while adding a new device."
               }</div>
               ${deviceEnrollUnlocked ? `<div class="sec-enroll-box" id="secDeviceEnrollBox" style="margin-top:10px;text-align:left">
@@ -3898,6 +3898,21 @@
                 <canvas id="secDeviceEnrollQr" width="180" height="180" hidden></canvas>
                 <div class="secret" id="secDeviceEnrollSecret" hidden></div>
               </div>` : ""}
+              ${(() => {
+                const devices = Array.isArray(panelLock.auth_app_devices) ? panelLock.auth_app_devices : [];
+                if (!devices.length) {
+                  return `<div class="sec-empty" style="margin-top:10px">No enrolled Authenticator LAN devices yet.</div>`;
+                }
+                return `<table class="sec-table" style="margin-top:10px"><thead><tr><th>LAN IP</th><th>Platform</th><th>Note</th><th></th></tr></thead><tbody>${
+                  devices.map((d) => `<tr>
+                    <td><code>${escHtml(d.ip || "")}</code></td>
+                    <td>${escHtml(d.platform || "—")}</td>
+                    <td class="sec-users">${escHtml(d.note || "—")}</td>
+                    <td><button type="button" class="ghost danger sec-auth-device-remove" data-ip="${escHtml(d.ip || "")}">Remove</button></td>
+                  </tr>`).join("")
+                }</tbody></table>
+                <div class="method-sub" style="margin-top:6px">Removing drops the Flint pending exemption for that phone LAN IP.</div>`;
+              })()}
             </div>
             <label class="sec-toggle" title="Unlock new authenticator devices">
               <input type="checkbox" id="secDeviceEnrollToggle" ${deviceEnrollUnlocked ? "checked" : ""} ${twoFactor && twoFactorMethod === "app" ? "" : "disabled"} />
@@ -3979,6 +3994,14 @@
         });
         document.getElementById("secDeviceEnrollToggle")?.addEventListener("change", (ev) => {
           setAuthDeviceEnroll(!!ev.target.checked);
+        });
+        document.querySelectorAll(".sec-auth-device-remove").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const ip = btn.getAttribute("data-ip") || "";
+            if (!ip) return;
+            if (!confirm(`Remove enrolled Authenticator device ${ip}?`)) return;
+            removeAuthAppDevice(ip);
+          });
         });
         if (deviceEnrollUnlocked) {
           // Re-fetch enroll material so QR/secret appear after unlock.
@@ -4311,6 +4334,20 @@
         if (!silent) setStatus(String(e.message || e), "err");
       } finally {
         if (toggle) toggle.disabled = false;
+      }
+    }
+    async function removeAuthAppDevice(ip) {
+      setStatus(`Removing Authenticator device ${ip}…`);
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "remove_device", ip }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || `Removed ${ip}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
       }
     }
     async function setSshPanel2fa(enabled, codeFromPopup, opts) {
