@@ -2,9 +2,15 @@
 
 Server lives on the VPS at `/opt/openvpn`. Clients:
 
-- Flint site-to-site: `flint.ovpn` / `GL-MT6000.ovpn` (no full-tunnel)
+- Flint site-to-site: `flint.ovpn` / `GL-MT6000.ovpn` (no full-tunnel) — **VIP `10.9.0.2`**
 - Phone: `james-iphone.ovpn` (full tunnel)
-- Windows PC: `windows.ovpn` (full tunnel + AdGuard DNS)
+- Windows PC: `windows.ovpn` (full tunnel + AdGuard DNS) — **VIP `10.9.0.10`**
+
+CCD files under `/opt/openvpn/ccd/` pin those addresses. Do not let Windows (or
+any other client) take `10.9.0.2` — Caddy proxies `router.vpstruelord.com` to
+that VIP, so a stolen address produces HTTP 502.
+
+Also never DNAT public TCP 8443 to Flint HTTPS; OpenVPN owns that port.
 
 Portal downloads (login required, VPN-only):
 
@@ -17,17 +23,18 @@ Portal downloads (login required, VPN-only):
 Full-tunnel clients push (OpenVPN Connect–compatible):
 
 ```
-dhcp-option DNS 10.9.0.1
+dhcp-option DNS 10.42.42.44
 redirect-gateway def1
 ```
 
-AdGuard rewrites `portal.vpstruelord.com` → `10.9.0.1`, so HTTPS stays on-tunnel
-and Caddy `@vpn_clients` matches `10.9.0.0/24`.
+Portal/router stay on the public A record (`74.208.76.213`); sticky home-WAN ACL
+in Caddy covers gateway-excluded Windows traffic.
 
 Rebuild a profile after changing DNS defaults:
 
 ```bash
 OVPN_REDIRECT_GATEWAY=1 bash /opt/openvpn/scripts/build-client.sh windows
+install -m 644 /opt/openvpn/scripts/ccd-windows /opt/openvpn/ccd/windows
 ```
 
 ### Windows setup

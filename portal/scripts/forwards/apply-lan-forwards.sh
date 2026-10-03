@@ -72,8 +72,22 @@ while read -r other; do
 done < <(docker exec "$WG_CONTAINER" wg show wg0 peers 2>/dev/null || true)
 
 ip route replace "${WG_CIDR}" via "${WG_GW}"
-ip route replace "${LAN_CIDR}" via "${WG_GW}"
-ip route replace "192.168.8.0/24" via "${WG_GW}" 2>/dev/null || true
+# Prefer OpenVPN (tun0 via 10.9.0.2) for home LAN while Flint is connected.
+# Unmetric'd WG replaces steal Caddy→192.168.8.1 and cause router 502s.
+OVPN_GW="${OVPN_FLINT_IP:-10.9.0.2}"
+flint_on_ovpn=0
+if [[ -r /var/log/openvpn-status.log ]] && grep -qE '^flint,' /var/log/openvpn-status.log; then
+  flint_on_ovpn=1
+fi
+if [[ "$flint_on_ovpn" -eq 1 ]] && ip link show tun0 >/dev/null 2>&1; then
+  ip route replace "${LAN_CIDR}" via "${OVPN_GW}" dev tun0 metric 5
+  ip route replace "192.168.8.0/24" via "${OVPN_GW}" dev tun0 metric 5
+  ip route replace "${LAN_CIDR}" via "${WG_GW}" metric 100 2>/dev/null || true
+  ip route replace "192.168.8.0/24" via "${WG_GW}" metric 100 2>/dev/null || true
+else
+  ip route replace "${LAN_CIDR}" via "${WG_GW}"
+  ip route replace "192.168.8.0/24" via "${WG_GW}" 2>/dev/null || true
+fi
 
 iptables -C FORWARD -d "${WG_CIDR}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d "${WG_CIDR}" -j ACCEPT
 iptables -C FORWARD -s "${WG_CIDR}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s "${WG_CIDR}" -j ACCEPT
@@ -189,6 +203,11 @@ apply_one() {
 
 while read -r pub proto dest_ip dest_port name; do
   [[ -z "${pub:-}" || "$pub" =~ ^# ]] && continue
+  # TCP 8443 is OpenVPN — never DNAT it to Flint HTTPS (breaks school VPN + sslh).
+  if [[ "$pub" == "8443" ]]; then
+    echo "skip ${pub}/${proto} (${name:-}) — reserved for OpenVPN"
+    continue
+  fi
   apply_one "$pub" "$proto" "$dest_ip" "$dest_port" "${name:-fwd}"
 done < "$CONF"
 

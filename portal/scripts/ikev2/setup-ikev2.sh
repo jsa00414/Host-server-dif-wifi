@@ -103,6 +103,18 @@ conn ikev2-eap
     rightsendcert=never
     eap_identity=%identity
     auto=add
+
+# Do not ESP-encrypt packets sourced from the VPS public IP. Full-tunnel
+# Windows clients hairpin HTTPS to portal/router via the tunnel; without
+# this bypass, replies leave in the clear and browsers time out.
+conn passthrough-vps
+    type=passthrough
+    left=%any
+    leftsubnet=${VPS_PUBLIC_IP:-74.208.76.213}/32
+    right=%any
+    rightsubnet=0.0.0.0/0
+    authby=never
+    auto=route
 EOF
 
 # Bind charon to WAN only. Advertising docker/tun private ADD_4_ADDR makes
@@ -157,27 +169,31 @@ done
 
 # Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
 #   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh
+_ikev2_install_script() {
+  local src="$1" dest="$2"
+  [[ -f "$src" ]] || return 1
+  if [[ "$(readlink -f "$src" 2>/dev/null || echo "$src")" != "$(readlink -f "$dest" 2>/dev/null || echo "$dest")" ]]; then
+    cp -f "$src" "$dest"
+  fi
+  chmod 0755 "$dest"
+  return 0
+}
+
 if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
   VIA_OVPN_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-via-openvpn.sh"
-  if [[ -f "$VIA_OVPN_SRC" ]]; then
-    cp -f "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
-    chmod 0755 "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"
+  if _ikev2_install_script "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"; then
     bash "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh" || true
   fi
 else
   PUBLIC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-public.sh"
-  if [[ -f "$PUBLIC_SRC" ]]; then
-    cp -f "$PUBLIC_SRC" "$IKEV2_DIR/ensure-ikev2-public.sh"
-    chmod 0755 "$IKEV2_DIR/ensure-ikev2-public.sh"
+  if _ikev2_install_script "$PUBLIC_SRC" "$IKEV2_DIR/ensure-ikev2-public.sh"; then
     bash "$IKEV2_DIR/ensure-ikev2-public.sh" || true
   else
     ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
     ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
   fi
   NO_NEST_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-no-nest.sh"
-  if [[ -f "$NO_NEST_SRC" ]]; then
-    cp -f "$NO_NEST_SRC" "$IKEV2_DIR/ensure-ikev2-no-nest.sh"
-    chmod 0755 "$IKEV2_DIR/ensure-ikev2-no-nest.sh"
+  if _ikev2_install_script "$NO_NEST_SRC" "$IKEV2_DIR/ensure-ikev2-no-nest.sh"; then
     bash "$IKEV2_DIR/ensure-ikev2-no-nest.sh" || true
   fi
 fi
@@ -209,9 +225,7 @@ fi
 
 # VPN-only admin hostnames → 10.11.0.1 lo VIP (avoid public-IP exclusion → 403)
 SPLIT_DNS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-vpn-split-dns.sh"
-if [[ -f "$SPLIT_DNS_SRC" ]]; then
-  cp -f "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"
-  chmod 0755 "$IKEV2_DIR/ensure-vpn-split-dns.sh"
+if _ikev2_install_script "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"; then
   bash "$IKEV2_DIR/ensure-vpn-split-dns.sh" || true
 fi
 
@@ -219,9 +233,7 @@ fi
 PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
 PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
 PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
-if [[ -f "$PEER_ACL_SRC" ]]; then
-  cp -f "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
-  chmod 0755 "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"
+if _ikev2_install_script "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"; then
   [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
   [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
@@ -230,9 +242,7 @@ if [[ -f "$PEER_ACL_SRC" ]]; then
 fi
 
 NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"
-if [[ -f "$NOH3_SRC" ]]; then
-  cp -f "$NOH3_SRC" "$IKEV2_DIR/ensure-caddy-no-h3.sh"
-  chmod 0755 "$IKEV2_DIR/ensure-caddy-no-h3.sh"
+if _ikev2_install_script "$NOH3_SRC" "$IKEV2_DIR/ensure-caddy-no-h3.sh"; then
   bash "$IKEV2_DIR/ensure-caddy-no-h3.sh" || true
 fi
 

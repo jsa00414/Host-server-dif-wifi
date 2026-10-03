@@ -3037,8 +3037,9 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
         raise ValueError("vps rules must be a list")
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT}
-    protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
+    # 8443/tcp is OpenVPN (sslh multiplex / direct) — never DNAT it to Flint HTTPS.
+    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, 8443, NAS_FTP_PUBLIC_PORT}
+    protected_pubs = {8080, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:
             pub = int(rule["pub"])
@@ -3059,11 +3060,10 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
             raise ValueError(f"VPS rule {i + 1}: invalid dest_ip")
         if not NAME_RE.match(name):
             raise ValueError(f"VPS rule {i + 1}: invalid name")
-        # Keep protected admin HTTP/HTTPS public ports immutable
+        # Keep protected admin HTTP / NAS SMB public ports immutable
         if pub in protected_pubs and not external:
             expected = {
                 8080: ("tcp", "192.168.8.1", 80, "flint-http"),
-                8443: ("tcp", "192.168.8.1", 443, "flint-https"),
                 NAS_SMB_FORWARD_PUB: ("tcp", NAS_SMB_HOST, 445, "nas-smb"),
             }[pub]
             proto, dest_ip, dest_port, name = expected
@@ -3997,14 +3997,8 @@ def write_vps_state(rules: list[dict], comments: list[str] | None = None) -> dic
         "name": "flint-http",
         "external": False,
     }
-    by_pub[8443] = {
-        "pub": 8443,
-        "proto": "tcp",
-        "dest_ip": "192.168.8.1",
-        "dest_port": 443,
-        "name": "flint-https",
-        "external": False,
-    }
+    # Never publish 8443→Flint HTTPS: OpenVPN owns TCP 8443 (and sslh→8443).
+    by_pub.pop(8443, None)
     by_pub[NAS_SMB_FORWARD_PUB] = {
         "pub": NAS_SMB_FORWARD_PUB,
         "proto": "tcp",
@@ -4284,8 +4278,10 @@ def _hookup_proxy_upstream(rule: dict) -> str:
 def _router_hookup_site_lines(rule: dict) -> list[str]:
     """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects.
 
-    Prefer the OpenVPN VIP (10.9.0.2) as upstream: after router reboots/firmware
-    updates, LAN iroute to 192.168.8.1 can flap while the VIP stays reachable.
+    Prefer the OpenVPN VIP (10.9.0.2) as upstream. That VIP is reserved for the
+    flint CCD client — other profiles (e.g. windows) must not steal 10.9.0.2 or
+    Caddy returns 502 while dialing the wrong peer. LAN 192.168.8.1 is a
+    fallback only when OVPN iroute + metric prefer tun0 over WireGuard.
     """
     lan_host = ROUTER_ADMIN_HOST
     proxy_host = OVPN_FLINT_VPN_IP or lan_host

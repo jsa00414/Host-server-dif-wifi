@@ -56,5 +56,11 @@ push_flint_lan_allow() {
 if [ "${common_name:-}" = "flint" ]; then
   prefer_ovpn_lan_routes
   push_flint_lan_allow
+  # Non-blocking: keep Flint VPN in policy mode so home Wi‑Fi uses WAN.
+  (
+    sleep 4
+    POLICY_SCRIPT="${OVPN_POLICY_SCRIPT:-/opt/openvpn/scripts/ensure-flint-ovpn-policy.sh}"
+    [ -x "$POLICY_SCRIPT" ] && bash "$POLICY_SCRIPT" || true
+  ) >/tmp/sm-ovpn-flint-policy.log 2>&1 &
 fi
 exit 0
