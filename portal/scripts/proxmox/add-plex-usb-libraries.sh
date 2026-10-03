@@ -1,5 +1,6 @@
 #!/bin/bash
-# Create Plex libraries from known video folders on the WD USB mount.
+# Create four Plex libraries from the Elements USB media folders:
+#   Movies, Kids Movies, TV Shows, KIDS TV SHOWS
 set -euo pipefail
 
 CTID="${CTID:-101}"
@@ -29,46 +30,15 @@ fi
 echo "==> Top-level USB:"
 ls -1 "$CT_MNT" | head -80
 
-# Explicit media roots (skip CinemaCave app copies / installers)
-movie_candidates=(
-  "Movies"
-  "New Movies"
-  "Kids Movies"
-  "kids mp4"
-  "LEAVING NETFLEX"
-  "inport"
-)
-tv_candidates=(
-  "TV Shows"
-  "KIDS TV SHOWS"
+# Four primary library folders (exact names on the Elements drive).
+# Plex section titles match existing libraries already claimed on this server.
+declare -a libs=(
+  "Movies|1|Movies|tv.plex.agents.movie|Plex Movie"
+  "Kids Movies|1|Kids Movies|tv.plex.agents.movie|Plex Movie"
+  "TV Shows|2|TV Shows|tv.plex.agents.series|Plex TV Series"
+  "KIDS TV SHOWS|2|Kids TV Shows|tv.plex.agents.series|Plex TV Series"
 )
 
-movie_locs=()
-tv_locs=()
-for name in "${movie_candidates[@]}"; do
-  p="$CT_MNT/$name"
-  if [[ -d "$p" ]]; then
-    movie_locs+=("$p")
-  fi
-done
-for name in "${tv_candidates[@]}"; do
-  p="$CT_MNT/$name"
-  if [[ -d "$p" ]]; then
-    tv_locs+=("$p")
-  fi
-done
-
-echo "movie_locs:"
-printf '  %s\n' "${movie_locs[@]:-(none)}"
-echo "tv_locs:"
-printf '  %s\n' "${tv_locs[@]:-(none)}"
-
-if [[ ${#movie_locs[@]} -eq 0 && ${#tv_locs[@]} -eq 0 ]]; then
-  echo "No known media folders found" >&2
-  exit 1
-fi
-
-# Ensure plex user can read (ntfs often nobody:nogroup 755 — OK for dirs)
 existing=$(curl -sk --max-time 30 "http://127.0.0.1:32400/library/sections?X-Plex-Token=$TOKEN" || true)
 echo "==> Existing sections snippet:"
 echo "$existing" | head -c 1500; echo
@@ -89,42 +59,48 @@ print(m.group(1) if m else "")
 }
 
 create_or_add() {
-  local name="$1" type="$2" agent="$3" scanner="$4" language="$5"
-  shift 5
-  local locs=("$@")
-  [[ ${#locs[@]} -eq 0 ]] && return 0
+  local name="$1" type="$2" agent="$3" scanner="$4" language="$5" loc="$6"
   local key
   key=$(section_key "$name")
   if [[ -n "$key" ]]; then
-    echo "==> Section '$name' exists (key=$key); adding locations…"
-    for loc in "${locs[@]}"; do
+    echo "==> Section '$name' exists (key=$key); ensuring location $loc…"
+    # Skip add when this path is already attached (Plex returns 404 for duplicate location).
+    if printf '%s' "$existing" | grep -Fq "path=\"$loc\""; then
+      echo "    already hooked: $loc"
+    else
       code=$(curl -sk -o /tmp/plex-loc.out -w '%{http_code}' -X POST \
         "http://127.0.0.1:32400/library/sections/${key}/location?X-Plex-Token=$TOKEN&location=$(q "$loc")" || true)
       echo "    add $loc -> HTTP $code"
       head -c 200 /tmp/plex-loc.out 2>/dev/null; echo
-    done
+    fi
     curl -sk "http://127.0.0.1:32400/library/sections/${key}/refresh?X-Plex-Token=$TOKEN" >/dev/null || true
   else
-    echo "==> Creating section '$name' type=$type"
-    qs="name=$(q "$name")&type=$type&agent=$(q "$agent")&scanner=$(q "$scanner")&language=$(q "$language")&X-Plex-Token=$TOKEN"
-    for loc in "${locs[@]}"; do
-      qs+="&location=$(q "$loc")"
-      echo "    location: $loc"
-    done
+    echo "==> Creating section '$name' type=$type location=$loc"
+    qs="name=$(q "$name")&type=$type&agent=$(q "$agent")&scanner=$(q "$scanner")&language=$(q "$language")&location=$(q "$loc")&X-Plex-Token=$TOKEN"
     code=$(curl -sk -o /tmp/plex-create.out -w '%{http_code}' -X POST "http://127.0.0.1:32400/library/sections?$qs" || true)
     echo "    HTTP $code"
     cat /tmp/plex-create.out; echo
   fi
 }
 
-if [[ ${#movie_locs[@]} -gt 0 ]]; then
-  create_or_add "USB Movies" 1 "tv.plex.agents.movie" "Plex Movie" "en-US" "${movie_locs[@]}"
-fi
-if [[ ${#tv_locs[@]} -gt 0 ]]; then
-  create_or_add "USB TV" 2 "tv.plex.agents.series" "Plex TV Series" "en-US" "${tv_locs[@]}"
+hooked=0
+for entry in "${libs[@]}"; do
+  IFS='|' read -r folder type title agent scanner <<<"$entry"
+  path="$CT_MNT/$folder"
+  if [[ -d "$path" ]]; then
+    echo "==> Hookup folder: $folder → Plex '$title'"
+    create_or_add "$title" "$type" "$agent" "$scanner" "en-US" "$path"
+    hooked=$((hooked + 1))
+  else
+    echo "==> Missing folder (skip): $folder"
+  fi
+done
+
+if [[ "$hooked" -eq 0 ]]; then
+  echo "No known media folders found" >&2
+  exit 1
 fi
 
-# Refresh existing XML cache for section_key of newly created
 existing=$(curl -sk --max-time 30 "http://127.0.0.1:32400/library/sections?X-Plex-Token=$TOKEN" || true)
 curl -sk "http://127.0.0.1:32400/library/sections/all/refresh?X-Plex-Token=$TOKEN" >/dev/null || true
 
@@ -145,5 +121,5 @@ for m in re.finditer(r'<Location\b([^>]*)>', xml):
         return mm.group(1) if mm else ""
     print(f"    Location id={g('id')} path={g('path')}")
 PY
-echo "DONE"
+echo "DONE hooked=${hooked}"
 REMOTE

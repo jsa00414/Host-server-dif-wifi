@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# Elements USB media ingest pipeline (Proxmox host).
+#
+# Layout on WD Elements (/mnt/plex-usb):
+#   inbox/movies/         ← upload movies
+#   inbox/kids-movies/    ← upload kids movies
+#   inbox/tvshows/        ← upload TV episodes
+#   inbox/kids-tvshows/   ← upload kids TV episodes
+#   Movies/               ← Plex movie library
+#   Kids Movies/          ← Plex kids movie library
+#   TV Shows/             ← Plex TV library
+#   KIDS TV SHOWS/        ← Plex kids TV library
+#
+# Usage:
+#   elements-media-pipeline status
+#   elements-media-pipeline ensure-dirs
+#   elements-media-pipeline process
+#   elements-media-pipeline scan
+#   elements-media-pipeline run
+set -euo pipefail
+
+HOST_MNT="${HOST_MNT:-/mnt/plex-usb}"
+CTID="${CTID:-101}"
+CT_MNT="${CT_MNT:-/mnt/usb}"
+INBOX_MOVIES="${HOST_MNT}/inbox/movies"
+INBOX_KIDS_MOVIES="${HOST_MNT}/inbox/kids-movies"
+INBOX_TV="${HOST_MNT}/inbox/tvshows"
+INBOX_KIDS_TV="${HOST_MNT}/inbox/kids-tvshows"
+LIB_MOVIES="${HOST_MNT}/Movies"
+LIB_KIDS_MOVIES="${HOST_MNT}/Kids Movies"
+LIB_TV="${HOST_MNT}/TV Shows"
+LIB_KIDS_TV="${HOST_MNT}/KIDS TV SHOWS"
+STATE_DIR="/etc/proxmox-elements"
+STATE_PATH="${STATE_DIR}/pipeline-last.json"
+VIDEO_EXT_RE='\.(mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|mpg|mpeg|webm)$'
+
+mkdir -p "$STATE_DIR"
+
+die() { echo "$*" >&2; exit 1; }
+
+require_mount() {
+  mountpoint -q "$HOST_MNT" 2>/dev/null || die "Elements not mounted at $HOST_MNT (run elements-plex-hookup attach)"
+}
+
+cmd_ensure_dirs() {
+  require_mount
+  mkdir -p \
+    "$INBOX_MOVIES" "$INBOX_KIDS_MOVIES" "$INBOX_TV" "$INBOX_KIDS_TV" \
+    "$LIB_MOVIES" "$LIB_KIDS_MOVIES" "$LIB_TV" "$LIB_KIDS_TV"
+  touch \
+    "$INBOX_MOVIES/.keep" "$INBOX_KIDS_MOVIES/.keep" \
+    "$INBOX_TV/.keep" "$INBOX_KIDS_TV/.keep" 2>/dev/null || true
+  echo "dirs_ok movies=$LIB_MOVIES kids_movies=$LIB_KIDS_MOVIES tv=$LIB_TV kids_tv=$LIB_KIDS_TV"
+}
+
+count_videos() {
+  local dir="$1"
+  [[ -d "$dir" ]] || { echo 0; return; }
+  find "$dir" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" 2>/dev/null | wc -l
+}
+
+# Count TV series folders that contain video (fallback when Plex is unavailable).
+count_shows() {
+  local dir="$1" n=0 d vids
+  [[ -d "$dir" ]] || { echo 0; return; }
+  while IFS= read -r d; do
+    vids=$(find "$d" -maxdepth 4 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" 2>/dev/null | wc -l)
+    [[ "$vids" -gt 0 ]] && n=$((n + 1))
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name ".*" ! -name "@*" 2>/dev/null)
+  echo "$n"
+}
+
+# Prefer Plex library item count (matches what Plex displays).
+# type: movie | show
+count_plex_library() {
+  local title="$1" typ="${2:-show}"
+  pct exec "$CTID" -- python3 - "$title" "$typ" <<'PY' 2>/dev/null || true
+import re, sys, pathlib, urllib.request
+title, typ = sys.argv[1], sys.argv[2]
+p = pathlib.Path("/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml")
+try:
+    token = re.search(r'PlexOnlineToken="([^"]+)"', p.read_text(errors="replace")).group(1)
+except Exception:
+    raise SystemExit(0)
+xml = urllib.request.urlopen(
+    f"http://127.0.0.1:32400/library/sections?X-Plex-Token={token}", timeout=20
+).read().decode()
+key = ""
+for m in re.finditer(r"<Directory\b([^>]*)>", xml):
+    attrs = m.group(1)
+    tm = re.search(r'title="([^"]*)"', attrs)
+    km = re.search(r'key="([^"]*)"', attrs)
+    typm = re.search(r'type="([^"]*)"', attrs)
+    if tm and km and typm and tm.group(1) == title and typm.group(1) == typ:
+        key = km.group(1)
+        break
+if not key:
+    raise SystemExit(0)
+sec = urllib.request.urlopen(
+    f"http://127.0.0.1:32400/library/sections/{key}/all?X-Plex-Container-Size=0&X-Plex-Token={token}",
+    timeout=30,
+).read().decode()
+m = re.search(r'totalSize="(\d+)"', sec) or re.search(r'size="(\d+)"', sec)
+print(m.group(1) if m else "")
+PY
+}
+
+cmd_status() {
+  local mounted=0
+  local movies_inbox=0 kids_movies_inbox=0 tv_inbox=0 kids_tv_inbox=0
+  local movies_lib=0 kids_movies_lib=0 tv_lib=0 kids_tv_lib=0
+  local plex_movies="" plex_kids_movies="" plex_tv="" plex_kids_tv=""
+  mountpoint -q "$HOST_MNT" 2>/dev/null && mounted=1
+  if [[ "$mounted" -eq 1 ]]; then
+    movies_inbox=$(count_videos "$INBOX_MOVIES")
+    kids_movies_inbox=$(count_videos "$INBOX_KIDS_MOVIES")
+    tv_inbox=$(count_videos "$INBOX_TV")
+    kids_tv_inbox=$(count_videos "$INBOX_KIDS_TV")
+
+    plex_movies=$(count_plex_library "Movies" "movie" | tr -d '[:space:]')
+    plex_kids_movies=$(count_plex_library "Kids Movies" "movie" | tr -d '[:space:]')
+    plex_tv=$(count_plex_library "TV Shows" "show" | tr -d '[:space:]')
+    plex_kids_tv=$(count_plex_library "Kids TV Shows" "show" | tr -d '[:space:]')
+
+    if [[ "$plex_movies" =~ ^[0-9]+$ ]]; then
+      movies_lib="$plex_movies"
+    else
+      movies_lib=$(count_videos "$LIB_MOVIES")
+    fi
+    if [[ "$plex_kids_movies" =~ ^[0-9]+$ ]]; then
+      kids_movies_lib="$plex_kids_movies"
+    else
+      kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
+    fi
+    if [[ "$plex_tv" =~ ^[0-9]+$ ]]; then
+      tv_lib="$plex_tv"
+    else
+      tv_lib=$(count_shows "$LIB_TV")
+    fi
+    if [[ "$plex_kids_tv" =~ ^[0-9]+$ ]]; then
+      kids_tv_lib="$plex_kids_tv"
+    else
+      kids_tv_lib=$(count_shows "$LIB_KIDS_TV")
+    fi
+  fi
+  local last_ok=0 last_at="" last_detail=""
+  if [[ -f "$STATE_PATH" ]]; then
+    eval "$(python3 - "$STATE_PATH" <<'PY'
+import json, sys, shlex
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+print("last_ok=%s" % (1 if d.get("ok") else 0))
+print("last_at=%s" % shlex.quote(str(d.get("at") or "")))
+print("last_detail=%s" % shlex.quote(str(d.get("detail") or "")[:240]))
+PY
+)"
+  fi
+  echo "ok=1 mounted=${mounted} inbox_movies=${movies_inbox} inbox_kids_movies=${kids_movies_inbox} inbox_tv=${tv_inbox} inbox_kids_tv=${kids_tv_inbox} lib_movies=${movies_lib} lib_kids_movies=${kids_movies_lib} lib_tv=${tv_lib} lib_kids_tv=${kids_tv_lib} last_ok=${last_ok:-0} last_at=${last_at:-} host_mnt=${HOST_MNT}"
+  if [[ -n "${last_detail:-}" ]]; then
+    echo "last_detail=${last_detail}"
+  fi
+}
+
+_move_sidecars() {
+  local src="$1" dest_dir="$2"
+  local dir name stem ext f
+  dir=$(dirname "$src")
+  name=$(basename "$src")
+  stem="${name%.*}"
+  shopt -s nullglob
+  for f in "$dir"/"$stem".*; do
+    [[ -f "$f" ]] || continue
+    [[ "$f" == "$src" ]] && continue
+    ext="${f##*.}"
+    if [[ "$ext" =~ ^(srt|sub|idx|nfo|jpg|jpeg|png|txt|SRT|SUB|IDX|NFO|JPG|JPEG|PNG|TXT)$ ]]; then
+      mv -n -- "$f" "$dest_dir/"
+      echo "  sidecar: $(basename "$f") → $dest_dir/"
+    fi
+  done
+  shopt -u nullglob
+}
+
+_process_movies_into() {
+  local inbox="$1" lib="$2" label="$3" key="$4"
+  local f name dest moved=0
+  [[ -d "$inbox" ]] || { echo "${key}_moved=0"; return 0; }
+  while IFS= read -r -d '' f; do
+    name=$(basename "$f")
+    dest="$lib/$name"
+    if [[ -e "$dest" ]]; then
+      echo "  skip exists: $name"
+      continue
+    fi
+    mv -- "$f" "$dest"
+    echo "  movie: $name → ${label}/"
+    _move_sidecars "$f" "$lib"
+    moved=$((moved + 1))
+  done < <(find "$inbox" -maxdepth 2 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
+  echo "${key}_moved=${moved}"
+}
+
+_process_tv_into() {
+  local inbox="$1" lib="$2" label="$3" key="$4"
+  local f name show season ep dest_dir dest moved=0 parsed
+  [[ -d "$inbox" ]] || { echo "${key}_moved=0"; return 0; }
+  while IFS= read -r -d '' f; do
+    name=$(basename "$f")
+    parsed=$(python3 - "$name" <<'PY'
+import re, sys
+name = sys.argv[1]
+stem = name.rsplit(".", 1)[0]
+patterns = [
+    r"^(?P<show>.+?)[.\s_-]+[Ss](?P<season>\d{1,2})[Ee](?P<ep>\d{1,2})(?:[.\s_-]|$)",
+    r"^(?P<show>.+?)\s*-\s*(?P<season>\d{1,2})x(?P<ep>\d{1,2})(?:[.\s_-]|$)",
+    r"^(?P<show>.+?)[.\s_-]+(?P<season>\d{1,2})x(?P<ep>\d{1,2})(?:[.\s_-]|$)",
+]
+for pat in patterns:
+    m = re.search(pat, stem)
+    if m:
+        show = re.sub(r"[._]+", " ", m.group("show"))
+        show = re.sub(r"\s+", " ", show).strip(" -._")
+        print("%s|%s|%s" % (show.title(), int(m.group("season")), int(m.group("ep"))))
+        raise SystemExit(0)
+print("|0|0")
+PY
+)
+    show="${parsed%%|*}"
+    rest="${parsed#*|}"
+    season="${rest%%|*}"
+    ep="${rest##*|}"
+    if [[ -z "$show" || "$season" == "0" ]]; then
+      show="Unsorted"
+      season=1
+      dest_dir="$lib/$show"
+    else
+      dest_dir=$(printf '%s/%s/Season %02d' "$lib" "$show" "$season")
+    fi
+    mkdir -p "$dest_dir"
+    dest="$dest_dir/$name"
+    if [[ -e "$dest" ]]; then
+      echo "  skip exists: $name"
+      continue
+    fi
+    mv -- "$f" "$dest"
+    echo "  tv: $name → ${dest_dir#"$HOST_MNT"/}/"
+    _move_sidecars "$f" "$dest_dir"
+    moved=$((moved + 1))
+  done < <(find "$inbox" -maxdepth 3 -type f -regextype posix-egrep -iregex ".*${VIDEO_EXT_RE}" -print0 2>/dev/null)
+  echo "${key}_moved=${moved}"
+}
+
+_write_state() {
+  local ok="$1" detail="$2"
+  python3 - "$STATE_PATH" "$ok" "$detail" <<'PY'
+import json, pathlib, sys, datetime
+path = pathlib.Path(sys.argv[1])
+ok = sys.argv[2] in ("1", "true", "True")
+detail = sys.argv[3]
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({
+    "ok": ok,
+    "at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "detail": detail,
+}, indent=2) + "\n")
+PY
+}
+
+cmd_process() {
+  cmd_ensure_dirs
+  local mout kmout tout ktout detail
+  echo "=== processing Movies inbox ==="
+  mout=$(_process_movies_into "$INBOX_MOVIES" "$LIB_MOVIES" "Movies" "movies")
+  echo "$mout"
+  echo "=== processing Kids Movies inbox ==="
+  kmout=$(_process_movies_into "$INBOX_KIDS_MOVIES" "$LIB_KIDS_MOVIES" "Kids Movies" "kids_movies")
+  echo "$kmout"
+  echo "=== processing TV Shows inbox ==="
+  tout=$(_process_tv_into "$INBOX_TV" "$LIB_TV" "TV Shows" "tv")
+  echo "$tout"
+  echo "=== processing KIDS TV SHOWS inbox ==="
+  ktout=$(_process_tv_into "$INBOX_KIDS_TV" "$LIB_KIDS_TV" "KIDS TV SHOWS" "kids_tv")
+  echo "$ktout"
+  detail=$(printf '%s; %s; %s; %s' \
+    "$(echo "$mout" | grep movies_moved= || true)" \
+    "$(echo "$kmout" | grep kids_movies_moved= || true)" \
+    "$(echo "$tout" | grep tv_moved= || true)" \
+    "$(echo "$ktout" | grep kids_tv_moved= || true)")
+  _write_state 1 "$detail"
+  echo "process_ok=1 ${detail}"
+}
+
+cmd_scan() {
+  require_mount
+  cmd_ensure_dirs
+  if [[ -x /usr/local/sbin/add-plex-usb-libraries ]]; then
+    echo "=== add-plex-usb-libraries ==="
+    CTID="$CTID" /usr/local/sbin/add-plex-usb-libraries || true
+  elif [[ -x /usr/local/sbin/add-plex-usb-libraries.sh ]]; then
+    CTID="$CTID" /usr/local/sbin/add-plex-usb-libraries.sh || true
+  elif [[ -f /tmp/add-plex-usb-libraries.sh ]]; then
+    CTID="$CTID" bash /tmp/add-plex-usb-libraries.sh || true
+  else
+    echo "add-plex-usb-libraries not installed — refreshing sections only"
+  fi
+  pct exec "$CTID" -- bash -lc '
+    set -e
+    TOKEN=$(python3 - <<'"'"'PY'"'"'
+import re, pathlib
+p = pathlib.Path("/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml")
+t = p.read_text(errors="replace")
+m = re.search(r"PlexOnlineToken=\"([^\"]+)\"", t)
+print(m.group(1) if m else "")
+PY
+)
+    if [[ -n "$TOKEN" ]]; then
+      curl -sk "http://127.0.0.1:32400/library/sections/all/refresh?X-Plex-Token=$TOKEN" >/dev/null || true
+      echo "plex_refresh=1"
+    else
+      echo "plex_refresh=0 (no token)"
+    fi
+  ' 2>/dev/null || echo "plex_refresh=0 (ct exec failed)"
+  echo "scan_ok=1"
+}
+
+cmd_run() {
+  cmd_process
+  cmd_scan
+  cmd_status
+}
+
+usage() {
+  echo "Usage: elements-media-pipeline status|ensure-dirs|process|scan|run"
+}
+
+main() {
+  case "${1:-}" in
+    status) cmd_status ;;
+    ensure-dirs|ensure) cmd_ensure_dirs ;;
+    process|ingest) cmd_process ;;
+    scan|refresh) cmd_scan ;;
+    run|pipeline) cmd_run ;;
+    -h|--help|"") usage; exit 2 ;;
+    *) echo "unknown: $1" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
