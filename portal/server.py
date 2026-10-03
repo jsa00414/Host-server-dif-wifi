@@ -11274,7 +11274,8 @@ AUTH_APP_DEVICES_PATH = Path(
 AUTH_APP_ENROLL_UNLOCK_SECONDS = int(
     os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900")
 )  # auto-relock new-device enrollment
-# Portal / auth-app IP jail: 3 fails → 5 min lockout; fails counted per UTC calendar day.
+# Portal / auth-app IP jail:
+#   3 fails → 10 min lockout; 5 lockout rounds in 1 UTC day → permanent ban.
 IP_JAIL_MAX_FAILS = int(
     os.environ.get(
         "IP_JAIL_MAX_FAILS",
@@ -11284,8 +11285,11 @@ IP_JAIL_MAX_FAILS = int(
 IP_JAIL_LOCKOUT_SECONDS = int(
     os.environ.get(
         "IP_JAIL_LOCKOUT_SECONDS",
-        os.environ.get("AUTH_APP_TOTP_LOCKOUT", "300"),
+        os.environ.get("AUTH_APP_TOTP_LOCKOUT", "600"),
     )
+)
+IP_JAIL_ROUNDS_FOR_PERMANENT = int(
+    os.environ.get("IP_JAIL_ROUNDS_FOR_PERMANENT", "5")
 )
 IP_JAIL_PATH = Path(
     os.environ.get(
@@ -12549,19 +12553,33 @@ def _ip_jail_load() -> dict:
         except Exception:
             data = _ip_jail_empty()
     if str(data.get("day") or "") != today:
-        # Keep active lockouts that still have time left; drop yesterday's fail counts.
+        # Keep permanent bans + active timed lockouts; reset same-day fail/round counts.
         now = time.time()
         kept: dict[str, dict] = {}
         for ip, row in (data.get("ips") or {}).items():
             if not isinstance(row, dict):
                 continue
+            permanent = bool(row.get("permanent"))
             locked_until = float(row.get("locked_until") or 0)
-            if locked_until > now:
+            if permanent:
+                kept[str(ip)] = {
+                    "fails": [],
+                    "fail_count": 0,
+                    "locked_until": 0,
+                    "lock_count": 0,
+                    "permanent": True,
+                    "permanent_at": float(row.get("permanent_at") or now),
+                    "reasons": list(row.get("reasons") or [])[-8:],
+                    "last_reason": str(row.get("last_reason") or "permanent"),
+                    "last_fail_at": float(row.get("last_fail_at") or 0),
+                }
+            elif locked_until > now:
                 kept[str(ip)] = {
                     "fails": [],
                     "fail_count": 0,
                     "locked_until": locked_until,
-                    "lock_count": int(row.get("lock_count") or 0),
+                    "lock_count": 0,
+                    "permanent": False,
                     "reasons": list(row.get("reasons") or [])[-8:],
                     "last_reason": str(row.get("last_reason") or ""),
                     "last_fail_at": float(row.get("last_fail_at") or 0),
@@ -12584,22 +12602,28 @@ def _ip_jail_save(data: dict) -> None:
 
 
 def ip_jail_status_for(client_ip: str) -> dict:
-    """Return lock/fail status for one IP (same UTC day)."""
+    """Return lock/fail status for one IP (same UTC day + permanent flag)."""
     key = _auth_app_totp_client_key(client_ip)
     now = time.time()
     with _ip_jail_lock:
         data = _ip_jail_load()
         row = (data.get("ips") or {}).get(key) or {}
+        permanent = bool(row.get("permanent"))
         locked_until = float(row.get("locked_until") or 0)
         fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+        locked = permanent or locked_until > now
         return {
             "ip": key,
             "day": data.get("day"),
             "fail_count": len(fails),
             "max_fails": max(1, IP_JAIL_MAX_FAILS),
-            "locked": locked_until > now,
-            "locked_until": locked_until if locked_until > now else 0,
-            "retry_after": max(0, int(locked_until - now)) if locked_until > now else 0,
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
+            "locked": locked,
+            "permanent": permanent,
+            "locked_until": 0 if permanent else (locked_until if locked_until > now else 0),
+            "retry_after": 0
+            if permanent
+            else (max(0, int(locked_until - now)) if locked_until > now else 0),
             "lock_count_today": int(row.get("lock_count") or 0),
             "last_reason": str(row.get("last_reason") or ""),
         }
@@ -12608,6 +12632,8 @@ def ip_jail_status_for(client_ip: str) -> dict:
 def ip_jail_assert_allowed(client_ip: str) -> None:
     """Raise ValueError if this IP is currently jailed."""
     st = ip_jail_status_for(client_ip)
+    if st.get("permanent"):
+        raise ValueError("IP permanently banned after repeated lockouts today")
     if st.get("locked"):
         secs = int(st.get("retry_after") or 0) + 1
         raise ValueError(
@@ -12616,7 +12642,10 @@ def ip_jail_assert_allowed(client_ip: str) -> None:
 
 
 def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
-    """Record a failed auth attempt. After 3 fails the same UTC day → 5 min lockout."""
+    """Record a failed auth attempt.
+
+    3 fails → 10 min lockout; 5 lockout rounds in the same UTC day → permanent.
+    """
     key = _auth_app_totp_client_key(client_ip)
     now = time.time()
     reason = str(reason or "auth").strip()[:64] or "auth"
@@ -12624,6 +12653,13 @@ def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
         data = _ip_jail_load()
         ips = data.setdefault("ips", {})
         row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            row["last_reason"] = reason
+            row["last_fail_at"] = now
+            ips[key] = row
+            _ip_jail_save(data)
+            return ip_jail_status_for(key)
+
         locked_until = float(row.get("locked_until") or 0)
         if locked_until > now:
             # Still locked — do not grow fail list, just refresh reason.
@@ -12646,6 +12682,7 @@ def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
                 "reasons": reasons[-16:],
                 "last_reason": reason,
                 "last_fail_at": now,
+                "permanent": False,
             }
         )
         threshold = max(1, IP_JAIL_MAX_FAILS)
@@ -12655,6 +12692,11 @@ def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
             row["lock_count"] = int(row.get("lock_count") or 0) + 1
             row["fails"] = []  # reset streak after locking; day lock_count remains
             row["fail_count"] = 0
+            if int(row["lock_count"]) >= max(1, IP_JAIL_ROUNDS_FOR_PERMANENT):
+                row["permanent"] = True
+                row["permanent_at"] = now
+                row["locked_until"] = 0
+                row["last_reason"] = "permanent"
         ips[key] = row
         data["ips"] = ips
         _ip_jail_save(data)
@@ -12662,7 +12704,10 @@ def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
 
 
 def ip_jail_clear_success(client_ip: str) -> None:
-    """Clear today's fail streak (and active lock) after a successful auth from this IP."""
+    """Clear today's fail streak (and timed lock) after successful auth.
+
+    Permanent bans are never cleared by success.
+    """
     key = _auth_app_totp_client_key(client_ip)
     with _ip_jail_lock:
         data = _ip_jail_load()
@@ -12670,10 +12715,12 @@ def ip_jail_clear_success(client_ip: str) -> None:
         if key not in ips:
             return
         row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            return
         row["fails"] = []
         row["fail_count"] = 0
         row["locked_until"] = 0
-        # Keep lock_count_today for visibility.
+        # Keep lock_count_today for visibility / progression toward permanent.
         ips[key] = row
         data["ips"] = ips
         _ip_jail_save(data)
@@ -12686,9 +12733,11 @@ def build_ip_jail_status() -> dict:
         data = _ip_jail_load()
         locked = []
         watching = []
+        permanent_rows = []
         for ip, row in sorted((data.get("ips") or {}).items()):
             if not isinstance(row, dict):
                 continue
+            permanent = bool(row.get("permanent"))
             locked_until = float(row.get("locked_until") or 0)
             fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
             entry = {
@@ -12699,8 +12748,11 @@ def build_ip_jail_status() -> dict:
                 "last_fail_at": int(float(row.get("last_fail_at") or 0) or 0),
                 "locked_until": int(locked_until) if locked_until > now else 0,
                 "retry_after": max(0, int(locked_until - now)) if locked_until > now else 0,
+                "permanent": permanent,
             }
-            if locked_until > now:
+            if permanent:
+                permanent_rows.append(entry)
+            elif locked_until > now:
                 locked.append(entry)
             elif fails or entry["lock_count_today"]:
                 watching.append(entry)
@@ -12709,8 +12761,11 @@ def build_ip_jail_status() -> dict:
             "day": data.get("day"),
             "max_fails": max(1, IP_JAIL_MAX_FAILS),
             "lockout_seconds": max(30, IP_JAIL_LOCKOUT_SECONDS),
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
             "currently_locked": len(locked),
+            "currently_permanent": len(permanent_rows),
             "locked": locked[:50],
+            "permanent": permanent_rows[:50],
             "watching": watching[:50],
             "path": str(IP_JAIL_PATH),
         }
