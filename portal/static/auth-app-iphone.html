@@ -868,9 +868,13 @@
       const blocks = [];
       if (pending.length) {
         pending.forEach((row) => {
+          const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
+          const detail = isLan
+            ? `${esc(row.status || "pending")} · LAN offline · ${esc(row.name || row.note || "unplugged")}`
+            : `${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
           blocks.push(`<div class="circle-row">
             <div class="ip">${esc(row.ip)}</div>
-            <div class="info">${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits</div>
+            <div class="info">${detail}</div>
             <div class="row-actions">
               <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
               <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>

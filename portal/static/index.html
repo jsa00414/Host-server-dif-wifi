@@ -3716,16 +3716,19 @@
         const pending = circle.pending || [];
         const attempts = circle.attempts || [];
         const pendingRows = pending.length
-          ? pending.map((r) => `<tr>
+          ? pending.map((r) => {
+              const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
+              return `<tr>
               <td><code>${escHtml(r.ip)}</code></td>
-              <td class="sec-users">${escHtml(r.vip || "—")}</td>
-              <td>${escHtml(r.count || 1)}</td>
-              <td class="sec-users">${escHtml(r.status || "pending")}</td>
+              <td class="sec-users">${escHtml(isLan ? (r.name || r.note || "LAN offline") : (r.vip || "—"))}</td>
+              <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
+              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN` : (r.status || "pending"))}</td>
               <td>
                 <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
                 <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
               </td>
-            </tr>`).join("")
+            </tr>`;
+            }).join("")
           : "";
         const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
             <td><code>${escHtml(a.ip)}</code></td>
@@ -3734,9 +3737,9 @@
             <td class="sec-users">${a.trusted ? "trusted" : "guest DNS"}</td>
           </tr>`).join("");
         if (!pendingRows && !attemptRows) {
-          pendingEl.innerHTML = `<div class="sec-empty">No recent IKEv2 WAN attempts.</div>`;
+          pendingEl.innerHTML = `<div class="sec-empty">No pending WAN or offline LAN devices.</div>`;
         } else {
-          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>WAN IP</th><th>VIP</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
+          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>VIP / name</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
             ${pendingRows || `<tr><td colspan="5" class="sec-users">No pending — recent attempts below.</td></tr>`}
             ${attemptRows ? `<tr><td colspan="5" class="sec-users" style="padding-top:10px">Recent attempts</td></tr>${attemptRows}` : ""}
           </tbody></table>`;

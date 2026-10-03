@@ -413,13 +413,29 @@ for vip in list_guest_dns_vips():
         if vip not in {s["vip"] for s in sessions}:
             ensure_guest_dns(vip, enable=False)
 
-# Keep pending for currently interesting IPs (active or recent 7d)
+# Keep pending for currently interesting IPs (active or recent 7d),
+# and preserve LAN-offline pending rows seeded by the portal.
 cutoff = now - 7 * 86400
+preserved_lan = []
+for row in data.get("pending") or []:
+    if not isinstance(row, dict):
+        continue
+    if str(row.get("source") or "") == "lan-offline" or str(row.get("kind") or "") == "lan":
+        ip = normalize_ip(row.get("ip", ""))
+        if ip and ip not in allowed_ips and ip not in denied_ips:
+            preserved_lan.append(row)
+
+merged = {normalize_ip(x.get("ip", "")): x for x in pending_map.values() if isinstance(x, dict)}
+for row in preserved_lan:
+    ip = normalize_ip(row.get("ip", ""))
+    if ip and ip not in merged:
+        merged[ip] = row
+
 data["pending"] = sorted(
-    [v for v in pending_map.values() if int(v.get("last_seen") or 0) >= cutoff],
+    [v for v in merged.values() if int(v.get("last_seen") or 0) >= cutoff or str(v.get("source") or "") == "lan-offline"],
     key=lambda x: int(x.get("last_seen") or 0),
     reverse=True,
-)[:50]
+)[:80]
 data["attempts"] = attempts[-200:]
 save_allowlist(data)
 
