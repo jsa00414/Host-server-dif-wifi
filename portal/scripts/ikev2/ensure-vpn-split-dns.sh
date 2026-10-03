@@ -23,12 +23,12 @@ elif ! ip -4 addr show dev lo 2>/dev/null | grep -q "inet ${VPN_INTERNAL_IP}/"; 
   ip addr add "${VPN_INTERNAL_IP}/32" dev lo 2>/dev/null || true
 fi
 
-# IKEv2 clients must reach host INPUT (sslh on VIP:443)
+# IKEv2 clients: narrow HTTPS only (full host INPUT is allowlist-gated).
 if command -v ufw >/dev/null 2>&1; then
-  if ! ufw status 2>/dev/null | grep -F 'Anywhere                   ALLOW       10.10.0.0/24' | grep -q 'IKEv2 clients to host'; then
-    ufw allow from 10.10.0.0/24 comment 'IKEv2 clients to host' >/dev/null 2>&1 || true
-    echo "  ufw: allow from 10.10.0.0/24"
-  fi
+  ufw delete allow from 10.10.0.0/24 >/dev/null 2>&1 || true
+  ufw allow from 10.10.0.0/24 to any port 443 proto tcp comment 'IKEv2 base HTTPS' >/dev/null 2>&1 || true
+  ufw allow from 10.10.0.0/24 to any port 80 proto tcp comment 'IKEv2 base HTTPS' >/dev/null 2>&1 || true
+  echo "  ufw: IKEv2 base HTTPS (443/80); trust circle via allowlist"
 fi
 
 python3 - <<'PY'
