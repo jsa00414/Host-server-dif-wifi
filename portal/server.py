@@ -1771,6 +1771,12 @@ PLEX_PUBLIC_HOST = (
 )
 PLEX_HOST = os.environ.get("PLEX_HOST", "192.168.8.161").strip() or "192.168.8.161"
 PLEX_PORT = int(os.environ.get("PLEX_PORT", "32400") or "32400")
+GRAFANA_PUBLIC_HOST = (
+    os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
+    or "grafana.vpstruelord.com"
+)
+GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
@@ -4107,6 +4113,10 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
+    elif domain == GRAFANA_PUBLIC_HOST.lower():
+        out["target_host"] = GRAFANA_HOST
+        out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
+        out["name"] = str(out.get("name") or "grafana").strip() or "grafana"
     return out
 
 
@@ -4158,6 +4168,39 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee grafana.vpstruelord.com is present (Grafana on VPS)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = GRAFANA_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **rule,
+                    "enabled": rule.get("enabled", True),
+                    "external": False,
+                    "target_host": GRAFANA_HOST,
+                    "target_port": GRAFANA_PORT,
+                    "name": rule.get("name") or "grafana",
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": GRAFANA_HOST,
+                "target_port": GRAFANA_PORT,
+                "name": "grafana",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4167,7 +4210,7 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_plex_hookup(ensure_proxmox_hookup(out))
+    return ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:

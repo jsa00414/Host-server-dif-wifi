@@ -184,6 +184,7 @@
     #view-files.active,
     #view-buffalo.active,
     #view-proxmox.active,
+    #view-grafana.active,
     #view-pihole.active,
     #view-wireguard.active,
     #view-openvpn.active {
@@ -197,6 +198,7 @@
     #frameBuffalo,
     #frameFiles,
     #frameProxmox,
+    #frameGrafana,
     #frameAdguard,
     #framePihole,
     #frameWireguard,
@@ -1116,6 +1118,7 @@
       body.embed-mode .embed-view.active,
       body.embed-mode #view-buffalo.active,
       body.embed-mode #view-proxmox.active,
+      body.embed-mode #view-grafana.active,
       body.embed-mode #view-files.active,
       body.embed-mode #view-adguard.active,
       body.embed-mode #view-pihole.active,
@@ -1132,6 +1135,7 @@
       body.embed-mode .embed-frame,
       body.embed-mode #frameBuffalo,
       body.embed-mode #frameProxmox,
+      body.embed-mode #frameGrafana,
       body.embed-mode #frameFiles,
       body.embed-mode #frameAdguard,
       body.embed-mode #framePihole,
@@ -1205,6 +1209,9 @@
     <button type="button" class="nav-btn" data-view="proxmox">
       <span class="nav-copy"><span>Proxmox</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="grafana">
+      <span class="nav-copy"><span>Grafana</span></span>
+    </button>
     <button type="button" class="nav-btn" data-view="files">
       <span class="nav-copy"><span>Files</span></span>
     </button>
@@ -1271,6 +1278,11 @@
             <div class="k">Proxmox</div>
             <div class="v">VE</div>
             <div class="s">192.168.8.160</div>
+          </button>
+          <button type="button" class="stat" data-go="grafana">
+            <div class="k">Grafana</div>
+            <div class="v">Dash</div>
+            <div class="s">metrics</div>
           </button>
           <button type="button" class="stat" data-go="files">
             <div class="k">Files</div>
@@ -1588,6 +1600,9 @@
         <iframe class="embed-frame" id="frameProxmox" title="Proxmox VE" src="about:blank" data-src="https://proxmox.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
+      <section class="view embed-view" id="view-grafana">
+        <iframe class="embed-frame" id="frameGrafana" title="Grafana" src="about:blank" data-src="https://grafana.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
 
       <section class="view embed-view" id="view-files">
         <iframe class="embed-frame" id="frameFiles" title="NAS File Manager" src="about:blank" data-src="/nas-files/ui/" allow="clipboard-read; clipboard-write"></iframe>
@@ -2033,6 +2048,7 @@
                     <option value="router">Router</option>
                     <option value="buffalo">Buffalo</option>
                     <option value="proxmox">Proxmox</option>
+                    <option value="grafana">Grafana</option>
                     <option value="files">Files</option>
                     <option value="media">Plex Upload</option>
                     <option value="domains">Domains</option>
@@ -2379,7 +2395,7 @@
     function showView(name) {
       document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
       document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "proxmox" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
+      const embed = name === "adguard" || name === "pihole" || name === "buffalo" || name === "proxmox" || name === "grafana" || name === "files" || name === "wireguard" || name === "openvpn" || name === "windowsvpn";
       document.body.classList.toggle("embed-mode", embed);
       lockMobileViewport();
       if (embed) {
@@ -2409,6 +2425,12 @@
         const f = document.getElementById("frameProxmox");
         if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
           f.src = (f.dataset.src || "https://proxmox.vpstruelord.com/") + "?_sm=" + Date.now();
+        }
+      }
+      if (name === "grafana") {
+        const f = document.getElementById("frameGrafana");
+        if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
+          f.src = (f.dataset.src || "https://grafana.vpstruelord.com/") + "?_sm=" + Date.now();
         }
       }
       if (name === "files") {
@@ -2561,7 +2583,6 @@
       hookupCount.textContent = String(hookupRules.length);
       fwCount.textContent = String(fwRules.length);
       document.getElementById("ovVps").textContent = String(vpsMine);
-      document.getElementById("ovRouter").textContent = String(routerRules.length);
       document.getElementById("ovDomains").textContent = String(hookupRules.length);
       document.getElementById("ovFw").textContent = String(fwRules.length);
       document.getElementById("ovDomainNote").textContent = "";
