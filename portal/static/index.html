@@ -892,9 +892,41 @@
     .sec-ssh-lock-form {
       display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
     }
-    .sec-ssh-lock-form input[type="password"] {
+    .sec-ssh-lock-form input[type="password"],
+    .sec-ssh-lock-form input[type="text"] {
       flex: 1 1 180px; max-width: 280px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
       text-align: center;
+    }
+    .sec-ssh-lock-form input[type="text"] {
+      letter-spacing: .22em; font-size: 1rem;
+    }
+    .sec-2fa-row {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+      margin: 8px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px;
+      background: rgba(0,0,0,.16);
+    }
+    .sec-2fa-row .method-label { font-size: .92rem; }
+    .sec-2fa-row .method-sub { margin-top: 4px; }
+    .sec-toggle {
+      position: relative; width: 46px; height: 26px; flex: 0 0 auto;
+    }
+    .sec-toggle input {
+      opacity: 0; width: 0; height: 0; position: absolute;
+    }
+    .sec-toggle span {
+      position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+      background: rgba(255,255,255,.08); border: 1px solid var(--line);
+      transition: background .15s ease, border-color .15s ease;
+    }
+    .sec-toggle span::before {
+      content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+      border-radius: 50%; background: #c5d5cc; transition: transform .15s ease, background .15s ease;
+    }
+    .sec-toggle input:checked + span {
+      background: rgba(61,222,160,.28); border-color: rgba(61,222,160,.55);
+    }
+    .sec-toggle input:checked + span::before {
+      transform: translateX(20px); background: var(--accent);
     }
     .sec-ssh-lock.unlocked .sec-login-actions { justify-content: center; }
     .sec-ssh-controls[data-locked="1"] {
@@ -3614,22 +3646,38 @@
         const unlocked = !!panelLock.unlocked;
         const unlockSecs = panelLock.unlock_seconds || 300;
         const expiresIn = panelLock.expires_in || 0;
+        const twoFactor = !!panelLock.two_factor_enabled;
+        const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
+          const needCode = !!window.__sshUnlockNeedCode;
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
               <div class="lock-title">Locked</div>
+              ${twoFactor ? `<div class="lock-sub">Two-factor on · code → <code>${escHtml(emailTo)}</code></div>` : ""}
               <div class="sec-ssh-lock-form">
-                <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" />
+                <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" ${needCode ? "readonly" : ""} />
+                ${needCode || twoFactor ? `<input type="text" id="secSshUnlockCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="${needCode ? "Email code" : "Email code (after password)"}" />` : ""}
               </div>
             </div>`;
-          document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
+          const passEl = document.getElementById("secSshUnlockPass");
+          const codeEl = document.getElementById("secSshUnlockCode");
+          passEl?.addEventListener("keydown", (ev) => {
             if (ev.key === "Enter") {
               ev.preventDefault();
               unlockSshPanel();
             }
           });
+          codeEl?.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              unlockSshPanel();
+            }
+          });
+          if (needCode) codeEl?.focus();
+          else passEl?.focus();
           scheduleSshPanelRelock(0);
         } else {
+        window.__sshUnlockNeedCode = false;
         sshEl.innerHTML = `
           <div class="sec-ssh-lock unlocked">
             <div class="lock-title">Unlocked ${secSev("ok")}</div>
@@ -3637,6 +3685,20 @@
             <div class="sec-login-actions">
               <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
             </div>
+          </div>
+          <div class="sec-2fa-row">
+            <div>
+              <div class="method-label">Two-factor (email)</div>
+              <div class="method-sub">Require a code to <code>${escHtml(emailTo)}</code> when unlocking this panel.</div>
+              <div id="sec2faCodeWrap" class="sec-ssh-lock-form" style="display:none;margin-top:10px;justify-content:flex-start">
+                <input type="password" id="sec2faPass" placeholder="Password" autocomplete="current-password" />
+                <input type="text" id="sec2faCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="Email code" />
+              </div>
+            </div>
+            <label class="sec-toggle" title="Toggle two-factor">
+              <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
+              <span></span>
+            </label>
           </div>
           <div class="meta-grid">
             <div class="meta-box"><label>Login method</label><div>${escHtml(methodLabel)}</div></div>
@@ -3708,6 +3770,15 @@
             }</tbody></table>
           </div>`;
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
+          setSshPanel2fa(!!ev.target.checked);
+        });
+        document.getElementById("sec2faCode")?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            setSshPanel2fa(true, true);
+          }
+        });
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -3782,21 +3853,117 @@
     }
     async function unlockSshPanel() {
       const pass = document.getElementById("secSshUnlockPass")?.value || "";
+      const code = document.getElementById("secSshUnlockCode")?.value || "";
       if (!pass) {
         setStatus("Enter the password to unlock.", "err");
         return;
       }
-      setStatus("Unlocking VPS login panel…");
+      if (window.__sshUnlockNeedCode && !code) {
+        setStatus("Enter the email verification code.", "err");
+        return;
+      }
+      setStatus(window.__sshUnlockNeedCode ? "Verifying email code…" : "Unlocking VPS login panel…");
       try {
         const result = await api("/api/security/ssh-unlock", {
           method: "POST",
-          body: JSON.stringify({ action: "unlock", password: pass }),
-          timeoutMs: 20000,
+          body: JSON.stringify({ action: "unlock", password: pass, code }),
+          timeoutMs: 30000,
         });
+        if (result.need_code) {
+          window.__sshUnlockNeedCode = true;
+          setStatus(result.message || "Code sent — check email.", "ok");
+          let codeEl = document.getElementById("secSshUnlockCode");
+          if (!codeEl) {
+            const form = document.querySelector(".sec-ssh-lock-form");
+            if (form) {
+              codeEl = document.createElement("input");
+              codeEl.type = "text";
+              codeEl.id = "secSshUnlockCode";
+              codeEl.inputMode = "numeric";
+              codeEl.autocomplete = "one-time-code";
+              codeEl.maxLength = 8;
+              codeEl.placeholder = "Email code";
+              codeEl.addEventListener("keydown", (ev) => {
+                if (ev.key === "Enter") {
+                  ev.preventDefault();
+                  unlockSshPanel();
+                }
+              });
+              form.appendChild(codeEl);
+            }
+          }
+          const passEl = document.getElementById("secSshUnlockPass");
+          if (passEl) passEl.readOnly = true;
+          codeEl?.focus();
+          return;
+        }
+        window.__sshUnlockNeedCode = false;
+        window.__sshUnlockPassCache = "";
         setStatus(result.message || "Panel unlocked", "ok");
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
+      }
+    }
+    async function setSshPanel2fa(enabled, confirmCode) {
+      const toggle = document.getElementById("sec2faToggle");
+      const wrap = document.getElementById("sec2faCodeWrap");
+      if (!enabled) {
+        if (toggle) toggle.disabled = true;
+        setStatus("Disabling two-factor…");
+        try {
+          const result = await api("/api/security/ssh-unlock", {
+            method: "POST",
+            body: JSON.stringify({ action: "2fa", enabled: false }),
+            timeoutMs: 20000,
+          });
+          setStatus(result.message || "Two-factor disabled", "ok");
+          await refreshSecurity(true);
+        } catch (e) {
+          if (toggle) toggle.checked = true;
+          setStatus(String(e.message || e), "err");
+        } finally {
+          if (toggle) toggle.disabled = false;
+        }
+        return;
+      }
+      const pass = document.getElementById("sec2faPass")?.value || "";
+      const code = document.getElementById("sec2faCode")?.value || "";
+      if (wrap) wrap.style.display = "flex";
+      if (!confirmCode && !code) {
+        if (!pass) {
+          setStatus("Enter !!password!! then toggle again, or fill password below.", "err");
+          if (toggle) toggle.checked = false;
+          document.getElementById("sec2faPass")?.focus();
+          return;
+        }
+      }
+      if (toggle) toggle.disabled = true;
+      setStatus(code ? "Confirming two-factor…" : "Sending verification code…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "2fa",
+            enabled: true,
+            password: pass,
+            code: code,
+          }),
+          timeoutMs: 30000,
+        });
+        if (result.need_code) {
+          setStatus(result.message || "Code sent — enter it below.", "ok");
+          if (toggle) toggle.checked = false;
+          document.getElementById("sec2faCode")?.focus();
+          return;
+        }
+        setStatus(result.message || "Two-factor enabled", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        if (toggle) toggle.checked = false;
+        setStatus(String(e.message || e), "err");
+      } finally {
+        if (toggle) toggle.disabled = false;
       }
     }
     async function lockSshPanel() {
@@ -3807,6 +3974,7 @@
           body: JSON.stringify({ action: "lock" }),
           timeoutMs: 15000,
         });
+        window.__sshUnlockNeedCode = false;
         setStatus(result.message || "Panel locked", "ok");
         await refreshSecurity(true);
       } catch (e) {

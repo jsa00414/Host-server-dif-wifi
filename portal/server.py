@@ -7143,7 +7143,10 @@ def _security_sshd_config() -> dict:
         "expires_at": None,
         "expires_in": 0,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-        "required": ["portal_password"],
+        "two_factor_enabled": ssh_panel_2fa_enabled(),
+        "email_to": EMAIL_CODE_TO,
+        "required": ["portal_password"]
+        + (["email_code"] if ssh_panel_2fa_enabled() else []),
     }
     return out
 
@@ -10774,22 +10777,22 @@ def _email_code_html(code: str, *, minutes: int) -> str:
 </html>"""
 
 
-def send_email_test_code(client_ip: str) -> dict:
-    """Generate + email a 6-digit test code (rate-limited per IP)."""
-    ip = (client_ip or "unknown").strip() or "unknown"
+def send_email_test_code(client_ip: str, *, key: str | None = None) -> dict:
+    """Generate + email a 6-digit code (rate-limited per key/IP)."""
+    store_key = (key or client_ip or "unknown").strip() or "unknown"
     now = time.time()
     with _email_codes_lock:
-        last = float(_email_code_last_send.get(ip) or 0)
+        last = float(_email_code_last_send.get(store_key) or 0)
         wait = EMAIL_CODE_COOLDOWN_SECONDS - (now - last)
         if wait > 0:
             raise ValueError(f"Wait {int(wait) + 1}s before sending another code")
         code = f"{secrets.randbelow(1_000_000):06d}"
-        _email_codes[ip] = {
+        _email_codes[store_key] = {
             "hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
             "expires": now + max(60, EMAIL_CODE_TTL_SECONDS),
             "attempts": 0,
         }
-        _email_code_last_send[ip] = now
+        _email_code_last_send[store_key] = now
 
     minutes = max(1, EMAIL_CODE_TTL_SECONDS // 60)
     # Keep digits out of the subject — OTP-in-subject is a common spam signal.
@@ -10805,7 +10808,7 @@ def send_email_test_code(client_ip: str) -> dict:
         )
     except Exception as exc:
         with _email_codes_lock:
-            _email_codes.pop(ip, None)
+            _email_codes.pop(store_key, None)
         raise RuntimeError(f"Failed to send email: {exc}") from exc
 
     return {
@@ -10816,32 +10819,134 @@ def send_email_test_code(client_ip: str) -> dict:
     }
 
 
-def verify_email_test_code(client_ip: str, code: str) -> dict:
-    ip = (client_ip or "unknown").strip() or "unknown"
+def verify_email_test_code(client_ip: str, code: str, *, key: str | None = None) -> dict:
+    store_key = (key or client_ip or "unknown").strip() or "unknown"
     raw = re.sub(r"\D+", "", str(code or ""))
     if len(raw) != 6:
         raise ValueError("Enter the 6-digit code")
     now = time.time()
     with _email_codes_lock:
-        entry = _email_codes.get(ip)
+        entry = _email_codes.get(store_key)
         if not entry:
             raise ValueError("No code pending — send a new one")
         if float(entry.get("expires") or 0) <= now:
-            _email_codes.pop(ip, None)
+            _email_codes.pop(store_key, None)
             raise ValueError("Code expired — send a new one")
         attempts = int(entry.get("attempts") or 0) + 1
         entry["attempts"] = attempts
         if attempts > 8:
-            _email_codes.pop(ip, None)
+            _email_codes.pop(store_key, None)
             raise ValueError("Too many attempts — send a new code")
         expect = str(entry.get("hash") or "")
         got = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(expect, got):
             raise ValueError("Incorrect code")
-        _email_codes.pop(ip, None)
+        _email_codes.pop(store_key, None)
     return {
         "ok": True,
         "message": "Code accepted. Email path works.",
+    }
+
+
+# Persist 2FA toggle for Security → VPS login method & SSH keys panel.
+SSH_PANEL_2FA_PATH = Path(
+    os.environ.get(
+        "SSH_PANEL_2FA_PATH",
+        "/opt/servermanager/panel/ssh-panel-2fa.json",
+    )
+)
+_ssh_panel_2fa_lock = threading.Lock()
+
+
+def ssh_panel_2fa_enabled() -> bool:
+    try:
+        if not SSH_PANEL_2FA_PATH.is_file():
+            return False
+        data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
+        return bool((data or {}).get("enabled"))
+    except Exception:
+        return False
+
+
+def _write_ssh_panel_2fa(enabled: bool) -> None:
+    SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "enabled": bool(enabled),
+        "updated_at": int(time.time()),
+        "email_to": EMAIL_CODE_TO,
+    }
+    with _ssh_panel_2fa_lock:
+        SSH_PANEL_2FA_PATH.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+        try:
+            os.chmod(SSH_PANEL_2FA_PATH, 0o600)
+        except Exception:
+            pass
+
+
+def _check_ssh_panel_password(password: str) -> None:
+    if not AUTH_PASS:
+        raise ValueError("Password is not configured")
+    expected = f"!!{AUTH_PASS}!!"
+    if not hmac.compare_digest(str(password or ""), expected):
+        time.sleep(0.35)
+        raise ValueError("Incorrect password")
+
+
+def set_ssh_panel_2fa(
+    token: str | None,
+    *,
+    enabled: bool,
+    password: str = "",
+    code: str = "",
+    client_ip: str = "",
+) -> dict:
+    """Enable/disable email 2FA for the VPS login panel (requires unlock)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before changing two-factor settings")
+    want = bool(enabled)
+    if want == ssh_panel_2fa_enabled():
+        return {
+            "ok": True,
+            "two_factor_enabled": want,
+            "email_to": EMAIL_CODE_TO,
+            "message": "Two-factor already "
+            + ("enabled." if want else "disabled."),
+        }
+    if want:
+        # Confirm with email code when turning 2FA on.
+        key = f"ssh-2fa-enable:{token}"
+        if not str(code or "").strip():
+            _check_ssh_panel_password(password)
+            sent = send_email_test_code(client_ip or "panel", key=key)
+            return {
+                "ok": True,
+                "need_code": True,
+                "two_factor_enabled": False,
+                "email_to": EMAIL_CODE_TO,
+                "message": sent.get("message")
+                or "Enter the email code to enable two-factor.",
+            }
+        _check_ssh_panel_password(password)
+        verify_email_test_code(client_ip or "panel", code, key=key)
+        _write_ssh_panel_2fa(True)
+        return {
+            "ok": True,
+            "two_factor_enabled": True,
+            "email_to": EMAIL_CODE_TO,
+            "message": f"Two-factor enabled. Codes go to {EMAIL_CODE_TO}.",
+        }
+    # Disable only needs the panel unlock (already checked).
+    _write_ssh_panel_2fa(False)
+    return {
+        "ok": True,
+        "two_factor_enabled": False,
+        "email_to": EMAIL_CODE_TO,
+        "message": "Two-factor disabled for VPS login panel.",
     }
 
 
@@ -10857,43 +10962,69 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     """Whether this portal session may mutate VPS login / SSH keys."""
     now = time.time()
     _purge_ssh_panel_unlocks(now)
+    two_factor = ssh_panel_2fa_enabled()
+    required = ["portal_password"]
+    if two_factor:
+        required.append("email_code")
+    base = {
+        "two_factor_enabled": two_factor,
+        "email_to": EMAIL_CODE_TO,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "required": required,
+    }
     if not token or not session_valid(token):
         return {
+            **base,
             "unlocked": False,
             "expires_at": None,
             "expires_in": 0,
-            "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-            "required": ["portal_password"],
         }
     with _ssh_panel_unlocks_lock:
         exp = _ssh_panel_unlocks.get(token)
     if not exp or exp <= now:
         return {
+            **base,
             "unlocked": False,
             "expires_at": None,
             "expires_in": 0,
-            "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-            "required": ["portal_password"],
         }
     return {
+        **base,
         "unlocked": True,
         "expires_at": int(exp),
         "expires_in": max(0, int(exp - now)),
-        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-        "required": ["portal_password"],
     }
 
 
-def unlock_ssh_panel(token: str | None, password: str) -> dict:
-    """Unlock SSH panel mutations with !!<portal password>!!."""
+def unlock_ssh_panel(
+    token: str | None,
+    password: str,
+    *,
+    code: str = "",
+    client_ip: str = "",
+) -> dict:
+    """Unlock SSH panel with !!<portal password>!! (+ email code when 2FA on)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
-    if not AUTH_PASS:
-        raise ValueError("Password is not configured")
-    expected = f"!!{AUTH_PASS}!!"
-    if not hmac.compare_digest(str(password or ""), expected):
-        time.sleep(0.35)
-        raise ValueError("Incorrect password")
+    _check_ssh_panel_password(password)
+    two_factor = ssh_panel_2fa_enabled()
+    if two_factor:
+        key = f"ssh-unlock:{token}"
+        if not str(code or "").strip():
+            sent = send_email_test_code(client_ip or "panel", key=key)
+            return {
+                "ok": True,
+                "unlocked": False,
+                "need_code": True,
+                "two_factor_enabled": True,
+                "email_to": EMAIL_CODE_TO,
+                "expires_at": None,
+                "expires_in": 0,
+                "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                "message": sent.get("message")
+                or "Enter the email verification code to unlock.",
+            }
+        verify_email_test_code(client_ip or "panel", code, key=key)
     now = time.time()
     exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
     _purge_ssh_panel_unlocks(now)
@@ -10902,6 +11033,9 @@ def unlock_ssh_panel(token: str | None, password: str) -> dict:
     return {
         "ok": True,
         "unlocked": True,
+        "need_code": False,
+        "two_factor_enabled": two_factor,
+        "email_to": EMAIL_CODE_TO,
         "expires_at": int(exp),
         "expires_in": int(exp - now),
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -10916,6 +11050,9 @@ def lock_ssh_panel(token: str | None) -> dict:
     return {
         "ok": True,
         "unlocked": False,
+        "need_code": False,
+        "two_factor_enabled": ssh_panel_2fa_enabled(),
+        "email_to": EMAIL_CODE_TO,
         "expires_at": None,
         "expires_in": 0,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -16152,14 +16289,42 @@ document.getElementById('f').onsubmit = async (e) => {
                 action = str(payload.get("action") or "unlock").strip().lower()
                 if action in ("lock", "relock"):
                     result = lock_ssh_panel(tok)
+                elif action in ("2fa", "two_factor", "set_2fa"):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    enabled_raw = payload.get("enabled", payload.get("two_factor_enabled"))
+                    if isinstance(enabled_raw, str):
+                        enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
+                    else:
+                        enabled = bool(enabled_raw)
+                    result = set_ssh_panel_2fa(
+                        tok,
+                        enabled=enabled,
+                        password=str(
+                            payload.get("password") or payload.get("portal_password") or ""
+                        ),
+                        code=str(payload.get("code") or payload.get("email_code") or ""),
+                        client_ip=self.client_address[0],
+                    )
                 else:
                     result = unlock_ssh_panel(
-                        tok, str(payload.get("password") or payload.get("portal_password") or "")
+                        tok,
+                        str(payload.get("password") or payload.get("portal_password") or ""),
+                        code=str(payload.get("code") or payload.get("email_code") or ""),
+                        client_ip=self.client_address[0],
                     )
                 # Attach fresh ssh snapshot for UI refresh (read-only).
                 ssh = _security_sshd_config()
-                ssh["panel_lock"] = ssh_panel_unlock_status(tok)
-                result["ssh"] = ssh
+                lock = ssh_panel_unlock_status(tok)
+                if result.get("unlocked") or lock.get("unlocked"):
+                    ssh["panel_lock"] = lock
+                    result["ssh"] = ssh
+                else:
+                    # Keep details hidden while locked; still surface 2FA flags.
+                    result["ssh"] = {"panel_lock": {**lock, **{
+                        k: result[k] for k in ("need_code", "two_factor_enabled", "email_to")
+                        if k in result
+                    }}, "ok": True}
                 self._json(200, result)
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
