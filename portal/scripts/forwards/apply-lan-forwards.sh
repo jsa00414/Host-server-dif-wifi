@@ -109,8 +109,8 @@ done < "$CONF"
 iptables -t nat -F "$CHAIN"
 
 # Public ports that must DNAT only for VPN/LAN clients (not the open internet).
-# Override with space-separated list: VPN_ONLY_FORWARD_PORTS="1445 3389 4000"
-VPN_ONLY_FORWARD_PORTS="${VPN_ONLY_FORWARD_PORTS:-1445 3389 4000}"
+# Override with space-separated list: VPN_ONLY_FORWARD_PORTS="1445 3389 4000 8080 2222 8084"
+VPN_ONLY_FORWARD_PORTS="${VPN_ONLY_FORWARD_PORTS:-1445 3389 4000 8080 2222 8084}"
 VPN_UFW_FROM="${VPN_UFW_FROM:-10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24 10.42.42.0/24 172.16.0.0/12}"
 
 _vpn_forward_sources() {
@@ -151,7 +151,32 @@ apply_one() {
 
   if command -v ufw >/dev/null 2>&1; then
     if _is_vpn_only_forward_port "$pub"; then
-      # Ensure no Anywhere allow remains; add per-CIDR allows.
+      # Drop Anywhere / unscoped allows so only VPN/LAN CIDRs remain.
+      for _ in $(seq 1 30); do
+        numbered="$(ufw status numbered 2>/dev/null || true)"
+        num=""
+        while IFS= read -r line; do
+          [[ "$line" == \[* ]] || continue
+          [[ "$line" == *"${pub}/${proto}"* ]] || continue
+          keep=0
+          for src in $(_vpn_forward_sources); do
+            if [[ "$line" == *"$src"* ]]; then
+              keep=1
+              break
+            fi
+          done
+          [[ "$keep" -eq 1 ]] && continue
+          nraw="${line%%]*}"
+          nraw="${nraw#[}"
+          nraw="${nraw// /}"
+          [[ "$nraw" =~ ^[0-9]+$ ]] || continue
+          if [[ -z "$num" || "$nraw" -gt "$num" ]]; then
+            num="$nraw"
+          fi
+        done <<< "$numbered"
+        [[ -z "${num:-}" ]] && break
+        ufw --force delete "$num" >/dev/null || true
+      done
       for src in $(_vpn_forward_sources); do
         ufw status | grep -qE "${pub}/${proto}.*${src}|${src}.*${pub}/${proto}" \
           || ufw allow from "$src" to any port "$pub" proto "$proto" comment "GL forward ${name}" >/dev/null || true

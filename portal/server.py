@@ -8119,7 +8119,7 @@ def build_security_status() -> dict:
     attackers = _security_attacker_stats(banned)
 
     # WAN probes for high-interest ports
-    probe_ports = [22, 2121, 3016, 5001, 5002, 1445, 445, 3389, 4000]
+    probe_ports = [22, 2121, 3016, 5000, 5001, 5002, 1445, 445, 3389, 4000, 8080, 2222, 8084]
     probes = _security_probe_ports(probe_ports)
     open_map = {p["port"]: p["open"] for p in probes}
 
@@ -8178,12 +8178,16 @@ def build_security_status() -> dict:
     exposure_labels = {
         2121: "NAS FTP gateway",
         3016: "Grafana (should be 127.0.0.1 only)",
+        5000: "remote-desktop HTTP (TCP; WG tunnel is UDP)",
         5001: "WireGuard Easy UI",
         5002: "Portal cleartext HTTP",
         1445: "NAS SMB gateway",
         445: "Samba/SMB",
         3389: "RDP forward",
         4000: "Windows RDP forward",
+        8080: "Flint HTTP forward",
+        2222: "Flint SSH forward",
+        8084: "LAN HTTP forward",
     }
     vpn_only_ports: set[int] = set()
     for p in ufw.get("vpn_only_ports") or []:
