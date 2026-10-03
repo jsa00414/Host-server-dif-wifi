@@ -10727,7 +10727,7 @@ def _email_code_html(code: str, *, minutes: int) -> str:
       <td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;background:#ffffff;border:1px solid #d7e0db;border-radius:12px;">
           <tr>
-            <td align="center" style="padding:28px 28px 8px;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#3d7a5f;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
+            <td align="center" style="padding:28px 28px 8px;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:18px;color:#3d7a5f;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
               ServerManager
             </td>
           </tr>
