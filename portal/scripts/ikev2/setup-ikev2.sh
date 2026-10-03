@@ -85,6 +85,7 @@ conn %default
     dpdaction=clear
     dpddelay=300s
     rekey=no
+    mobike=no
     left=%any
     leftid=@${IKEV2_HOST}
     leftcert=server.crt

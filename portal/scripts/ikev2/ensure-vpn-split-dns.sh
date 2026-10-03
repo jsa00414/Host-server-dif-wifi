@@ -40,7 +40,8 @@ import urllib.request
 api = os.environ["ADGUARD_API"].rstrip("/")
 want_ip = os.environ["VPN_INTERNAL_IP"]
 hosts = [
-    "portal.vpstruelord.com",
+    # portal.vpstruelord.com intentionally omitted: must stay on public A
+    # so Windows IKEv2 can dial the VPS before the tunnel is up.
     "vpn.vpstruelord.com",
     "grafana.vpstruelord.com",
     "proxmox.vpstruelord.com",
