@@ -7150,7 +7150,7 @@ def _security_sshd_config() -> dict:
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
-        "auth_app_path": "/auth-app.html",
+        "auth_app_path": "/auth-app-iphone.html",
         "email_to": EMAIL_CODE_TO,
         "required": required,
     }
@@ -10985,7 +10985,7 @@ def _totp_provisioning(secret_b32: str) -> dict:
         "otpauth_url": uri,
         "account": account,
         "issuer": issuer,
-        "auth_app_path": f"/auth-app.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+        "auth_app_path": f"/auth-app-iphone.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
     }
 
 
@@ -11053,7 +11053,7 @@ def set_ssh_panel_2fa(
                 "two_factor_enabled": True,
                 "two_factor_method": "app",
                 "email_to": EMAIL_CODE_TO,
-                "auth_app_path": "/auth-app.html",
+                "auth_app_path": "/auth-app-iphone.html",
                 "message": "Authenticator app two-factor enabled.",
             }
         # Email method
@@ -11108,7 +11108,7 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     base = {
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
-        "auth_app_path": "/auth-app.html",
+        "auth_app_path": "/auth-app-iphone.html",
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -11161,7 +11161,7 @@ def unlock_ssh_panel(
                     "need_code": True,
                     "two_factor_enabled": True,
                     "two_factor_method": "app",
-                    "auth_app_path": "/auth-app.html",
+                    "auth_app_path": "/auth-app-iphone.html",
                     "email_to": EMAIL_CODE_TO,
                     "expires_at": None,
                     "expires_in": 0,
@@ -11200,7 +11200,7 @@ def unlock_ssh_panel(
         "need_code": False,
         "two_factor_enabled": two_factor,
         "two_factor_method": method if two_factor else "email",
-        "auth_app_path": "/auth-app.html",
+        "auth_app_path": "/auth-app-iphone.html",
         "email_to": EMAIL_CODE_TO,
         "expires_at": int(exp),
         "expires_in": int(exp - now),
@@ -11220,7 +11220,7 @@ def lock_ssh_panel(token: str | None) -> dict:
         "need_code": False,
         "two_factor_enabled": ssh_panel_2fa_enabled(),
         "two_factor_method": method,
-        "auth_app_path": "/auth-app.html",
+        "auth_app_path": "/auth-app-iphone.html",
         "email_to": EMAIL_CODE_TO,
         "expires_at": None,
         "expires_in": 0,
@@ -15476,6 +15476,7 @@ class Handler(BaseHTTPRequestHandler):
             "/login.html",
             "/email-code-test.html",
             "/auth-app.html",
+            "/auth-app-iphone.html",
             "/api/branding",
             "/api/health",
         ) or path.startswith("/static/"):
@@ -15641,6 +15642,10 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/auth-app.html":
             return self._serve_file(
                 STATIC_DIR / "auth-app.html", "text/html; charset=utf-8"
+            )
+        if path == "/auth-app-iphone.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
             )
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
@@ -16190,6 +16195,7 @@ document.getElementById('f').onsubmit = async (e) => {
         if path in (
             "/login.html",
             "/auth-app.html",
+            "/auth-app-iphone.html",
             "/api/branding",
             "/api/health",
         ) or path.startswith("/static/"):

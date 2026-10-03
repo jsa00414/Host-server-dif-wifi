@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#050807" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SM Auth" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest" />
+  <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@600&family=Sora:wght@600;700&display=swap" rel="stylesheet" />
+  <title>SM Auth · iPhone</title>
+  <style>
+    :root {
+      --bg: #050807;
+      --text: #eef7f1;
+      --muted: #7f9588;
+      --accent: #3ddea0;
+      --danger: #ff7a7a;
+      --line: rgba(170, 210, 185, .14);
+      --sat: env(safe-area-inset-top, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Sora", system-ui, sans-serif;
+      overflow: hidden;
+      overscroll-behavior: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    body {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background:
+        radial-gradient(120% 55% at 50% -5%, rgba(61,222,160,.2), transparent 55%),
+        linear-gradient(180deg, #0a1210 0%, var(--bg) 46%, #030504 100%);
+    }
+    header {
+      padding: calc(8px + var(--sat)) calc(16px + var(--sar)) 8px calc(16px + var(--sal));
+      text-align: center;
+    }
+    .brand {
+      margin: 0;
+      color: var(--accent);
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 4px 0 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -.03em;
+    }
+    main {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      width: 100%;
+    }
+    .code-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      width: 100%;
+      position: relative;
+      padding-bottom: 10px;
+    }
+    .code-pane[hidden],
+    .empty[hidden],
+    button[hidden] { display: none !important; }
+    .acct {
+      text-align: center;
+      color: var(--muted);
+      font-size: .72rem;
+      padding: 0 calc(14px + var(--sar)) 14px calc(14px + var(--sal));
+      word-break: break-all;
+    }
+    .code {
+      width: 100%;
+      text-align: center;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: clamp(3.4rem, 17.5vw, 5rem);
+      font-weight: 600;
+      letter-spacing: .18em;
+      padding-left: .18em;
+      line-height: 1;
+      margin: 0;
+    }
+    .bar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 7px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: 100%;
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--accent), #8af0c4);
+      transition: transform .18s linear;
+    }
+    .empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: var(--muted);
+      font-size: .92rem;
+      line-height: 1.45;
+      padding: 24px calc(22px + var(--sar)) 24px calc(22px + var(--sal));
+    }
+    footer {
+      border-top: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      padding: 12px calc(12px + var(--sar)) calc(12px + var(--sab)) calc(12px + var(--sal));
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .install {
+      display: none;
+      border: 1px dashed rgba(61,222,160,.4);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: rgba(61,222,160,.07);
+      font-size: .8rem;
+      line-height: 1.45;
+    }
+    .install.show { display: block; }
+    .install strong { color: var(--accent); }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .actions .wide { grid-column: 1 / -1; }
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      border-radius: 14px;
+      min-height: 48px;
+      padding: 12px 10px;
+      font: inherit;
+      font-size: .86rem;
+      font-weight: 600;
+    }
+    button.primary {
+      background: rgba(61,222,160,.18);
+      border-color: rgba(61,222,160,.5);
+      color: #d9ffe9;
+    }
+    button.danger {
+      border-color: rgba(255,122,122,.4);
+      color: #ffc0c0;
+    }
+    .manual {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .manual.show { display: flex; }
+    .manual label {
+      font-size: .74rem;
+      color: var(--muted);
+    }
+    .manual input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.35);
+      color: var(--text);
+      padding: 12px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .88rem;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .hint {
+      margin: 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: .72rem;
+    }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(18px + var(--sab));
+      transform: translateX(-50%) translateY(16px);
+      background: #132019;
+      border: 1px solid rgba(61,222,160,.4);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: .8rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s ease;
+      z-index: 30;
+      max-width: calc(100% - 28px);
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="brand">ServerManager</p>
+    <h1>iPhone Authenticator</h1>
+  </header>
+
+  <main>
+    <section class="code-pane" id="codePane" hidden>
+      <div class="acct" id="acctLabel"></div>
+      <div class="code" id="codeView">------</div>
+      <div class="bar"><i id="tickBar"></i></div>
+    </section>
+    <div class="empty" id="emptyView">Open the setup link from the portal Security tab on this iPhone to save your account.</div>
+  </main>
+
+  <footer>
+    <div class="install" id="installHint"></div>
+    <div class="actions">
+      <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+      <button type="button" id="manualBtn">Enter secret</button>
+      <button type="button" class="danger wide" id="clearBtn" hidden>Remove account</button>
+    </div>
+    <div class="manual" id="manualForm">
+      <label for="secretInput">Secret from portal</label>
+      <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="NJEPFWCQ…" />
+      <label for="accountInput">Label (optional)</label>
+      <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
+      <button type="button" class="primary" id="saveManualBtn">Save on this iPhone</button>
+    </div>
+    <p class="hint" id="hint">Add to Home Screen for a full-screen app. Codes refresh every 30s.</p>
+  </footer>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const STORE_KEY = "sm.auth.totp.v1";
+    const PERIOD = 30;
+    const DIGITS = 6;
+    const els = {
+      codePane: document.getElementById("codePane"),
+      emptyView: document.getElementById("emptyView"),
+      acctLabel: document.getElementById("acctLabel"),
+      codeView: document.getElementById("codeView"),
+      tickBar: document.getElementById("tickBar"),
+      copyBtn: document.getElementById("copyBtn"),
+      clearBtn: document.getElementById("clearBtn"),
+      installHint: document.getElementById("installHint"),
+      manualBtn: document.getElementById("manualBtn"),
+      manualForm: document.getElementById("manualForm"),
+      secretInput: document.getElementById("secretInput"),
+      accountInput: document.getElementById("accountInput"),
+      saveManualBtn: document.getElementById("saveManualBtn"),
+      toast: document.getElementById("toast"),
+    };
+    let account = null;
+    let toastTimer = null;
+
+    function toast(msg) {
+      els.toast.textContent = msg;
+      els.toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1700);
+    }
+    function loadAccount() {
+      try {
+        const data = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+        if (!data?.secret) return null;
+        return {
+          secret: String(data.secret).replace(/\s+/g, "").toUpperCase(),
+          issuer: String(data.issuer || "ServerManager"),
+          account: String(data.account || "portal"),
+        };
+      } catch (_) { return null; }
+    }
+    function saveAccount(next) {
+      localStorage.setItem(STORE_KEY, JSON.stringify(next));
+      account = next;
+      render();
+    }
+    function clearAccount() {
+      localStorage.removeItem(STORE_KEY);
+      account = null;
+      render();
+      toast("Account removed");
+    }
+    function parseHash() {
+      const hash = (location.hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      const params = new URLSearchParams(hash);
+      const secret = (params.get("secret") || "").replace(/\s+/g, "").toUpperCase();
+      if (!secret) return null;
+      return {
+        secret,
+        issuer: params.get("issuer") || "ServerManager",
+        account: params.get("account") || "portal",
+      };
+    }
+    function b32Decode(secret) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = "";
+      for (const ch of String(secret || "").replace(/=+$/, "").toUpperCase()) {
+        const val = alphabet.indexOf(ch);
+        if (val < 0) continue;
+        bits += val.toString(2).padStart(5, "0");
+      }
+      const bytes = [];
+      for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+      return new Uint8Array(bytes);
+    }
+    async function hmacSha1(keyBytes, msgBytes) {
+      const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+      return new Uint8Array(await crypto.subtle.sign("HMAC", key, msgBytes));
+    }
+    async function totpAt(secret, forTime = Date.now() / 1000) {
+      const counter = Math.floor(forTime / PERIOD);
+      const msg = new Uint8Array(8);
+      let n = counter;
+      for (let i = 7; i >= 0; i--) { msg[i] = n & 0xff; n = Math.floor(n / 256); }
+      const digest = await hmacSha1(b32Decode(secret), msg);
+      const offset = digest[digest.length - 1] & 0x0f;
+      const codeInt =
+        ((digest[offset] & 0x7f) << 24) |
+        ((digest[offset + 1] & 0xff) << 16) |
+        ((digest[offset + 2] & 0xff) << 8) |
+        (digest[offset + 3] & 0xff);
+      return String(codeInt % 10 ** DIGITS).padStart(DIGITS, "0");
+    }
+    function remaining() {
+      return PERIOD - ((Date.now() / 1000) % PERIOD);
+    }
+    async function tick() {
+      if (!account) return;
+      try {
+        els.codeView.textContent = await totpAt(account.secret);
+        els.tickBar.style.transform = `scaleX(${remaining() / PERIOD})`;
+      } catch (_) {
+        els.codeView.textContent = "------";
+      }
+    }
+    function isStandalone() {
+      return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    }
+    function updateInstallUi() {
+      if (isStandalone()) {
+        els.installHint.classList.remove("show");
+        return;
+      }
+      els.installHint.classList.add("show");
+      els.installHint.innerHTML =
+        "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>. Open <strong>SM Auth</strong> from your home screen for full-screen edge-to-edge.";
+    }
+    function render() {
+      if (account) {
+        els.codePane.hidden = false;
+        els.emptyView.hidden = true;
+        els.copyBtn.hidden = false;
+        els.clearBtn.hidden = false;
+        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
+        els.manualForm.classList.remove("show");
+        tick();
+      } else {
+        els.codePane.hidden = true;
+        els.emptyView.hidden = false;
+        els.copyBtn.hidden = true;
+        els.clearBtn.hidden = true;
+        els.codeView.textContent = "------";
+      }
+      updateInstallUi();
+    }
+
+    els.copyBtn.addEventListener("click", async () => {
+      const code = els.codeView.textContent || "";
+      if (!/^\d{6}$/.test(code)) return;
+      try { await navigator.clipboard.writeText(code); toast("Copied"); }
+      catch (_) { toast(code); }
+    });
+    els.clearBtn.addEventListener("click", () => {
+      if (confirm("Remove the authenticator account from this iPhone?")) clearAccount();
+    });
+    els.manualBtn.addEventListener("click", () => {
+      els.manualForm.classList.toggle("show");
+      if (els.manualForm.classList.contains("show")) els.secretInput.focus();
+    });
+    els.saveManualBtn.addEventListener("click", () => {
+      const secret = (els.secretInput.value || "").replace(/\s+/g, "").toUpperCase();
+      if (secret.length < 16) { toast("Secret looks too short"); return; }
+      saveAccount({
+        secret,
+        issuer: "ServerManager",
+        account: (els.accountInput.value || "portal").trim() || "portal",
+      });
+      els.secretInput.value = "";
+      toast("Saved on this iPhone");
+      history.replaceState(null, "", location.pathname);
+    });
+
+    const fromHash = parseHash();
+    if (fromHash) {
+      saveAccount(fromHash);
+      history.replaceState(null, "", location.pathname);
+      toast("Account saved on this iPhone");
+    } else {
+      account = loadAccount();
+      render();
+    }
+    setInterval(tick, 250);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/static/auth-app-iphone-sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>

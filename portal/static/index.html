@@ -3736,7 +3736,7 @@
         const expiresIn = panelLock.expires_in || 0;
         const twoFactor = !!panelLock.two_factor_enabled;
         const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
-        const authAppPath = panelLock.auth_app_path || "/auth-app.html";
+        const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
@@ -3776,7 +3776,7 @@
             <div>
               <div class="method-label">Two-factor · ${escHtml(methodLabel2fa)}</div>
               <div class="method-sub">${escHtml(methodSub2fa)}</div>
-              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open Authenticator app</a></div>` : ""}
+              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a></div>` : ""}
             </div>
             <label class="sec-toggle" title="Toggle two-factor">
               <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
@@ -3939,7 +3939,7 @@
       const enrollHtml = enroll
         ? `<div class="sec-enroll-box">
             <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows.</div>
-            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app.html")}" target="_blank" rel="noopener">Open Authenticator on this phone</a>
+            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
             <canvas id="secEnrollQr" width="180" height="180" aria-label="Authenticator QR"></canvas>
             <div class="secret">${escHtml(enroll.secret || "")}</div>
           </div>`
