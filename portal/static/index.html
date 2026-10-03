@@ -838,6 +838,68 @@
     .sec-sev.ok { color: var(--ok); border-color: rgba(61,222,160,.35); background: var(--accent-dim); }
     .sec-users { color: var(--muted); font-size: .72rem; line-height: 1.4; }
     .sec-empty { color: var(--muted); font-size: .8rem; padding: 8px 0; }
+    .sec-login-method {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+      justify-content: space-between; margin-bottom: 12px;
+    }
+    .sec-login-method .method-label {
+      font-family: "IBM Plex Mono", monospace; font-size: 1rem; font-weight: 600; color: var(--text);
+    }
+    .sec-login-method .method-sub { color: var(--muted); font-size: .78rem; margin-top: 4px; max-width: 42rem; line-height: 1.4; }
+    .sec-login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sec-ssh-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .sec-ssh-section h4 {
+      margin: 0 0 8px; font-size: .82rem; font-weight: 600; color: var(--text);
+    }
+    .sec-ssh-add {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 10px;
+    }
+    .sec-ssh-add textarea {
+      flex: 1 1 280px; min-height: 64px; resize: vertical;
+      font-family: "IBM Plex Mono", monospace; font-size: .72rem;
+    }
+    .sec-ssh-form {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px; margin-top: 10px; align-items: end;
+    }
+    .sec-ssh-form label {
+      display: block; color: var(--muted); font-size: .72rem; margin-bottom: 5px;
+    }
+    .sec-ssh-form input[type="text"] {
+      width: 100%; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+    }
+    .sec-ssh-check {
+      display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .78rem;
+      min-height: 34px;
+    }
+    .sec-ssh-check input { width: auto; }
+    .sec-ssh-lock {
+      margin-bottom: 12px; padding: 16px 14px; border: 1px solid var(--line);
+      border-radius: 12px; background: rgba(226,180,90,.08);
+      text-align: center;
+    }
+    .sec-ssh-lock.unlocked {
+      background: rgba(61,222,160,.06); border-color: rgba(61,222,160,.28);
+    }
+    .sec-ssh-lock .lock-title {
+      font-family: "IBM Plex Mono", monospace; font-size: 1rem; font-weight: 600;
+      letter-spacing: .08em; margin-bottom: 10px; text-transform: uppercase;
+    }
+    .sec-ssh-lock .lock-sub {
+      color: var(--muted); font-size: .76rem; line-height: 1.4; margin-bottom: 10px;
+      text-align: center;
+    }
+    .sec-ssh-lock-form {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
+    }
+    .sec-ssh-lock-form input[type="password"] {
+      flex: 1 1 180px; max-width: 280px; font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+      text-align: center;
+    }
+    .sec-ssh-lock.unlocked .sec-login-actions { justify-content: center; }
+    .sec-ssh-controls[data-locked="1"] {
+      opacity: .55; pointer-events: none; user-select: none; filter: grayscale(.15);
+    }
     .sec-callout {
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
@@ -1518,7 +1580,7 @@
       <section class="view" id="view-security">
         <div class="page-head">
           <h2>Security</h2>
-          <p>Live fail2ban, SSH, exposures, domains, and secret-file checks</p>
+          <p>Live fail2ban, VPS login method, exposures, domains, and secret-file checks</p>
         </div>
         <div class="sec-callout" id="secCallout">
           <div>
@@ -1554,11 +1616,6 @@
         </div>
 
         <div class="panel" style="margin-bottom:14px">
-          <div class="panel-head"><h3>SSH hardening</h3></div>
-          <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
-        </div>
-
-        <div class="panel" style="margin-bottom:14px">
           <div class="panel-head"><h3>Sensitive domains</h3></div>
           <div class="panel-body" id="secDomains"><div class="sec-empty">Loading…</div></div>
         </div>
@@ -1566,6 +1623,13 @@
         <div class="panel" style="margin-bottom:14px">
           <div class="panel-head"><h3>Secret file permissions</h3></div>
           <div class="panel-body" id="secFiles"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head">
+            <h3>VPS login method &amp; SSH keys</h3>
+          </div>
+          <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
         </div>
       </section>
 
@@ -3493,15 +3557,170 @@
       const ssh = data.ssh || {};
       const sshEl = document.getElementById("secSsh");
       if (sshEl) {
+        const method = ssh.login_method || "unknown";
+        const methodLabel = ssh.login_method_label || method;
+        const keysReady = !!ssh.keys_only_ready;
+        const keyCount = ssh.root_authorized_keys ?? 0;
+        const authKeys = Array.isArray(ssh.authorized_keys) ? ssh.authorized_keys : [];
+        const loginUsers = Array.isArray(ssh.login_users) ? ssh.login_users : [];
+        const isKeys = method === "keys_only";
+        const isPw = method === "password_and_keys";
+        const rootMode = ssh.root_login_mode || ssh.permit_root_login || "unknown";
+        const rootLabel = ssh.root_login_label || rootMode;
+        const rootRisk = ssh.root_login_risk || "medium";
+        const rootDetail = ssh.root_login_detail
+          || `permitrootlogin=${ssh.permit_root_login ?? "—"}`;
+        const rootKeysOnly = rootMode === "prohibit-password" || rootMode === "without-password";
+        const rootDenied = rootMode === "no";
+        const rootYes = rootMode === "yes";
         const rows = [
           ["PermitRootLogin", ssh.permit_root_login],
           ["PasswordAuthentication", ssh.password_authentication],
           ["PubkeyAuthentication", ssh.pubkey_authentication],
+          ["KbdInteractiveAuthentication", ssh.kbd_interactive_authentication],
           ["PermitEmptyPasswords", ssh.permit_empty_passwords],
         ];
-        sshEl.innerHTML = `<table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
-          rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
-        }</tbody></table>`;
+        const hint = isKeys
+          ? "Password login is off. Prefer managing root access and keys below."
+          : (isPw
+            ? "Password and SSH keys both work. Prefer keys only once your key is installed."
+            : "Current sshd settings do not match a standard password/keys profile.");
+        const lockHint = keysReady
+          ? `${keyCount} key(s) in /root/.ssh/authorized_keys.`
+          : "No keys in /root/.ssh/authorized_keys — add one before keys-only login.";
+        const keysTable = authKeys.length
+          ? `<table class="sec-table"><thead><tr><th>#</th><th>Type</th><th>Fingerprint</th><th>Comment</th><th></th></tr></thead><tbody>${
+              authKeys.map((k) => `<tr>
+                <td>${escHtml(k.index)}</td>
+                <td><code>${escHtml(k.type || "—")}</code></td>
+                <td><code>${escHtml(k.fingerprint || "—")}</code></td>
+                <td class="sec-users">${escHtml(k.comment || "—")}</td>
+                <td><button type="button" class="ghost danger sec-ssh-remove" data-index="${escHtml(k.index)}" data-fp="${escHtml(k.fingerprint || "")}">Remove</button></td>
+              </tr>`).join("")
+            }</tbody></table>`
+          : `<div class="sec-empty">No root authorized keys yet.</div>`;
+        const usersTable = loginUsers.length
+          ? `<table class="sec-table" style="margin-top:10px"><thead><tr><th>User</th><th>Login</th><th>sudo</th><th>Keys</th><th>Shell</th></tr></thead><tbody>${
+              loginUsers.map((u) => `<tr>
+                <td><code>${escHtml(u.username)}</code></td>
+                <td>${u.login_enabled ? "yes" : "no"}</td>
+                <td>${u.sudo ? "yes" : "no"}</td>
+                <td>${escHtml(u.authorized_keys ?? 0)}</td>
+                <td class="sec-users">${escHtml(u.shell || "")}</td>
+              </tr>`).join("")
+            }</tbody></table>`
+          : `<div class="sec-empty" style="margin-top:8px">No extra login users yet (uid ≥ 1000).</div>`;
+        const panelLock = ssh.panel_lock || {};
+        const unlocked = !!panelLock.unlocked;
+        const unlockSecs = panelLock.unlock_seconds || 300;
+        const expiresIn = panelLock.expires_in || 0;
+        if (!unlocked) {
+          sshEl.innerHTML = `
+            <div class="sec-ssh-lock">
+              <div class="lock-title">Locked</div>
+              <div class="sec-ssh-lock-form">
+                <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" />
+              </div>
+            </div>`;
+          document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              unlockSshPanel();
+            }
+          });
+          scheduleSshPanelRelock(0);
+        } else {
+        sshEl.innerHTML = `
+          <div class="sec-ssh-lock unlocked">
+            <div class="lock-title">Unlocked ${secSev("ok")}</div>
+            <div class="lock-sub">Changes allowed for ~${escHtml(Math.max(1, Math.ceil(expiresIn / 60)))} min. Relock when finished.</div>
+            <div class="sec-login-actions">
+              <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
+            </div>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-box"><label>Login method</label><div>${escHtml(methodLabel)}</div></div>
+            <div class="meta-box"><label>Password login</label><div>${escHtml(ssh.password_authentication ?? "—")}</div></div>
+            <div class="meta-box"><label>Root login</label><div>${escHtml(ssh.permit_root_login ?? "—")}</div></div>
+            <div class="meta-box"><label>Root authorized keys</label><div>${escHtml(keyCount)}</div></div>
+          </div>
+          <div class="method-sub" style="margin:8px 0 4px">${escHtml(hint)} ${escHtml(lockHint)}</div>
+
+          <div class="sec-ssh-controls" data-locked="0">
+            <div class="sec-login-method">
+              <div>
+                <div class="method-label">${escHtml(methodLabel)}</div>
+                <div class="method-sub">Change how the VPS accepts SSH logins.</div>
+              </div>
+              <div class="sec-login-actions">
+                <button type="button" class="primary" id="secSshKeysOnlyBtn" ${isKeys || !keysReady ? "disabled" : ""}>Use SSH keys only</button>
+                <button type="button" class="ghost" id="secSshPasswordBtn" ${isPw ? "disabled" : ""}>Allow password + keys</button>
+              </div>
+            </div>
+
+            <div class="sec-ssh-section">
+              <h4>Root SSH login ${secSev(rootRisk)}</h4>
+              <div class="method-label" style="font-size:.92rem">${escHtml(rootLabel)}</div>
+              <div class="method-sub">${escHtml(rootDetail)}</div>
+              <div class="sec-login-actions" style="margin-top:10px">
+                <button type="button" class="ghost" id="secRootKeysBtn" ${rootKeysOnly ? "disabled" : ""}>Root keys only</button>
+                <button type="button" class="ghost danger" id="secRootDenyBtn" ${rootDenied ? "disabled" : ""}>Disable root SSH</button>
+                <button type="button" class="ghost" id="secRootPasswordBtn" ${rootYes || isKeys ? "disabled" : ""}>Allow root password</button>
+              </div>
+            </div>
+
+            <div class="sec-ssh-section">
+              <h4>Create login user</h4>
+              <div class="method-sub">Create another SSH user (useful before disabling root). Optional auto SSH key downloads once.</div>
+              ${usersTable}
+              <div class="sec-ssh-form">
+                <div>
+                  <label for="secUserName">Username</label>
+                  <input type="text" id="secUserName" placeholder="ops" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserSudo" checked /> <span>sudo access</span></div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserGenKey" checked /> <span>auto-create SSH key</span></div>
+                <div class="sec-ssh-check"><input type="checkbox" id="secUserAlsoRoot" /> <span>also add key to root</span></div>
+                <div>
+                  <button type="button" class="primary" id="secUserCreateBtn">Create user</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sec-ssh-section">
+              <h4>SSH key management</h4>
+              <div class="method-sub" style="margin-bottom:8px">Public keys in <code>/root/.ssh/authorized_keys</code></div>
+              ${keysTable}
+              <div class="sec-login-actions" style="margin:10px 0">
+                <button type="button" class="primary" id="secSshKeyAutoBtn">Auto-create SSH key</button>
+              </div>
+              <div class="sec-ssh-add">
+                <textarea id="secSshKeyInput" placeholder="ssh-ed25519 AAAA… comment" spellcheck="false"></textarea>
+                <button type="button" class="primary" id="secSshKeyAddBtn">Add key</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-ssh-section">
+            <h4>sshd settings</h4>
+            <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
+              rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
+            }</tbody></table>
+          </div>`;
+        document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
+        document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
+        document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
+        document.getElementById("secRootDenyBtn")?.addEventListener("click", () => applySshRootLogin("no"));
+        document.getElementById("secRootPasswordBtn")?.addEventListener("click", () => applySshRootLogin("yes"));
+        document.getElementById("secSshKeyAddBtn")?.addEventListener("click", () => addSshAuthorizedKey());
+        document.getElementById("secSshKeyAutoBtn")?.addEventListener("click", () => autoCreateSshKey());
+        document.getElementById("secUserCreateBtn")?.addEventListener("click", () => createSshLoginUser());
+        sshEl.querySelectorAll(".sec-ssh-remove").forEach((btn) => {
+          btn.addEventListener("click", () => removeSshAuthorizedKey(btn.getAttribute("data-index"), btn.getAttribute("data-fp")));
+        });
+        scheduleSshPanelRelock(expiresIn);
+        }
       }
 
       const domEl = document.getElementById("secDomains");
@@ -3539,6 +3758,7 @@
       if (!quiet) setStatus("Scanning security…");
       try {
         const data = await api("/api/security", { timeoutMs: 60000 });
+        window.__lastSecurityData = data;
         renderSecurity(data);
         if (!quiet) setStatus(`Security score ${data.score ?? "—"}`, data.counts?.high ? "err" : "ok");
       } catch (e) {
@@ -3546,6 +3766,213 @@
         if (!quiet) setStatus(String(e.message || e), "err");
       } finally {
         if (btn) btn.disabled = false;
+      }
+    }
+    let sshPanelRelockTimer = null;
+    function scheduleSshPanelRelock(expiresInSec) {
+      if (sshPanelRelockTimer) {
+        clearTimeout(sshPanelRelockTimer);
+        sshPanelRelockTimer = null;
+      }
+      const sec = Number(expiresInSec) || 0;
+      if (sec <= 0) return;
+      sshPanelRelockTimer = setTimeout(() => {
+        refreshSecurity(true);
+      }, (sec + 1) * 1000);
+    }
+    async function unlockSshPanel() {
+      const pass = document.getElementById("secSshUnlockPass")?.value || "";
+      if (!pass) {
+        setStatus("Enter the password to unlock.", "err");
+        return;
+      }
+      setStatus("Unlocking VPS login panel…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "unlock", password: pass }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || "Panel unlocked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function lockSshPanel() {
+      setStatus("Locking VPS login panel…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "lock" }),
+          timeoutMs: 15000,
+        });
+        setStatus(result.message || "Panel locked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function applySshLoginMethod(method) {
+      const label = method === "keys_only" ? "SSH keys only" : "password + keys";
+      if (method === "keys_only") {
+        const ok = window.confirm(
+          "Switch VPS login to SSH keys only?\n\nPassword login will be disabled. Make sure you can still reach the VPS with your SSH key."
+        );
+        if (!ok) return;
+      }
+      const keysBtn = document.getElementById("secSshKeysOnlyBtn");
+      const pwBtn = document.getElementById("secSshPasswordBtn");
+      if (keysBtn) keysBtn.disabled = true;
+      if (pwBtn) pwBtn.disabled = true;
+      setStatus(`Applying VPS login method: ${label}…`);
+      try {
+        const result = await api("/api/security/ssh-login", {
+          method: "POST",
+          body: JSON.stringify({ method }),
+          timeoutMs: 30000,
+        });
+        setStatus(result.message || `Login method set to ${label}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function applySshRootLogin(mode) {
+      const labels = {
+        "prohibit-password": "root keys only",
+        no: "disable root SSH",
+        yes: "allow root password",
+      };
+      if (mode === "no") {
+        const ok = window.confirm(
+          "Disable root SSH login?\n\nRoot will not be able to sign in over SSH (even with keys). Only do this if another sudo user can still reach the VPS."
+        );
+        if (!ok) return;
+      }
+      setStatus(`Applying root login: ${labels[mode] || mode}…`);
+      try {
+        const result = await api("/api/security/ssh-login", {
+          method: "POST",
+          body: JSON.stringify({ permit_root_login: mode }),
+          timeoutMs: 30000,
+        });
+        setStatus(result.message || `Root login set to ${mode}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function addSshAuthorizedKey() {
+      const input = document.getElementById("secSshKeyInput");
+      const key = (input?.value || "").trim();
+      if (!key) {
+        setStatus("Paste an SSH public key first.", "err");
+        return;
+      }
+      setStatus("Adding SSH public key…");
+      try {
+        const result = await api("/api/security/ssh-keys", {
+          method: "POST",
+          body: JSON.stringify({ action: "add", public_key: key }),
+          timeoutMs: 20000,
+        });
+        if (input) input.value = "";
+        setStatus(result.message || "Key added", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function removeSshAuthorizedKey(index, fingerprint) {
+      const ok = window.confirm(`Remove SSH key #${index}?\n${fingerprint || ""}`);
+      if (!ok) return;
+      setStatus(`Removing SSH key #${index}…`);
+      try {
+        const result = await api("/api/security/ssh-keys", {
+          method: "POST",
+          body: JSON.stringify({ action: "remove", index: Number(index), fingerprint }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || "Key removed", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    function downloadSshPrivateKey(filename, privateKey) {
+      if (!privateKey) return;
+      const name = filename || "id_ed25519";
+      const blob = new Blob([privateKey], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+    async function autoCreateSshKey() {
+      const ok = window.confirm(
+        "Auto-create an ed25519 SSH key for root?\n\nThe private key will download once and is not stored on the VPS."
+      );
+      if (!ok) return;
+      setStatus("Generating SSH key…");
+      try {
+        const result = await api("/api/security/ssh-keys", {
+          method: "POST",
+          body: JSON.stringify({ action: "generate", username: "root", comment: `portal-${Date.now()}` }),
+          timeoutMs: 30000,
+        });
+        downloadSshPrivateKey(result.filename || "id_ed25519_root", result.private_key);
+        setStatus(result.message || "SSH key created — private key downloaded", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    async function createSshLoginUser() {
+      const nameEl = document.getElementById("secUserName");
+      const username = (nameEl?.value || "").trim().toLowerCase();
+      if (!username) {
+        setStatus("Enter a username.", "err");
+        return;
+      }
+      const sudo = !!document.getElementById("secUserSudo")?.checked;
+      const generateKey = !!document.getElementById("secUserGenKey")?.checked;
+      const alsoRoot = !!document.getElementById("secUserAlsoRoot")?.checked;
+      const ok = window.confirm(
+        `Create user “${username}”?${sudo ? "\n• sudo access" : ""}${generateKey ? "\n• auto-create SSH key (private key downloads once)" : ""}${alsoRoot ? "\n• also install key on root" : ""}`
+      );
+      if (!ok) return;
+      setStatus(`Creating user ${username}…`);
+      try {
+        const result = await api("/api/security/ssh-users", {
+          method: "POST",
+          body: JSON.stringify({
+            username,
+            sudo,
+            generate_key: generateKey,
+            also_root: alsoRoot,
+            comment: `${username}@vps`,
+          }),
+          timeoutMs: 60000,
+        });
+        if (result.private_key) {
+          downloadSshPrivateKey(result.filename || `id_ed25519_${username}`, result.private_key);
+        }
+        if (nameEl) nameEl.value = "";
+        setStatus(result.message || `User ${username} created`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
       }
     }
     document.getElementById("secRefreshBtn")?.addEventListener("click", () => refreshSecurity());
