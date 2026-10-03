@@ -6619,8 +6619,9 @@ ROUTER_SSO_CACHE_TTL = int(os.environ.get("ROUTER_SSO_CACHE_TTL", "1800"))
 
 
 def _router_rpc(method: str, params: dict) -> dict:
-    """Call GL.iNet /rpc on the Flint LAN IP (Host must be the router itself)."""
-    url = f"http://{ROUTER_ADMIN_HOST}/rpc"
+    """Call GL.iNet /rpc via OpenVPN VIP (LAN Host header required by oui-access)."""
+    proxy_host = (OVPN_FLINT_VPN_IP or ROUTER_ADMIN_HOST).strip() or ROUTER_ADMIN_HOST
+    url = f"http://{proxy_host}/rpc"
     body = {
         "jsonrpc": "2.0",
         "id": int(time.time() * 1000),
@@ -6644,20 +6645,38 @@ def _router_rpc(method: str, params: dict) -> dict:
     return parsed
 
 
-def _router_login_hash(username: str, password: str, alg: int, salt: str, nonce: str) -> str:
-    """GL.iNet SDK 4.x: unix crypt(password, salt) then md5(user:cipher:nonce)."""
+def _router_login_hash(
+    username: str,
+    password: str,
+    alg: int,
+    salt: str,
+    nonce: str,
+    hash_method: str = "sha256",
+) -> str:
+    """GL.iNet SDK 4.x login digest.
+
+    Firmware 4.11+ returns hash-method=sha256 (older builds used md5):
+    unix crypt(password, $<alg>$<salt>$) then H(user:cipher:nonce).
+    """
     alg = int(alg)
     if alg == 1:
         cipher = crypt.crypt(password, f"$1${salt}$")
     elif alg == 5:
-        cipher = crypt.crypt(password, f"$5$rounds=5000${salt}$")
+        # Match /etc/shadow ($5$salt$...); do not force rounds=5000 prefix.
+        cipher = crypt.crypt(password, f"$5${salt}$")
     elif alg == 6:
-        cipher = crypt.crypt(password, f"$6$rounds=5000${salt}$")
+        cipher = crypt.crypt(password, f"$6${salt}$")
     else:
         raise RuntimeError(f"Unsupported router login alg: {alg}")
     if not cipher:
         raise RuntimeError("Router login hash generation failed (crypt unavailable)")
-    return hashlib.md5(f"{username}:{cipher}:{nonce}".encode()).hexdigest()
+    material = f"{username}:{cipher}:{nonce}".encode()
+    method = (hash_method or "sha256").strip().lower()
+    if method == "md5":
+        return hashlib.md5(material).hexdigest()
+    if method in {"sha256", "sha-256"}:
+        return hashlib.sha256(material).hexdigest()
+    raise RuntimeError(f"Unsupported router hash-method: {hash_method}")
 
 
 def router_sso_login() -> dict:
@@ -6691,7 +6710,14 @@ def router_sso_login() -> dict:
     if not nonce:
         raise RuntimeError(f"Router challenge failed: {ch}")
 
-    digest = _router_login_hash("root", ROUTER_PASS, alg, salt, nonce)
+    digest = _router_login_hash(
+        "root",
+        ROUTER_PASS,
+        alg,
+        salt,
+        nonce,
+        str(result.get("hash-method") or "sha256"),
+    )
     login = _router_rpc(
         "login",
         {"username": "root", "hash": digest, "alg": alg, "salt": salt},
