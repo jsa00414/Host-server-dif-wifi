@@ -10644,6 +10644,96 @@ def check_credentials(username: str, password: str) -> bool:
     )
 
 
+_pending_logins: dict[str, dict] = {}
+_pending_logins_lock = threading.Lock()
+PENDING_LOGIN_TTL_SECONDS = int(os.environ.get("PENDING_LOGIN_TTL_SECONDS", "300"))
+
+
+def _purge_pending_logins(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    with _pending_logins_lock:
+        dead = [k for k, v in _pending_logins.items() if float(v.get("exp") or 0) <= ts]
+        for k in dead:
+            _pending_logins.pop(k, None)
+
+
+def portal_login_2fa_method() -> str:
+    """Prefer authenticator app when a TOTP secret exists; otherwise email codes."""
+    cfg = _read_ssh_panel_2fa()
+    if str(cfg.get("totp_secret") or "").strip():
+        return "app"
+    return "email"
+
+
+def begin_portal_login(*, username: str, password: str, client_ip: str = "") -> dict:
+    """Step 1: password OK → issue pending login and request 2FA code."""
+    if not check_credentials(username, password):
+        raise PermissionError("Invalid username or password")
+    method = portal_login_2fa_method()
+    login_token = secrets.token_urlsafe(24)
+    now = time.time()
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        _pending_logins[login_token] = {
+            "exp": now + max(60, PENDING_LOGIN_TTL_SECONDS),
+            "user": AUTH_USER,
+            "ip": client_ip or "",
+            "method": method,
+        }
+    if method == "app":
+        return {
+            "ok": True,
+            "need_code": True,
+            "two_factor_method": "app",
+            "login_token": login_token,
+            "message": "Enter the code from your Authenticator app.",
+        }
+    sent = send_email_test_code(client_ip or "login", key=f"portal-login:{login_token}")
+    return {
+        "ok": True,
+        "need_code": True,
+        "two_factor_method": "email",
+        "login_token": login_token,
+        "message": sent.get("message") or "Enter the email verification code.",
+    }
+
+
+def complete_portal_login(
+    *,
+    login_token: str,
+    code: str,
+    client_ip: str = "",
+) -> dict:
+    """Step 2: verify 2FA code for a pending login, then create session."""
+    token = str(login_token or "").strip()
+    if not token:
+        raise ValueError("Login session expired. Sign in again.")
+    now = time.time()
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        pending = _pending_logins.get(token)
+    if not pending or float(pending.get("exp") or 0) <= now:
+        raise ValueError("Login session expired. Sign in again.")
+    method = str(pending.get("method") or "email")
+    if method == "app":
+        secret = str(_read_ssh_panel_2fa().get("totp_secret") or "")
+        if not verify_totp_code(secret, code):
+            time.sleep(0.25)
+            raise ValueError("Incorrect authenticator code")
+    else:
+        verify_email_test_code(client_ip or "login", code, key=f"portal-login:{token}")
+    with _pending_logins_lock:
+        _pending_logins.pop(token, None)
+    session = create_session()
+    return {
+        "ok": True,
+        "need_code": False,
+        "user": AUTH_USER,
+        "session": session,
+        "message": "Signed in.",
+    }
+
+
 # --- Email verification code test (portalvpsserver@truemailor.com → Gmail) ---
 EMAIL_CODE_TO = os.environ.get(
     "EMAIL_CODE_TO", "portalvpsserver@truemailor.com"
@@ -16246,18 +16336,58 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/api/login":
             try:
                 payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
                 user = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
+                code = str(
+                    payload.get("code")
+                    or payload.get("email_code")
+                    or payload.get("app_code")
+                    or ""
+                ).strip()
+                login_token = str(
+                    payload.get("login_token") or payload.get("pending_token") or ""
+                ).strip()
             except Exception:
                 self._json(400, {"error": "invalid json"})
                 return
-            if not check_credentials(user, password):
+            try:
+                if login_token and code:
+                    result = complete_portal_login(
+                        login_token=login_token,
+                        code=code,
+                        client_ip=self.client_address[0],
+                    )
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "user": result.get("user") or AUTH_USER,
+                            "message": result.get("message") or "Signed in.",
+                        },
+                        set_cookie=str(result.get("session") or ""),
+                    )
+                    return
+                if not user or not password:
+                    self._json(400, {"error": "Username and password required"})
+                    return
+                result = begin_portal_login(
+                    username=user,
+                    password=password,
+                    client_ip=self.client_address[0],
+                )
+                # Never create a session until 2FA succeeds.
+                self._json(200, result)
+            except PermissionError as exc:
                 log_failed_login(self.client_address[0], user or "?")
                 time.sleep(0.35)
-                self._json(401, {"error": "Invalid username or password"})
-                return
-            token = create_session()
-            self._json(200, {"ok": True, "user": AUTH_USER}, set_cookie=token)
+                self._json(401, {"error": str(exc) or "Invalid username or password"})
+            except ValueError as exc:
+                time.sleep(0.25)
+                self._json(403, {"error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
             return
         if path == "/api/email-code/send":
             try:
