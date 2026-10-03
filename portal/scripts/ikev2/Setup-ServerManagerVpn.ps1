@@ -1,5 +1,10 @@
 # ServerManager - Windows built-in IKEv2 VPN setup
 # Run in elevated PowerShell (Run as administrator) OR use the .cmd launcher.
+#
+# IKEv2 is reachable only through OpenVPN on the VPS:
+#   1) Connect OpenVPN (windows.ovpn) first
+#   2) Then connect this IKEv2 profile to portal.vpstruelord.com
+#      (OpenVPN DNS resolves it to 10.9.0.1 on tun0)
 param(
   [string]$Server = "portal.vpstruelord.com",
   [string]$Name = "ServerManager IKEv2",
@@ -7,7 +12,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "Creating Windows VPN profile '$Name' -> $Server (IKEv2)..."
+Write-Host "Creating Windows VPN profile '$Name' -> $Server (IKEv2 via OpenVPN)..."
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
   [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -47,9 +52,6 @@ Set-VpnConnectionIPsecConfiguration `
   -AllUserConnection `
   -Force
 
-# Prefer VPN DNS so AdGuard can rewrite portal/admin → 10.9.0.1 (on-tunnel).
-# Edge/Chrome DoH can still bypass this; the server also allows active IKEv2
-# peer WAN IPs while the tunnel is up.
 try {
   Set-VpnConnection -Name $Name -AllUserConnection -DnsSuffix "vpstruelord.com" -Force -ErrorAction Stop
 } catch {
@@ -57,15 +59,11 @@ try {
 }
 
 Write-Host ""
-Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
+Write-Host "Done. Use this order:"
+Write-Host "  1) Connect OpenVPN (windows.ovpn) first"
+Write-Host "  2) Settings -> Network & internet -> VPN -> connect '$Name'"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
-Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
-Write-Host ""
-Write-Host "If portal shows Forbidden while VPN is connected:"
-Write-Host "  1) Disconnect/reconnect the VPN"
-Write-Host "  2) In elevated CMD: ipconfig /flushdns"
-Write-Host "  3) Disable Secure DNS / DoH in the browser (Edge/Chrome) for this test"
-Write-Host "  4) Or open https://10.9.0.1 and accept the cert name mismatch"
+Write-Host "IKEv2 is not open on the public internet anymore — only via OpenVPN."
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

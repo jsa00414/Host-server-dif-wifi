@@ -29,6 +29,22 @@ No private CA install is required.
 | DNS | `10.9.0.1` → AdGuard → Pi-hole |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 
+## IKEv2 via OpenVPN (nested)
+
+IKEv2 no longer listens on the public WAN. It binds to OpenVPN `tun0` only.
+
+```bash
+bash /opt/ikev2/ensure-ikev2-via-openvpn.sh
+```
+
+Client order:
+
+1. Connect **OpenVPN** (`windows.ovpn` / phone profile) — DNS = `10.9.0.1`
+2. Connect **IKEv2** to `portal.vpstruelord.com` (AdGuard resolves it to `10.9.0.1`)
+3. Open https://portal.vpstruelord.com
+
+UDP 500/4500 are allowed only from `10.9.0.0/24` (and other VPN/LAN ranges), not Anywhere.
+
 ## Portal / admin sites while on IKEv2
 
 iOS/Windows exclude the VPN gateway public IP from the tunnel. If DNS returns
