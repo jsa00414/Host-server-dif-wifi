@@ -148,10 +148,16 @@ def save_allowlist(data: dict) -> None:
 
 def sync_sticky(allowed: list[dict]) -> None:
     sticky_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["# Managed by vpn allowlist — approved sticky WAN IPs", "# one IPv4 per line"]
+    lines = [
+        "# Managed by vpn allowlist — approved sticky WAN + LAN IPs",
+        "# Hidden-from-Authenticator rows stay sticky-allowlisted.",
+        "# one IPv4 /32 per line",
+    ]
     for row in allowed:
+        if not isinstance(row, dict):
+            continue
         ip = normalize_ip(row.get("ip", ""))
-        if ip and is_public_ipv4(ip):
+        if ip and (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
             lines.append(f"{ip}/32")
     sticky_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
