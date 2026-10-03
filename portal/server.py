@@ -11048,7 +11048,127 @@ STICKY_VPN_IPS_PATH = Path(
 VPN_PEER_ACL_SCRIPT = Path(
     os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
 )
+# Always-on trust-circle members (router WAN, etc). Hidden from Authenticator apps.
+# Default seals the Flint public WAN; override with comma/space-separated IPv4s.
+VPN_CIRCLE_SEALED_IPS = os.environ.get(
+    "VPN_CIRCLE_SEALED_IPS",
+    "192.81.235.246",
+)
 _ssh_panel_2fa_lock = threading.Lock()
+
+
+def _sealed_vpn_ips() -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    raw = str(VPN_CIRCLE_SEALED_IPS or "")
+    for part in re.split(r"[\s,;]+", raw):
+        ip = _normalize_vpn_ip(part)
+        if not ip or not _is_public_ipv4(ip) or ip in seen:
+            continue
+        seen.add(ip)
+        out.append(ip)
+    return out
+
+
+def _is_sealed_vpn_ip(ip: str) -> bool:
+    return _normalize_vpn_ip(ip) in set(_sealed_vpn_ips())
+
+
+def _sealed_vpn_row(ip: str) -> dict:
+    return {
+        "ip": _normalize_vpn_ip(ip),
+        "note": "Flint router WAN (sealed)",
+        "approved_at": 0,
+        "source": "router",
+        "sealed": True,
+        "hidden": True,
+    }
+
+
+def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
+    """Keep sealed router WAN IPs permanently allowed; never drop them."""
+    changed = False
+    sealed = _sealed_vpn_ips()
+    sealed_set = set(sealed)
+    allowed_in = [x for x in (data.get("allowed") or []) if isinstance(x, dict)]
+    by_ip: dict[str, dict] = {}
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip:
+            by_ip[ip] = dict(row)
+
+    for ip in sealed:
+        row = by_ip.get(ip) or _sealed_vpn_row(ip)
+        before = dict(row)
+        row["ip"] = ip
+        row["sealed"] = True
+        row["hidden"] = True
+        row["source"] = "router"
+        if not str(row.get("note") or "").strip() or "seeded from sticky" in str(row.get("note") or ""):
+            row["note"] = "Flint router WAN (sealed)"
+        if not row.get("approved_at"):
+            row["approved_at"] = int(time.time())
+        by_ip[ip] = row
+        if before != row or ip not in {_normalize_vpn_ip(r.get("ip", "")) for r in allowed_in}:
+            changed = True
+
+    # Preserve non-sealed entries after sealed ones.
+    rebuilt: list[dict] = []
+    seen: set[str] = set()
+    for ip in sealed:
+        rebuilt.append(by_ip[ip])
+        seen.add(ip)
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip or ip in seen:
+            continue
+        if ip in sealed_set:
+            continue
+        rebuilt.append(row)
+        seen.add(ip)
+
+    denied = [
+        r for r in (data.get("denied") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    pending = [
+        r for r in (data.get("pending") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    attempts = [
+        r for r in (data.get("attempts") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    if len(denied) != len(list(data.get("denied") or [])) or len(pending) != len(list(data.get("pending") or [])) or len(attempts) != len(list(data.get("attempts") or [])):
+        changed = True
+    if rebuilt != allowed_in:
+        changed = True
+    data["allowed"] = rebuilt
+    data["denied"] = denied
+    data["pending"] = pending
+    data["attempts"] = attempts
+    return data, changed
+
+
+def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dict:
+    """Optionally hide sealed router entries from Authenticator apps."""
+    def _vis(rows: list) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(row.get("ip", ""))
+            if for_auth_app and (row.get("sealed") or row.get("hidden") or _is_sealed_vpn_ip(ip)):
+                continue
+            out.append(row)
+        return out
+
+    return {
+        "allowed": _vis(list(data.get("allowed") or [])),
+        "denied": _vis(list(data.get("denied") or [])),
+        "pending": _vis(list(data.get("pending") or [])),
+        "attempts": _vis(list(data.get("attempts") or [])),
+    }
 
 
 def _b32_encode_secret(raw: bytes) -> str:
@@ -11214,7 +11334,7 @@ def _read_vpn_allowlist() -> dict:
     }
     changed = False
     for ip in sticky_ips:
-        if ip and _is_public_ipv4(ip) and ip not in allowed_set:
+        if ip and _is_public_ipv4(ip) and ip not in allowed_set and not _is_sealed_vpn_ip(ip):
             data["allowed"].append(
                 {
                     "ip": ip,
@@ -11225,12 +11345,14 @@ def _read_vpn_allowlist() -> dict:
             )
             allowed_set.add(ip)
             changed = True
-    if changed or not VPN_ALLOWLIST_PATH.is_file():
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    if changed or sealed_changed or not VPN_ALLOWLIST_PATH.is_file():
         _write_vpn_allowlist(data)
     return data
 
 
 def _write_vpn_allowlist(data: dict) -> None:
+    data, _ = _ensure_sealed_vpn_allowlist(data)
     VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "allowed": list(data.get("allowed") or []),
@@ -11250,6 +11372,7 @@ def _write_vpn_allowlist(data: dict) -> None:
     lines = [
         "# Managed by Security → VPN trust circle",
         "# Approved sticky WAN IPs (one IPv4 /32 per line)",
+        "# Sealed router WAN IPs are always included and cannot be revoked from apps.",
     ]
     for row in payload["allowed"]:
         if not isinstance(row, dict):
@@ -11278,21 +11401,28 @@ def _run_vpn_peer_acl_sync() -> str:
         return str(exc)
 
 
-def build_vpn_allowlist_status() -> dict:
+def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
     data = _read_vpn_allowlist()
-    recent = list(reversed(list(data.get("attempts") or [])[-40:]))
+    view = _public_vpn_allowlist_view(data, for_auth_app=for_auth_app)
+    recent = list(reversed(list(view.get("attempts") or [])[-40:]))
     return {
         "ok": True,
-        "allowed": data.get("allowed") or [],
-        "denied": data.get("denied") or [],
-        "pending": data.get("pending") or [],
+        "allowed": view.get("allowed") or [],
+        "denied": view.get("denied") or [],
+        "pending": view.get("pending") or [],
         "attempts": recent,
         "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
         "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
         "sticky_file": str(STICKY_VPN_IPS_PATH),
+        "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
             "approve a WAN IP (Authenticator unlock) to enter the trust circle."
+            + (
+                ""
+                if for_auth_app
+                else " Sealed router WAN stays in the circle and is hidden from Authenticator apps."
+            )
         ),
     }
 
@@ -11304,6 +11434,8 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     action_n = str(action or "").strip().lower()
     if action_n not in ("approve", "revoke", "deny"):
         raise ValueError("action must be approve, revoke, or deny")
+    if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny"):
+        raise ValueError("Sealed router WAN cannot be revoked or denied")
     data = _read_vpn_allowlist()
     now = int(time.time())
     src = (source or "security-ui").strip()[:40] or "security-ui"
@@ -11313,7 +11445,13 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            if _normalize_vpn_ip(row.get("ip", "")) == target:
+            row_ip = _normalize_vpn_ip(row.get("ip", ""))
+            if row_ip == target:
+                # Never strip sealed rows during approve rebuild either —
+                # approve path re-adds below; revoke/deny already blocked.
+                if row.get("sealed") or _is_sealed_vpn_ip(row_ip):
+                    out.append(row)
+                    continue
                 continue
             out.append(row)
         return out
@@ -11323,14 +11461,18 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     data["pending"] = _without(list(data.get("pending") or []), ip_n)
 
     if action_n == "approve":
-        data["allowed"].append(
-            {
-                "ip": ip_n,
-                "note": (note or "").strip()[:120],
-                "approved_at": now,
-                "source": src,
-            }
-        )
+        if _is_sealed_vpn_ip(ip_n):
+            # Already permanent; just ensure sealed metadata.
+            data, _ = _ensure_sealed_vpn_allowlist(data)
+        else:
+            data["allowed"].append(
+                {
+                    "ip": ip_n,
+                    "note": (note or "").strip()[:120],
+                    "approved_at": now,
+                    "source": src,
+                }
+            )
     elif action_n == "deny":
         data["denied"].append(
             {
@@ -11349,16 +11491,18 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
                 "count": 1,
             }
         )
-    # revoke: already removed from allowed/denied
+    # revoke: already removed from allowed/denied (sealed preserved)
 
+    data, _ = _ensure_sealed_vpn_allowlist(data)
     _write_vpn_allowlist(data)
     sync_msg = _run_vpn_peer_acl_sync()
+    for_auth = str(source or "").startswith("auth-app")
     return {
         "ok": True,
         "action": action_n,
         "ip": ip_n,
         "sync": sync_msg,
-        "vpn_allowlist": build_vpn_allowlist_status(),
+        "vpn_allowlist": build_vpn_allowlist_status(for_auth_app=for_auth),
     }
 
 
@@ -16622,7 +16766,7 @@ document.getElementById('f').onsubmit = async (e) => {
                     or ""
                 )
                 require_auth_app_totp(str(code))
-                self._json(200, {"ok": True, **build_vpn_allowlist_status()})
+                self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:

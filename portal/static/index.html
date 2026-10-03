@@ -3696,11 +3696,18 @@
           allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
         } else {
           allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>WAN IP</th><th>Note</th><th></th></tr></thead><tbody>${
-            rows.map((r) => `<tr>
+            rows.map((r) => {
+              const sealed = !!(r.sealed || r.hidden || r.source === "router");
+              const note = sealed ? (r.note || "Flint router WAN (sealed)") : (r.note || r.source || "—");
+              const action = sealed
+                ? `<span class="sec-users">sealed</span>`
+                : `<button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Revoke</button>`;
+              return `<tr>
               <td><code>${escHtml(r.ip)}</code></td>
-              <td class="sec-users">${escHtml(r.note || r.source || "—")}</td>
-              <td><button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Revoke</button></td>
-            </tr>`).join("")
+              <td class="sec-users">${escHtml(note)}</td>
+              <td>${action}</td>
+            </tr>`;
+            }).join("")
           }</tbody></table>`;
         }
       }
