@@ -1777,6 +1777,12 @@ GRAFANA_PUBLIC_HOST = (
 )
 GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
 GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
+VPN_UI_PUBLIC_HOST = (
+    os.environ.get("VPN_UI_PUBLIC_HOST", "vpn.vpstruelord.com").strip()
+    or "vpn.vpstruelord.com"
+)
+VPN_UI_HOST = os.environ.get("VPN_UI_HOST", "172.18.0.1").strip() or "172.18.0.1"
+VPN_UI_PORT = int(os.environ.get("VPN_UI_PORT", "5001") or "5001")
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
@@ -4117,6 +4123,13 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
         out["name"] = str(out.get("name") or "grafana").strip() or "grafana"
+    elif domain == VPN_UI_PUBLIC_HOST.lower():
+        out["target_host"] = VPN_UI_HOST
+        out["target_port"] = int(out.get("target_port") or VPN_UI_PORT)
+        out["name"] = str(out.get("name") or "vpn").strip() or "vpn"
+        # Always VPN-only: wg-easy must not be public on the internet.
+        out["vpn_only"] = True
+        out["external"] = False
     return out
 
 
@@ -4201,6 +4214,40 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def ensure_vpn_ui_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee vpn.vpstruelord.com is present and always VPN-only (wg-easy)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = VPN_UI_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **rule,
+                    "enabled": rule.get("enabled", True),
+                    "external": False,
+                    "vpn_only": True,
+                    "target_host": VPN_UI_HOST,
+                    "target_port": VPN_UI_PORT,
+                    "name": rule.get("name") or "vpn",
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": VPN_UI_HOST,
+                "target_port": VPN_UI_PORT,
+                "name": "vpn",
+                "external": False,
+                "vpn_only": True,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4210,7 +4257,43 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    return ensure_vpn_ui_hookup(
+        ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    )
+
+
+def strip_caddy_site_blocks(caddy_text: str, domains: set[str]) -> str:
+    """Remove top-level site blocks for domains (used when adopting into managed)."""
+    wanted = {d.strip().lower() for d in domains if d and d.strip()}
+    if not wanted or not caddy_text:
+        return caddy_text
+    site_re = re.compile(
+        r"(?m)^(?P<label>\{\$[A-Za-z0-9_]+\}|[A-Za-z0-9][A-Za-z0-9._*, -]*?)\s*\{\s*$"
+    )
+    lines = caddy_text.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = site_re.match(lines[i].rstrip("\n"))
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        label = m.group("label").strip()
+        label_domains = {d.strip().lower() for d in label.split(",") if d.strip()}
+        if not (label_domains & wanted):
+            out.append(lines[i])
+            i += 1
+            continue
+        # Skip this entire site block (and a following blank line).
+        depth = 1
+        i += 1
+        while i < len(lines) and depth > 0:
+            depth += lines[i].count("{") - lines[i].count("}")
+            i += 1
+        while i < len(lines) and lines[i].strip() == "":
+            i += 1
+    return "".join(out)
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -5309,8 +5392,21 @@ def write_hookups_state(rules: list[dict]) -> dict:
             "dns_hint": dns_hint,
         }
     original = CADDYFILE_PATH.read_text(encoding="utf-8")
+    # If a domain was previously a hand-written external site (e.g. vpn.vpstruelord.com),
+    # remove that block outside the managed section so vpn_only / managed config wins.
+    begin = original.find(HOOKUPS_BEGIN)
+    end = original.find(HOOKUPS_END)
+    managed_domains = {r["domain"] for r in managed}
+    if begin != -1 and end != -1 and end > begin:
+        end_at = end + len(HOOKUPS_END)
+        head = strip_caddy_site_blocks(original[:begin], managed_domains)
+        mid = original[begin:end_at]
+        tail = strip_caddy_site_blocks(original[end_at:], managed_domains)
+        original_for_upsert = head.rstrip() + "\n\n" + mid + "\n" + tail.lstrip("\n")
+    else:
+        original_for_upsert = strip_caddy_site_blocks(original, managed_domains)
     new_block = serialize_hookups_caddy(managed)
-    updated = upsert_caddy_hookups_block(original, new_block)
+    updated = upsert_caddy_hookups_block(original_for_upsert, new_block)
     block_changed = original != updated
     _write_text_inplace(CADDYFILE_PATH, updated)
     validate = subprocess.run(
