@@ -70,12 +70,13 @@ count_shows() {
   echo "$n"
 }
 
-# Prefer Plex library show count (matches what Plex displays).
-count_plex_shows() {
-  local title="$1"
-  pct exec "$CTID" -- python3 - "$title" <<'PY' 2>/dev/null || true
-import re, sys, pathlib, urllib.request, urllib.parse
-title = sys.argv[1]
+# Prefer Plex library item count (matches what Plex displays).
+# type: movie | show
+count_plex_library() {
+  local title="$1" typ="${2:-show}"
+  pct exec "$CTID" -- python3 - "$title" "$typ" <<'PY' 2>/dev/null || true
+import re, sys, pathlib, urllib.request
+title, typ = sys.argv[1], sys.argv[2]
 p = pathlib.Path("/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml")
 try:
     token = re.search(r'PlexOnlineToken="([^"]+)"', p.read_text(errors="replace")).group(1)
@@ -89,8 +90,8 @@ for m in re.finditer(r"<Directory\b([^>]*)>", xml):
     attrs = m.group(1)
     tm = re.search(r'title="([^"]*)"', attrs)
     km = re.search(r'key="([^"]*)"', attrs)
-    typ = re.search(r'type="([^"]*)"', attrs)
-    if tm and km and typ and tm.group(1) == title and typ.group(1) == "show":
+    typm = re.search(r'type="([^"]*)"', attrs)
+    if tm and km and typm and tm.group(1) == title and typm.group(1) == typ:
         key = km.group(1)
         break
 if not key:
@@ -108,17 +109,29 @@ cmd_status() {
   local mounted=0
   local movies_inbox=0 kids_movies_inbox=0 tv_inbox=0 kids_tv_inbox=0
   local movies_lib=0 kids_movies_lib=0 tv_lib=0 kids_tv_lib=0
-  local plex_tv="" plex_kids_tv=""
+  local plex_movies="" plex_kids_movies="" plex_tv="" plex_kids_tv=""
   mountpoint -q "$HOST_MNT" 2>/dev/null && mounted=1
   if [[ "$mounted" -eq 1 ]]; then
     movies_inbox=$(count_videos "$INBOX_MOVIES")
     kids_movies_inbox=$(count_videos "$INBOX_KIDS_MOVIES")
     tv_inbox=$(count_videos "$INBOX_TV")
     kids_tv_inbox=$(count_videos "$INBOX_KIDS_TV")
-    movies_lib=$(count_videos "$LIB_MOVIES")
-    kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
-    plex_tv=$(count_plex_shows "TV Shows" | tr -d '[:space:]')
-    plex_kids_tv=$(count_plex_shows "Kids TV Shows" | tr -d '[:space:]')
+
+    plex_movies=$(count_plex_library "Movies" "movie" | tr -d '[:space:]')
+    plex_kids_movies=$(count_plex_library "Kids Movies" "movie" | tr -d '[:space:]')
+    plex_tv=$(count_plex_library "TV Shows" "show" | tr -d '[:space:]')
+    plex_kids_tv=$(count_plex_library "Kids TV Shows" "show" | tr -d '[:space:]')
+
+    if [[ "$plex_movies" =~ ^[0-9]+$ ]]; then
+      movies_lib="$plex_movies"
+    else
+      movies_lib=$(count_videos "$LIB_MOVIES")
+    fi
+    if [[ "$plex_kids_movies" =~ ^[0-9]+$ ]]; then
+      kids_movies_lib="$plex_kids_movies"
+    else
+      kids_movies_lib=$(count_videos "$LIB_KIDS_MOVIES")
+    fi
     if [[ "$plex_tv" =~ ^[0-9]+$ ]]; then
       tv_lib="$plex_tv"
     else
