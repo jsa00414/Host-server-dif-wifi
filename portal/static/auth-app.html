@@ -461,7 +461,6 @@
       border-color: rgba(61,222,160,.6);
       color: #d9ffe9;
     }
-    body.tab-circle .code-shell > .acct,
     body.tab-circle .code-shell > .code,
     body.tab-circle .code-shell > .bar {
       display: none !important;
@@ -472,10 +471,8 @@
     }
     body.tab-circle .dock .actions #copyBtn,
     body.tab-circle .dock .actions #manualBtn,
-    body.tab-circle .dock .actions #clearBtn,
     body.tab-circle .dock .actions #installBtn,
     body.tab-circle .dock .manual,
-    body.tab-circle .dock .hint,
     body.tab-circle .dock .install {
       display: none !important;
     }
@@ -507,7 +504,6 @@
       </div>
     </section>
     <div class="code-shell" id="codeShell" hidden>
-      <div class="acct" id="acctLabel"></div>
       <div class="code" id="codeView">------</div>
       <div class="bar"><i id="tickBar"></i></div>
       <section class="circle" id="circlePane" hidden>
@@ -535,8 +531,7 @@
         <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
         <button type="button" id="lockNowBtn" hidden>Lock</button>
         <button type="button" id="installBtn" hidden>Add to Home Screen</button>
-        <button type="button" id="manualBtn">Enter secret</button>
-        <button type="button" class="danger" id="clearBtn" hidden>Remove account</button>
+        <button type="button" id="manualBtn" hidden>Enter secret</button>
       </div>
       <div class="manual" id="manualForm">
         <label for="secretInput">Base32 secret from portal</label>
@@ -545,7 +540,6 @@
         <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
         <button type="button" class="primary" id="saveManualBtn">Save on this phone</button>
       </div>
-      <p class="hint" id="hint">Works offline after install. Codes refresh every 30 seconds.</p>
     </div>
   </div>
   <div class="toast" id="toast"></div>
@@ -570,12 +564,10 @@
       pinSubmitBtn: document.getElementById("pinSubmitBtn"),
       codeShell: document.getElementById("codeShell"),
       emptyView: document.getElementById("emptyView"),
-      acctLabel: document.getElementById("acctLabel"),
       codeView: document.getElementById("codeView"),
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
       lockNowBtn: document.getElementById("lockNowBtn"),
-      clearBtn: document.getElementById("clearBtn"),
       installBtn: document.getElementById("installBtn"),
       installHint: document.getElementById("installHint"),
       manualBtn: document.getElementById("manualBtn"),
@@ -584,7 +576,6 @@
       accountInput: document.getElementById("accountInput"),
       saveManualBtn: document.getElementById("saveManualBtn"),
       toast: document.getElementById("toast"),
-      hint: document.getElementById("hint"),
       circlePane: document.getElementById("circlePane"),
       circleList: document.getElementById("circleList"),
       circleAllowedCount: document.getElementById("circleAllowedCount"),
@@ -623,8 +614,7 @@
       }
       if (account && unlocked) {
         els.copyBtn.hidden = circleOpen;
-        els.clearBtn.hidden = circleOpen;
-        els.manualBtn.hidden = circleOpen;
+        els.manualBtn.hidden = true;
         if (circleOpen) {
           renderCircle();
           if (!circleData && !circleLoading) fetchCircle();
@@ -987,7 +977,7 @@
         els.tickBar.style.transform = `scaleX(${left / PERIOD})`;
       } catch (err) {
         els.codeView.textContent = "------";
-        els.hint.textContent = "Could not generate code. Check the secret.";
+        toast("Could not generate code. Check the secret.");
       }
     }
 
@@ -1092,7 +1082,6 @@
           els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
           els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
         }
-        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
         if (circleOpen) els.manualForm.classList.remove("show");
         tick();
         bumpIdle();
