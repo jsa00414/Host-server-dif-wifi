@@ -119,18 +119,41 @@ done
 
 ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
 ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
-iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
-  || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
-iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
-iptables -C FORWARD -d 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.10.0.0/24 -j ACCEPT
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
-iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \
-  || iptables -t nat -I POSTROUTING 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE
-iptables -C FORWARD -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT 2>/dev/null \
-  || iptables -I FORWARD 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT
+
+# FORWARD/NAT/DNS for the IKEv2 pool (also installed as sm-ikev2-forward.service)
+ENSURE_FWD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-forward.sh"
+if [[ -x "$ENSURE_FWD" ]]; then
+  IKEV2_POOL="$IKEV2_POOL" ADGUARD_DNS="$ADGUARD_DNS" bash "$ENSURE_FWD"
+else
+  iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
+    || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
+  iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
+  iptables -C FORWARD -d 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.10.0.0/24 -j ACCEPT
+  iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
+    || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
+  iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
+    || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
+  iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \
+    || iptables -t nat -I POSTROUTING 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE
+  iptables -C FORWARD -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT
+fi
+
+# Persist across reboot
+UNIT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-forward.service"
+if [[ -f "$UNIT_SRC" ]]; then
+  install -m 0644 "$UNIT_SRC" /etc/systemd/system/sm-ikev2-forward.service
+  # Point ExecStart at the installed copy under the portal tree when present
+  if [[ -f /opt/wireguard/port-forward-ui/scripts/ikev2/ensure-ikev2-forward.sh ]]; then
+    :
+  elif [[ -f "$ENSURE_FWD" ]]; then
+    mkdir -p /opt/wireguard/port-forward-ui/scripts/ikev2
+    install -m 0755 "$ENSURE_FWD" /opt/wireguard/port-forward-ui/scripts/ikev2/ensure-ikev2-forward.sh
+    install -m 0644 "$UNIT_SRC" /etc/systemd/system/sm-ikev2-forward.service
+  fi
+  systemctl daemon-reload
+  systemctl enable --now sm-ikev2-forward.service >/dev/null 2>&1 || true
+fi
 
 if [[ -f "$ENV_FILE" ]]; then
   grep -q '^IKEV2_HOST=' "$ENV_FILE" 2>/dev/null || echo "IKEV2_HOST=${IKEV2_HOST}" >> "$ENV_FILE"

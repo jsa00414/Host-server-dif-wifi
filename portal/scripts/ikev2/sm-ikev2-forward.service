@@ -1,0 +1,12 @@
+[Unit]
+Description=ServerManager IKEv2 client internet forward/NAT
+After=network-online.target strongswan-starter.service ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/wireguard/port-forward-ui/scripts/ikev2/ensure-ikev2-forward.sh
+
+[Install]
+WantedBy=multi-user.target
