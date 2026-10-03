@@ -10663,7 +10663,13 @@ def _truemail_admin_password() -> str:
     return (os.environ.get("TRUEMAIL_ADMIN_PASS") or "").strip()
 
 
-def _smtp_send_email(*, to_addr: str, subject: str, body: str) -> None:
+def _smtp_send_email(
+    *,
+    to_addr: str,
+    subject: str,
+    body: str,
+    html: str | None = None,
+) -> None:
     import smtplib
     import ssl
     from email.message import EmailMessage
@@ -10680,6 +10686,8 @@ def _smtp_send_email(*, to_addr: str, subject: str, body: str) -> None:
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid(domain="truemailor.com")
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
 
     ctx = ssl._create_unverified_context()
     host = os.environ.get("SMTP_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -10690,6 +10698,95 @@ def _smtp_send_email(*, to_addr: str, subject: str, body: str) -> None:
         s.ehlo()
         s.login(EMAIL_CODE_FROM, pw)
         s.send_message(msg)
+
+
+def _email_code_html(code: str, *, minutes: int) -> str:
+    """Rich HTML email for delivering a one-time portal code."""
+    digits = "".join(ch for ch in str(code) if ch.isdigit())
+    cells = []
+    for d in digits:
+        cells.append(
+            "<td style=\"width:42px;height:52px;border:1px solid #1f3d31;"
+            "border-radius:10px;background:#0a1712;color:#3ddea0;"
+            "font-family:'IBM Plex Mono',Consolas,Monaco,monospace;"
+            "font-size:26px;font-weight:700;letter-spacing:0;"
+            "text-align:center;vertical-align:middle;\">"
+            f"{d}</td>"
+        )
+    gap = (
+        '<td style="width:8px;font-size:0;line-height:0;">&nbsp;</td>'
+    )
+    code_row = gap.join(cells)
+    mins = max(1, int(minutes))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portal login code</title>
+</head>
+<body style="margin:0;padding:0;background:#050a08;color:#e7f1eb;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+    Your ServerManager code is {digits}. Expires in {mins} minutes.
+  </div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+    style="background:#050a08;background-image:radial-gradient(ellipse at 20% 0%,rgba(61,222,160,0.18),transparent 55%),radial-gradient(ellipse at 100% 100%,rgba(40,120,90,0.2),transparent 50%);padding:36px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+          style="max-width:520px;border-collapse:separate;">
+          <tr>
+            <td style="padding:0 0 18px;text-align:center;font-family:Sora,Segoe UI,Helvetica,Arial,sans-serif;font-size:12px;letter-spacing:0.22em;text-transform:uppercase;color:#7f9689;">
+              ServerManager
+            </td>
+          </tr>
+          <tr>
+            <td style="border-radius:22px;padding:1px;background:linear-gradient(145deg,rgba(61,222,160,0.55),rgba(61,222,160,0.08) 42%,rgba(61,222,160,0.22));">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+                style="border-radius:21px;background:#0e1a15;border:1px solid rgba(170,210,185,0.12);">
+                <tr>
+                  <td style="padding:34px 28px 12px;text-align:center;font-family:Sora,Segoe UI,Helvetica,Arial,sans-serif;">
+                    <div style="font-size:13px;color:#3ddea0;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;margin-bottom:10px;">
+                      Verification code
+                    </div>
+                    <h1 style="margin:0;font-size:28px;line-height:1.15;letter-spacing:-0.03em;color:#e7f1eb;font-weight:700;">
+                      Sign in to your portal
+                    </h1>
+                    <p style="margin:14px 0 0;font-size:15px;line-height:1.5;color:#7f9689;">
+                      Enter this one-time code on the verification form. It expires in <strong style="color:#e7f1eb;">{mins} minutes</strong>.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:26px 20px 10px;">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="border-collapse:separate;margin:0 auto;">
+                      <tr>{code_row}</tr>
+                    </table>
+                    <div style="margin-top:18px;font-family:'IBM Plex Mono',Consolas,Monaco,monospace;font-size:18px;letter-spacing:0.35em;color:#9bb5a8;">
+                      {digits}
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:22px 28px 30px;text-align:center;font-family:Sora,Segoe UI,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.55;color:#7f9689;">
+                    Sent to <span style="color:#3ddea0;">{EMAIL_CODE_TO}</span>.<br />
+                    If you didn’t request this, you can ignore this email.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 8px 0;text-align:center;font-family:Sora,Segoe UI,Helvetica,Arial,sans-serif;font-size:11px;color:#5d7368;">
+              Portal · {PORTAL_HOST}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
 
 def send_email_test_code(client_ip: str) -> dict:
@@ -10709,15 +10806,19 @@ def send_email_test_code(client_ip: str) -> dict:
         }
         _email_code_last_send[ip] = now
 
-    subject = "Portal login code"
+    minutes = max(1, EMAIL_CODE_TTL_SECONDS // 60)
+    subject = f"Portal login code · {code}"
     body = (
-        f"Your ServerManager test code is: {code}\n\n"
+        f"Your ServerManager verification code is: {code}\n\n"
         f"Sent to {EMAIL_CODE_TO}\n"
-        f"Expires in {EMAIL_CODE_TTL_SECONDS // 60} minutes.\n"
+        f"Expires in {minutes} minutes.\n"
         "If you did not request this, ignore this message.\n"
     )
+    html = _email_code_html(code, minutes=minutes)
     try:
-        _smtp_send_email(to_addr=EMAIL_CODE_TO, subject=subject, body=body)
+        _smtp_send_email(
+            to_addr=EMAIL_CODE_TO, subject=subject, body=body, html=html
+        )
     except Exception as exc:
         with _email_codes_lock:
             _email_codes.pop(ip, None)
