@@ -625,6 +625,7 @@
   </div>
   <div class="toast" id="toast"></div>
 
+  <script src="/static/sm-circle-crypto.js"></script>
   <script>
     const STORE_KEY = "sm.auth.totp.v1";
     const BIO_KEY = "sm.auth.bio.cred.v1";
@@ -661,6 +662,7 @@
       circlePendingCount: document.getElementById("circlePendingCount"),
       circleIpInput: document.getElementById("circleIpInput"),
       circleApproveBtn: document.getElementById("circleApproveBtn"),
+      circleAuthorizeBtn: document.getElementById("circleAuthorizeBtn"),
       circleRefreshBtn: document.getElementById("circleRefreshBtn"),
       circleTabPending: document.getElementById("circleTabPending"),
       circleTabAllowed: document.getElementById("circleTabAllowed"),
@@ -1008,7 +1010,22 @@
       try {
         const lanIp = await detectHomeLanIp();
         if (!lanIp) return;
+        if (!window.SmCircleCrypto) return;
+        const keyRow = await SmCircleCrypto.ensureKeyForIp(lanIp);
         const code = await currentTotpCode();
+        const bodyObj = {
+          code,
+          lan_ip: lanIp,
+          platform: "android",
+          note: "android Authenticator",
+          pubkey: keyRow.publicKey,
+        };
+        const bodyText = JSON.stringify(bodyObj);
+        const proofHeaders = await SmCircleCrypto.circleHeaders(lanIp, {
+          method: "POST",
+          path: "/api/auth-app/register-device",
+          bodyText,
+        });
         await fetch("/api/auth-app/register-device", {
           method: "POST",
           headers: {
@@ -1017,13 +1034,9 @@
             "X-SM-Totp": code,
             "X-SM-Lan-Ip": lanIp,
             "X-SM-Platform": "android",
+            ...proofHeaders,
           },
-          body: JSON.stringify({
-            code,
-            lan_ip: lanIp,
-            platform: "android",
-            note: "Android Authenticator",
-          }),
+          body: bodyText,
           cache: "no-store",
         });
       } catch (_) {}
@@ -1055,6 +1068,56 @@
       }
     }
 
+    
+    async function authorizeNetwork() {
+      if (!unlocked) { toast("Unlock first"); return; }
+      try {
+        if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
+        const code = await currentTotpCode();
+        // Authorize the WAN/public IP seen by the server for this browser.
+        const probe = await fetch("/api/auth-app/enroll-status", { cache: "no-store" });
+        const status = await probe.json().catch(() => ({}));
+        // Use client-reported LAN if home, else ask server via lease on connection IP.
+        // Lease is always for request_client_ip — sign with key bound to that IP.
+        // We discover bound IPs from local key store; prefer the one matching sticky WAN.
+        const store = SmCircleCrypto.loadStore();
+        const ips = Object.keys(store || {});
+        if (!ips.length) throw new Error("No circle keys yet — approve an IP first");
+        let used = null;
+        let lastErr = null;
+        for (const ip of ips) {
+          try {
+            const proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
+              method: "POST",
+              path: "/api/auth-app/circle-lease",
+              bodyText: "",
+            });
+            const res = await fetch("/api/auth-app/circle-lease", {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "X-SM-Totp": code,
+                ...proofHeaders,
+              },
+              body: "",
+              cache: "no-store",
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+            used = ip;
+            toast(data.message || `Authorized ${ip}`);
+            break;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (!used) throw lastErr || new Error("No matching key for this network");
+        bumpIdle();
+      } catch (err) {
+        toast(String(err?.message || err));
+      }
+    }
+
     async function mutateCircle(action, ip, note) {
       if (!unlocked) {
         toast("Unlock first");
@@ -1065,26 +1128,36 @@
         return;
       }
       try {
+        if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
         const code = await currentTotpCode();
         const lanIp = await detectHomeLanIp();
+        const keyRow = await SmCircleCrypto.ensureKeyForIp(ip);
+        const bodyObj = { action, ip, note: note || "", pubkey: keyRow.publicKey };
+        const bodyText = JSON.stringify(bodyObj);
+        const proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
+          method: "POST",
+          path: "/api/auth-app/vpn-allowlist",
+          bodyText,
+        });
         const headers = {
           "Content-Type": "application/json",
           Accept: "application/json",
           "X-SM-Totp": code,
           "X-SM-Platform": "android",
+          ...proofHeaders,
         };
         if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
         const res = await fetch("/api/auth-app/vpn-allowlist", {
           method: "POST",
           headers,
-          body: JSON.stringify({ action, ip, note: note || "" }),
+          body: bodyText,
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
         circleData = data.vpn_allowlist || data;
         renderCircle();
         const labels = {
-          approve: "Approved",
+          approve: "Approved + key-bound",
           deny: "Denied",
           revoke: "Removed",
           pending: "Moved to pending",
@@ -1150,13 +1223,14 @@
           const name = String(row.name || row.hostname || "").trim();
           const title = name || row.ip;
           const detail = isLan
-            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${row.online ? " · online" : " · offline"}`
+            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${(row.key_bound || a.key_bound) ? " · key-bound" : ""}}${row.online ? " · online" : " · offline"}`
             : `${esc(row.ip)} · ${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
           blocks.push(`<div class="circle-row">
             <div class="ip">${esc(title)}</div>
             <div class="info">${detail}</div>
             <div class="row-actions">
               <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
+          <button type="button" class="ghost" id="circleAuthorizeBtn">Authorize network</button>
               <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
             </div>
           </div>`);
@@ -1164,7 +1238,7 @@
         els.circleList.innerHTML = blocks.join("");
       } else {
         const recent = attempts.slice(0, 4).map((a) =>
-          `<div class="circle-row"><div class="ip">${esc(a.ip)}</div><div class="info">recent · VIP ${esc(a.vip || "—")} · guest DNS</div>
+          `<div class="circle-row"><div class="ip">${esc(a.ip)}${a.key_bound ? " · 🔑 " + esc((a.key_id || "").slice(0, 8)) : ""}</div><div class="info">recent · VIP ${esc(a.vip || "—")} · guest DNS</div>
            <div class="row-actions"><button type="button" class="primary circle-approve" data-ip="${esc(a.ip)}">Approve</button>
            <button type="button" class="danger circle-deny" data-ip="${esc(a.ip)}">Deny</button></div></div>`
         ).join("");
@@ -1449,6 +1523,7 @@
       }, 15000);
     })();
 
+    if (els.circleAuthorizeBtn) els.circleAuthorizeBtn.onclick = () => authorizeNetwork();
     setInterval(tick, 250);
 
     if ("serviceWorker" in navigator) {
