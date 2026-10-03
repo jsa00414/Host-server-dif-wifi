@@ -43,8 +43,11 @@ fi
   echo "connect-retry 2"
   if [ "$REDIRECT" = "1" ] || [ "$REDIRECT" = "true" ] || [ "$REDIRECT" = "yes" ]; then
     echo "redirect-gateway def1 bypass-dhcp"
-    echo "dhcp-option DNS 1.1.1.1"
-    echo "dhcp-option DNS 8.8.8.8"
+    # AdGuard via tun DNS DNAT (10.9.0.1:53 → 10.42.42.44). Rewrites
+    # portal/admin → 10.9.0.1 so Caddy sees a VPN client_ip.
+    echo "dhcp-option DNS 10.9.0.1"
+    # Windows: stop DNS leaking outside the tunnel (portal dual-A / DoH issues)
+    echo "block-outside-dns"
   fi
   echo "route 192.168.8.0 255.255.255.0 vpn_gateway"
   echo "route 10.8.0.0 255.255.255.0 vpn_gateway"

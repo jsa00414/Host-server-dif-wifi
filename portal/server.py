@@ -7793,6 +7793,7 @@ def build_portal_settings() -> dict:
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
+        {"id": "ovpn-windows", "label": "OpenVPN Windows (.ovpn)", "url": f"https://{host}/api/openvpn/clients/windows"},
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
