@@ -62,11 +62,14 @@ delete_ufw_matching '(^|[[:space:]])500/udp'
 delete_ufw_matching '4500/udp'
 delete_ufw_matching '8443/tcp'
 
-# Rate-limit new connections / floods per IP (UFW recent module).
-ufw limit 500/udp comment 'IKEv2-IKE-ratecap' >/dev/null || true
-ufw limit 4500/udp comment 'IKEv2-NATT-ratecap' >/dev/null || true
-ufw limit 5000/udp comment 'WireGuard-ratecap' >/dev/null || true
-ufw limit 443/udp comment 'WG-udp443-ratecap' >/dev/null || true
+# UDP VPN: use plain ALLOW. UFW "limit" (recent module) is a poor fit for
+# UDP handshakes/keepalives and can drop real mobile clients. Abuse is capped
+# by connlimit + hashlimit in before.rules below.
+ufw allow 500/udp comment 'IKEv2-IKE' >/dev/null || true
+ufw allow 4500/udp comment 'IKEv2-NATT' >/dev/null || true
+ufw allow 5000/udp comment 'WireGuard' >/dev/null || true
+ufw allow 443/udp comment 'WG-udp443' >/dev/null || true
+# TCP OpenVPN: UFW limit works well for connection floods.
 ufw limit 8443/tcp comment 'OpenVPN-tcp-ratecap' >/dev/null || true
 
 # --- concurrent caps in before.rules ---
