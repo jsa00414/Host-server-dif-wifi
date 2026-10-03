@@ -6688,6 +6688,575 @@ def _docker_running(name: str) -> bool:
     return out.strip().lower() == "true"
 
 
+def _security_run(cmd: list[str], timeout: float = 8) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr=str(exc)
+        )
+
+
+def _security_sshd_config() -> dict:
+    proc = _security_run(["sshd", "-T"], timeout=6)
+    out = {
+        "ok": proc.returncode == 0,
+        "permit_root_login": None,
+        "password_authentication": None,
+        "pubkey_authentication": None,
+        "permit_empty_passwords": None,
+    }
+    if proc.returncode != 0:
+        out["error"] = (proc.stderr or proc.stdout or "sshd -T failed")[:240]
+        return out
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        key, val = parts[0].lower(), parts[1].strip().lower()
+        if key == "permitrootlogin":
+            out["permit_root_login"] = val
+        elif key == "passwordauthentication":
+            out["password_authentication"] = val
+        elif key == "pubkeyauthentication":
+            out["pubkey_authentication"] = val
+        elif key == "permitemptypasswords":
+            out["permit_empty_passwords"] = val
+    return out
+
+
+def _security_fail2ban() -> dict:
+    status = _security_run(["fail2ban-client", "status"], timeout=6)
+    sshd = _security_run(["fail2ban-client", "status", "sshd"], timeout=6)
+    banip = _security_run(["fail2ban-client", "get", "sshd", "banip"], timeout=6)
+    active = status.returncode == 0
+    jails: list[str] = []
+    if active:
+        for line in (status.stdout or "").splitlines():
+            if "Jail list:" in line:
+                jails = [j.strip() for j in line.split(":", 1)[-1].split(",") if j.strip()]
+    banned: list[str] = []
+    if banip.returncode == 0 and (banip.stdout or "").strip():
+        banned = [x.strip() for x in (banip.stdout or "").split() if x.strip()]
+    currently_banned = 0
+    total_banned = 0
+    total_failed = 0
+    currently_failed = 0
+    if sshd.returncode == 0:
+        for line in (sshd.stdout or "").splitlines():
+            s = line.strip()
+            if s.startswith("Currently banned:"):
+                try:
+                    currently_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total banned:"):
+                try:
+                    total_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Currently failed:"):
+                try:
+                    currently_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total failed:"):
+                try:
+                    total_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif "Banned IP list:" in s and not banned:
+                banned = [x.strip() for x in s.split(":", 1)[-1].split() if x.strip()]
+    return {
+        "ok": active,
+        "active": active,
+        "jails": jails,
+        "sshd": {
+            "currently_banned": currently_banned or len(banned),
+            "total_banned": total_banned,
+            "currently_failed": currently_failed,
+            "total_failed": total_failed,
+            "banned_ips": banned,
+        },
+        "error": None
+        if active
+        else ((status.stderr or status.stdout or "fail2ban inactive")[:240]),
+    }
+
+
+def _security_attacker_stats(banned_ips: list[str]) -> dict:
+    """One journal pass: top attackers + per-banned-IP attempt breakdown."""
+    banned_set = {ip.strip() for ip in banned_ips if ip.strip()}
+    proc = _security_run(
+        [
+            "journalctl",
+            "-u",
+            "ssh",
+            "--since",
+            "7 days ago",
+            "--no-pager",
+            "-o",
+            "cat",
+        ],
+        timeout=25,
+    )
+    top: dict[str, int] = {}
+    by_banned: dict[str, dict] = {
+        ip: {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        for ip in banned_set
+    }
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": (proc.stderr or "journalctl failed")[:240],
+            "top_attackers": [],
+            "banned_details": list(by_banned.values()),
+            "window": "7d",
+        }
+
+    failed_re = re.compile(
+        r"Failed password for (?:invalid user )?(\S+) from (\d+\.\d+\.\d+\.\d+)"
+    )
+    invalid_re = re.compile(r"Invalid user (\S+) from (\d+\.\d+\.\d+\.\d+)")
+    for line in (proc.stdout or "").splitlines():
+        m = failed_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["failed_password"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+            continue
+        m = invalid_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["invalid_user"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+
+    top_list = [
+        {"ip": ip, "attempts": n}
+        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    ]
+    banned_details = []
+    for ip in banned_ips:
+        row = by_banned.get(ip) or {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        users_sorted = sorted(
+            [{"user": u, "count": c} for u, c in row["users"].items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:15]
+        banned_details.append(
+            {
+                "ip": ip,
+                "failed_password": row["failed_password"],
+                "invalid_user": row["invalid_user"],
+                "attempts": int(row["failed_password"]) + int(row["invalid_user"]),
+                "users": users_sorted,
+                "last_seen": row.get("last_seen") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "window": "7d",
+        "top_attackers": top_list,
+        "banned_details": banned_details,
+    }
+
+
+def _security_listeners_and_ufw() -> tuple[list[dict], dict]:
+    """Return public listeners of interest + UFW risk rules."""
+    watch = {
+        22,
+        80,
+        443,
+        445,
+        139,
+        2121,
+        1445,
+        3016,
+        5000,
+        5001,
+        5002,
+        3389,
+        4000,
+        8080,
+        2222,
+        8443,
+        25,
+        465,
+        587,
+        993,
+    }
+    ss = _security_run(["ss", "-lntH"], timeout=6)
+    listeners: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for line in (ss.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[3]
+        if local.count(":") < 1:
+            continue
+        host, _, port_s = local.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            continue
+        if port not in watch:
+            continue
+        public = host in ("0.0.0.0", "*", "[::]", "::")
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        listeners.append(
+            {
+                "addr": host,
+                "port": port,
+                "public_bind": public,
+            }
+        )
+
+    fw = read_firewall_state()
+    risky_allows: list[dict] = []
+    for r in fw.get("rules") or []:
+        if r.get("locked"):
+            continue
+        if r.get("vpn_only"):
+            continue
+        if str(r.get("from") or "").lower().startswith("anywhere"):
+            risky_allows.append(
+                {
+                    "port": r.get("port"),
+                    "proto": r.get("proto"),
+                    "comment": r.get("comment") or "",
+                    "id": r.get("id"),
+                }
+            )
+    return listeners, {
+        "active": bool(fw.get("active")),
+        "default_incoming": fw.get("default_incoming"),
+        "risky_public_allows": risky_allows,
+        "rule_count": len(fw.get("rules") or []),
+        "error": fw.get("error"),
+    }
+
+
+def _security_probe_ports(ports: list[int]) -> list[dict]:
+    """Best-effort connect to VPS public IP (external reachability approx)."""
+    import socket
+
+    host = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "127.0.0.1"
+    out: list[dict] = []
+    for port in ports:
+        open_ = False
+        err = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.2)
+            open_ = s.connect_ex((host, int(port))) == 0
+            s.close()
+        except Exception as exc:
+            err = str(exc)[:120]
+        out.append({"host": host, "port": int(port), "open": open_, "error": err})
+    return out
+
+
+def _security_file_checks() -> list[dict]:
+    checks: list[dict] = []
+    targets = [
+        ("/opt/wireguard/port-forward-ui.env", 0o600, True),
+        ("/opt/grafana/.env", 0o600, False),
+        ("/opt/wireguard/.env", 0o600, False),
+        ("/opt/truemail/config/ssl/key.pem", 0o600, False),
+        ("/opt/truemail/.env", 0o600, False),
+        ("/opt/wireguard/nas-smb-gateway/credentials", 0o600, False),
+    ]
+    for path, want_mode, required in targets:
+        p = Path(path)
+        if not p.exists():
+            if required:
+                checks.append(
+                    {
+                        "path": path,
+                        "ok": False,
+                        "severity": "medium",
+                        "detail": "missing",
+                    }
+                )
+            continue
+        try:
+            mode = p.stat().st_mode & 0o777
+        except OSError as exc:
+            checks.append(
+                {
+                    "path": path,
+                    "ok": False,
+                    "severity": "medium",
+                    "detail": str(exc)[:120],
+                }
+            )
+            continue
+        world_w = bool(mode & 0o002)
+        world_r = bool(mode & 0o004)
+        group_r = bool(mode & 0o040)
+        ok = mode <= want_mode and not world_w and not world_r
+        sev = "ok"
+        detail = f"mode {mode:03o}"
+        if world_w:
+            sev = "high"
+            detail += " (world-writable)"
+        elif world_r or (group_r and want_mode <= 0o600):
+            sev = "medium"
+            detail += " (overly readable)"
+        elif not ok:
+            sev = "low"
+        checks.append(
+            {
+                "path": path,
+                "ok": ok and sev == "ok",
+                "severity": sev if not ok or sev != "ok" else "ok",
+                "mode": f"{mode:03o}",
+                "detail": detail,
+            }
+        )
+    return checks
+
+
+def _security_domain_exposure() -> list[dict]:
+    sensitive = {
+        "router.vpstruelord.com",
+        "buffalo.vpstruelord.com",
+        "files.vpstruelord.com",
+        "proxmox.vpstruelord.com",
+        "grafana.vpstruelord.com",
+        "pihole.vpstruelord.com",
+        "dns.vpstruelord.com",
+    }
+    try:
+        state = read_hookups_state()
+        rules = state.get("rules") or []
+    except Exception:
+        rules = []
+    out: list[dict] = []
+    for r in rules:
+        domain = str(r.get("domain") or "").strip().lower()
+        if not domain:
+            continue
+        if domain not in sensitive and not r.get("enabled", True):
+            continue
+        if domain not in sensitive:
+            continue
+        out.append(
+            {
+                "domain": domain,
+                "name": r.get("name") or "",
+                "enabled": bool(r.get("enabled", True)),
+                "vpn_only": bool(r.get("vpn_only")),
+                "target": f"{r.get('target_host')}:{r.get('target_port')}",
+                "risk": "ok" if r.get("vpn_only") else "high",
+            }
+        )
+    return out
+
+
+def build_security_status() -> dict:
+    """Live security dashboard for the portal Security tab."""
+    findings: list[dict] = []
+    f2b = _security_fail2ban()
+    ssh = _security_sshd_config()
+    listeners, ufw = _security_listeners_and_ufw()
+    files = _security_file_checks()
+    domains = _security_domain_exposure()
+    banned = list((f2b.get("sshd") or {}).get("banned_ips") or [])
+    attackers = _security_attacker_stats(banned)
+
+    # WAN probes for high-interest ports
+    probe_ports = [22, 2121, 3016, 5001, 5002, 1445, 445, 3389, 4000]
+    probes = _security_probe_ports(probe_ports)
+    open_map = {p["port"]: p["open"] for p in probes}
+
+    if not f2b.get("active"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "fail2ban not active",
+                "detail": f2b.get("error") or "sshd jail missing",
+            }
+        )
+    if ssh.get("password_authentication") in ("yes", "true"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "SSH password login enabled",
+                "detail": "Disable PasswordAuthentication; use keys only.",
+            }
+        )
+    if ssh.get("permit_root_login") in ("yes", "prohibit-password", "without-password"):
+        if ssh.get("permit_root_login") == "yes":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": "SSH root login with password allowed",
+                    "detail": f"permitrootlogin={ssh.get('permit_root_login')}",
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": "SSH root login allowed",
+                    "detail": f"permitrootlogin={ssh.get('permit_root_login')}",
+                }
+            )
+
+    exposure_labels = {
+        2121: "NAS FTP gateway",
+        3016: "Grafana (direct, bypasses Caddy)",
+        5001: "WireGuard Easy UI",
+        5002: "Portal cleartext HTTP",
+        1445: "NAS SMB gateway",
+        445: "Samba/SMB",
+        3389: "RDP forward",
+        4000: "Windows RDP forward",
+    }
+    exposures: list[dict] = []
+    for port, label in exposure_labels.items():
+        listening_public = any(
+            L.get("port") == port and L.get("public_bind") for L in listeners
+        )
+        ufw_open = any(int(r.get("port") or 0) == port for r in ufw.get("risky_public_allows") or [])
+        wan_open = bool(open_map.get(port))
+        # Prefer UFW+listener as authority; raw connect can false-positive via hairpin.
+        severity = "ok"
+        if ufw_open and (listening_public or wan_open):
+            severity = "high"
+        elif listening_public and wan_open and port in (2121, 3016, 5001, 5002, 445, 1445, 3389):
+            severity = "high"
+        elif listening_public or ufw_open or wan_open:
+            severity = "medium"
+        exposures.append(
+            {
+                "port": port,
+                "label": label,
+                "listening_public": listening_public,
+                "ufw_anywhere": ufw_open,
+                "wan_open": wan_open,
+                "severity": severity,
+            }
+        )
+        if severity == "high":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": f"{label} exposed on :{port}",
+                    "detail": "Close UFW or bind localhost / VPN-only.",
+                }
+            )
+        elif severity == "medium":
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{label} partially exposed (:{port})",
+                    "detail": "Listener or UFW allow present; confirm WAN path.",
+                }
+            )
+
+    for d in domains:
+        if d.get("risk") == "high" and d.get("enabled"):
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{d['domain']} is public (not VPN-only)",
+                    "detail": f"Upstream {d.get('target')}",
+                }
+            )
+
+    for f in files:
+        if f.get("severity") in ("high", "medium"):
+            findings.append(
+                {
+                    "severity": f["severity"],
+                    "title": f"Weak permissions: {f['path']}",
+                    "detail": f.get("detail") or "",
+                }
+            )
+
+    # Kernel reboot pending (needrestart), best-effort
+    kernel = {"ok": True, "detail": ""}
+    nr = _security_run(["needrestart", "-b"], timeout=8)
+    if nr.returncode == 0 and "NEEDRESTART-KSTA: 3" in (nr.stdout or ""):
+        kernel = {"ok": False, "detail": "Kernel update pending reboot"}
+        findings.append(
+            {
+                "severity": "low",
+                "title": "Kernel update pending reboot",
+                "detail": "needrestart reports a newer kernel is installed",
+            }
+        )
+
+    sev_rank = {"high": 0, "medium": 1, "low": 2, "ok": 3}
+    findings.sort(key=lambda x: sev_rank.get(str(x.get("severity")), 9))
+    counts = {"high": 0, "medium": 0, "low": 0}
+    for f in findings:
+        k = str(f.get("severity") or "")
+        if k in counts:
+            counts[k] += 1
+
+    score = 100
+    score -= counts["high"] * 18
+    score -= counts["medium"] * 8
+    score -= counts["low"] * 3
+    if score < 0:
+        score = 0
+    if counts["high"]:
+        grade = "at risk"
+    elif counts["medium"]:
+        grade = "needs attention"
+    else:
+        grade = "good"
+
+    return {
+        "ok": True,
+        "score": score,
+        "grade": grade,
+        "counts": counts,
+        "findings": findings[:40],
+        "fail2ban": f2b,
+        "attackers": attackers,
+        "ssh": ssh,
+        "firewall": ufw,
+        "listeners": listeners,
+        "exposures": exposures,
+        "domains": domains,
+        "files": files,
+        "kernel": kernel,
+        "probes": probes,
+        "generated_at": int(time.time()),
+    }
+
+
+
 BACKUP_ROOT = Path("/opt/servermanager-backup")
 BACKUP_SCRIPT = BACKUP_ROOT / "sm-backup.sh"
 BACKUP_SECRETS = BACKUP_ROOT / "secrets.env"
@@ -13794,6 +14363,14 @@ document.getElementById('f').onsubmit = async (e) => {
                 return
             try:
                 self._json(200, surfshark_status())
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_security_status())
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return

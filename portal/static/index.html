@@ -811,6 +811,38 @@
     }
     .meta-box label { display: block; color: var(--muted); font-size: .72rem; margin-bottom: 6px; }
 
+
+    .sec-score { font-family: "IBM Plex Mono", monospace; font-size: 1.8rem; font-weight: 600; line-height: 1; }
+    .sec-score small { display: block; font-size: .72rem; color: var(--muted); font-weight: 500; margin-top: 4px; text-transform: capitalize; }
+    .sec-counts { display: flex; gap: 10px; flex-wrap: wrap; }
+    .sec-chip {
+      font-family: "IBM Plex Mono", monospace; font-size: .72rem; padding: 6px 10px; border-radius: 999px;
+      border: 1px solid var(--line); background: var(--bg2); color: var(--muted);
+    }
+    .sec-chip.high { color: var(--danger); border-color: rgba(255,107,107,.35); }
+    .sec-chip.medium { color: var(--warn); border-color: rgba(226,180,90,.35); }
+    .sec-chip.low { color: var(--muted); }
+    .sec-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .sec-table th, .sec-table td {
+      text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top;
+    }
+    .sec-table th { color: var(--muted); font-weight: 500; font-size: .72rem; }
+    .sec-table code { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: .76rem; }
+    .sec-sev {
+      display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: .68rem;
+      padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); text-transform: uppercase;
+    }
+    .sec-sev.high { color: var(--danger); border-color: rgba(255,107,107,.4); background: rgba(255,107,107,.1); }
+    .sec-sev.medium { color: var(--warn); border-color: rgba(226,180,90,.4); background: rgba(226,180,90,.1); }
+    .sec-sev.low { color: var(--muted); }
+    .sec-sev.ok { color: var(--ok); border-color: rgba(61,222,160,.35); background: var(--accent-dim); }
+    .sec-users { color: var(--muted); font-size: .72rem; line-height: 1.4; }
+    .sec-empty { color: var(--muted); font-size: .8rem; padding: 8px 0; }
+    .sec-callout {
+      padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
+      background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
+    }
+
     .drawer {
       border-top: 1px solid var(--line);
       background: var(--bg1);
@@ -1164,6 +1196,14 @@
       input, select { font-size: 16px; min-height: 44px; }
       button { min-height: 40px; }
     }
+  
+    .sec-callout {
+      padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
+      background: rgba(61,222,160,.06); display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+      justify-content: space-between;
+    }
+    .sec-callout.at-risk { background: rgba(255,107,107,.08); border-color: rgba(255,107,107,.35); }
+    .sec-callout.needs-attention { background: rgba(226,180,90,.08); border-color: rgba(226,180,90,.35); }
   </style>
 </head>
 <body>
@@ -1187,6 +1227,10 @@
     <div class="nav-label">Portal</div>
     <button type="button" class="nav-btn active" data-view="overview">
       <span class="nav-copy"><span>Overview</span></span>
+    </button>
+    <button type="button" class="nav-btn" data-view="security">
+      <span class="nav-copy"><span>Security</span></span>
+      <span class="count" id="secCount">0</span>
     </button>
     <button type="button" class="nav-btn" data-view="backup">
       <span class="nav-copy"><span>Backup</span></span>
@@ -1329,6 +1373,11 @@
             <div class="v">DNS</div>
             <div class="s">full control</div>
           </button>
+<button type="button" class="stat" data-go="security">
+            <div class="k">Security</div>
+            <div class="v" id="ovSec">—</div>
+            <div class="s" id="ovSecNote">fail2ban · exposures</div>
+          </button>
           <button type="button" class="stat" data-go="backup">
             <div class="k">Backup</div>
             <div class="v">VPS</div>
@@ -1464,6 +1513,60 @@
           </div>
         </div>
 
+      </section>
+
+      <section class="view" id="view-security">
+        <div class="page-head">
+          <h2>Security</h2>
+          <p>Live fail2ban, SSH, exposures, domains, and secret-file checks</p>
+        </div>
+        <div class="sec-callout" id="secCallout">
+          <div>
+            <div class="sec-score" id="secScore">—<small id="secGrade">loading</small></div>
+          </div>
+          <div class="sec-counts" id="secCounts"></div>
+          <div class="toolbar" style="margin:0;gap:8px">
+            <button type="button" class="primary" id="secRefreshBtn">Refresh</button>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Findings</h3></div>
+          <div class="panel-body" id="secFindings"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>fail2ban — currently banned</h3></div>
+          <div class="panel-body">
+            <div class="meta-grid" id="secF2bMeta"></div>
+            <div id="secBanned"></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Top attackers (7 days)</h3></div>
+          <div class="panel-body" id="secTopAttackers"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Public exposures</h3></div>
+          <div class="panel-body" id="secExposures"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>SSH hardening</h3></div>
+          <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Sensitive domains</h3></div>
+          <div class="panel-body" id="secDomains"><div class="sec-empty">Loading…</div></div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Secret file permissions</h3></div>
+          <div class="panel-body" id="secFiles"><div class="sec-empty">Loading…</div></div>
+        </div>
       </section>
 
       <section class="view" id="view-backup">
@@ -2450,10 +2553,11 @@
       if (name === "files") {
         loadNasFilesFrame(true);
       }
-      if (name === "overview") { refreshVpsStatus(); }
+      if (name === "overview") { refreshVpsStatus(); refreshSecurity(true); }
       if (name === "dnsmap") { refreshDnsMap(); }
       if (name === "tailscale") { refreshTailscale(); }
       if (name === "surfshark") { refreshSurfshark(); }
+      if (name === "security") { refreshSecurity(); }
       if (name === "backup") { refreshBackupStatus(); }
       if (name === "media") { refreshElementsSettings(); }
       if (name === "settings") { refreshSettings(); }
@@ -3246,6 +3350,191 @@
       document.getElementById("ssExitWrap").classList.toggle("show", e.target.checked);
     });
 
+    function escHtml(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+    function secSev(sev) {
+      const s = String(sev || "ok").toLowerCase();
+      return `<span class="sec-sev ${escHtml(s)}">${escHtml(s)}</span>`;
+    }
+    function renderSecurity(data) {
+      const callout = document.getElementById("secCallout");
+      const scoreEl = document.getElementById("secScore");
+      const gradeEl = document.getElementById("secGrade");
+      const countsEl = document.getElementById("secCounts");
+      const ovSec = document.getElementById("ovSec");
+      const ovSecNote = document.getElementById("ovSecNote");
+      const secCount = document.getElementById("secCount");
+      if (!data || data.error) {
+        if (scoreEl) scoreEl.innerHTML = `—<small id="secGrade">error</small>`;
+        if (document.getElementById("secFindings")) {
+          document.getElementById("secFindings").innerHTML =
+            `<div class="sec-empty">${escHtml(data?.error || "Failed to load")}</div>`;
+        }
+        return;
+      }
+      const counts = data.counts || {};
+      const high = Number(counts.high || 0);
+      const medium = Number(counts.medium || 0);
+      const low = Number(counts.low || 0);
+      const grade = String(data.grade || "");
+      if (callout) {
+        callout.classList.toggle("at-risk", grade === "at risk");
+        callout.classList.toggle("needs-attention", grade === "needs attention");
+      }
+      if (scoreEl) {
+        scoreEl.innerHTML = `${escHtml(data.score)}<small id="secGrade">${escHtml(grade || "—")}</small>`;
+      }
+      if (countsEl) {
+        countsEl.innerHTML = `
+          <span class="sec-chip high">${high} high</span>
+          <span class="sec-chip medium">${medium} medium</span>
+          <span class="sec-chip low">${low} low</span>`;
+      }
+      if (ovSec) ovSec.textContent = String(data.score ?? "—");
+      if (ovSecNote) ovSecNote.textContent = grade || "security score";
+      if (secCount) secCount.textContent = String(high + medium);
+
+      const findings = data.findings || [];
+      const findingsEl = document.getElementById("secFindings");
+      if (findingsEl) {
+        if (!findings.length) {
+          findingsEl.innerHTML = `<div class="sec-empty">No open findings.</div>`;
+        } else {
+          findingsEl.innerHTML = `<table class="sec-table"><thead><tr><th>Sev</th><th>Issue</th><th>Detail</th></tr></thead><tbody>${
+            findings.map((f) => `<tr>
+              <td>${secSev(f.severity)}</td>
+              <td>${escHtml(f.title)}</td>
+              <td class="sec-users">${escHtml(f.detail || "")}</td>
+            </tr>`).join("")
+          }</tbody></table>`;
+        }
+      }
+
+      const f2b = data.fail2ban || {};
+      const sshd = f2b.sshd || {};
+      const f2bMeta = document.getElementById("secF2bMeta");
+      if (f2bMeta) {
+        f2bMeta.innerHTML = `
+          <div class="meta-box"><label>fail2ban</label><div>${f2b.active ? "active" : "inactive"}</div></div>
+          <div class="meta-box"><label>Currently banned</label><div>${escHtml(sshd.currently_banned ?? 0)}</div></div>
+          <div class="meta-box"><label>Total bans</label><div>${escHtml(sshd.total_banned ?? 0)}</div></div>
+          <div class="meta-box"><label>Failed (jail)</label><div>${escHtml(sshd.total_failed ?? 0)}</div></div>`;
+      }
+      const bannedDetails = (data.attackers && data.attackers.banned_details) || [];
+      const bannedEl = document.getElementById("secBanned");
+      if (bannedEl) {
+        if (!bannedDetails.length) {
+          bannedEl.innerHTML = `<div class="sec-empty">No IPs currently banned.</div>`;
+        } else {
+          bannedEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>Attempts (7d)</th><th>Users tried</th></tr></thead><tbody>${
+            bannedDetails.map((b) => {
+              const users = (b.users || []).map((u) => `${u.user}×${u.count}`).join(", ") || "—";
+              return `<tr>
+                <td><code>${escHtml(b.ip)}</code></td>
+                <td>${escHtml(b.attempts || 0)} <span class="sec-users">(fail ${escHtml(b.failed_password || 0)}, invalid ${escHtml(b.invalid_user || 0)})</span></td>
+                <td class="sec-users">${escHtml(users)}</td>
+              </tr>`;
+            }).join("")
+          }</tbody></table>`;
+        }
+      }
+
+      const top = (data.attackers && data.attackers.top_attackers) || [];
+      const topEl = document.getElementById("secTopAttackers");
+      if (topEl) {
+        if (!top.length) {
+          topEl.innerHTML = `<div class="sec-empty">No failed SSH attempts in the last 7 days.</div>`;
+        } else {
+          topEl.innerHTML = `<table class="sec-table"><thead><tr><th>#</th><th>IP</th><th>Attempts</th></tr></thead><tbody>${
+            top.map((t, i) => `<tr>
+              <td>${i + 1}</td>
+              <td><code>${escHtml(t.ip)}</code></td>
+              <td>${escHtml(t.attempts)}</td>
+            </tr>`).join("")
+          }</tbody></table>`;
+        }
+      }
+
+      const expEl = document.getElementById("secExposures");
+      if (expEl) {
+        const rows = data.exposures || [];
+        expEl.innerHTML = `<table class="sec-table"><thead><tr><th>Sev</th><th>Service</th><th>Port</th><th>WAN</th><th>UFW</th><th>Listen</th></tr></thead><tbody>${
+          rows.map((e) => `<tr>
+            <td>${secSev(e.severity)}</td>
+            <td>${escHtml(e.label)}</td>
+            <td><code>${escHtml(e.port)}</code></td>
+            <td>${e.wan_open ? "open" : "closed"}</td>
+            <td>${e.ufw_anywhere ? "Anywhere" : "—"}</td>
+            <td>${e.listening_public ? "0.0.0.0" : "—"}</td>
+          </tr>`).join("")
+        }</tbody></table>`;
+      }
+
+      const ssh = data.ssh || {};
+      const sshEl = document.getElementById("secSsh");
+      if (sshEl) {
+        const rows = [
+          ["PermitRootLogin", ssh.permit_root_login],
+          ["PasswordAuthentication", ssh.password_authentication],
+          ["PubkeyAuthentication", ssh.pubkey_authentication],
+          ["PermitEmptyPasswords", ssh.permit_empty_passwords],
+        ];
+        sshEl.innerHTML = `<table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
+          rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
+        }</tbody></table>`;
+      }
+
+      const domEl = document.getElementById("secDomains");
+      if (domEl) {
+        const rows = data.domains || [];
+        if (!rows.length) {
+          domEl.innerHTML = `<div class="sec-empty">No sensitive domains in hookups.</div>`;
+        } else {
+          domEl.innerHTML = `<table class="sec-table"><thead><tr><th>Risk</th><th>Domain</th><th>VPN only</th><th>Target</th></tr></thead><tbody>${
+            rows.map((d) => `<tr>
+              <td>${secSev(d.risk)}</td>
+              <td><code>${escHtml(d.domain)}</code></td>
+              <td>${d.vpn_only ? "yes" : "no"}</td>
+              <td class="sec-users">${escHtml(d.target || "")}</td>
+            </tr>`).join("")
+          }</tbody></table>`;
+        }
+      }
+
+      const filesEl = document.getElementById("secFiles");
+      if (filesEl) {
+        const rows = data.files || [];
+        filesEl.innerHTML = `<table class="sec-table"><thead><tr><th>Sev</th><th>Path</th><th>Detail</th></tr></thead><tbody>${
+          rows.map((f) => `<tr>
+            <td>${secSev(f.severity)}</td>
+            <td><code>${escHtml(f.path)}</code></td>
+            <td class="sec-users">${escHtml(f.detail || f.mode || "")}</td>
+          </tr>`).join("")
+        }</tbody></table>`;
+      }
+    }
+    async function refreshSecurity(quiet) {
+      const btn = document.getElementById("secRefreshBtn");
+      if (btn) btn.disabled = true;
+      if (!quiet) setStatus("Scanning security…");
+      try {
+        const data = await api("/api/security", { timeoutMs: 60000 });
+        renderSecurity(data);
+        if (!quiet) setStatus(`Security score ${data.score ?? "—"}`, data.counts?.high ? "err" : "ok");
+      } catch (e) {
+        renderSecurity({ error: String(e.message || e) });
+        if (!quiet) setStatus(String(e.message || e), "err");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    document.getElementById("secRefreshBtn")?.addEventListener("click", () => refreshSecurity());
+
     let backupState = null;
     function fillBackupForm(data) {
       if (!data) return;
@@ -3390,7 +3679,7 @@
     });
 
     const SETTINGS_VIEWS = new Set([
-      "overview", "backup", "vps", "router", "buffalo", "proxmox", "files",
+      "overview", "security", "backup", "vps", "router", "buffalo", "proxmox", "files",
       "domains", "firewall", "wireguard", "openvpn", "windowsvpn",
       "dnsmap", "adguard", "tailscale", "surfshark", "pihole", "settings",
     ]);
