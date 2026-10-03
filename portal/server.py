@@ -4914,6 +4914,22 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\t}")
             lines.append("\t}")
+            # Authenticator PWA + APIs stay reachable without VPN circle membership
+            # so enrolled phones can manage pending while LAN pending is enforced.
+            lines.append(
+                "\t@auth_app path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+                "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+                "/static/auth-app.html /static/auth-app-iphone.html"
+            )
+            lines.append("\thandle @auth_app {")
+            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\t\theader_up Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+            lines.append("\t\t\theader_up X-Forwarded-For {remote_host}")
+            lines.append("\t\t\theader_up X-Real-IP {remote_host}")
+            lines.append("\t\t}")
+            lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
             # otherwise a stolen session cookie can cat/download off-VPN while
             # /login.html remains VPN-gated (403).
@@ -11196,6 +11212,12 @@ VPN_ALLOWLIST_PATH = Path(
         "/opt/servermanager/panel/vpn-allowlist.json",
     )
 )
+AUTH_APP_DEVICES_PATH = Path(
+    os.environ.get(
+        "AUTH_APP_DEVICES_FILE",
+        "/opt/servermanager/panel/auth-app-devices.json",
+    )
+)
 STICKY_VPN_IPS_PATH = Path(
     os.environ.get(
         "STICKY_VPN_IPS_FILE",
@@ -11229,6 +11251,99 @@ def _sealed_vpn_ips() -> list[str]:
 
 def _is_sealed_vpn_ip(ip: str) -> bool:
     return _normalize_vpn_ip(ip) in set(_sealed_vpn_ips())
+
+
+def _read_auth_app_devices() -> dict:
+    data = {"devices": [], "updated_at": 0}
+    if AUTH_APP_DEVICES_PATH.is_file():
+        try:
+            loaded = json.loads(AUTH_APP_DEVICES_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+                data["devices"] = [x for x in loaded["devices"] if isinstance(x, dict)]
+                data["updated_at"] = int(loaded.get("updated_at") or 0)
+        except Exception:
+            pass
+    return data
+
+
+def _write_auth_app_devices(data: dict) -> None:
+    AUTH_APP_DEVICES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "devices": list(data.get("devices") or [])[-80:],
+        "updated_at": int(time.time()),
+    }
+    tmp = AUTH_APP_DEVICES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(AUTH_APP_DEVICES_PATH)
+    try:
+        os.chmod(AUTH_APP_DEVICES_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def auth_app_enrolled_lan_ips() -> set[str]:
+    """LAN IPs of phones that successfully registered an enrolled Authenticator."""
+    out: set[str] = set()
+    for row in _read_auth_app_devices().get("devices") or []:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if _is_home_lan_ipv4(ip):
+            out.add(ip)
+    return out
+
+
+def touch_auth_app_device(
+    *,
+    lan_ip: str = "",
+    note: str = "",
+    platform: str = "",
+) -> dict:
+    """Record an enrolled Authenticator's home-LAN IP so Flint pending can exempt it."""
+    ip = _normalize_vpn_ip(lan_ip)
+    if not ip or not _is_home_lan_ipv4(ip):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    now = int(time.time())
+    data = _read_auth_app_devices()
+    devices = [dict(x) for x in (data.get("devices") or []) if isinstance(x, dict)]
+    by_ip = {
+        _normalize_vpn_ip(x.get("ip", "")): x
+        for x in devices
+        if _normalize_vpn_ip(x.get("ip", ""))
+    }
+    row = by_ip.get(ip) or {"ip": ip, "first_seen": now}
+    row.update(
+        {
+            "ip": ip,
+            "last_seen": now,
+            "enrolled": True,
+            "note": (note or row.get("note") or "Authenticator app")[:120],
+            "platform": (platform or row.get("platform") or "")[:40],
+        }
+    )
+    by_ip[ip] = row
+    data["devices"] = sorted(
+        by_ip.values(),
+        key=lambda x: int(x.get("last_seen") or 0),
+        reverse=True,
+    )[:80]
+    _write_auth_app_devices(data)
+    # Refresh Flint gate so this enrolled phone is no longer blocked while pending.
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    return {"ok": True, "ip": ip, "devices": data["devices"]}
 
 
 def _sealed_vpn_row(ip: str) -> dict:
@@ -11499,6 +11614,23 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
         totp_secret=secret,
         device_enroll_unlocked=want,
     )
+    # Enrollment unlock opens Flint for pending LAN so new phones can reach /auth-app.
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
     out: dict = {
         "ok": True,
         "device_enroll_unlocked": want,
@@ -11694,22 +11826,35 @@ def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
 def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
     data = sync_offline_lan_into_pending(_read_vpn_allowlist())
     view = _public_vpn_allowlist_view(data, for_auth_app=for_auth_app)
+    enrolled = auth_app_enrolled_lan_ips()
+    pending = []
+    for row in view.get("pending") or []:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if ip in enrolled:
+            item["auth_app"] = True
+            item["auth_app_enrolled"] = True
+        pending.append(item)
     recent = list(reversed(list(view.get("attempts") or [])[-40:]))
     return {
         "ok": True,
         "allowed": view.get("allowed") or [],
         "denied": view.get("denied") or [],
-        "pending": view.get("pending") or [],
+        "pending": pending,
         "attempts": recent,
         "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
         "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
         "sticky_file": str(STICKY_VPN_IPS_PATH),
+        "auth_app_devices": sorted(enrolled),
         "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
             "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
             "Home LAN devices stay pending until approved; pending/denied LAN IPs "
-            "are blocked on the Flint router before NAT so they cannot reach the portal."
+            "are blocked on the Flint router before NAT — except enrolled "
+            "Authenticator phones, which keep portal access while remaining pending."
             + (
                 ""
                 if for_auth_app
@@ -16439,6 +16584,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/health",
             "/api/auth-app/vpn-allowlist",
             "/api/auth-app/enroll-status",
+            "/api/auth-app/register-device",
         ) or path.startswith("/static/"):
             pass  # public (auth-app is the phone authenticator PWA)
         elif path in (
@@ -17181,7 +17327,48 @@ document.getElementById('f').onsubmit = async (e) => {
                     or ""
                 )
                 require_auth_app_totp(str(code))
+                # Refresh enrolled-device LAN sticky when Circle is opened.
+                lan_hint = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip")
+                    or (qs.get("lan_ip") or [""])[0]
+                    or ""
+                )
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        touch_auth_app_device(lan_ip=lan_hint, note="Authenticator Circle")
+                    except Exception:
+                        pass
                 self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                code = (
+                    self.headers.get("X-SM-Totp")
+                    or (qs.get("code") or [""])[0]
+                    or ""
+                )
+                require_auth_app_totp(str(code))
+                lan_ip = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip")
+                    or (qs.get("lan_ip") or [""])[0]
+                    or ""
+                )
+                platform = str(
+                    self.headers.get("X-SM-Platform")
+                    or (qs.get("platform") or [""])[0]
+                    or ""
+                )
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note="Authenticator app",
+                    platform=platform,
+                )
+                self._json(200, result)
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:
@@ -17355,11 +17542,44 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not isinstance(payload, dict):
                     payload = {}
                 require_auth_app_totp(str(payload.get("code") or ""))
+                lan_hint = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
+                )
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        touch_auth_app_device(
+                            lan_ip=lan_hint,
+                            note="Authenticator Circle",
+                            platform=str(payload.get("platform") or ""),
+                        )
+                    except Exception:
+                        pass
                 result = mutate_vpn_allowlist(
                     action=str(payload.get("action") or ""),
                     ip=str(payload.get("ip") or ""),
                     note=str(payload.get("note") or "from authenticator app"),
                     source="auth-app",
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                require_auth_app_totp(str(payload.get("code") or ""))
+                lan_ip = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
+                )
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note=str(payload.get("note") or "Authenticator app"),
+                    platform=str(payload.get("platform") or ""),
                 )
                 self._json(200, result)
             except ValueError as exc:

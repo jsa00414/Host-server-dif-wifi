@@ -810,13 +810,78 @@
       if (!account?.secret) throw new Error("No authenticator account");
       return totpAt(account.secret);
     }
+    async function detectHomeLanIp() {
+      // Best-effort local IPv4 via WebRTC host candidates (home Wi‑Fi 192.168.8.x).
+      return await new Promise((resolve) => {
+        let done = false;
+        const finish = (ip) => {
+          if (done) return;
+          done = true;
+          try { pc.close(); } catch (_) {}
+          resolve(ip || "");
+        };
+        let pc;
+        try {
+          pc = new RTCPeerConnection({ iceServers: [] });
+        } catch (_) {
+          resolve("");
+          return;
+        }
+        try { pc.createDataChannel("sm"); } catch (_) {}
+        pc.onicecandidate = (ev) => {
+          const cand = ev?.candidate?.candidate || "";
+          const m = cand.match(
+            /(?:^| )(\d{1,3}(?:\.\d{1,3}){3})(?: |\n|$)/
+          );
+          if (!m) return;
+          const ip = m[1];
+          if (/^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/.test(ip)) {
+            finish(ip);
+          }
+        };
+        pc.createOffer()
+          .then((offer) => pc.setLocalDescription(offer))
+          .catch(() => finish(""));
+        setTimeout(() => finish(""), 1600);
+      });
+    }
+    async function registerEnrolledDevice() {
+      if (!account?.secret || !unlocked) return;
+      try {
+        const lanIp = await detectHomeLanIp();
+        if (!lanIp) return;
+        const code = await currentTotpCode();
+        await fetch("/api/auth-app/register-device", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-SM-Totp": code,
+            "X-SM-Lan-Ip": lanIp,
+            "X-SM-Platform": "iphone",
+          },
+          body: JSON.stringify({
+            code,
+            lan_ip: lanIp,
+            platform: "iphone",
+            note: "iPhone Authenticator",
+          }),
+          cache: "no-store",
+        });
+      } catch (_) {}
+    }
     async function fetchCircle() {
       if (!account || !unlocked) return;
       circleLoading = true;
       try {
         const code = await currentTotpCode();
-        const res = await fetch(`/api/auth-app/vpn-allowlist?code=${encodeURIComponent(code)}`, {
-          headers: { "X-SM-Totp": code, Accept: "application/json" },
+        const lanIp = await detectHomeLanIp();
+        const headers = { "X-SM-Totp": code, Accept: "application/json" };
+        if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+        const q = new URLSearchParams({ code });
+        if (lanIp) q.set("lan_ip", lanIp);
+        const res = await fetch(`/api/auth-app/vpn-allowlist?${q}`, {
+          headers,
           cache: "no-store",
         });
         const data = await res.json().catch(() => ({}));
@@ -869,8 +934,9 @@
       if (pending.length) {
         pending.forEach((row) => {
           const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
+          const authApp = !!(row.auth_app || row.auth_app_enrolled);
           const detail = isLan
-            ? `${esc(row.status || "pending")} · LAN offline · ${esc(row.name || row.note || "unplugged")}`
+            ? `${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled (access kept)" : ""}${row.online ? " · online" : " · offline"} · ${esc(row.name || row.note || "device")}`
             : `${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
           blocks.push(`<div class="circle-row">
             <div class="ip">${esc(row.ip)}</div>
@@ -1034,6 +1100,7 @@
         unlocked = true;
         pinMode = false;
         render();
+        registerEnrolledDevice();
         toast("Unlocked");
       } catch (err) {
         unlocked = false;
@@ -1051,6 +1118,7 @@
         unlocked = true;
         pinMode = false;
         render();
+        registerEnrolledDevice();
         toast("Face ID enabled");
       } catch (err) {
         toast(String(err?.message || err || "Face ID setup cancelled"));
@@ -1078,6 +1146,7 @@
       pinMode = false;
       els.pinInput.value = "";
       render();
+      registerEnrolledDevice();
       toast("Unlocked");
     }));
     els.pinInput.addEventListener("keydown", (ev) => {

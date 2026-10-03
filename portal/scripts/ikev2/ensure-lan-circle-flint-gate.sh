@@ -9,6 +9,8 @@ set -euo pipefail
 
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
+AUTH_APP_DEVICES_FILE="${AUTH_APP_DEVICES_FILE:-/opt/servermanager/panel/auth-app-devices.json}"
+SSH_PANEL_2FA_FILE="${SSH_PANEL_2FA_FILE:-/opt/servermanager/panel/ssh-panel-2fa.json}"
 BLOCK_FILE="${LAN_CIRCLE_BLOCK_FILE:-/opt/servermanager/panel/lan-circle-block.txt}"
 OVPN_GW="${OVPN_FLINT_IP:-10.9.0.2}"
 VPS_IP="${VPS_PUBLIC_IP:-74.208.76.213}"
@@ -36,7 +38,7 @@ command -v sshpass >/dev/null 2>&1 || {
   exit 0
 }
 
-export ALLOWLIST_FILE BLOCK_FILE VPS_IP
+export ALLOWLIST_FILE AUTH_APP_DEVICES_FILE SSH_PANEL_2FA_FILE BLOCK_FILE VPS_IP
 BLOCK_LIST="$(
   python3 - <<'PY'
 import json
@@ -45,6 +47,12 @@ import re
 from pathlib import Path
 
 allow = Path(os.environ.get("ALLOWLIST_FILE", "/opt/servermanager/panel/vpn-allowlist.json"))
+auth_dev = Path(
+    os.environ.get("AUTH_APP_DEVICES_FILE", "/opt/servermanager/panel/auth-app-devices.json")
+)
+ssh_2fa = Path(
+    os.environ.get("SSH_PANEL_2FA_FILE", "/opt/servermanager/panel/ssh-panel-2fa.json")
+)
 block_file = Path(os.environ.get("BLOCK_FILE", "/opt/servermanager/panel/lan-circle-block.txt"))
 vps = os.environ.get("VPS_IP", "74.208.76.213").strip() or "74.208.76.213"
 
@@ -76,6 +84,30 @@ if allow.is_file():
     except Exception:
         pass
 
+# Enrolled Authenticator phones keep portal access while remaining pending.
+enrolled: set[str] = set()
+if auth_dev.is_file():
+    try:
+        loaded = json.loads(auth_dev.read_text(encoding="utf-8"))
+        for row in (loaded.get("devices") or []) if isinstance(loaded, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            ip = norm(row.get("ip", ""))
+            if is_home_lan(ip):
+                enrolled.add(ip)
+    except Exception:
+        pass
+
+# While new-device enrollment is unlocked, do not block pending LAN (phones must
+# reach /auth-app to paste the secret). Denied IPs stay blocked.
+enroll_unlocked = False
+if ssh_2fa.is_file():
+    try:
+        st = json.loads(ssh_2fa.read_text(encoding="utf-8"))
+        enroll_unlocked = bool(isinstance(st, dict) and st.get("device_enroll_unlocked"))
+    except Exception:
+        enroll_unlocked = False
+
 allowed = {
     norm(r.get("ip", ""))
     for r in (data.get("allowed") or [])
@@ -83,23 +115,38 @@ allowed = {
 }
 blocked: list[str] = []
 seen = set()
-for key in ("pending", "denied"):
-    for row in data.get(key) or []:
-        if not isinstance(row, dict):
-            continue
-        ip = norm(row.get("ip", ""))
-        if not is_home_lan(ip) or ip in allowed or ip in seen:
-            continue
-        # denied rows are also mirrored into pending with status=denied
-        if key == "pending" and str(row.get("status") or "") == "allowed":
-            continue
-        seen.add(ip)
-        blocked.append(ip)
+
+# Denied LAN IPs are always blocked (unless later approved).
+for row in data.get("denied") or []:
+    if not isinstance(row, dict):
+        continue
+    ip = norm(row.get("ip", ""))
+    if not is_home_lan(ip) or ip in allowed or ip in seen:
+        continue
+    seen.add(ip)
+    blocked.append(ip)
+
+# Pending LAN IPs are blocked unless an enrolled Authenticator owns that IP,
+# or new-device enrollment is currently unlocked.
+for row in data.get("pending") or []:
+    if not isinstance(row, dict):
+        continue
+    ip = norm(row.get("ip", ""))
+    if not is_home_lan(ip) or ip in allowed or ip in seen:
+        continue
+    if str(row.get("status") or "") == "denied":
+        continue
+    if ip in enrolled or enroll_unlocked:
+        continue
+    seen.add(ip)
+    blocked.append(ip)
 
 block_file.parent.mkdir(parents=True, exist_ok=True)
 lines = [
     "# Managed by ensure-lan-circle-flint-gate.sh",
     f"# Reject these LAN sources to {vps}:80,443 on Flint (pre-NAT).",
+    f"# Enrolled Authenticators exempt: {', '.join(sorted(enrolled)) or '(none)'}",
+    f"# enroll_unlocked={int(enroll_unlocked)}",
     "# one IPv4 per line",
 ]
 lines.extend(blocked)

@@ -3718,11 +3718,12 @@
         const pendingRows = pending.length
           ? pending.map((r) => {
               const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
+              const authApp = !!(r.auth_app || r.auth_app_enrolled);
               return `<tr>
               <td><code>${escHtml(r.ip)}</code></td>
-              <td class="sec-users">${escHtml(isLan ? (r.name || r.note || "LAN offline") : (r.vip || "—"))}</td>
+              <td class="sec-users">${escHtml(isLan ? (r.name || r.note || "LAN device") : (r.vip || "—"))}</td>
               <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
-              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN` : (r.status || "pending"))}</td>
+              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN${authApp ? " · Authenticator" : ""}` : (r.status || "pending"))}</td>
               <td>
                 <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
                 <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
