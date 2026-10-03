@@ -57,9 +57,12 @@ iptables -C FORWARD -s "$DNS_NET" -d "$IKEV2_POOL" -m comment --comment SM-IKEV2
 iptables -t raw -C PREROUTING -s "$IKEV2_POOL" -d "${ADGUARD_DNS}/32" -m comment --comment SM-VPN-DNS-ALLOW -j ACCEPT 2>/dev/null \
   || iptables -t raw -I PREROUTING 1 -s "$IKEV2_POOL" -d "${ADGUARD_DNS}/32" -m comment --comment SM-VPN-DNS-ALLOW -j ACCEPT
 
-# Host INPUT for IKEv2 clients (sslh / portal VIP)
+# Host INPUT for IKEv2: narrow HTTPS only. Full host access is granted per
+# allowlisted VIP by ensure-vpn-client-gate.sh (Security → VPN trust circle).
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow from "$IKEV2_POOL" comment 'IKEv2 clients to host' >/dev/null 2>&1 || true
+  ufw delete allow from "$IKEV2_POOL" >/dev/null 2>&1 || true
+  ufw allow from "$IKEV2_POOL" to any port 443 proto tcp comment 'IKEv2 base HTTPS' >/dev/null 2>&1 || true
+  ufw allow from "$IKEV2_POOL" to any port 80 proto tcp comment 'IKEv2 base HTTPS' >/dev/null 2>&1 || true
 fi
 
 # Persist VIP across reboot

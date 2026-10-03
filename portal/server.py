@@ -8396,6 +8396,7 @@ def build_security_status() -> dict:
         "files": files,
         "kernel": kernel,
         "probes": probes,
+        "vpn_allowlist": build_vpn_allowlist_status(),
         "generated_at": int(time.time()),
     }
 
@@ -11032,6 +11033,21 @@ SSH_PANEL_2FA_PATH = Path(
         "/opt/servermanager/panel/ssh-panel-2fa.json",
     )
 )
+VPN_ALLOWLIST_PATH = Path(
+    os.environ.get(
+        "VPN_ALLOWLIST_FILE",
+        "/opt/servermanager/panel/vpn-allowlist.json",
+    )
+)
+STICKY_VPN_IPS_PATH = Path(
+    os.environ.get(
+        "STICKY_VPN_IPS_FILE",
+        "/opt/servermanager/panel/caddy-sticky-vpn-ips.txt",
+    )
+)
+VPN_PEER_ACL_SCRIPT = Path(
+    os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
+)
 _ssh_panel_2fa_lock = threading.Lock()
 
 
@@ -11139,6 +11155,210 @@ def _write_ssh_panel_2fa(
             os.chmod(SSH_PANEL_2FA_PATH, 0o600)
         except Exception:
             pass
+
+
+def _normalize_vpn_ip(raw: str) -> str:
+    ip = str(raw or "").strip()
+    if "/" in ip:
+        ip = ip.split("/", 1)[0].strip()
+    return ip
+
+
+def _is_public_ipv4(ip: str) -> bool:
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] == 10 or parts[0] == 127:
+        return False
+    if parts[0] == 192 and parts[1] == 168:
+        return False
+    if parts[0] == 172 and 16 <= parts[1] <= 31:
+        return False
+    if parts[0] == 100 and 64 <= parts[1] <= 127:
+        return False
+    return True
+
+
+def _empty_vpn_allowlist() -> dict:
+    return {"allowed": [], "denied": [], "pending": [], "attempts": []}
+
+
+def _read_vpn_allowlist() -> dict:
+    data = _empty_vpn_allowlist()
+    if VPN_ALLOWLIST_PATH.is_file():
+        try:
+            loaded = json.loads(VPN_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for key in data:
+                    if isinstance(loaded.get(key), list):
+                        data[key] = loaded[key]
+        except Exception:
+            pass
+    # Seed sticky WAN entries so existing home IP stays trusted.
+    sticky_ips: list[str] = []
+    if STICKY_VPN_IPS_PATH.is_file():
+        try:
+            for line in STICKY_VPN_IPS_PATH.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                sticky_ips.append(_normalize_vpn_ip(raw))
+        except Exception:
+            sticky_ips = []
+    allowed_set = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in data["allowed"]
+        if isinstance(x, dict)
+    }
+    changed = False
+    for ip in sticky_ips:
+        if ip and _is_public_ipv4(ip) and ip not in allowed_set:
+            data["allowed"].append(
+                {
+                    "ip": ip,
+                    "note": "seeded from sticky WAN",
+                    "approved_at": int(time.time()),
+                    "source": "sticky",
+                }
+            )
+            allowed_set.add(ip)
+            changed = True
+    if changed or not VPN_ALLOWLIST_PATH.is_file():
+        _write_vpn_allowlist(data)
+    return data
+
+
+def _write_vpn_allowlist(data: dict) -> None:
+    VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "allowed": list(data.get("allowed") or []),
+        "denied": list(data.get("denied") or []),
+        "pending": list(data.get("pending") or []),
+        "attempts": list(data.get("attempts") or [])[-200:],
+        "updated_at": int(time.time()),
+    }
+    tmp = VPN_ALLOWLIST_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(VPN_ALLOWLIST_PATH)
+    try:
+        os.chmod(VPN_ALLOWLIST_PATH, 0o600)
+    except Exception:
+        pass
+    # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
+    lines = [
+        "# Managed by Security → VPN trust circle",
+        "# Approved sticky WAN IPs (one IPv4 /32 per line)",
+    ]
+    for row in payload["allowed"]:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_public_ipv4(ip):
+            lines.append(f"{ip}/32")
+    STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_vpn_peer_acl_sync() -> str:
+    script = VPN_PEER_ACL_SCRIPT
+    if not script.is_file():
+        return "peer-acl script missing"
+    try:
+        proc = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return out[-500:] if out else ("ok" if proc.returncode == 0 else "failed")
+    except Exception as exc:
+        return str(exc)
+
+
+def build_vpn_allowlist_status() -> dict:
+    data = _read_vpn_allowlist()
+    recent = list(reversed(list(data.get("attempts") or [])[-40:]))
+    return {
+        "ok": True,
+        "allowed": data.get("allowed") or [],
+        "denied": data.get("denied") or [],
+        "pending": data.get("pending") or [],
+        "attempts": recent,
+        "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
+        "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
+        "sticky_file": str(STICKY_VPN_IPS_PATH),
+        "detail": (
+            "Unapproved IKEv2 clients keep internet via guest DNS; "
+            "approve a WAN IP (Authenticator unlock) to enter the trust circle."
+        ),
+    }
+
+
+def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "") -> dict:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n or not _is_public_ipv4(ip_n):
+        raise ValueError("A public IPv4 address is required")
+    action_n = str(action or "").strip().lower()
+    if action_n not in ("approve", "revoke", "deny"):
+        raise ValueError("action must be approve, revoke, or deny")
+    data = _read_vpn_allowlist()
+    now = int(time.time())
+
+    def _without(rows: list, target: str) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if _normalize_vpn_ip(row.get("ip", "")) == target:
+                continue
+            out.append(row)
+        return out
+
+    data["allowed"] = _without(list(data.get("allowed") or []), ip_n)
+    data["denied"] = _without(list(data.get("denied") or []), ip_n)
+    data["pending"] = _without(list(data.get("pending") or []), ip_n)
+
+    if action_n == "approve":
+        data["allowed"].append(
+            {
+                "ip": ip_n,
+                "note": (note or "").strip()[:120],
+                "approved_at": now,
+                "source": "security-ui",
+            }
+        )
+    elif action_n == "deny":
+        data["denied"].append(
+            {
+                "ip": ip_n,
+                "note": (note or "").strip()[:120],
+                "denied_at": now,
+                "source": "security-ui",
+            }
+        )
+        data["pending"].append(
+            {
+                "ip": ip_n,
+                "status": "denied",
+                "first_seen": now,
+                "last_seen": now,
+                "count": 1,
+            }
+        )
+    # revoke: already removed from allowed/denied
+
+    _write_vpn_allowlist(data)
+    sync_msg = _run_vpn_peer_acl_sync()
+    return {
+        "ok": True,
+        "action": action_n,
+        "ip": ip_n,
+        "sync": sync_msg,
+        "vpn_allowlist": build_vpn_allowlist_status(),
+    }
 
 
 def _totp_provisioning(secret_b32: str) -> dict:
@@ -16369,6 +16589,14 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, **build_vpn_allowlist_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/security/ssh-login",
             "/api/security/ssh-keys",
@@ -16806,6 +17034,26 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(200, result)
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                result = mutate_vpn_allowlist(
+                    action=str(payload.get("action") or ""),
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or ""),
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return

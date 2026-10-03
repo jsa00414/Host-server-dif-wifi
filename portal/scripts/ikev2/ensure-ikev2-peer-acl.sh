@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Allow active IKEv2 peer *public* IPs through Caddy @vpn_clients.
+# Sync Caddy @vpn_clients with the VPN trust circle (allowlisted sticky WAN IPs).
 #
-# Windows/iOS exclude the VPN gateway public IP from the tunnel, so HTTPS to
-# portal.vpstruelord.com often arrives from the peer WAN IP (not 10.10.0.x).
-# Split-DNS helps when the client uses VPN DNS; this ACL covers DoH / DNS-leak /
-# gateway-exclusion cases while an SA is up.
-#
-# Sticky IPs in /opt/servermanager/panel/caddy-sticky-vpn-ips.txt survive
-# disconnects (home WAN) so router/portal keep working without a live SA.
+# Active IKEv2 peer WANs are NO LONGER auto-added. Unapproved peers still get
+# internet (FORWARD/MASQ) but stay out of @vpn_clients until an operator
+# approves them in Security → VPN trust circle (Authenticator unlock required).
+# Guest DNS for unapproved VIPs is applied by ensure-vpn-client-gate.sh.
 set -euo pipefail
 
 CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"
@@ -15,16 +12,20 @@ ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 STATE_DIR="${IKEV2_PEER_ACL_DIR:-/var/lib/servermanager}"
 STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
 STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
+ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
+GATE_SCRIPT="${VPN_CLIENT_GATE_SCRIPT:-/opt/ikev2/ensure-vpn-client-gate.sh}"
 BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
-export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE BASE_CIDRS_DEFAULT
+export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE ALLOWLIST_FILE BASE_CIDRS_DEFAULT
 
-mkdir -p "$STATE_DIR" "$(dirname "$STICKY_FILE")"
+mkdir -p "$STATE_DIR" "$(dirname "$STICKY_FILE")" "$(dirname "$ALLOWLIST_FILE")"
 
 python3 - <<'PY'
+import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 caddyfile = Path(os.environ.get("CADDYFILE", "/opt/truemail/Caddyfile"))
@@ -33,10 +34,14 @@ state_file = Path(os.environ.get("STATE_FILE", "/var/lib/servermanager/ikev2-pee
 sticky_file = Path(
     os.environ.get("STICKY_FILE", "/opt/servermanager/panel/caddy-sticky-vpn-ips.txt")
 )
+allow_file = Path(
+    os.environ.get("ALLOWLIST_FILE", "/opt/servermanager/panel/vpn-allowlist.json")
+)
 base_default = os.environ.get(
     "BASE_CIDRS_DEFAULT",
     "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
+now = int(time.time())
 
 PRIVATE = [
     re.compile(r"^10\."),
@@ -53,6 +58,13 @@ def is_public_ipv4(ip: str) -> bool:
     return not any(p.match(ip) for p in PRIVATE)
 
 
+def normalize_ip(raw: str) -> str:
+    raw = (raw or "").strip()
+    if "/" in raw:
+        raw = raw.split("/", 1)[0]
+    return raw
+
+
 def peer_ips() -> list[str]:
     try:
         out = subprocess.check_output(
@@ -66,7 +78,6 @@ def peer_ips() -> list[str]:
         except Exception:
             return []
     found = []
-    # e.g. 74.208.76.213[portal...]...192.81.235.246[172.16.17.228]
     for m in re.finditer(r"\.\.\.(\d{1,3}(?:\.\d{1,3}){3})\[", out):
         ip = m.group(1)
         if is_public_ipv4(ip) and ip not in found:
@@ -89,27 +100,78 @@ def load_sticky_cidrs() -> list[str]:
     return out
 
 
-def load_base_cidrs() -> list[str]:
+def load_allowlist_ips() -> set[str]:
+    ips: set[str] = set()
+    if not allow_file.is_file():
+        return ips
+    try:
+        data = json.loads(allow_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ips
+    for row in data.get("allowed") or []:
+        if isinstance(row, dict):
+            ip = normalize_ip(row.get("ip", ""))
+            if ip and is_public_ipv4(ip):
+                ips.add(ip)
+    return ips
+
+
+def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
+    """Ensure sticky WANs exist as allowed entries; return allowed IP set."""
+    allowed = load_allowlist_ips()
+    data = {"allowed": [], "denied": [], "attempts": [], "pending": []}
+    if allow_file.is_file():
+        try:
+            loaded = json.loads(allow_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for key in data:
+                    if isinstance(loaded.get(key), list):
+                        data[key] = loaded[key]
+        except Exception:
+            pass
+    changed = False
+    for cidr in sticky:
+        ip = normalize_ip(cidr)
+        if ip and is_public_ipv4(ip) and ip not in allowed:
+            data["allowed"].append(
+                {
+                    "ip": ip,
+                    "note": "seeded from sticky WAN",
+                    "approved_at": now,
+                    "source": "sticky",
+                }
+            )
+            allowed.add(ip)
+            changed = True
+    if changed or not allow_file.is_file():
+        allow_file.parent.mkdir(parents=True, exist_ok=True)
+        allow_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        try:
+            os.chmod(allow_file, 0o600)
+        except Exception:
+            pass
+    return allowed
+
+
+def load_base_cidrs(allowed_ips: set[str]) -> list[str]:
     base = base_default.split()
-    sticky = set(load_sticky_cidrs())
+    sticky = [c for c in load_sticky_cidrs() if normalize_ip(c) in allowed_ips]
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
             if line.startswith("VPN_CLIENT_CIDRS="):
                 raw = line.split("=", 1)[1].strip().strip('"').strip("'")
                 parts = raw.split()
-                # Drop previously injected peer /32s (public singles), but keep
-                # the VPS public /32 and sticky home-WAN entries.
                 cleaned = []
                 for p in parts:
                     if p.endswith("/32"):
                         ip = p[:-3]
-                        if is_public_ipv4(ip) and ip != "74.208.76.213" and p not in sticky:
+                        # Keep VPS public + allowlisted sticky only (drop transient peers)
+                        if is_public_ipv4(ip) and ip != "74.208.76.213" and ip not in allowed_ips:
                             continue
                     cleaned.append(p)
                 if cleaned:
                     base = cleaned
                 break
-    # Ensure IKEv2 pool + portal VIP + VPS public IP (hairpin) always present
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
     if "10.11.0.1/32" not in base:
@@ -119,31 +181,42 @@ def load_base_cidrs() -> list[str]:
     for s in sticky:
         if s not in base:
             base.append(s)
+    for ip in sorted(allowed_ips):
+        cidr = f"{ip}/32"
+        if cidr not in base:
+            base.append(cidr)
     return base
 
 
 peers = peer_ips()
-base = load_base_cidrs()
-peer_cidrs = [f"{ip}/32" for ip in peers]
 sticky_cidrs = load_sticky_cidrs()
+allowed_ips = ensure_allowlist_seeded(sticky_cidrs)
+# Sticky file may include unapproved leftovers — only allowlisted count
+sticky_trusted = [c for c in sticky_cidrs if normalize_ip(c) in allowed_ips]
+base = load_base_cidrs(allowed_ips)
+
+# IMPORTANT: do NOT auto-append live peer WANs. Only allowlisted sticky enter the circle.
 combined = base[:]
-for c in peer_cidrs + sticky_cidrs:
-    if c not in combined:
-        combined.append(c)
 combined_s = " ".join(combined)
 
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
+trusted_needed = [c[:-3] for c in sticky_trusted if c.endswith("/32")]
 if prev == cur and caddyfile.is_file():
     text = caddyfile.read_text()
-    needed = peers + [c[:-3] for c in sticky_cidrs if c.endswith("/32")]
-    if needed and all(f"{ip}/32" in text for ip in needed):
-        print(f"OK unchanged ({len(peers)} peers, {len(sticky_cidrs)} sticky)")
-        raise SystemExit(0)
+    # Still patch if allowlist changed relative to Caddy
+    if trusted_needed and all(f"{ip}/32" in text for ip in trusted_needed):
+        # Also ensure no unapproved peer /32 remains from older runs
+        unapproved = [ip for ip in peers if ip not in allowed_ips]
+        if not unapproved or all(f"{ip}/32" not in text for ip in unapproved):
+            print(
+                f"OK unchanged ({len(peers)} peers seen, {len(sticky_trusted)} trusted sticky, "
+                f"{len(allowed_ips)} allowlisted)"
+            )
+            raise SystemExit(0)
 
 state_file.write_text(cur + ("\n" if cur else ""))
 
-# Update env VPN_CLIENT_CIDRS
 if env_file.is_file():
     lines = env_file.read_text().splitlines()
     out_lines = []
@@ -159,7 +232,6 @@ if env_file.is_file():
     env_file.write_text("\n".join(out_lines) + "\n")
     print(f"updated {env_file}")
 
-# Patch every @vpn_clients client_ip/remote_ip line (prefer client_ip + PROXY)
 if not caddyfile.is_file():
     print(f"missing {caddyfile}")
     raise SystemExit(1)
@@ -179,11 +251,11 @@ else:
     caddyfile.write_text(new_text)
     print(f"patched {n} Caddy @vpn_clients lines")
 
-print("peers:", ", ".join(peers) if peers else "(none)")
-print("sticky:", ", ".join(sticky_cidrs) if sticky_cidrs else "(none)")
+print("peers_seen:", ", ".join(peers) if peers else "(none)")
+print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")
+print("allowlisted:", ", ".join(sorted(allowed_ips)) if allowed_ips else "(none)")
 print("cidrs:", combined_s)
 
-# Reload Caddy
 reload = subprocess.run(
     [
         "docker",
@@ -204,3 +276,11 @@ if reload.returncode != 0:
 else:
     print("caddy reloaded")
 PY
+
+# Apply guest DNS + UFW circle gating for live IKEv2 sessions
+if [[ -x "$GATE_SCRIPT" ]]; then
+  bash "$GATE_SCRIPT" || true
+elif [[ -f "$GATE_SCRIPT" ]]; then
+  chmod +x "$GATE_SCRIPT" 2>/dev/null || true
+  bash "$GATE_SCRIPT" || true
+fi

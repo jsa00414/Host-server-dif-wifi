@@ -197,8 +197,10 @@ else
     bash "$IKEV2_DIR/ensure-ikev2-no-nest.sh" || true
   fi
 fi
-# Host INPUT for portal VIP / sslh (split-DNS points portal at 10.11.0.1)
-ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
+# Host INPUT: narrow HTTPS; full access is allowlist-gated per VIP
+ufw delete allow from 10.10.0.0/24 >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 443 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 80 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
