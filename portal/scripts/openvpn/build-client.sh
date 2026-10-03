@@ -50,9 +50,11 @@ fi
   fi
   if [ "$REDIRECT" = "1" ] || [ "$REDIRECT" = "true" ] || [ "$REDIRECT" = "yes" ]; then
     echo "redirect-gateway def1"
-    # AdGuard via tun DNS DNAT (10.9.0.1:53 → 10.42.42.44). Rewrites
-    # portal/admin → 10.9.0.1 so Caddy sees a VPN client_ip.
-    echo "dhcp-option DNS 10.9.0.1"
+    # AdGuard directly (split-DNS for vpn-only hosts). Portal stays on public A;
+    # sticky WAN ACL covers Windows gateway-IP exclusion.
+    echo "dhcp-option DNS 10.42.42.44"
+    echo "route 10.42.42.0 255.255.255.0 vpn_gateway"
+    echo "route 10.11.0.1 255.255.255.255 vpn_gateway"
     if [ "$STYLE" = "community" ]; then
       echo "block-outside-dns"
     fi
