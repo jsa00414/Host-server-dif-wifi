@@ -1957,6 +1957,24 @@ def load_ikev2_ca_pem() -> str:
     return ""
 
 
+AUTH_APP_WINDOWS_EXE_NAME = "ServerManagerAuthenticator.exe"
+AUTH_APP_WINDOWS_EXE_PATHS = (
+    Path(__file__).resolve().parent / "scripts" / "auth-app-windows" / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/wireguard/port-forward-ui/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/servermanager/panel/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+)
+
+
+def load_auth_app_windows_exe() -> bytes:
+    """Windows Authenticator .exe (WebView2 shell around /auth-app.html)."""
+    for path in AUTH_APP_WINDOWS_EXE_PATHS:
+        if path.is_file():
+            return path.read_bytes()
+    raise FileNotFoundError(
+        f"{AUTH_APP_WINDOWS_EXE_NAME} missing — build portal/scripts/auth-app-windows/"
+    )
+
+
 def load_ikev2_windows_ps1() -> bytes:
     """PowerShell helper that trusts the IKEv2 CA and creates the VPN profile."""
     candidates = [
@@ -4919,7 +4937,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append(
                 "\t@auth_app path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
                 "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
-                "/static/auth-app.html /static/auth-app-iphone.html"
+                "/static/auth-app.html /static/auth-app-iphone.html "
+                "/download/ServerManagerAuthenticator.exe "
+                "/api/auth-app/windows-exe"
             )
             lines.append("\thandle @auth_app {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -7395,6 +7415,8 @@ def _security_sshd_config() -> dict:
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
         "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "email_to": EMAIL_CODE_TO,
         "required": required,
     }
@@ -11542,6 +11564,7 @@ def auth_app_enroll_status() -> dict:
         "device_enroll_unlocked": unlocked,
         "auth_app_path": "/auth-app-iphone.html",
         "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "message": (
             "Enrollment unlocked — Enter secret is available in the Authenticator app."
             if unlocked
@@ -11639,6 +11662,7 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
         "two_factor_method": str(cfg.get("method") or "app"),
         "auth_app_path": "/auth-app-iphone.html",
         "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "message": (
             "New-device enrollment unlocked. Enter secret is visible in the Authenticator app until you lock it again."
             if want
@@ -12107,6 +12131,8 @@ def _totp_provisioning(secret_b32: str) -> dict:
         "account": account,
         "issuer": issuer,
         "auth_app_path": f"/auth-app-iphone.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+        "auth_app_android_path": f"/auth-app.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
     }
 
 
@@ -12234,6 +12260,7 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
         "enroll_unlocked": enroll_unlocked,
         "auth_app_path": "/auth-app-iphone.html",
         "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -16607,6 +16634,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/vpn-allowlist",
             "/api/auth-app/enroll-status",
             "/api/auth-app/register-device",
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
         ) or path.startswith("/static/"):
             pass  # public (auth-app is the phone authenticator PWA)
         elif path in (
@@ -16780,6 +16809,28 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(
                 STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
             )
+        if path in (
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+        ):
+            try:
+                from urllib.parse import quote
+
+                body = load_auth_app_windows_exe()
+                name = AUTH_APP_WINDOWS_EXE_NAME
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.microsoft.portable-executable")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
