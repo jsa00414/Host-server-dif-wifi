@@ -5580,6 +5580,8 @@ UFW_PROTECTED = {
 # Ports that must keep a UFW allow (never mass-deleted) but MAY be vpn_only.
 UFW_REQUIRED = {
     (5002, "tcp"),  # portal cleartext HTTP — VPN/LAN only by default
+    (2121, "tcp"),  # NAS FTP gateway
+    (1445, "tcp"),  # NAS SMB gateway forward
 }
 
 UFW_ROW_RE = re.compile(
@@ -5788,6 +5790,8 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         if (port, proto) not in seen:
             labels = {
                 (5002, "tcp"): "portal-http-vpn",
+                (2121, "tcp"): "nas-ftp-vpn",
+                (1445, "tcp"): "nas-smb-vpn",
             }
             cleaned.append(
                 {
@@ -7372,10 +7376,10 @@ def build_security_status() -> dict:
             severity = "ok"
         elif ufw_open and (listening_public or wan_open):
             severity = "high"
-        elif listening_public and wan_open and port in (2121, 3016, 5001, 5002, 1445):
-            # Exclude 445/3389/4000: hairpin to public IP looks "open" even when UFW denies WAN.
+        elif listening_public and wan_open and port in (3016, 5001):
+            # Exclude VPN-scoped NAS/RDP/portal ports: hairpin to public IP looks "open".
             severity = "high"
-        elif listening_public and port in (3016, 5001, 5002):
+        elif listening_public and port in (3016, 5001):
             severity = "high"
         elif listening_public or ufw_open or wan_open:
             severity = "medium"
