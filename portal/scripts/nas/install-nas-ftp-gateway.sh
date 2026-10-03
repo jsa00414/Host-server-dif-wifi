@@ -103,9 +103,16 @@ chmod 700 "$ROOT/run.sh"
 
 install -m 0644 "$SCRIPT_DIR/nas-ftp-gateway.service" /etc/systemd/system/nas-ftp-gateway.service
 
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow "${PUBLIC_PORT}/tcp" comment "nas-ftp-gateway" >/dev/null || true
-  ufw allow "${PASV_START}:${PASV_END}/tcp" comment "nas-ftp-pasv" >/dev/null || true
+# Prefer VPN/LAN-only UFW (do not re-open Anywhere on reinstall).
+HARDEN_NAS="${SCRIPT_DIR}/../security/harden-nas-gateways-vpn-only.sh"
+if [[ -x "$HARDEN_NAS" ]]; then
+  NAS_FTP_PUBLIC_PORT="$PUBLIC_PORT" NAS_FTP_PASV_START="$PASV_START" NAS_FTP_PASV_END="$PASV_END" \
+    bash "$HARDEN_NAS" || true
+elif command -v ufw >/dev/null 2>&1; then
+  for src in 10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24 10.42.42.0/24 172.16.0.0/12; do
+    ufw allow from "$src" to any port "${PUBLIC_PORT}" proto tcp comment "nas-ftp-vpn" >/dev/null || true
+    ufw allow from "$src" to any port "${PASV_START}:${PASV_END}" proto tcp comment "nas-ftp-pasv-vpn" >/dev/null || true
+  done
 fi
 
 systemctl daemon-reload
