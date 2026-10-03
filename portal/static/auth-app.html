@@ -427,6 +427,26 @@
       margin-bottom: 2px;
     }
     .circle .meta strong { font-size: 1rem; }
+    .circle-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 0 0 10px;
+    }
+    .circle-tabs button {
+      margin: 0;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      font-weight: 700;
+      padding: 10px 12px;
+    }
+    .circle-tabs button[aria-selected="true"] {
+      background: rgba(52,211,153,.16);
+      border-color: rgba(52,211,153,.4);
+      color: var(--text);
+    }
     .circle-list {
       display: flex;
       flex-direction: column;
@@ -550,10 +570,14 @@
       <div class="bar"><i id="tickBar"></i></div>
       <section class="circle" id="circlePane" hidden>
         <h3>VPN trust circle</h3>
-        <p class="sub">Pending WAN IPs stay on guest DNS until you approve them here with your authenticator code.</p>
+        <p class="sub">View pending or allowed. Allowed IPs can be moved back to pending or removed.</p>
         <div class="meta">
           <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
           <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
+        </div>
+        <div class="circle-tabs" role="tablist" aria-label="Circle lists">
+          <button type="button" id="circleTabPending" role="tab" aria-selected="true">Pending</button>
+          <button type="button" id="circleTabAllowed" role="tab" aria-selected="false">Allowed</button>
         </div>
         <div class="circle-list" id="circleList"><div class="circle-empty">Open Circle to load the list.</div></div>
         <div class="circle-add">
@@ -621,6 +645,8 @@
       circleIpInput: document.getElementById("circleIpInput"),
       circleApproveBtn: document.getElementById("circleApproveBtn"),
       circleRefreshBtn: document.getElementById("circleRefreshBtn"),
+      circleTabPending: document.getElementById("circleTabPending"),
+      circleTabAllowed: document.getElementById("circleTabAllowed"),
       tabBar: document.getElementById("tabBar"),
       circleToggle: document.getElementById("circleToggle"),
     };
@@ -634,6 +660,7 @@
     let circleData = null;
     let circleLoading = false;
     let circleOpen = false;
+    let circleView = "pending";
     let enrollUnlocked = false;
     let enrollStatusLoaded = false;
 
@@ -1031,7 +1058,13 @@
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
         circleData = data.vpn_allowlist || data;
         renderCircle();
-        toast(`${action}d ${ip}`);
+        const labels = {
+          approve: "Approved",
+          deny: "Denied",
+          revoke: "Removed",
+          pending: "Moved to pending",
+        };
+        toast(`${labels[action] || action} ${ip}`);
         bumpIdle();
       } catch (err) {
         toast(String(err?.message || err));
@@ -1050,40 +1083,61 @@
       const attempts = circleData?.attempts || [];
       els.circleAllowedCount.textContent = String(allowed.length);
       els.circlePendingCount.textContent = String(pending.length);
+      if (els.circleTabPending) {
+        els.circleTabPending.setAttribute("aria-selected", circleView === "pending" ? "true" : "false");
+      }
+      if (els.circleTabAllowed) {
+        els.circleTabAllowed.setAttribute("aria-selected", circleView === "allowed" ? "true" : "false");
+      }
       const blocks = [];
-      pending.forEach((row) => {
-        const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
-        const authApp = !!(row.auth_app || row.auth_app_enrolled);
-        const detail = isLan
-          ? `${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled (access kept)" : ""}${row.online ? " · online" : " · offline"} · ${esc(row.name || row.note || "device")}`
-          : `${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
-        blocks.push(`<div class="circle-row">
-          <div class="ip">${esc(row.ip)}</div>
-          <div class="info">${detail}</div>
-          <div class="row-actions">
-            <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
-            <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
-          </div>
-        </div>`);
-      });
-      allowed.forEach((row) => {
-        blocks.push(`<div class="circle-row">
-          <div class="ip">${esc(row.ip)}</div>
-          <div class="info">allowlisted · ${esc(row.note || row.source || "—")}</div>
-          <div class="row-actions">
-            <button type="button" class="danger circle-revoke" data-ip="${esc(row.ip)}" style="grid-column:1/-1">Revoke</button>
-          </div>
-        </div>`);
-      });
-      if (!blocks.length) {
+      if (circleView === "allowed") {
+        if (!allowed.length) {
+          els.circleList.innerHTML = `<div class="circle-empty">No allowlisted IPs yet.</div>`;
+        } else {
+          allowed.forEach((row) => {
+            const sealed = !!(row.sealed || row.hidden || row.source === "router");
+            const isLan = row.kind === "lan" || String(row.ip || "").startsWith("192.168.8.");
+            const detail = sealed
+              ? "sealed · always on"
+              : `allowlisted · ${isLan ? "LAN · " : ""}${esc(row.note || row.source || "—")}`;
+            const actions = sealed
+              ? `<div class="info">Cannot remove sealed router WAN</div>`
+              : `<div class="row-actions">
+              <button type="button" class="circle-pending" data-ip="${esc(row.ip)}">Move to pending</button>
+              <button type="button" class="danger circle-revoke" data-ip="${esc(row.ip)}">Remove</button>
+            </div>`;
+            blocks.push(`<div class="circle-row">
+              <div class="ip">${esc(row.ip)}</div>
+              <div class="info">${detail}</div>
+              ${actions}
+            </div>`);
+          });
+          els.circleList.innerHTML = blocks.join("");
+        }
+      } else if (pending.length) {
+        pending.forEach((row) => {
+          const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
+          const authApp = !!(row.auth_app || row.auth_app_enrolled);
+          const detail = isLan
+            ? `${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled (access kept)" : ""}${row.online ? " · online" : " · offline"} · ${esc(row.name || row.note || "device")}`
+            : `${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
+          blocks.push(`<div class="circle-row">
+            <div class="ip">${esc(row.ip)}</div>
+            <div class="info">${detail}</div>
+            <div class="row-actions">
+              <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
+              <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
+            </div>
+          </div>`);
+        });
+        els.circleList.innerHTML = blocks.join("");
+      } else {
         const recent = attempts.slice(0, 4).map((a) =>
           `<div class="circle-row"><div class="ip">${esc(a.ip)}</div><div class="info">recent · VIP ${esc(a.vip || "—")} · guest DNS</div>
            <div class="row-actions"><button type="button" class="primary circle-approve" data-ip="${esc(a.ip)}">Approve</button>
            <button type="button" class="danger circle-deny" data-ip="${esc(a.ip)}">Deny</button></div></div>`
         ).join("");
-        els.circleList.innerHTML = recent || `<div class="circle-empty">No pending VPN WAN attempts.</div>`;
-      } else {
-        els.circleList.innerHTML = blocks.join("");
+        els.circleList.innerHTML = recent || `<div class="circle-empty">No pending WAN or LAN devices.</div>`;
       }
       els.circleList.querySelectorAll(".circle-approve").forEach((btn) => {
         btn.onclick = () => mutateCircle("approve", btn.dataset.ip || "");
@@ -1093,6 +1147,9 @@
       });
       els.circleList.querySelectorAll(".circle-revoke").forEach((btn) => {
         btn.onclick = () => mutateCircle("revoke", btn.dataset.ip || "");
+      });
+      els.circleList.querySelectorAll(".circle-pending").forEach((btn) => {
+        btn.onclick = () => mutateCircle("pending", btn.dataset.ip || "", "moved to pending");
       });
     }
 
@@ -1296,6 +1353,16 @@
     els.circleToggle?.addEventListener("click", () => {
       if (!unlocked) return;
       setCircleOpen(!circleOpen);
+      bumpIdle();
+    });
+    els.circleTabPending?.addEventListener("click", () => {
+      circleView = "pending";
+      renderCircle();
+      bumpIdle();
+    });
+    els.circleTabAllowed?.addEventListener("click", () => {
+      circleView = "allowed";
+      renderCircle();
       bumpIdle();
     });
     els.circleRefreshBtn?.addEventListener("click", async () => {

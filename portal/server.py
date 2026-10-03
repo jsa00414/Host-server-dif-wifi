@@ -11869,10 +11869,10 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     if not ip_n or not _is_circle_candidate_ip(ip_n):
         raise ValueError("A public WAN or home LAN (192.168.8.x) IPv4 address is required")
     action_n = str(action or "").strip().lower()
-    if action_n not in ("approve", "revoke", "deny"):
-        raise ValueError("action must be approve, revoke, or deny")
-    if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny"):
-        raise ValueError("Sealed router WAN cannot be revoked or denied")
+    if action_n not in ("approve", "revoke", "deny", "pending"):
+        raise ValueError("action must be approve, revoke, deny, or pending")
+    if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny", "pending"):
+        raise ValueError("Sealed router WAN cannot be revoked, denied, or moved to pending")
     data = _read_vpn_allowlist()
     now = int(time.time())
     src = (source or "security-ui").strip()[:40] or "security-ui"
@@ -11941,7 +11941,29 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
                 ),
             }
         )
-    # revoke: already removed from allowed/denied (sealed preserved)
+    elif action_n == "pending":
+        # Demote from allowlist back to pending (not denied).
+        pending_row = {
+            "ip": ip_n,
+            "status": "pending",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": (note or "").strip()[:120] or "moved from allowlist",
+            "source": src,
+        }
+        if is_lan:
+            pending_row.update(
+                {
+                    "kind": "lan",
+                    "vip": "",
+                    "source": "lan" if src.startswith("auth-app") or src == "security-ui" else src,
+                }
+            )
+        else:
+            pending_row["vip"] = ""
+        data["pending"].append(pending_row)
+    # revoke: already removed from allowed/denied/pending (sealed preserved)
 
     data, _ = _ensure_sealed_vpn_allowlist(data)
     _write_vpn_allowlist(data)
