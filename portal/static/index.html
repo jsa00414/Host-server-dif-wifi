@@ -838,6 +838,15 @@
     .sec-sev.ok { color: var(--ok); border-color: rgba(61,222,160,.35); background: var(--accent-dim); }
     .sec-users { color: var(--muted); font-size: .72rem; line-height: 1.4; }
     .sec-empty { color: var(--muted); font-size: .8rem; padding: 8px 0; }
+    .sec-login-method {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+      justify-content: space-between; margin-bottom: 12px;
+    }
+    .sec-login-method .method-label {
+      font-family: "IBM Plex Mono", monospace; font-size: 1rem; font-weight: 600; color: var(--text);
+    }
+    .sec-login-method .method-sub { color: var(--muted); font-size: .78rem; margin-top: 4px; max-width: 42rem; line-height: 1.4; }
+    .sec-login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .sec-callout {
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
@@ -1518,7 +1527,7 @@
       <section class="view" id="view-security">
         <div class="page-head">
           <h2>Security</h2>
-          <p>Live fail2ban, SSH, exposures, domains, and secret-file checks</p>
+          <p>Live fail2ban, VPS login method, exposures, domains, and secret-file checks</p>
         </div>
         <div class="sec-callout" id="secCallout">
           <div>
@@ -1554,7 +1563,9 @@
         </div>
 
         <div class="panel" style="margin-bottom:14px">
-          <div class="panel-head"><h3>SSH hardening</h3></div>
+          <div class="panel-head">
+            <h3>VPS login method</h3>
+          </div>
           <div class="panel-body" id="secSsh"><div class="sec-empty">Loading…</div></div>
         </div>
 
@@ -3493,15 +3504,52 @@
       const ssh = data.ssh || {};
       const sshEl = document.getElementById("secSsh");
       if (sshEl) {
+        const method = ssh.login_method || "unknown";
+        const methodLabel = ssh.login_method_label || method;
+        const keysReady = !!ssh.keys_only_ready;
+        const keyCount = ssh.root_authorized_keys ?? 0;
+        const isKeys = method === "keys_only";
+        const isPw = method === "password_and_keys";
         const rows = [
           ["PermitRootLogin", ssh.permit_root_login],
           ["PasswordAuthentication", ssh.password_authentication],
           ["PubkeyAuthentication", ssh.pubkey_authentication],
+          ["KbdInteractiveAuthentication", ssh.kbd_interactive_authentication],
           ["PermitEmptyPasswords", ssh.permit_empty_passwords],
         ];
-        sshEl.innerHTML = `<table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
-          rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
-        }</tbody></table>`;
+        const hint = isKeys
+          ? "Password login is off. Root can sign in with SSH keys only."
+          : (isPw
+            ? "Password and SSH keys both work. Prefer keys only once your key is installed."
+            : "Current sshd settings do not match a standard password/keys profile.");
+        const lockHint = keysReady
+          ? `${keyCount} key(s) in /root/.ssh/authorized_keys — safe to switch to keys only.`
+          : "No keys in /root/.ssh/authorized_keys — add one before switching to keys only.";
+        sshEl.innerHTML = `
+          <div class="sec-login-method">
+            <div>
+              <div class="method-label">${escHtml(methodLabel)}</div>
+              <div class="method-sub">${escHtml(hint)}</div>
+              <div class="method-sub" style="margin-top:6px">${escHtml(lockHint)}</div>
+            </div>
+            <div class="sec-login-actions">
+              <button type="button" class="primary" id="secSshKeysOnlyBtn" ${isKeys || !keysReady ? "disabled" : ""}>Use SSH keys only</button>
+              <button type="button" class="ghost" id="secSshPasswordBtn" ${isPw ? "disabled" : ""}>Allow password + keys</button>
+            </div>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-box"><label>Password login</label><div>${escHtml(ssh.password_authentication ?? "—")}</div></div>
+            <div class="meta-box"><label>Pubkey login</label><div>${escHtml(ssh.pubkey_authentication ?? "—")}</div></div>
+            <div class="meta-box"><label>Root login</label><div>${escHtml(ssh.permit_root_login ?? "—")}</div></div>
+            <div class="meta-box"><label>Root authorized keys</label><div>${escHtml(keyCount)}</div></div>
+          </div>
+          <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
+            rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
+          }</tbody></table>`;
+        const keysBtn = document.getElementById("secSshKeysOnlyBtn");
+        const pwBtn = document.getElementById("secSshPasswordBtn");
+        keysBtn?.addEventListener("click", () => applySshLoginMethod("keys_only"));
+        pwBtn?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
       }
 
       const domEl = document.getElementById("secDomains");
@@ -3546,6 +3594,32 @@
         if (!quiet) setStatus(String(e.message || e), "err");
       } finally {
         if (btn) btn.disabled = false;
+      }
+    }
+    async function applySshLoginMethod(method) {
+      const label = method === "keys_only" ? "SSH keys only" : "password + keys";
+      if (method === "keys_only") {
+        const ok = window.confirm(
+          "Switch VPS login to SSH keys only?\n\nPassword login will be disabled. Make sure you can still reach the VPS with your SSH key."
+        );
+        if (!ok) return;
+      }
+      const keysBtn = document.getElementById("secSshKeysOnlyBtn");
+      const pwBtn = document.getElementById("secSshPasswordBtn");
+      if (keysBtn) keysBtn.disabled = true;
+      if (pwBtn) pwBtn.disabled = true;
+      setStatus(`Applying VPS login method: ${label}…`);
+      try {
+        const result = await api("/api/security/ssh-login", {
+          method: "POST",
+          body: JSON.stringify({ method }),
+          timeoutMs: 30000,
+        });
+        setStatus(result.message || `Login method set to ${label}`, "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
       }
     }
     document.getElementById("secRefreshBtn")?.addEventListener("click", () => refreshSecurity());
