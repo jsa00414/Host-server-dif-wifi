@@ -64,6 +64,23 @@ Copy the **public** key into portal Security → VPS SSH keys. Keep the
 PowerShell scripts (`New-SmUsbKeyVault.ps1`, etc.) create a VHDX + BitLocker
 vault the same way if the stick is plugged into a Windows machine instead.
 
+## Hide a recovery note inside a PNG (steganography)
+
+`stego-text-in-png.py` embeds short text in the low bits of a PNG. Useful for a
+**recovery reminder** you keep offline (e.g. printed or on another drive). This
+is concealment, not strong crypto — use `--password`, or encrypt first.
+
+```bash
+# Hide (generates a plain cover PNG if you don't pass --cover)
+python3 stego-text-in-png.py hide --out vault-hint.png \
+  --text 'LUKS: …' --password 'recall-phrase'
+
+# Reveal
+python3 stego-text-in-png.py reveal --image vault-hint.png --password 'recall-phrase'
+```
+
+Or use a real photo: `--cover myphoto.png --out vault-hint.png`.
+
 ## Out of scope
 
 True hardware-backed portal step-up (WebAuthn / YubiKey) is separate work.
