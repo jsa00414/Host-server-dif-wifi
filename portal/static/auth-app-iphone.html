@@ -88,6 +88,7 @@
     }
     .code-pane[hidden],
     .empty[hidden],
+    .lock[hidden],
     button[hidden] { display: none !important; }
     .acct {
       text-align: center;
@@ -124,9 +125,10 @@
       background: linear-gradient(90deg, var(--accent), #8af0c4);
       transition: transform .18s linear;
     }
-    .empty {
+    .empty, .lock {
       flex: 1;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       text-align: center;
@@ -134,7 +136,25 @@
       font-size: .92rem;
       line-height: 1.45;
       padding: 24px calc(22px + var(--sar)) 24px calc(22px + var(--sal));
+      gap: 16px;
     }
+    .lock .face {
+      width: 72px;
+      height: 72px;
+      border-radius: 20px;
+      border: 1px solid rgba(61,222,160,.4);
+      background: rgba(61,222,160,.1);
+      display: grid;
+      place-items: center;
+      font-size: 2rem;
+      color: var(--accent);
+    }
+    .lock h2 {
+      margin: 0;
+      color: var(--text);
+      font-size: 1.2rem;
+    }
+    .lock p { margin: 0; max-width: 18rem; }
     footer {
       border-top: 1px solid var(--line);
       background: rgba(0,0,0,.28);
@@ -239,6 +259,13 @@
   </header>
 
   <main>
+    <section class="lock" id="lockView" hidden>
+      <div class="face" aria-hidden="true">◉</div>
+      <h2>Face ID required</h2>
+      <p>Unlock with Face ID to see your ServerManager codes.</p>
+      <button type="button" class="primary wide" id="faceUnlockBtn" style="width:min(280px,100%)">Unlock with Face ID</button>
+      <button type="button" id="setupFaceBtn" style="width:min(280px,100%)" hidden>Set up Face ID</button>
+    </section>
     <section class="code-pane" id="codePane" hidden>
       <div class="acct" id="acctLabel"></div>
       <div class="code" id="codeView">------</div>
@@ -251,6 +278,7 @@
     <div class="install" id="installHint"></div>
     <div class="actions">
       <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+      <button type="button" id="lockNowBtn" hidden>Lock</button>
       <button type="button" id="manualBtn">Enter secret</button>
       <button type="button" class="danger wide" id="clearBtn" hidden>Remove account</button>
     </div>
@@ -261,15 +289,19 @@
       <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
       <button type="button" class="primary" id="saveManualBtn">Save on this iPhone</button>
     </div>
-    <p class="hint" id="hint">Add to Home Screen for a full-screen app. Codes refresh every 30s.</p>
+    <p class="hint" id="hint">Face ID locks codes when you leave the app. Codes refresh every 30s.</p>
   </footer>
   <div class="toast" id="toast"></div>
 
   <script>
     const STORE_KEY = "sm.auth.totp.v1";
+    const FACE_KEY = "sm.auth.face.cred.v1";
     const PERIOD = 30;
     const DIGITS = 6;
+    const LOCK_AFTER_MS = 45_000;
+
     const els = {
+      lockView: document.getElementById("lockView"),
       codePane: document.getElementById("codePane"),
       emptyView: document.getElementById("emptyView"),
       acctLabel: document.getElementById("acctLabel"),
@@ -277,6 +309,9 @@
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
       clearBtn: document.getElementById("clearBtn"),
+      lockNowBtn: document.getElementById("lockNowBtn"),
+      faceUnlockBtn: document.getElementById("faceUnlockBtn"),
+      setupFaceBtn: document.getElementById("setupFaceBtn"),
       installHint: document.getElementById("installHint"),
       manualBtn: document.getElementById("manualBtn"),
       manualForm: document.getElementById("manualForm"),
@@ -284,16 +319,103 @@
       accountInput: document.getElementById("accountInput"),
       saveManualBtn: document.getElementById("saveManualBtn"),
       toast: document.getElementById("toast"),
+      hint: document.getElementById("hint"),
     };
+
     let account = null;
+    let unlocked = false;
     let toastTimer = null;
+    let idleTimer = null;
+    let busy = false;
 
     function toast(msg) {
       els.toast.textContent = msg;
       els.toast.classList.add("show");
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1700);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
     }
+
+    function b64urlFromBuf(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function bufFromB64url(s) {
+      const pad = "=".repeat((4 - (s.length % 4)) % 4);
+      const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function randomBytes(n) {
+      const out = new Uint8Array(n);
+      crypto.getRandomValues(out);
+      return out;
+    }
+    function loadFaceCredId() {
+      return localStorage.getItem(FACE_KEY) || "";
+    }
+    function saveFaceCredId(id) {
+      localStorage.setItem(FACE_KEY, id);
+    }
+    function clearFaceCredId() {
+      localStorage.removeItem(FACE_KEY);
+    }
+    async function faceAvailable() {
+      try {
+        if (!window.PublicKeyCredential) return false;
+        if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+          return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    async function enrollFaceId() {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32),
+          rp: { name: "ServerManager Auth", id: location.hostname },
+          user: {
+            id: randomBytes(16),
+            name: "sm-auth-iphone",
+            displayName: "SM Auth",
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+            residentKey: "preferred",
+          },
+          timeout: 90_000,
+        },
+      });
+      if (!cred || !cred.rawId) throw new Error("Face ID setup failed");
+      saveFaceCredId(b64urlFromBuf(cred.rawId));
+      return true;
+    }
+    async function verifyFaceId() {
+      const id = loadFaceCredId();
+      if (!id) throw new Error("Face ID is not set up yet");
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: randomBytes(32),
+          rpId: location.hostname,
+          allowCredentials: [{ type: "public-key", id: bufFromB64url(id) }],
+          userVerification: "required",
+          timeout: 90_000,
+        },
+      });
+      if (!assertion) throw new Error("Face ID cancelled");
+      return true;
+    }
+
     function loadAccount() {
       try {
         const data = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
@@ -303,16 +425,21 @@
           issuer: String(data.issuer || "ServerManager"),
           account: String(data.account || "portal"),
         };
-      } catch (_) { return null; }
+      } catch (_) {
+        return null;
+      }
     }
     function saveAccount(next) {
       localStorage.setItem(STORE_KEY, JSON.stringify(next));
       account = next;
+      unlocked = false;
       render();
     }
     function clearAccount() {
       localStorage.removeItem(STORE_KEY);
+      clearFaceCredId();
       account = null;
+      unlocked = false;
       render();
       toast("Account removed");
     }
@@ -362,7 +489,10 @@
       return PERIOD - ((Date.now() / 1000) % PERIOD);
     }
     async function tick() {
-      if (!account) return;
+      if (!account || !unlocked) {
+        els.codeView.textContent = "------";
+        return;
+      }
       try {
         els.codeView.textContent = await totpAt(account.secret);
         els.tickBar.style.transform = `scaleX(${remaining() / PERIOD})`;
@@ -380,32 +510,102 @@
       }
       els.installHint.classList.add("show");
       els.installHint.innerHTML =
-        "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>. Open <strong>SM Auth</strong> from your home screen for full-screen edge-to-edge.";
+        "<strong>Install on iPhone:</strong> tap Share → <strong>Add to Home Screen</strong>, then open <strong>SM Auth</strong>.";
+    }
+    function bumpIdle() {
+      clearTimeout(idleTimer);
+      if (!unlocked || !account) return;
+      idleTimer = setTimeout(() => lockNow("Locked after inactivity"), LOCK_AFTER_MS);
+    }
+    function lockNow(msg) {
+      unlocked = false;
+      els.codeView.textContent = "------";
+      clearTimeout(idleTimer);
+      render();
+      if (msg) toast(msg);
     }
     function render() {
-      if (account) {
-        els.codePane.hidden = false;
-        els.emptyView.hidden = true;
-        els.copyBtn.hidden = false;
-        els.clearBtn.hidden = false;
-        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
-        els.manualForm.classList.remove("show");
-        tick();
-      } else {
+      const hasFace = !!loadFaceCredId();
+      if (!account) {
+        els.lockView.hidden = true;
         els.codePane.hidden = true;
         els.emptyView.hidden = false;
         els.copyBtn.hidden = true;
         els.clearBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        els.setupFaceBtn.hidden = true;
         els.codeView.textContent = "------";
+        updateInstallUi();
+        return;
+      }
+      els.emptyView.hidden = true;
+      els.clearBtn.hidden = false;
+      if (!unlocked) {
+        els.lockView.hidden = false;
+        els.codePane.hidden = true;
+        els.copyBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        els.faceUnlockBtn.hidden = !hasFace;
+        els.setupFaceBtn.hidden = hasFace;
+        els.setupFaceBtn.textContent = hasFace ? "Re-set Face ID" : "Set up Face ID";
+        els.hint.textContent = hasFace
+          ? "Face ID required to view codes."
+          : "Set up Face ID once, then unlock with Face ID every time.";
+      } else {
+        els.lockView.hidden = true;
+        els.codePane.hidden = false;
+        els.copyBtn.hidden = false;
+        els.lockNowBtn.hidden = false;
+        els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
+        els.manualForm.classList.remove("show");
+        els.hint.textContent = "Face ID locks codes when you leave the app. Codes refresh every 30s.";
+        tick();
+        bumpIdle();
       }
       updateInstallUi();
     }
 
+    async function withBusy(fn) {
+      if (busy) return;
+      busy = true;
+      try { await fn(); }
+      finally { busy = false; }
+    }
+
+    els.faceUnlockBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        await verifyFaceId();
+        unlocked = true;
+        render();
+        toast("Unlocked");
+      } catch (err) {
+        unlocked = false;
+        render();
+        toast(String(err?.message || err || "Face ID failed"));
+      }
+    }));
+    els.setupFaceBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        if (!(await faceAvailable())) {
+          toast("Face ID / biometrics not available in this browser");
+          return;
+        }
+        await enrollFaceId();
+        unlocked = true;
+        render();
+        toast("Face ID enabled");
+      } catch (err) {
+        toast(String(err?.message || err || "Face ID setup cancelled"));
+      }
+    }));
+    els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
     els.copyBtn.addEventListener("click", async () => {
+      if (!unlocked) return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try { await navigator.clipboard.writeText(code); toast("Copied"); }
       catch (_) { toast(code); }
+      bumpIdle();
     });
     els.clearBtn.addEventListener("click", () => {
       if (confirm("Remove the authenticator account from this iPhone?")) clearAccount();
@@ -414,7 +614,7 @@
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
     });
-    els.saveManualBtn.addEventListener("click", () => {
+    els.saveManualBtn.addEventListener("click", async () => {
       const secret = (els.secretInput.value || "").replace(/\s+/g, "").toUpperCase();
       if (secret.length < 16) { toast("Secret looks too short"); return; }
       saveAccount({
@@ -423,17 +623,34 @@
         account: (els.accountInput.value || "portal").trim() || "portal",
       });
       els.secretInput.value = "";
-      toast("Saved on this iPhone");
+      toast("Saved — set up Face ID");
       history.replaceState(null, "", location.pathname);
+      if (!loadFaceCredId() && await faceAvailable()) {
+        els.setupFaceBtn.hidden = false;
+      }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && unlocked) lockNow();
+    });
+    window.addEventListener("pagehide", () => {
+      if (unlocked) lockNow();
+    });
+    window.addEventListener("blur", () => {
+      if (unlocked) lockNow();
+    });
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => {
+      document.addEventListener(ev, bumpIdle, { passive: true });
     });
 
     const fromHash = parseHash();
     if (fromHash) {
       saveAccount(fromHash);
       history.replaceState(null, "", location.pathname);
-      toast("Account saved on this iPhone");
+      toast("Account saved — set up Face ID");
     } else {
       account = loadAccount();
+      unlocked = false;
       render();
     }
     setInterval(tick, 250);
