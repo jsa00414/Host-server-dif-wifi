@@ -1028,7 +1028,6 @@
         els.emptyView.hidden = false;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
-        els.clearBtn.hidden = true;
         els.manualBtn.hidden = false;
         if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
@@ -1045,7 +1044,6 @@
         els.codeShell.hidden = true;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
-        els.clearBtn.hidden = true;
         els.manualBtn.hidden = true;
         els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = true;
@@ -1075,14 +1073,13 @@
         els.codeShell.hidden = false;
         els.copyBtn.hidden = circleOpen;
         els.lockNowBtn.hidden = false;
-        els.clearBtn.hidden = circleOpen;
-        els.manualBtn.hidden = circleOpen;
+        els.manualBtn.hidden = true;
+        els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = false;
         if (els.circleToggle) {
           els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
           els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
         }
-        if (circleOpen) els.manualForm.classList.remove("show");
         tick();
         bumpIdle();
         renderCircle();
@@ -1106,16 +1103,10 @@
 
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
 
-    els.clearBtn.addEventListener("click", () => {
-      if (confirm("Remove the authenticator account from this phone?")) clearAccount();
-    });
-
     els.manualBtn.addEventListener("click", () => {
-      if (!unlocked) return;
-      if (circleOpen) setCircleOpen(false);
+      if (account) return;
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
-      bumpIdle();
     });
 
     els.saveManualBtn.addEventListener("click", () => {
