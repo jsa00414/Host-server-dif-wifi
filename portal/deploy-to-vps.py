@@ -84,6 +84,10 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/backup/sm-backup.timer",
         "/etc/systemd/system/sm-backup.timer",
     ),
+    (
+        ROOT / "scripts/security/harden-secret-perms.sh",
+        f"{REMOTE_UI}/scripts/security/harden-secret-perms.sh",
+    ),
 ]
 
 
