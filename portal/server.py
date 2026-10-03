@@ -2340,6 +2340,13 @@ VPN_CLIENT_CIDRS = os.environ.get(
     # No blanket 192.168.8.0/24 — approved LAN /32s are appended by peer-acl sync.
     "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
+# Shared campus/ISP egress that must NEVER enter @vpn_clients — even if sticky,
+# sealed, allowlisted, or left over in a stale VPN_CLIENT_CIDRS process env.
+# Neumann University shared NAT (~2000 students) is the known offender.
+VPN_CIRCLE_DENIED_IPS = os.environ.get(
+    "VPN_CIRCLE_DENIED_IPS",
+    "192.81.235.246",
+)
 # Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
 # Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
 VPN_UFW_FROM = os.environ.get(
@@ -4346,7 +4353,8 @@ def _router_hookup_site_lines(rule: dict) -> list[str]:
         "\tencode gzip",
     ]
     if vpn_only:
-        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
         lines.append("\thandle @vpn_clients {")
         indent = "\t\t"
     else:
@@ -4404,7 +4412,8 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
         f"{public} {{",
     ]
     if vpn_only:
-        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
         lines.append("\thandle @vpn_clients {")
         indent = "\t\t"
     else:
@@ -4540,7 +4549,8 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     ]
     lines = [f"{public} {{"]
     if vpn_only:
-        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
         lines.append("\thandle @vpn_clients {")
     lines.extend(
         [
@@ -4898,10 +4908,11 @@ def _as_bool(value) -> bool:
 
 
 def serialize_hookups_caddy(rules: list[dict]) -> str:
+    vpn_cidrs = effective_vpn_client_cidrs()
     lines = [
         HOOKUPS_BEGIN,
         "# managed by ServerManager — do not edit by hand",
-        f"# vpn_only allows: {VPN_CLIENT_CIDRS}",
+        f"# vpn_only allows: {vpn_cidrs}",
     ]
     # Never rewrite external/pre-existing Caddy sites into this block
     active = [r for r in rules if r.get("enabled", True) and not r.get("external")]
@@ -4923,6 +4934,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         # there so Caddy never buffers an entire movie to compress it.
         is_portal = domain == PORTAL_HOST or domain.startswith("portal.")
         if is_portal:
+            # Site-level deny first so shared campus egress cannot use public
+            # auth-app paths either (phones on cellular still work from other IPs).
+            lines.extend(_caddy_denied_wan_lines("\t"))
             # Public Windows OpenVPN profile download (token enforced in portal app)
             lines.append("\t@ovpn_windows_dl path /api/openvpn/windows /download/windows.ovpn")
             lines.append("\thandle @ovpn_windows_dl {")
@@ -4959,7 +4973,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -4986,7 +5000,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
             if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -5012,7 +5026,8 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\tencode gzip")
             if r.get("vpn_only"):
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
-                lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+                lines.extend(_caddy_denied_wan_lines("\t"))
+                lines.append(f"\t@vpn_clients client_ip {vpn_cidrs}")
                 lines.append("\thandle @vpn_clients {")
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
@@ -5086,7 +5101,8 @@ def read_hookups_state() -> dict:
         "path": str(HOOKUPS_JSON),
         "caddyfile": str(CADDYFILE_PATH),
         "dns_hint": "",
-        "vpn_cidrs": VPN_CLIENT_CIDRS,
+        "vpn_cidrs": effective_vpn_client_cidrs(),
+        "denied_ips": list(_denied_vpn_ips()),
         "rules": rules,
     }
 
@@ -11323,21 +11339,165 @@ VPN_CIRCLE_SEALED_IPS = os.environ.get(
 _ssh_panel_2fa_lock = threading.Lock()
 
 
-def _sealed_vpn_ips() -> list[str]:
+def _parse_ip_list(raw: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
-    raw = str(VPN_CIRCLE_SEALED_IPS or "")
-    for part in re.split(r"[\s,;]+", raw):
+    for part in re.split(r"[\s,;]+", str(raw or "")):
         ip = _normalize_vpn_ip(part)
-        if not ip or not _is_public_ipv4(ip) or ip in seen:
+        if not ip or ip in seen:
+            continue
+        if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
             continue
         seen.add(ip)
         out.append(ip)
     return out
 
 
+def _sealed_vpn_ips() -> list[str]:
+    out: list[str] = []
+    for ip in _parse_ip_list(VPN_CIRCLE_SEALED_IPS):
+        if _is_public_ipv4(ip):
+            out.append(ip)
+    return out
+
+
 def _is_sealed_vpn_ip(ip: str) -> bool:
     return _normalize_vpn_ip(ip) in set(_sealed_vpn_ips())
+
+
+def _denied_vpn_ips() -> list[str]:
+    """Public WANs that are permanently untrusted (shared campus egress, etc.)."""
+    denied: list[str] = []
+    seen: set[str] = set()
+    # Prefer live env so operators can extend without restart; fall back to boot value.
+    raw = os.environ.get("VPN_CIRCLE_DENIED_IPS", VPN_CIRCLE_DENIED_IPS)
+    for ip in _parse_ip_list(raw):
+        if not _is_public_ipv4(ip) or ip in seen:
+            continue
+        # Never deny the VPS itself.
+        if ip == "74.208.76.213":
+            continue
+        seen.add(ip)
+        denied.append(ip)
+    return denied
+
+
+def _is_denied_vpn_ip(ip: str) -> bool:
+    return _normalize_vpn_ip(ip) in set(_denied_vpn_ips())
+
+
+def _cidr_host(cidr: str) -> str:
+    raw = (cidr or "").strip()
+    if "/" in raw:
+        return raw.split("/", 1)[0].strip()
+    return raw
+
+
+def effective_vpn_client_cidrs() -> str:
+    """Live @vpn_clients CIDR list for Caddy serialization.
+
+    Never reuse a stale module-level snapshot alone: a hookups save that still
+    held a campus /32 in process memory previously re-admitted it after peer-acl
+    had already scrubbed Caddy. Rebuild from current env + sticky allowlist and
+    always strip VPN_CIRCLE_DENIED_IPS.
+    """
+    denied = set(_denied_vpn_ips())
+    sealed = set(_sealed_vpn_ips())
+    base_toks: list[str] = []
+    seen: set[str] = set()
+
+    def _add(tok: str) -> None:
+        tok = (tok or "").strip()
+        if not tok or tok in seen or tok == "192.168.8.0/24":
+            return
+        host = _cidr_host(tok)
+        if host in denied:
+            return
+        # Public /32s must be allowlisted/sealed (except the VPS itself).
+        if tok.endswith("/32") and _is_public_ipv4(host) and host != "74.208.76.213":
+            if host not in sealed and host not in _allowlisted_public_ips():
+                return
+        if tok.endswith("/32") and _is_home_lan_ipv4(host):
+            if host not in _allowlisted_lan_ips():
+                return
+        seen.add(tok)
+        base_toks.append(tok)
+
+    live_env = os.environ.get("VPN_CLIENT_CIDRS", "").strip().strip('"').strip("'")
+    for tok in (live_env or VPN_CLIENT_CIDRS or "").split():
+        _add(tok)
+    # Sticky file (peer-acl / allowlist sync).
+    try:
+        if STICKY_VPN_IPS_PATH.is_file():
+            for line in STICKY_VPN_IPS_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                tok = line if "/" in line else f"{line}/32"
+                _add(tok)
+    except Exception:
+        pass
+    for ip in sorted(_allowlisted_public_ips() | _allowlisted_lan_ips() | sealed):
+        if ip in denied:
+            continue
+        _add(f"{ip}/32")
+    # Hard requirements.
+    for req in (
+        "10.8.0.0/24",
+        "10.42.42.0/24",
+        "10.9.0.0/24",
+        "10.10.0.0/24",
+        "100.64.0.0/10",
+        "127.0.0.1/32",
+        "74.208.76.213/32",
+        "10.11.0.1/32",
+    ):
+        _add(req)
+    return " ".join(base_toks) if base_toks else VPN_CLIENT_CIDRS
+
+
+def _allowlisted_public_ips() -> set[str]:
+    out: set[str] = set()
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_public_ipv4(ip) and not _is_denied_vpn_ip(ip):
+            out.add(ip)
+    return out
+
+
+def _allowlisted_lan_ips() -> set[str]:
+    out: set[str] = set()
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_home_lan_ipv4(ip):
+            out.add(ip)
+    return out
+
+
+def _caddy_denied_wan_lines(indent: str) -> list[str]:
+    """Explicit deny matchers — win before @vpn_clients if an IP was wrongly allowlisted."""
+    denied = _denied_vpn_ips()
+    if not denied:
+        return []
+    denied_s = " ".join(f"{ip}/32" for ip in denied)
+    return [
+        f"{indent}@denied_wan client_ip {denied_s}",
+        f"{indent}handle @denied_wan {{",
+        f'{indent}\trespond "Forbidden" 403',
+        f"{indent}}}",
+    ]
 
 
 def _read_auth_app_devices() -> dict:
@@ -11585,6 +11745,10 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
     changed = False
     sealed = _sealed_vpn_ips()
     sealed_set = set(sealed)
+    denied_set = set(_denied_vpn_ips())
+    # Denied shared egress can never be sealed.
+    sealed = [ip for ip in sealed if ip not in denied_set]
+    sealed_set = set(sealed)
     allowed_in = [x for x in (data.get("allowed") or []) if isinstance(x, dict)]
     by_ip: dict[str, dict] = {}
     for row in allowed_in:
@@ -11609,6 +11773,7 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
 
     # Preserve non-sealed entries after sealed ones.
     # Drop rows that were sealed for IPs no longer in VPN_CIRCLE_SEALED_IPS.
+    # Drop permanently denied shared-egress IPs (campus NAT, etc.).
     rebuilt: list[dict] = []
     seen: set[str] = set()
     for ip in sealed:
@@ -11619,6 +11784,9 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
         if not ip or ip in seen:
             continue
         if ip in sealed_set:
+            continue
+        if ip in denied_set:
+            changed = True
             continue
         # Obsolete sealed campus/WAN rows must not stay trusted.
         if row.get("sealed") or (
@@ -12291,6 +12459,10 @@ def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = 
     action_n = str(action or "").strip().lower()
     if action_n not in ("approve", "revoke", "deny", "pending"):
         raise ValueError("action must be approve, revoke, deny, or pending")
+    if _is_denied_vpn_ip(ip_n) and action_n == "approve":
+        raise ValueError(
+            "This shared campus/ISP egress IP is permanently denied and cannot enter the trust circle"
+        )
     if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny", "pending"):
         raise ValueError("Sealed router WAN cannot be revoked, denied, or moved to pending")
     data = _read_vpn_allowlist()

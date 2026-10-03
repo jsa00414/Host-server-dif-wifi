@@ -77,6 +77,51 @@ def normalize_ip(raw: str) -> str:
     return raw
 
 
+def denied_ips() -> set[str]:
+    """Shared campus/ISP egress that must never enter @vpn_clients."""
+    raw = os.environ.get("VPN_CIRCLE_DENIED_IPS", "192.81.235.246")
+    out: set[str] = set()
+    for part in re.split(r"[\s,;]+", raw):
+        ip = normalize_ip(part)
+        if ip and is_public_ipv4(ip) and ip != "74.208.76.213":
+            out.add(ip)
+    return out
+
+
+DENIED_IPS = denied_ips()
+
+
+def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
+    """Keep site-level @denied_wan handles on portal + router (incl. auth-app)."""
+    if not DENIED_IPS:
+        return text, False
+    denied_s = " ".join(f"{ip}/32" for ip in sorted(DENIED_IPS))
+    changed = False
+    for site in ("portal.vpstruelord.com", "router.vpstruelord.com"):
+        marker = f"{site} {{"
+        start = text.find(marker)
+        if start < 0:
+            continue
+        brace = text.find("{", start)
+        # end of this site block (naive: next top-level site or EOF) — only need head
+        window = text[brace + 1 : brace + 280]
+        if f"@denied_wan client_ip {denied_s}" in window or (
+            "@denied_wan client_ip" in window
+            and all(f"{ip}/32" in window for ip in DENIED_IPS)
+        ):
+            continue
+        insert = (
+            f"\n\t# Hard-deny shared campus/ISP egress (never trust; includes auth-app).\n"
+            f"\t@denied_wan client_ip {denied_s}\n"
+            f"\thandle @denied_wan {{\n"
+            f'\t\trespond "Forbidden" 403\n'
+            f"\t}}\n"
+        )
+        text = text[: brace + 1] + insert + text[brace + 1 :]
+        changed = True
+    return text, changed
+
+
 def peer_ips() -> list[str]:
     try:
         out = subprocess.check_output(
@@ -181,7 +226,12 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
         if isinstance(r, dict) and normalize_ip(r.get("ip", ""))
     }
     # Drop obsolete sealed rows when VPN_CIRCLE_SEALED_IPS no longer includes them.
+    # Also drop permanently denied shared-egress IPs (campus NAT, etc.).
     for ip, row in list(by_ip.items()):
+        if ip in DENIED_IPS:
+            del by_ip[ip]
+            changed = True
+            continue
         if ip in sealed_ips:
             continue
         if row.get("sealed") or (
@@ -191,6 +241,8 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             del by_ip[ip]
             changed = True
     for ip in sealed_ips:
+        if ip in DENIED_IPS:
+            continue
         row = by_ip.get(ip) or {
             "ip": ip,
             "note": "Flint router WAN (sealed)",
@@ -304,6 +356,12 @@ def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
                 break
     # Drop blanket LAN if it leaked in via defaults/env.
     base = [c for c in base if c != "192.168.8.0/24"]
+    # Never keep permanently denied shared egress.
+    base = [
+        c
+        for c in base
+        if normalize_ip(c) not in DENIED_IPS
+    ]
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
     if "10.11.0.1/32" not in base:
@@ -311,9 +369,13 @@ def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
     if "74.208.76.213/32" not in base:
         base.append("74.208.76.213/32")
     for s in sticky:
+        if normalize_ip(s) in DENIED_IPS:
+            continue
         if s not in base:
             base.append(s)
     for ip in sorted(allowed_ips):
+        if ip in DENIED_IPS:
+            continue
         cidr = f"{ip}/32"
         if cidr not in base:
             base.append(cidr)
@@ -326,25 +388,27 @@ def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
 
 peers = peer_ips()
 sticky_cidrs = load_sticky_cidrs()
-allowed_ips = ensure_allowlist_seeded(sticky_cidrs)
+allowed_ips = ensure_allowlist_seeded(sticky_cidrs) - DENIED_IPS
 lan_ips = load_allowlist_lan_ips()
 # Sticky file may include unapproved leftovers — only allowlisted count
 sticky_trusted = [
     c
     for c in sticky_cidrs
-    if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+    if normalize_ip(c) not in DENIED_IPS
+    and (normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips)
 ]
 # Re-read sticky after possible reseal write.
 sticky_cidrs = load_sticky_cidrs()
 sticky_trusted = [
     c
     for c in sticky_cidrs
-    if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+    if normalize_ip(c) not in DENIED_IPS
+    and (normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips)
 ]
 base = load_base_cidrs(allowed_ips, lan_ips)
 
 # IMPORTANT: do NOT auto-append live peer WANs. Only allowlisted sticky enter the circle.
-combined = base[:]
+combined = [c for c in base if normalize_ip(c) not in DENIED_IPS]
 combined_s = " ".join(combined)
 
 prev = state_file.read_text().strip() if state_file.is_file() else ""
@@ -358,10 +422,17 @@ if prev == cur and caddyfile.is_file():
     # Require every trusted sticky/allowlisted /32 on the live matcher lines
     # (do NOT match comments — that previously skipped reseeding the router WAN).
     blanket_lan_gone = "192.168.8.0/24" not in live
+    denied_gone = all(f"{ip}/32" not in live for ip in DENIED_IPS)
+    text2, deny_changed = ensure_denied_wan_blocks(text)
+    if deny_changed:
+        caddyfile.write_text(text2)
+        text = text2
     if (
         trusted_needed
         and all(f"{ip}/32" in live for ip in trusted_needed)
         and blanket_lan_gone
+        and denied_gone
+        and not deny_changed
     ):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
         if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
@@ -377,14 +448,24 @@ if env_file.is_file():
     lines = env_file.read_text().splitlines()
     out_lines = []
     found = False
+    found_denied = False
     for line in lines:
         if line.startswith("VPN_CLIENT_CIDRS="):
             out_lines.append(f'VPN_CLIENT_CIDRS="{combined_s}"')
             found = True
+        elif line.startswith("VPN_CIRCLE_DENIED_IPS="):
+            out_lines.append(
+                'VPN_CIRCLE_DENIED_IPS="' + " ".join(sorted(DENIED_IPS)) + '"'
+            )
+            found_denied = True
         else:
             out_lines.append(line)
     if not found:
         out_lines.append(f'VPN_CLIENT_CIDRS="{combined_s}"')
+    if not found_denied and DENIED_IPS:
+        out_lines.append(
+            'VPN_CIRCLE_DENIED_IPS="' + " ".join(sorted(DENIED_IPS)) + '"'
+        )
     env_file.write_text("\n".join(out_lines) + "\n")
     print(f"updated {env_file}")
 
@@ -393,6 +474,7 @@ if not caddyfile.is_file():
     raise SystemExit(1)
 
 text = caddyfile.read_text()
+text, _ = ensure_denied_wan_blocks(text)
 
 
 def _repl(m):
@@ -403,6 +485,7 @@ pat = re.compile(r"^([ \t]*)@vpn_clients (?:client_ip|remote_ip) (.+)$", re.M)
 new_text, n = pat.subn(_repl, text)
 if n == 0:
     print("WARN: no @vpn_clients client_ip/remote_ip lines found")
+    caddyfile.write_text(text)
 else:
     caddyfile.write_text(new_text)
     print(f"patched {n} Caddy @vpn_clients lines")
@@ -411,6 +494,7 @@ print("peers_seen:", ", ".join(peers) if peers else "(none)")
 print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")
 print("allowlisted:", ", ".join(sorted(allowed_ips)) if allowed_ips else "(none)")
 print("lan_approved:", ", ".join(sorted(lan_ips)) if lan_ips else "(none)")
+print("denied:", ", ".join(sorted(DENIED_IPS)) if DENIED_IPS else "(none)")
 print("cidrs:", combined_s)
 
 reload = subprocess.run(
