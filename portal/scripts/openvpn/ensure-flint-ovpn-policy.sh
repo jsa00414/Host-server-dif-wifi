@@ -37,6 +37,10 @@ while uci -q delete dhcp.@dnsmasq[0].server; do :; done
 uci set dhcp.@dnsmasq[0].noresolv='0' 2>/dev/null || true
 uci commit dhcp 2>/dev/null || true
 /etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true
+# AdGuard (10.42.42.44) must go via OVPN — otherwise global-VPN DNS (dnsmasq
+# on :4153) leaks to WAN and LAN clients get no replies.
+ip route replace 10.42.42.0/24 dev ovpnclient1 metric 10 2>/dev/null || true
 ip route replace 10.42.42.0/24 dev ovpnclient1 table 1011 2>/dev/null || true
-echo "flint vpn mode=$(uci get route_policy.global.mode) local_access=1 dns=$(uci get gl-dns-v2.@dns[0].mode 2>/dev/null) override_vpn=$(uci get gl-dns-v2.@dns[0].override_vpn 2>/dev/null)"
+ip route replace 10.42.42.44/32 dev ovpnclient1 metric 5 2>/dev/null || true
+echo "flint vpn mode=$(uci get route_policy.global.mode) local_access=1 dns=$(uci get gl-dns-v2.@dns[0].mode 2>/dev/null) override_vpn=$(uci get gl-dns-v2.@dns[0].override_vpn 2>/dev/null) adguard_via=$(ip route get 10.42.42.44 2>/dev/null | head -1)"
 REMOTE

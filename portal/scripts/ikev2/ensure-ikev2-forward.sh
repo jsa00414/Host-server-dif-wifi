@@ -53,6 +53,9 @@ iptables -C FORWARD -s "$IKEV2_POOL" -d "$DNS_NET" -m comment --comment SM-IKEV2
   || iptables -I FORWARD 1 -s "$IKEV2_POOL" -d "$DNS_NET" -m comment --comment SM-IKEV2-DNS -j ACCEPT
 iptables -C FORWARD -s "$DNS_NET" -d "$IKEV2_POOL" -m comment --comment SM-IKEV2-DNS -j ACCEPT 2>/dev/null \
   || iptables -I FORWARD 1 -s "$DNS_NET" -d "$IKEV2_POOL" -m comment --comment SM-IKEV2-DNS -j ACCEPT
+# Docker raw-isolation DROP would otherwise black-hole direct queries to AdGuard
+iptables -t raw -C PREROUTING -s "$IKEV2_POOL" -d "${ADGUARD_DNS}/32" -m comment --comment SM-VPN-DNS-ALLOW -j ACCEPT 2>/dev/null \
+  || iptables -t raw -I PREROUTING 1 -s "$IKEV2_POOL" -d "${ADGUARD_DNS}/32" -m comment --comment SM-VPN-DNS-ALLOW -j ACCEPT
 
 # Host INPUT for IKEv2 clients (sslh / portal VIP)
 if command -v ufw >/dev/null 2>&1; then
