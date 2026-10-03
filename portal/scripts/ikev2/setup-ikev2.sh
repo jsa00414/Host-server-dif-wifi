@@ -119,6 +119,8 @@ done
 
 ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
 ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+# Host INPUT for tun VIP / sslh (split-DNS points portal at 10.9.0.1)
+ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
@@ -143,6 +145,14 @@ if [[ -f "$SCRIPT_SRC" && "$SCRIPT_SRC" != "$IKEV2_DIR/Setup-ServerManagerVpn.ps
   cp -f "$SCRIPT_SRC" "$IKEV2_DIR/Setup-ServerManagerVpn.ps1"
 fi
 
+# VPN-only admin hostnames → 10.9.0.1 (avoid gateway-IP tunnel exclusion → 403)
+SPLIT_DNS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-vpn-split-dns.sh"
+if [[ -f "$SPLIT_DNS_SRC" ]]; then
+  cp -f "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-vpn-split-dns.sh"
+  bash "$IKEV2_DIR/ensure-vpn-split-dns.sh" || true
+fi
+
 systemctl enable strongswan-starter >/dev/null 2>&1 || true
 systemctl restart strongswan-starter
 sleep 1
@@ -156,3 +166,4 @@ echo "  Password: ${IKEV2_PASS}"
 echo "  Pool:     ${IKEV2_POOL}"
 echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
 echo "  Cert:     ${LE_LIVE}"
+echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"

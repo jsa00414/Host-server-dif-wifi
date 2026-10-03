@@ -28,3 +28,20 @@ No private CA install is required.
 | Pool | `10.10.0.0/24` |
 | DNS | `10.9.0.1` → AdGuard → Pi-hole |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
+
+## Portal / admin sites while on IKEv2
+
+iOS/Windows exclude the VPN gateway public IP from the tunnel. If DNS returns
+`74.208.76.213`, HTTPS to `portal.vpstruelord.com` leaves the tunnel and Caddy
+returns **403 Forbidden**.
+
+Fix (VPN DNS only — public DNS unchanged):
+
+```bash
+bash /opt/ikev2/ensure-vpn-split-dns.sh
+```
+
+AdGuard rewrites VPN-gated hostnames to `10.9.0.1` so traffic stays on-tunnel
+with a private source IP that matches Caddy `@vpn_clients`.
+
+After applying: **disconnect/reconnect VPN** (or flush DNS), then open the portal.
