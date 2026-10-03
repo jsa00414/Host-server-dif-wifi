@@ -179,7 +179,7 @@
       grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
-    .actions .wide { grid-column: 1 / -1; }
+    .actions:empty { display: none; }
     button {
       appearance: none;
       border: 1px solid var(--line);
@@ -200,28 +200,6 @@
     button.danger {
       border-color: rgba(255,122,122,.4);
       color: #ffc0c0;
-    }
-    .manual {
-      display: none;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .manual.show { display: flex; }
-    .manual label {
-      font-size: .74rem;
-      color: var(--muted);
-    }
-    .manual input {
-      width: 100%;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: rgba(0,0,0,.35);
-      color: var(--text);
-      padding: 12px;
-      font-family: "IBM Plex Mono", monospace;
-      font-size: .88rem;
-      letter-spacing: .05em;
-      text-transform: uppercase;
     }
     .hint {
       margin: 0;
@@ -279,17 +257,7 @@
     <div class="actions">
       <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
       <button type="button" id="lockNowBtn" hidden>Lock</button>
-      <button type="button" id="manualBtn">Enter secret</button>
-      <button type="button" class="danger wide" id="clearBtn" hidden>Remove account</button>
     </div>
-    <div class="manual" id="manualForm">
-      <label for="secretInput">Secret from portal</label>
-      <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="NJEPFWCQ…" />
-      <label for="accountInput">Label (optional)</label>
-      <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
-      <button type="button" class="primary" id="saveManualBtn">Save on this iPhone</button>
-    </div>
-    <p class="hint" id="hint">Face ID locks codes when you leave the app. Codes refresh every 30s.</p>
   </footer>
   <div class="toast" id="toast"></div>
 
@@ -308,18 +276,11 @@
       codeView: document.getElementById("codeView"),
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
-      clearBtn: document.getElementById("clearBtn"),
       lockNowBtn: document.getElementById("lockNowBtn"),
       faceUnlockBtn: document.getElementById("faceUnlockBtn"),
       setupFaceBtn: document.getElementById("setupFaceBtn"),
       installHint: document.getElementById("installHint"),
-      manualBtn: document.getElementById("manualBtn"),
-      manualForm: document.getElementById("manualForm"),
-      secretInput: document.getElementById("secretInput"),
-      accountInput: document.getElementById("accountInput"),
-      saveManualBtn: document.getElementById("saveManualBtn"),
       toast: document.getElementById("toast"),
-      hint: document.getElementById("hint"),
     };
 
     let account = null;
@@ -435,14 +396,6 @@
       unlocked = false;
       render();
     }
-    function clearAccount() {
-      localStorage.removeItem(STORE_KEY);
-      clearFaceCredId();
-      account = null;
-      unlocked = false;
-      render();
-      toast("Account removed");
-    }
     function parseHash() {
       const hash = (location.hash || "").replace(/^#/, "");
       if (!hash) return null;
@@ -531,7 +484,6 @@
         els.codePane.hidden = true;
         els.emptyView.hidden = false;
         els.copyBtn.hidden = true;
-        els.clearBtn.hidden = true;
         els.lockNowBtn.hidden = true;
         els.setupFaceBtn.hidden = true;
         els.codeView.textContent = "------";
@@ -539,7 +491,6 @@
         return;
       }
       els.emptyView.hidden = true;
-      els.clearBtn.hidden = false;
       if (!unlocked) {
         els.lockView.hidden = false;
         els.codePane.hidden = true;
@@ -548,17 +499,12 @@
         els.faceUnlockBtn.hidden = !hasFace;
         els.setupFaceBtn.hidden = hasFace;
         els.setupFaceBtn.textContent = hasFace ? "Re-set Face ID" : "Set up Face ID";
-        els.hint.textContent = hasFace
-          ? "Face ID required to view codes."
-          : "Set up Face ID once, then unlock with Face ID every time.";
       } else {
         els.lockView.hidden = true;
         els.codePane.hidden = false;
         els.copyBtn.hidden = false;
         els.lockNowBtn.hidden = false;
         els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
-        els.manualForm.classList.remove("show");
-        els.hint.textContent = "Face ID locks codes when you leave the app. Codes refresh every 30s.";
         tick();
         bumpIdle();
       }
@@ -606,28 +552,6 @@
       try { await navigator.clipboard.writeText(code); toast("Copied"); }
       catch (_) { toast(code); }
       bumpIdle();
-    });
-    els.clearBtn.addEventListener("click", () => {
-      if (confirm("Remove the authenticator account from this iPhone?")) clearAccount();
-    });
-    els.manualBtn.addEventListener("click", () => {
-      els.manualForm.classList.toggle("show");
-      if (els.manualForm.classList.contains("show")) els.secretInput.focus();
-    });
-    els.saveManualBtn.addEventListener("click", async () => {
-      const secret = (els.secretInput.value || "").replace(/\s+/g, "").toUpperCase();
-      if (secret.length < 16) { toast("Secret looks too short"); return; }
-      saveAccount({
-        secret,
-        issuer: "ServerManager",
-        account: (els.accountInput.value || "portal").trim() || "portal",
-      });
-      els.secretInput.value = "";
-      toast("Saved — set up Face ID");
-      history.replaceState(null, "", location.pathname);
-      if (!loadFaceCredId() && await faceAvailable()) {
-        els.setupFaceBtn.hidden = false;
-      }
     });
 
     document.addEventListener("visibilitychange", () => {
