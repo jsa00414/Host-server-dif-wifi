@@ -3620,12 +3620,13 @@
               <div class="lock-title">Locked</div>
               <div class="sec-ssh-lock-form">
                 <input type="password" id="secSshUnlockPass" placeholder="Password" autocomplete="current-password" />
-                <button type="button" class="primary" id="secSshUnlockBtn">Unlock</button>
               </div>
             </div>`;
-          document.getElementById("secSshUnlockBtn")?.addEventListener("click", () => unlockSshPanel());
           document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
-            if (ev.key === "Enter") unlockSshPanel();
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              unlockSshPanel();
+            }
           });
           scheduleSshPanelRelock(0);
         } else {
