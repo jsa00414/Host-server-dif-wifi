@@ -10053,7 +10053,7 @@ def build_vps_status() -> dict:
         pass
 
     hostname = _sh_out(["hostname"], timeout=3).splitlines()[0] if _sh_out(["hostname"], timeout=3) else ""
-    public_ip = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "74.208.54.132"
+    public_ip = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "74.208.76.213"
 
     # Quick egress check (non-fatal)
     egress_ip = ""

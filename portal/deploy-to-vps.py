@@ -113,6 +113,10 @@ UPLOADS: list[tuple[Path, str]] = [
         f"{REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh",
     ),
     (
+        ROOT / "scripts/security/retire-old-vps-ip.sh",
+        f"{REMOTE_UI}/scripts/security/retire-old-vps-ip.sh",
+    ),
+    (
         ROOT / "scripts/forwards/apply-lan-forwards.sh",
         "/opt/wireguard/scripts/apply-lan-forwards.sh",
     ),
@@ -184,7 +188,8 @@ def main() -> int:
         if host == DEFAULT_HOST:
             _run(
                 client,
-                f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
+                f"chmod +x {REMOTE_UI}/scripts/security/retire-old-vps-ip.sh && "
+                f"bash {REMOTE_UI}/scripts/security/retire-old-vps-ip.sh || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
