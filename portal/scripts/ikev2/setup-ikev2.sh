@@ -197,8 +197,10 @@ else
     bash "$IKEV2_DIR/ensure-ikev2-no-nest.sh" || true
   fi
 fi
-# Host INPUT for portal VIP / sslh (split-DNS points portal at 10.11.0.1)
-ufw allow from 10.10.0.0/24 comment "IKEv2 clients to host" >/dev/null 2>&1 || true
+# Host INPUT: narrow HTTPS; full access is allowlist-gated per VIP
+ufw delete allow from 10.10.0.0/24 >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 443 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 80 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
@@ -233,12 +235,17 @@ fi
 PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
 PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
 PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
+LAN_GATE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-lan-circle-flint-gate.sh"
 if _ikev2_install_script "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"; then
   [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
   [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable --now sm-ikev2-peer-acl.timer >/dev/null 2>&1 || true
   bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
+fi
+if [[ -f "$LAN_GATE_SRC" ]]; then
+  _ikev2_install_script "$LAN_GATE_SRC" "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" || true
+  chmod +x "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" 2>/dev/null || true
 fi
 
 NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"

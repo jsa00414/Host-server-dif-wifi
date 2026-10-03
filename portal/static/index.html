@@ -2917,7 +2917,7 @@
           headers: { "Content-Type": "application/json", ...(rest.headers || {}) },
         });
         if (res.status === 401) {
-          location.href = "/login.html";
+          location.href = "/";
           throw new Error("unauthorized");
         }
         const data = await res.json().catch(() => ({}));
@@ -3659,6 +3659,8 @@
         }
       }
 
+      const circle = data.vpn_allowlist || {};
+
       const expEl = document.getElementById("secExposures");
       if (expEl) {
         const rows = data.exposures || [];
@@ -3736,7 +3738,10 @@
         const expiresIn = panelLock.expires_in || 0;
         const twoFactor = !!panelLock.two_factor_enabled;
         const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
+        const deviceEnrollUnlocked = !!panelLock.device_enroll_unlocked;
         const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
+        const authAppAndroidPath = panelLock.auth_app_android_path || "/auth-app.html";
+        const authAppWindowsPath = panelLock.auth_app_windows_path || "/download/ServerManagerAuthenticator.exe";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
@@ -3776,10 +3781,50 @@
             <div>
               <div class="method-label">Two-factor · ${escHtml(methodLabel2fa)}</div>
               <div class="method-sub">${escHtml(methodSub2fa)}</div>
-              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a></div>` : ""}
+              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a><a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a><a class="ghost" href="${escHtml(authAppWindowsPath)}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a></div>` : ""}
             </div>
             <label class="sec-toggle" title="Toggle two-factor">
               <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
+              <span></span>
+            </label>
+          </div>
+          <div class="sec-2fa-row">
+            <div>
+              <div class="method-label">New authenticator devices · ${deviceEnrollUnlocked ? "Unlocked" : "Locked"}</div>
+              <div class="method-sub">${
+                deviceEnrollUnlocked
+                  ? `Enter secret is visible in the Authenticator app so a new phone can enroll${panelLock.enroll_expires_in ? ` · auto-locks in ~${Math.max(1, Math.ceil(panelLock.enroll_expires_in / 60))} min` : ""}. Lock when finished.`
+                  : "Locked — Enter secret is hidden in the Authenticator app. Unlock only while adding a new device."
+              }</div>
+              ${deviceEnrollUnlocked ? `<div class="sec-enroll-box" id="secDeviceEnrollBox" style="margin-top:10px;text-align:left">
+                <div class="method-sub" style="margin:0 0 8px">Enrollment open — use Enter secret in the app, or open a setup link:</div>
+                <div class="sec-login-actions">
+                  <a class="primary-link" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+                  <a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a>
+                  <a class="ghost" href="${escHtml(authAppWindowsPath)}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
+                </div>
+                <div class="method-sub" style="margin-top:8px">Secret and QR load below after unlock so you can type or scan on the new device.</div>
+                <canvas id="secDeviceEnrollQr" width="180" height="180" hidden></canvas>
+                <div class="secret" id="secDeviceEnrollSecret" hidden></div>
+              </div>` : ""}
+              ${(() => {
+                const devices = Array.isArray(panelLock.auth_app_devices) ? panelLock.auth_app_devices : [];
+                if (!devices.length) {
+                  return `<div class="sec-empty" style="margin-top:10px">No enrolled Authenticator LAN devices yet.</div>`;
+                }
+                return `<table class="sec-table" style="margin-top:10px"><thead><tr><th>Device</th><th>LAN IP</th><th>Platform</th><th></th></tr></thead><tbody>${
+                  devices.map((d) => `<tr>
+                    <td>${escHtml(d.name || d.hostname || d.note || "—")}</td>
+                    <td><code>${escHtml(d.ip || "")}</code></td>
+                    <td>${escHtml(d.platform || "—")}</td>
+                    <td><button type="button" class="ghost danger sec-auth-device-remove" data-ip="${escHtml(d.ip || "")}">Remove</button></td>
+                  </tr>`).join("")
+                }</tbody></table>
+                <div class="method-sub" style="margin-top:6px">Removing drops the Flint pending exemption for that phone LAN IP.</div>`;
+              })()}
+            </div>
+            <label class="sec-toggle" title="Unlock new authenticator devices">
+              <input type="checkbox" id="secDeviceEnrollToggle" ${deviceEnrollUnlocked ? "checked" : ""} ${twoFactor && twoFactorMethod === "app" ? "" : "disabled"} />
               <span></span>
             </label>
           </div>
@@ -3851,11 +3896,49 @@
             <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
               rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
             }</tbody></table>
+          </div>
+
+          <div class="sec-ssh-section" id="secVpnCircleBlock">
+            <h4>VPN trust circle</h4>
+            <p class="sec-users" id="secVpnCircleHint" style="margin:0 0 10px">
+              Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle. LAN devices that are not currently plugged in also show in pending.
+            </p>
+            <div class="meta-grid" id="secVpnCircleMeta"></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Allowed list</h4>
+            <div id="secVpnAllowed"><div class="sec-empty">Loading…</div></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Pending / recent attempts</h4>
+            <div id="secVpnPending"><div class="sec-empty">Loading…</div></div>
+            <div class="toolbar" style="margin-top:12px;gap:8px;flex-wrap:wrap;justify-content:flex-start">
+              <input type="text" id="secVpnApproveIp" placeholder="Public WAN IP" style="min-width:160px" autocomplete="off" spellcheck="false" />
+              <input type="text" id="secVpnApproveNote" placeholder="Note (optional)" style="min-width:140px" autocomplete="off" />
+              <button type="button" class="primary" id="secVpnApproveBtn">Approve into circle</button>
+            </div>
           </div>`;
+        fillVpnTrustCircle(circle);
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("secVpnApproveBtn")?.addEventListener("click", () => {
+          const ip = document.getElementById("secVpnApproveIp")?.value || "";
+          const note = document.getElementById("secVpnApproveNote")?.value || "";
+          mutateVpnAllowlist("approve", ip.trim(), note.trim());
+        });
         document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
           setSshPanel2fa(!!ev.target.checked);
         });
+        document.getElementById("secDeviceEnrollToggle")?.addEventListener("change", (ev) => {
+          setAuthDeviceEnroll(!!ev.target.checked);
+        });
+        document.querySelectorAll(".sec-auth-device-remove").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const ip = btn.getAttribute("data-ip") || "";
+            if (!ip) return;
+            if (!confirm(`Remove enrolled Authenticator device ${ip}?`)) return;
+            removeAuthAppDevice(ip);
+          });
+        });
+        if (deviceEnrollUnlocked) {
+          // Re-fetch enroll material so QR/secret appear after unlock.
+          setAuthDeviceEnroll(true, { silent: true });
+        }
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -3899,6 +3982,139 @@
           </tr>`).join("")
         }</tbody></table>`;
       }
+      bindVpnAllowlistButtons();
+    }
+    async function mutateVpnAllowlist(action, ip, note) {
+      const unlocked = !!(window.__lastSecurityData?.ssh?.panel_lock?.unlocked);
+      if (!unlocked) {
+        setStatus("Unlock VPS login panel with Authenticator first", "err");
+        try { await unlockSshPanel(); } catch (_) {}
+        return;
+      }
+      try {
+        setStatus(`${action} ${ip}…`);
+        const result = await api("/api/security/vpn-allowlist", {
+          method: "POST",
+          body: { action, ip, note: note || "" },
+        });
+        if (result.vpn_allowlist && window.__lastSecurityData) {
+          window.__lastSecurityData.vpn_allowlist = result.vpn_allowlist;
+          renderSecurity(window.__lastSecurityData);
+        } else {
+          await refreshSecurity(true);
+        }
+        const labels = {
+          approve: "Approved",
+          deny: "Denied",
+          revoke: "Removed",
+          pending: "Moved to pending",
+        };
+        setStatus(
+          result.ok ? `${labels[action] || action} ${ip}` : (result.error || "failed"),
+          result.ok ? "ok" : "err"
+        );
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    function fillVpnTrustCircle(circle) {
+      const circleMeta = document.getElementById("secVpnCircleMeta");
+      if (!circleMeta) return;
+      circle = circle || {};
+      const nameMap = circle.device_names && typeof circle.device_names === "object" ? circle.device_names : {};
+      const deviceLabel = (row) => {
+        const ip = String(row?.ip || "").trim();
+        return String(row?.name || row?.hostname || nameMap[ip] || "").trim();
+      };
+      circleMeta.innerHTML = `
+        <div class="meta-box"><label>Allowlisted</label><div>${escHtml((circle.allowed || []).length)}</div></div>
+        <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
+        <div class="meta-box"><label>Guest DNS</label><div><code>${escHtml(circle.guest_dns || "1.1.1.1")}</code></div></div>
+        <div class="meta-box"><label>Circle DNS</label><div><code>${escHtml(circle.circle_dns || "10.42.42.44")}</code></div></div>`;
+      const hint = document.getElementById("secVpnCircleHint");
+      if (hint && circle.detail) hint.textContent = circle.detail;
+      const allowedEl = document.getElementById("secVpnAllowed");
+      if (allowedEl) {
+        const rows = circle.allowed || [];
+        if (!rows.length) {
+          allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
+        } else {
+          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>Note</th><th></th></tr></thead><tbody>${
+            rows.map((r) => {
+              const sealed = !!(r.sealed || r.source === "router");
+              const hiddenFromApps = !!(!sealed && r.hidden);
+              const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
+              const name = deviceLabel(r);
+              const note = sealed
+                ? (r.note || "Flint router WAN (sealed)")
+                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
+              const action = sealed
+                ? `<span class="sec-users">sealed</span>`
+                : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
+                   <button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Remove</button>`;
+              return `<tr>
+              <td><strong>${escHtml(name || "—")}</strong></td>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td class="sec-users">${escHtml(note)}</td>
+              <td style="white-space:nowrap">${action}</td>
+            </tr>`;
+            }).join("")
+          }</tbody></table>`;
+        }
+      }
+      const pendingEl = document.getElementById("secVpnPending");
+      if (pendingEl) {
+        const pending = circle.pending || [];
+        const attempts = circle.attempts || [];
+        const pendingRows = pending.length
+          ? pending.map((r) => {
+              const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
+              const authApp = !!(r.auth_app || r.auth_app_enrolled);
+              const name = deviceLabel(r);
+              return `<tr>
+              <td><strong>${escHtml(name || (isLan ? (r.note || "LAN device") : "—"))}</strong></td>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td class="sec-users">${escHtml(isLan ? "—" : (r.vip || "—"))}</td>
+              <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
+              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN${authApp ? " · Authenticator" : ""}` : (r.status || "pending"))}</td>
+              <td>
+                <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
+                <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
+              </td>
+            </tr>`;
+            }).join("")
+          : "";
+        const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
+            <td><strong>${escHtml(deviceLabel(a) || "—")}</strong></td>
+            <td><code>${escHtml(a.ip)}</code></td>
+            <td class="sec-users">${escHtml(a.vip || "—")}</td>
+            <td colspan="2" class="sec-users">${escHtml(a.ts ? new Date(a.ts * 1000).toLocaleString() : "—")}</td>
+            <td class="sec-users">${a.trusted ? "trusted" : "guest DNS"}</td>
+          </tr>`).join("");
+        if (!pendingRows && !attemptRows) {
+          pendingEl.innerHTML = `<div class="sec-empty">No pending WAN or offline LAN devices.</div>`;
+        } else {
+          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>VIP</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
+            ${pendingRows || `<tr><td colspan="6" class="sec-users">No pending — recent attempts below.</td></tr>`}
+            ${attemptRows ? `<tr><td colspan="6" class="sec-users" style="padding-top:10px">Recent attempts</td></tr>${attemptRows}` : ""}
+          </tbody></table>`;
+        }
+      }
+    }
+    function bindVpnAllowlistButtons() {
+      document.querySelectorAll(".sec-vpn-approve").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("approve", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-deny").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("deny", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-revoke").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("revoke", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-pending").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("pending", btn.dataset.ip || "", "moved to pending");
+      });
     }
     async function refreshSecurity(quiet) {
       const btn = document.getElementById("secRefreshBtn");
@@ -3938,8 +4154,9 @@
       backdrop.className = "sec-code-modal-backdrop";
       const enrollHtml = enroll
         ? `<div class="sec-enroll-box">
-            <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows.</div>
+            <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows. On Windows, download the .exe.</div>
             <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+            <a class="ghost" href="${escHtml(enroll.auth_app_windows_path || "/download/ServerManagerAuthenticator.exe")}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
             <canvas id="secEnrollQr" width="180" height="180" aria-label="Authenticator QR"></canvas>
             <div class="secret">${escHtml(enroll.secret || "")}</div>
           </div>`
@@ -4091,6 +4308,59 @@
         window.__sshUnlockPassCache = "";
         closeEmailCodePopup();
         setStatus(result.message || "Panel unlocked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function setAuthDeviceEnroll(unlocked, opts) {
+      const toggle = document.getElementById("secDeviceEnrollToggle");
+      const silent = !!(opts && opts.silent);
+      if (toggle) toggle.disabled = true;
+      if (!silent) setStatus(unlocked ? "Unlocking new-device enrollment…" : "Locking new-device enrollment…");
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "device_enroll", unlocked: !!unlocked }),
+          timeoutMs: 20000,
+        });
+        if (!silent) setStatus(result.message || (unlocked ? "Enrollment unlocked" : "Enrollment locked"), "ok");
+        const enroll = result.enroll || null;
+        const secretEl = document.getElementById("secDeviceEnrollSecret");
+        const qrEl = document.getElementById("secDeviceEnrollQr");
+        if (unlocked && enroll) {
+          if (secretEl) {
+            secretEl.hidden = false;
+            secretEl.textContent = enroll.secret || "";
+          }
+          if (enroll.otpauth_url) {
+            drawTotpQr("secDeviceEnrollQr", enroll.otpauth_url);
+            if (qrEl) qrEl.hidden = false;
+          }
+          if (enroll.auth_app_path) {
+            const box = document.getElementById("secDeviceEnrollBox");
+            const link = box?.querySelector('a.primary-link');
+            if (link) link.href = enroll.auth_app_path;
+          }
+        }
+        if (!silent) await refreshSecurity(true);
+        else if (toggle) toggle.checked = !!result.device_enroll_unlocked;
+      } catch (e) {
+        if (toggle) toggle.checked = !unlocked;
+        if (!silent) setStatus(String(e.message || e), "err");
+      } finally {
+        if (toggle) toggle.disabled = false;
+      }
+    }
+    async function removeAuthAppDevice(ip) {
+      setStatus(`Removing Authenticator device ${ip}…`);
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "remove_device", ip }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || `Removed ${ip}`, "ok");
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
@@ -4702,7 +4972,7 @@
           body: JSON.stringify({ current_password, new_password, confirm_password }),
         });
         setStatus("Password updated — sign in again", "ok");
-        location.href = "/login.html";
+        location.href = "/";
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);
@@ -4715,7 +4985,7 @@
           method: "POST",
           body: JSON.stringify({ logout_all_sessions: true }),
         });
-        location.href = "/login.html";
+        location.href = "/";
       } catch (e) {
         setStatus(String(e.message || e), "err");
       }

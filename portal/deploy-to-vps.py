@@ -127,6 +127,10 @@ UPLOADS: list[tuple[Path, str]] = [
         f"{REMOTE_UI}/scripts/security/retire-old-vps-ip.sh",
     ),
     (
+        ROOT / "scripts/ikev2/ensure-lan-circle-flint-gate.sh",
+        "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+    ),
+    (
         ROOT / "scripts/mail/ensure-portal-send-mailbox.sh",
         f"{REMOTE_UI}/scripts/mail/ensure-portal-send-mailbox.sh",
     ),

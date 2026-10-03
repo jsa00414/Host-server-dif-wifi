@@ -1957,6 +1957,24 @@ def load_ikev2_ca_pem() -> str:
     return ""
 
 
+AUTH_APP_WINDOWS_EXE_NAME = "ServerManagerAuthenticator.exe"
+AUTH_APP_WINDOWS_EXE_PATHS = (
+    Path(__file__).resolve().parent / "scripts" / "auth-app-windows" / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/wireguard/port-forward-ui/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/servermanager/panel/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+)
+
+
+def load_auth_app_windows_exe() -> bytes:
+    """Windows Authenticator .exe (WebView2 shell around /auth-app.html)."""
+    for path in AUTH_APP_WINDOWS_EXE_PATHS:
+        if path.is_file():
+            return path.read_bytes()
+    raise FileNotFoundError(
+        f"{AUTH_APP_WINDOWS_EXE_NAME} missing — build portal/scripts/auth-app-windows/"
+    )
+
+
 def load_ikev2_windows_ps1() -> bytes:
     """PowerShell helper that trusts the IKEv2 CA and creates the VPN profile."""
     candidates = [
@@ -2319,7 +2337,8 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
+    # No blanket 192.168.8.0/24 — approved LAN /32s are appended by peer-acl sync.
+    "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 # Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
 # Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
@@ -3763,7 +3782,17 @@ def _parse_gl_clients_json(text: str) -> dict[str, dict]:
             continue
         name = str(info.get("name") or "").strip()
         mac_s = str(info.get("mac") or mac or "").strip().lower()
-        by_ip[ip] = {"hostname": name, "mac": mac_s}
+        online = info.get("online")
+        if online is None:
+            online = info.get("is_online")
+        if online is None:
+            # Some firmwares use class/status strings.
+            status = str(info.get("status") or info.get("class") or "").lower()
+            if status in ("online", "up", "active", "connected"):
+                online = True
+            elif status in ("offline", "down", "inactive", "disconnected"):
+                online = False
+        by_ip[ip] = {"hostname": name, "mac": mac_s, "online": online}
     return by_ip
 
 
@@ -3837,6 +3866,7 @@ def read_lan_devices() -> dict:
         cur = by_ip.get(ip)
         name = str(info.get("hostname") or "").strip()
         mac = str(info.get("mac") or "").strip().lower()
+        online_gl = info.get("online")
         if not cur:
             by_ip[ip] = {
                 "ip": ip,
@@ -3844,6 +3874,7 @@ def read_lan_devices() -> dict:
                 "hostname": name,
                 "source": "gl",
                 "named_by": "gl" if name else "",
+                "online": bool(online_gl) if online_gl is not None else False,
             }
             continue
         if mac and not cur.get("mac"):
@@ -3854,6 +3885,16 @@ def read_lan_devices() -> dict:
         src = str(cur.get("source") or "")
         if "gl" not in src:
             cur["source"] = f"{src}+gl" if src else "gl"
+        if online_gl is not None:
+            cur["online"] = bool(online_gl) or bool(cur.get("online"))
+    # ARP/neigh presence means currently plugged in / reachable on LAN.
+    for d in by_ip.values():
+        src_parts = {p for p in str(d.get("source") or "").split("+") if p}
+        arp_live = "arp" in src_parts
+        if d.get("online") is None:
+            d["online"] = arp_live
+        elif arp_live:
+            d["online"] = True
     devices = _apply_lan_names(list(by_ip.values()))
     return {
         "ok": True,
@@ -4154,11 +4195,15 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_hosts"] = [PROXMOX_HOST]
         out["upstream_https"] = True
         out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+        # Hypervisor UI must never be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == PLEX_PUBLIC_HOST.lower():
         out["target_host"] = PLEX_HOST
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
+        # Media server must not be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == GRAFANA_PUBLIC_HOST.lower():
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
@@ -4167,12 +4212,14 @@ def _normalize_hookup_rule(rule: dict) -> dict:
 
 
 def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee proxmox.vpstruelord.com is present in managed hookups."""
+    """Guarantee proxmox.vpstruelord.com is present in managed hookups (VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PROXMOX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4183,7 +4230,7 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PROXMOX_PORT,
                 "name": "proxmox",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4191,12 +4238,14 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox)."""
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox, VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PLEX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4207,7 +4256,7 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PLEX_PORT,
                 "name": "plex-server",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4346,30 +4395,58 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     host = PROXMOX_HOST
     port = int(rule.get("target_port") or PROXMOX_PORT)
     public = PROXMOX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     lines = [
         f"{public} {{",
-        f"\treverse_proxy https://{host}:{port} {{",
-        "\t\ttransport http {",
-        "\t\t\ttls_insecure_skip_verify",
-        "\t\t}",
-        "\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto https",
-        "\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\theader_down Location https://{host}:{port}/ https://{public}/",
-        "\t\theader_down -X-Frame-Options",
-        "\t\theader_down -Content-Security-Policy",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
     ]
+    if vpn_only:
+        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.append("\thandle @vpn_clients {")
+        indent = "\t\t"
+    else:
+        indent = "\t"
+    lines.extend(
+        [
+            f"{indent}reverse_proxy https://{host}:{port} {{",
+            f"{indent}\ttransport http {{",
+            f"{indent}\t\ttls_insecure_skip_verify",
+            f"{indent}\t}}",
+            f"{indent}\theader_up Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto https",
+            f"{indent}\theader_up X-Forwarded-For {{remote_host}}",
+            f"{indent}\theader_down Location https://{host}:{port} https://{public}",
+            f"{indent}\theader_down Location https://{host}:{port}/ https://{public}/",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                '\t\trespond "Forbidden" 403',
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -4414,6 +4491,11 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
     claimed = _plex_is_claimed()
@@ -4433,57 +4515,78 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         setup_path = "/web/index.html"
     # After claim, PMS often requires TLS on :32400 ("secure connections required").
     upstream = f"https://{host}:{port}"
+    # Indent: site → optional vpn handle → path handle → reverse_proxy options
+    base = "\t\t" if vpn_only else "\t"
+    opt = base + "\t\t"  # options inside reverse_proxy inside path handle
     # Pass through client headers (especially X-Plex-*). Do NOT rewrite
     # X-Plex-Client-Identifier to empty — that breaks PlayQueue ("loading items").
     proxy_common = [
-        "\t\t\ttransport http {",
-        "\t\t\t\ttls_insecure_skip_verify",
-        "\t\t\t}",
+        f"{opt}transport http {{",
+        f"{opt}\ttls_insecure_skip_verify",
+        f"{opt}}}",
         # Keep public Host so PMS/web client stay aligned with plex.vpstruelord.com
-        "\t\t\theader_up Host {host}",
-        f"\t\t\theader_up X-Forwarded-Host {public}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Real-IP {remote_host}",
-        "\t\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\t\theader_down Location http://{public} https://{public}",
-        f"\t\t\theader_down Location https://{public} https://{public}",
-        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location http://{host} https://{public}",
-        "\t\t\theader_down -X-Frame-Options",
-        "\t\t\theader_down -Content-Security-Policy",
+        f"{opt}header_up Host {{host}}",
+        f"{opt}header_up X-Forwarded-Host {public}",
+        f"{opt}header_up X-Forwarded-Proto {{scheme}}",
+        f"{opt}header_up X-Real-IP {{remote_host}}",
+        f"{opt}header_up X-Forwarded-For {{remote_host}}",
+        f"{opt}header_down Location http://{public} https://{public}",
+        f"{opt}header_down Location https://{public} https://{public}",
+        f"{opt}header_down Location http://{host}:{port} https://{public}",
+        f"{opt}header_down Location https://{host}:{port} https://{public}",
+        f"{opt}header_down Location http://{host} https://{public}",
+        f"{opt}header_down -X-Frame-Options",
+        f"{opt}header_down -Content-Security-Policy",
     ]
-    lines = [
-        f"{public} {{",
-        # Claim helper (plex.tv claim code) — portal serves the form + API.
-        "\thandle /claim* {",
-        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
-        "\t}",
-        # Land on web UI (setup only while unclaimed).
-        "\t@plexroot path / /web /web/",
-        f"\tredir @plexroot {setup_path} 302",
-        # Media streams should not be gzip-buffered.
-        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
-        "\thandle @plexmedia {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t\tflush_interval -1",
-        "\t\t}",
-        "\t}",
-        "\thandle {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t}",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
-    ]
+    lines = [f"{public} {{"]
+    if vpn_only:
+        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.append("\thandle @vpn_clients {")
+    lines.extend(
+        [
+            # Claim helper (plex.tv claim code) — portal serves the form + API.
+            f"{base}handle /claim* {{",
+            f"{base}\treverse_proxy {DOCKER_HOST_GW}:5002",
+            f"{base}}}",
+            # Land on web UI (setup only while unclaimed).
+            f"{base}@plexroot path / /web /web/",
+            f"{base}redir @plexroot {setup_path} 302",
+            # Media streams should not be gzip-buffered.
+            f"{base}@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+            f"{base}handle @plexmedia {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{opt}flush_interval -1",
+            f"{base}\t}}",
+            f"{base}}}",
+            f"{base}handle {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{base}\t}}",
+            f"{base}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                '\t\trespond "Forbidden" 403',
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -4829,16 +4932,56 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append("\t\t}")
             lines.append("\t}")
-            lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
-            lines.append("\thandle @nasmedia {")
+            # Authenticator PWA + APIs stay reachable without VPN circle membership
+            # so enrolled phones can manage pending while LAN pending is enforced.
+            lines.append(
+                "\t@auth_app path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+                "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+                "/static/auth-app.html /static/auth-app-iphone.html "
+                "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+                "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+                "/static/auth-app-icon-512.png "
+                "/download/ServerManagerAuthenticator.exe "
+                "/api/auth-app/windows-exe"
+            )
+            lines.append("\thandle @auth_app {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\t\theader_down -X-Frame-Options")
-            lines.append("\t\t\theader_down -Content-Security-Policy")
-            lines.append("\t\t\tflush_interval -1")
+            lines.append("\t\t\theader_up X-Forwarded-For {remote_host}")
+            lines.append("\t\t\theader_up X-Real-IP {remote_host}")
             lines.append("\t\t}")
+            lines.append("\t}")
+            # NAS media streams skip gzip, but must still honor vpn_only —
+            # otherwise a stolen session cookie can cat/download off-VPN while
+            # /login (portal root) remains VPN-gated (403).
+            lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
+            lines.append("\thandle @nasmedia {")
+            if r.get("vpn_only"):
+                lines.append(f"\t\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+                lines.append("\t\thandle @vpn_clients {")
+                lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\t\theader_up Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\t\tflush_interval -1")
+                lines.append("\t\t\t}")
+                lines.append("\t\t}")
+                lines.append("\t\thandle {")
+                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.append("\t\t}")
+            else:
+                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\theader_up Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\tflush_interval -1")
+                lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
@@ -5636,9 +5779,14 @@ UFW_REQUIRED = {
 }
 
 UFW_ROW_RE = re.compile(
-    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN)\s{2,}"
+    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN|LIMIT IN)\s{2,}"
     r"(?P<frm>.+?)(?:\s+#\s*(?P<comment>.*))?$"
 )
+
+# Protected ports that stay public but use UFW "limit" (rate-cap) instead of bare allow.
+UFW_RATE_LIMITED = {
+    (22, "tcp"),  # SSH — complements fail2ban + MaxAuthTries 3
+}
 
 
 def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
@@ -5745,7 +5893,8 @@ def read_firewall_state() -> dict:
         to_raw = m.group("to")
         if "(v6)" in to_raw or "(v6)" in frm.lower():
             continue  # manage IPv4 rules; ufw allow adds v6 twin
-        if "ALLOW" not in m.group("action"):
+        action = m.group("action")
+        if "ALLOW" not in action and "LIMIT" not in action:
             continue
         port, proto, to_disp = _parse_ufw_to(to_raw)
         if port is None:
@@ -5757,17 +5906,19 @@ def read_firewall_state() -> dict:
         comment = (m.group("comment") or "").strip() or f"port-{port}"
         locked = key in UFW_PROTECTED
         vpn_only = (not locked) and _is_vpn_ufw_from(frm)
+        rate_limited = "LIMIT" in action or key in UFW_RATE_LIMITED
         rules.append(
             {
                 "id": int(m.group("num")),
                 "port": port,
                 "proto": proto,
-                "action": "allow",
+                "action": "limit" if rate_limited else "allow",
                 "from": "Anywhere" if frm.lower().startswith("anywhere") else frm,
                 "comment": comment,
                 "to": to_disp,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     return {
@@ -5796,8 +5947,8 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
             raise ValueError(f"Firewall rule {i + 1}: invalid fields") from exc
         if proto not in ("tcp", "udp"):
             raise ValueError(f"Firewall rule {i + 1}: proto must be tcp or udp")
-        if action not in ("allow",):
-            raise ValueError(f"Firewall rule {i + 1}: only allow rules are supported")
+        if action not in ("allow", "limit"):
+            raise ValueError(f"Firewall rule {i + 1}: only allow/limit rules are supported")
         if not (1 <= port <= 65535):
             raise ValueError(f"Firewall rule {i + 1}: invalid port")
         if not re.match(r"^[A-Za-z0-9 _.:/-]{1,60}$", comment):
@@ -5809,31 +5960,36 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         locked = key in UFW_PROTECTED
         if locked:
             vpn_only = False  # never VPN-restrict SSH / WG listen
+        rate_limited = key in UFW_RATE_LIMITED or str(rule.get("action", "")).lower() == "limit"
+        if rate_limited:
+            action = "limit"
         cleaned.append(
             {
                 "port": port,
                 "proto": proto,
                 "action": action,
-                "comment": comment,
+                "comment": "SSH-ratecap" if key == (22, "tcp") else comment,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     # Ensure protected rules always remain (public)
     for port, proto in UFW_PROTECTED:
         if (port, proto) not in seen:
             labels = {
-                (22, "tcp"): "SSH",
+                (22, "tcp"): "SSH-ratecap",
                 (5000, "udp"): "WireGuard VPN tunnel",
             }
             cleaned.append(
                 {
                     "port": port,
                     "proto": proto,
-                    "action": "allow",
+                    "action": "limit" if (port, proto) in UFW_RATE_LIMITED else "allow",
                     "comment": labels.get((port, proto), f"protected-{port}"),
                     "locked": True,
                     "vpn_only": False,
+                    "rate_limited": (port, proto) in UFW_RATE_LIMITED,
                 }
             )
     # Ensure required admin ports remain (VPN-only by default)
@@ -5859,7 +6015,7 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
 
 
 def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
-    """One or more `ufw allow …` argv lists (without the leading binary)."""
+    """One or more `ufw allow|limit …` argv lists (without the leading binary)."""
     port = rule["port"]
     proto = rule["proto"]
     comment = rule["comment"]
@@ -5882,7 +6038,12 @@ def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
                 ]
             )
         return cmds
-    return [["allow", f"{port}/{proto}", "comment", comment]]
+    verb = "limit" if (
+        rule.get("rate_limited")
+        or str(rule.get("action", "")).lower() == "limit"
+        or (port, proto) in UFW_RATE_LIMITED
+    ) else "allow"
+    return [[verb, f"{port}/{proto}", "comment", comment]]
 
 
 def _ufw_allow_cmd(rule: dict) -> list[str]:
@@ -5928,15 +6089,38 @@ def write_firewall_state(rules: list[dict]) -> dict:
 
     # Candidates to delete (unmanaged / vpn_only flip). Skip protected/required
     # ports unless we are intentionally recreating them from desired state.
+    # Exception: SSH ALLOW → LIMIT upgrade (UFW_RATE_LIMITED).
     delete_nums: list[tuple[int, int, str]] = []
     for num, port, proto, _ipv6, cur_vpn in rows:
-        if (port, proto) in UFW_PROTECTED:
+        key = (port, proto)
+        if key in UFW_PROTECTED:
+            if key in UFW_RATE_LIMITED:
+                # Recreate bare ALLOW as LIMIT when rate-cap is required.
+                # Detect via raw numbered status line action.
+                continue  # handled below via rate-limit upgrade pass
             continue
-        want = desired_keys.get((port, proto))
-        if want is None and (port, proto) in UFW_REQUIRED:
+        want = desired_keys.get(key)
+        if want is None and key in UFW_REQUIRED:
             continue  # never wipe portal HTTP allow during partial saves
         if want is None or bool(want.get("vpn_only")) != bool(cur_vpn):
             delete_nums.append((num, port, proto))
+
+    # Upgrade SSH (and other UFW_RATE_LIMITED) from unlimited ALLOW → LIMIT.
+    numbered_raw = numbered.stdout or ""
+    for line in numbered_raw.splitlines():
+        line_s = line.strip()
+        if not line_s.startswith("["):
+            continue
+        m = UFW_ROW_RE.match(line_s)
+        if not m:
+            continue
+        port, proto, _ = _parse_ufw_to(m.group("to"))
+        if port is None:
+            continue
+        if (port, proto) not in UFW_RATE_LIMITED:
+            continue
+        if "ALLOW" in m.group("action") and "LIMIT" not in m.group("action"):
+            delete_nums.append((int(m.group("num")), port, proto))
 
     # Guard: never mass-delete when the portal only knows a tiny rule set
     # (e.g. after a partial load). That previously wiped HTTP/HTTPS/forwards.
@@ -5959,12 +6143,23 @@ def write_firewall_state(rules: list[dict]) -> dict:
     # Refresh and add missing / recreated
     after = read_firewall_state()
     have = {
-        (r["port"], r["proto"]): bool(r.get("vpn_only")) for r in after["rules"]
+        (r["port"], r["proto"]): (
+            bool(r.get("vpn_only")),
+            str(r.get("action") or "allow").lower(),
+        )
+        for r in after["rules"]
     }
     for key, rule in desired_keys.items():
-        if key in have and have[key] == bool(rule.get("vpn_only")):
-            continue
-        scope = "vpn" if rule.get("vpn_only") else "public"
+        want_action = "limit" if (
+            rule.get("rate_limited")
+            or str(rule.get("action", "")).lower() == "limit"
+            or key in UFW_RATE_LIMITED
+        ) else "allow"
+        if key in have:
+            cur_vpn, cur_action = have[key]
+            if cur_vpn == bool(rule.get("vpn_only")) and cur_action == want_action:
+                continue
+        scope = "vpn" if rule.get("vpn_only") else ("limit" if want_action == "limit" else "public")
         for cmd in _ufw_allow_cmds(rule):
             proc = _run_ufw(cmd)
             src = ""
@@ -5974,7 +6169,7 @@ def write_firewall_state(rules: list[dict]) -> dict:
                 except Exception:
                     src = ""
             logs.append(
-                f"allow {rule['port']}/{rule['proto']} ({scope}{src}): "
+                f"{cmd[0]} {rule['port']}/{rule['proto']} ({scope}{src}): "
                 f"rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
             )
 
@@ -5991,14 +6186,14 @@ def write_firewall_state(rules: list[dict]) -> dict:
 
 def _cookie_clear_header() -> str:
     return (
-        f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; "
+        f"{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; "
         "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
     )
 
 
 def _cookie_set_header(token: str) -> str:
     return (
-        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; "
+        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; "
         f"Max-Age={int(SESSION_HOURS * 3600)}"
     )
 
@@ -7223,6 +7418,8 @@ def _security_sshd_config() -> dict:
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
         "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "email_to": EMAIL_CODE_TO,
         "required": required,
     }
@@ -8099,6 +8296,10 @@ def _security_file_checks() -> list[dict]:
         ("/opt/truemail/config/ssl/key.pem", 0o600, False),
         ("/opt/truemail/.env", 0o600, False),
         ("/opt/wireguard/nas-smb-gateway/credentials", 0o600, False),
+        ("/opt/servermanager/panel/ssh-panel-2fa.json", 0o600, False),
+        ("/opt/servermanager/panel/auth-app-devices.json", 0o600, False),
+        ("/opt/servermanager/panel/vpn-allowlist.json", 0o600, False),
+        ("/opt/servermanager/panel/caddy-sticky-vpn-ips.txt", 0o600, False),
     ]
     for path, want_mode, required in targets:
         p = Path(path)
@@ -8157,6 +8358,7 @@ def _security_domain_exposure() -> list[dict]:
         "buffalo.vpstruelord.com",
         "files.vpstruelord.com",
         "proxmox.vpstruelord.com",
+        "plex.vpstruelord.com",
         "grafana.vpstruelord.com",
         "pihole.vpstruelord.com",
         "dns.vpstruelord.com",
@@ -8396,6 +8598,7 @@ def build_security_status() -> dict:
         "files": files,
         "kernel": kernel,
         "probes": probes,
+        "vpn_allowlist": build_vpn_allowlist_status(),
         "generated_at": int(time.time()),
     }
 
@@ -11032,7 +11235,467 @@ SSH_PANEL_2FA_PATH = Path(
         "/opt/servermanager/panel/ssh-panel-2fa.json",
     )
 )
+VPN_ALLOWLIST_PATH = Path(
+    os.environ.get(
+        "VPN_ALLOWLIST_FILE",
+        "/opt/servermanager/panel/vpn-allowlist.json",
+    )
+)
+AUTH_APP_DEVICES_PATH = Path(
+    os.environ.get(
+        "AUTH_APP_DEVICES_FILE",
+        "/opt/servermanager/panel/auth-app-devices.json",
+    )
+)
+AUTH_APP_ENROLL_UNLOCK_SECONDS = int(
+    os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900")
+)  # auto-relock new-device enrollment
+AUTH_APP_TOTP_MAX_FAILS = int(os.environ.get("AUTH_APP_TOTP_MAX_FAILS", "8"))
+AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "300"))
+AUTH_APP_TOTP_LOCKOUT = int(os.environ.get("AUTH_APP_TOTP_LOCKOUT", "300"))
+AUTH_APP_MAX_DEVICES = int(os.environ.get("AUTH_APP_MAX_DEVICES", "8"))
+_auth_app_totp_lock = threading.Lock()
+_auth_app_totp_fails: dict[str, list[float]] = {}
+_auth_app_totp_lockouts: dict[str, float] = {}
+STICKY_VPN_IPS_PATH = Path(
+    os.environ.get(
+        "STICKY_VPN_IPS_FILE",
+        "/opt/servermanager/panel/caddy-sticky-vpn-ips.txt",
+    )
+)
+VPN_PEER_ACL_SCRIPT = Path(
+    os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
+)
+# Always-on trust-circle members (router WAN, etc). Hidden from Authenticator apps.
+# Default seals the Flint public WAN; override with comma/space-separated IPv4s.
+VPN_CIRCLE_SEALED_IPS = os.environ.get(
+    "VPN_CIRCLE_SEALED_IPS",
+    "192.81.235.246",
+)
 _ssh_panel_2fa_lock = threading.Lock()
+
+
+def _sealed_vpn_ips() -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    raw = str(VPN_CIRCLE_SEALED_IPS or "")
+    for part in re.split(r"[\s,;]+", raw):
+        ip = _normalize_vpn_ip(part)
+        if not ip or not _is_public_ipv4(ip) or ip in seen:
+            continue
+        seen.add(ip)
+        out.append(ip)
+    return out
+
+
+def _is_sealed_vpn_ip(ip: str) -> bool:
+    return _normalize_vpn_ip(ip) in set(_sealed_vpn_ips())
+
+
+def _read_auth_app_devices() -> dict:
+    data = {"devices": [], "updated_at": 0}
+    if AUTH_APP_DEVICES_PATH.is_file():
+        try:
+            loaded = json.loads(AUTH_APP_DEVICES_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+                data["devices"] = [x for x in loaded["devices"] if isinstance(x, dict)]
+                data["updated_at"] = int(loaded.get("updated_at") or 0)
+        except Exception:
+            pass
+    return data
+
+
+def _write_auth_app_devices(data: dict) -> None:
+    AUTH_APP_DEVICES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "devices": list(data.get("devices") or [])[-80:],
+        "updated_at": int(time.time()),
+    }
+    tmp = AUTH_APP_DEVICES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(AUTH_APP_DEVICES_PATH)
+    try:
+        os.chmod(AUTH_APP_DEVICES_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def auth_app_enrolled_lan_ips() -> set[str]:
+    """LAN IPs of phones that successfully registered an enrolled Authenticator."""
+    out: set[str] = set()
+    for row in _read_auth_app_devices().get("devices") or []:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if _is_home_lan_ipv4(ip) and row.get("enrolled", True):
+            out.add(ip)
+    return out
+
+
+def list_auth_app_devices() -> list[dict]:
+    """Public-safe enrolled Authenticator device rows for the Security panel."""
+    names = _lan_device_name_by_ip()
+    rows: list[dict] = []
+    for row in _read_auth_app_devices().get("devices") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not _is_home_lan_ipv4(ip) or not row.get("enrolled", True):
+            continue
+        name = str(row.get("name") or row.get("hostname") or names.get(ip) or "").strip()
+        rows.append(
+            {
+                "ip": ip,
+                "name": name[:64],
+                "hostname": name[:64],
+                "note": str(row.get("note") or name or "")[:120],
+                "platform": str(row.get("platform") or "")[:40],
+                "first_seen": int(row.get("first_seen") or 0),
+                "last_seen": int(row.get("last_seen") or 0),
+                "enrolled": True,
+            }
+        )
+    rows.sort(key=lambda x: int(x.get("last_seen") or 0), reverse=True)
+    return rows
+
+
+def remove_auth_app_device(token: str | None, *, ip: str) -> dict:
+    """Drop an enrolled Authenticator LAN exemption (requires unlocked Security panel)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before removing authenticator devices")
+    want = _normalize_vpn_ip(ip)
+    if not want or not _is_home_lan_ipv4(want):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    data = _read_auth_app_devices()
+    before = list(data.get("devices") or [])
+    kept = [
+        row
+        for row in before
+        if isinstance(row, dict) and _normalize_vpn_ip(row.get("ip", "")) != want
+    ]
+    if len(kept) == len(before):
+        raise ValueError(f"{want} is not an enrolled Authenticator device")
+    data["devices"] = kept
+    _write_auth_app_devices(data)
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    devices = list_auth_app_devices()
+    return {
+        "ok": True,
+        "removed": want,
+        "devices": devices,
+        "auth_app_devices": devices,
+        "message": f"Removed enrolled Authenticator device {want}. Flint gate refreshed.",
+    }
+
+
+def touch_auth_app_device(
+    *,
+    lan_ip: str = "",
+    note: str = "",
+    platform: str = "",
+    mode: str = "register",
+) -> dict:
+    """Record/refresh an enrolled Authenticator LAN IP for Flint pending exemption.
+
+    mode=refresh — only bump last_seen for already-enrolled IPs (never trust a
+    new client-supplied IP). mode=register — allow a new IP only while Security
+    has new-device enrollment unlocked (limits spoofed X-SM-Lan-Ip abuse).
+    """
+    ip = _normalize_vpn_ip(lan_ip)
+    if not ip or not _is_home_lan_ipv4(ip):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    mode_n = "refresh" if str(mode).lower() == "refresh" else "register"
+    now = int(time.time())
+    data = _read_auth_app_devices()
+    devices = [dict(x) for x in (data.get("devices") or []) if isinstance(x, dict)]
+    by_ip = {
+        _normalize_vpn_ip(x.get("ip", "")): x
+        for x in devices
+        if _normalize_vpn_ip(x.get("ip", ""))
+    }
+    existing = by_ip.get(ip)
+    already = bool(existing and existing.get("enrolled", True))
+    newly_enrolled = False
+    if mode_n == "refresh":
+        if not already:
+            raise ValueError("LAN IP is not an enrolled Authenticator device")
+    elif not already:
+        if not auth_app_device_enroll_unlocked():
+            raise ValueError(
+                "New Authenticator device enrollment is locked in Security"
+            )
+        enrolled_count = sum(
+            1
+            for row in by_ip.values()
+            if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
+            and row.get("enrolled", True)
+        )
+        if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
+            raise ValueError("Too many enrolled Authenticator devices")
+        # One new LAN IP per unlock window — spoofed X-SM-Lan-Ip cannot mass-exempt.
+        unlocked_at = int(_read_ssh_panel_2fa().get("device_enroll_unlocked_at") or 0)
+        if unlocked_at > 0:
+            registered_this_window = sum(
+                1
+                for row in by_ip.values()
+                if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
+                and row.get("enrolled", True)
+                and int(row.get("first_seen") or 0) >= unlocked_at
+            )
+            if registered_this_window >= 1:
+                raise ValueError(
+                    "Only one new Authenticator device can enroll per unlock — "
+                    "lock and unlock again in Security to add another"
+                )
+        newly_enrolled = True
+    row = existing or {"ip": ip, "first_seen": now}
+    row.update(
+        {
+            "ip": ip,
+            "last_seen": now,
+            "enrolled": True,
+            "note": (note or row.get("note") or "Authenticator app")[:120],
+            "platform": (platform or row.get("platform") or "")[:40],
+        }
+    )
+    by_ip[ip] = row
+    data["devices"] = sorted(
+        by_ip.values(),
+        key=lambda x: int(x.get("last_seen") or 0),
+        reverse=True,
+    )[:80]
+    _write_auth_app_devices(data)
+    # Auto-relock enrollment after a successful new-device registration so the
+    # Flint pending window does not stay open until the TTL expires.
+    if newly_enrolled:
+        try:
+            st = _read_ssh_panel_2fa()
+            if st.get("device_enroll_unlocked"):
+                _write_ssh_panel_2fa(
+                    enabled=bool(st.get("enabled")),
+                    method=str(st.get("method") or "app"),
+                    totp_secret=str(st.get("totp_secret") or ""),
+                    device_enroll_unlocked=False,
+                )
+        except Exception:
+            pass
+    # Refresh Flint gate so enrolled phones are not blocked while pending.
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "ip": ip,
+        "devices": data["devices"],
+        "mode": mode_n,
+        "newly_enrolled": newly_enrolled,
+    }
+
+
+def _sealed_vpn_row(ip: str) -> dict:
+    return {
+        "ip": _normalize_vpn_ip(ip),
+        "note": "Flint router WAN (sealed)",
+        "approved_at": 0,
+        "source": "router",
+        "sealed": True,
+        "hidden": True,
+    }
+
+
+def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
+    """Keep sealed router WAN IPs permanently allowed; never drop them."""
+    changed = False
+    sealed = _sealed_vpn_ips()
+    sealed_set = set(sealed)
+    allowed_in = [x for x in (data.get("allowed") or []) if isinstance(x, dict)]
+    by_ip: dict[str, dict] = {}
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip:
+            by_ip[ip] = dict(row)
+
+    for ip in sealed:
+        row = by_ip.get(ip) or _sealed_vpn_row(ip)
+        before = dict(row)
+        row["ip"] = ip
+        row["sealed"] = True
+        row["hidden"] = True
+        row["source"] = "router"
+        if not str(row.get("note") or "").strip() or "seeded from sticky" in str(row.get("note") or ""):
+            row["note"] = "Flint router WAN (sealed)"
+        if not row.get("approved_at"):
+            row["approved_at"] = int(time.time())
+        by_ip[ip] = row
+        if before != row or ip not in {_normalize_vpn_ip(r.get("ip", "")) for r in allowed_in}:
+            changed = True
+
+    # Preserve non-sealed entries after sealed ones.
+    rebuilt: list[dict] = []
+    seen: set[str] = set()
+    for ip in sealed:
+        rebuilt.append(by_ip[ip])
+        seen.add(ip)
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip or ip in seen:
+            continue
+        if ip in sealed_set:
+            continue
+        rebuilt.append(row)
+        seen.add(ip)
+
+    denied = [
+        r for r in (data.get("denied") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    pending = [
+        r for r in (data.get("pending") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    attempts = [
+        r for r in (data.get("attempts") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    if len(denied) != len(list(data.get("denied") or [])) or len(pending) != len(list(data.get("pending") or [])) or len(attempts) != len(list(data.get("attempts") or [])):
+        changed = True
+    if rebuilt != allowed_in:
+        changed = True
+    data["allowed"] = rebuilt
+    data["denied"] = denied
+    data["pending"] = pending
+    data["attempts"] = attempts
+    return data, changed
+
+
+def _lan_device_name_by_ip() -> dict[str, str]:
+    """Map home-LAN IPs → friendly hostnames from the live LAN inventory."""
+    out: dict[str, str] = {}
+    try:
+        lan = read_lan_devices()
+    except Exception:
+        return out
+    for d in list(lan.get("devices") or []) if lan.get("ok") else []:
+        if not isinstance(d, dict):
+            continue
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not _is_home_lan_ipv4(ip):
+            continue
+        name = str(d.get("hostname") or d.get("name") or "").strip()
+        if name:
+            out[ip] = name[:64]
+    return out
+
+
+def _attach_circle_device_names(rows: list, *, names: dict[str, str] | None = None) -> list:
+    """Ensure each circle row carries a display name when known."""
+    name_map = names if names is not None else _lan_device_name_by_ip()
+    out: list = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        existing = str(item.get("name") or item.get("hostname") or "").strip()
+        looked = name_map.get(ip, "") if ip else ""
+        name = existing or looked
+        if name:
+            item["name"] = name[:64]
+            item["hostname"] = name[:64]
+            # Keep a readable note for LAN rows that only say "from authenticator app".
+            note = str(item.get("note") or "").strip()
+            if item.get("kind") == "lan" or _is_home_lan_ipv4(ip):
+                if not note or note.lower().startswith("from authenticator") or note.lower().startswith("lan "):
+                    item["note"] = name[:120]
+        out.append(item)
+    return out
+
+
+def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dict:
+    """Hide sealed/hidden allowlist rows from Authenticator apps (still sticky-allowed)."""
+    def _vis(rows: list) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(row.get("ip", ""))
+            if for_auth_app and (
+                row.get("sealed")
+                or row.get("hidden")
+                or _is_sealed_vpn_ip(ip)
+            ):
+                continue
+            out.append(row)
+        return out
+
+    return {
+        "allowed": _vis(list(data.get("allowed") or [])),
+        "denied": _vis(list(data.get("denied") or [])),
+        "pending": _vis(list(data.get("pending") or [])),
+        "attempts": _vis(list(data.get("attempts") or [])),
+    }
+
+
+def hide_vpn_allowlist_ips_from_apps(ips: list[str] | None = None) -> dict:
+    """Keep IPs allowlisted/sticky, but permanently hide them from Authenticator Allowed list."""
+    data = _read_vpn_allowlist()
+    want: set[str] | None = None
+    if ips is not None:
+        want = {_normalize_vpn_ip(x) for x in ips if _normalize_vpn_ip(x)}
+    changed = False
+    rebuilt = []
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if not ip:
+            continue
+        if _is_sealed_vpn_ip(ip):
+            item["sealed"] = True
+            item["hidden"] = True
+        elif want is None or ip in want:
+            if not item.get("hidden"):
+                changed = True
+            item["hidden"] = True
+            if not str(item.get("note") or "").strip():
+                item["note"] = "hidden from Authenticator list"
+        rebuilt.append(item)
+    data["allowed"] = rebuilt
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    if changed or sealed_changed:
+        _write_vpn_allowlist(data)
+        _run_vpn_peer_acl_sync()
+    return build_vpn_allowlist_status(for_auth_app=True)
 
 
 def _b32_encode_secret(raw: bytes) -> str:
@@ -11082,10 +11745,20 @@ def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
 def _read_ssh_panel_2fa() -> dict:
     try:
         if not SSH_PANEL_2FA_PATH.is_file():
-            return {"enabled": False, "method": "email"}
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
+            }
         data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return {"enabled": False, "method": "email"}
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
+            }
         method = str(data.get("method") or "email").strip().lower()
         if method not in ("email", "app"):
             method = "email"
@@ -11095,9 +11768,16 @@ def _read_ssh_panel_2fa() -> dict:
             "totp_secret": str(data.get("totp_secret") or ""),
             "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
             "updated_at": data.get("updated_at"),
+            "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
+            "device_enroll_unlocked_at": int(data.get("device_enroll_unlocked_at") or 0),
         }
     except Exception:
-        return {"enabled": False, "method": "email"}
+        return {
+            "enabled": False,
+            "method": "email",
+            "device_enroll_unlocked": False,
+            "device_enroll_unlocked_at": 0,
+        }
 
 
 def ssh_panel_2fa_enabled() -> bool:
@@ -11108,11 +11788,84 @@ def ssh_panel_2fa_method() -> str:
     return str(_read_ssh_panel_2fa().get("method") or "email")
 
 
+def auth_app_device_enroll_unlocked() -> bool:
+    """Whether phones may add a new authenticator account via Enter secret."""
+    st = _read_ssh_panel_2fa()
+    if not bool(st.get("device_enroll_unlocked")):
+        return False
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    if unlocked_at <= 0:
+        # Legacy unlock without timestamp — treat as expired and relock.
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+        except Exception:
+            pass
+        return False
+    age = int(time.time()) - unlocked_at
+    if age > max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS):
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+            lan_gate = Path(
+                os.environ.get(
+                    "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+                    "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+                )
+            )
+            if lan_gate.is_file():
+                subprocess.run(
+                    ["bash", str(lan_gate)],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                )
+        except Exception:
+            pass
+        return False
+    return True
+
+
+def auth_app_enroll_status() -> dict:
+    """Public status for Authenticator PWAs (no secret material)."""
+    unlocked = auth_app_device_enroll_unlocked()
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    expires_in = 0
+    if unlocked and unlocked_at > 0:
+        expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
+    return {
+        "enroll_unlocked": unlocked,
+        "device_enroll_unlocked": unlocked,
+        "enroll_expires_in": expires_in,
+        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        "message": (
+            "Enrollment unlocked — Enter secret is available in the Authenticator app."
+            + (f" Auto-locks in ~{max(1, expires_in // 60)} min." if expires_in else "")
+            if unlocked
+            else "Enrollment locked — Enter secret is hidden until unlocked in Security."
+        ),
+    }
+
+
 def _write_ssh_panel_2fa(
     *,
     enabled: bool,
     method: str = "email",
     totp_secret: str = "",
+    device_enroll_unlocked: bool | None = None,
 ) -> None:
     SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
     method_n = "app" if str(method).lower() == "app" else "email"
@@ -11120,17 +11873,31 @@ def _write_ssh_panel_2fa(
     secret = totp_secret or str(prev.get("totp_secret") or "")
     if method_n != "app":
         secret = ""
+    enroll_flag = (
+        bool(device_enroll_unlocked)
+        if device_enroll_unlocked is not None
+        else bool(prev.get("device_enroll_unlocked"))
+    )
+    unlocked_at = int(prev.get("device_enroll_unlocked_at") or 0)
+    if device_enroll_unlocked is not None:
+        unlocked_at = int(time.time()) if enroll_flag else 0
+    elif not enroll_flag:
+        unlocked_at = 0
     payload = {
         "enabled": bool(enabled),
         "method": method_n,
         "totp_secret": secret if enabled and method_n == "app" else secret,
         "updated_at": int(time.time()),
         "email_to": EMAIL_CODE_TO,
+        "device_enroll_unlocked": enroll_flag,
+        "device_enroll_unlocked_at": unlocked_at if enroll_flag else 0,
     }
     if not enabled:
         # Keep secret only while enabled as app; wipe on disable for safety.
         payload["totp_secret"] = ""
         payload["method"] = method_n
+        # Disabling 2FA also locks new-device enrollment.
+        payload["device_enroll_unlocked"] = False
     with _ssh_panel_2fa_lock:
         SSH_PANEL_2FA_PATH.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
@@ -11139,6 +11906,625 @@ def _write_ssh_panel_2fa(
             os.chmod(SSH_PANEL_2FA_PATH, 0o600)
         except Exception:
             pass
+
+
+def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
+    """Lock/unlock Enter-secret enrollment for new Authenticator devices."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before changing device enrollment")
+    cfg = _read_ssh_panel_2fa()
+    want = bool(unlocked)
+    if want and not (cfg.get("enabled") and cfg.get("method") == "app"):
+        raise ValueError(
+            "Enable Authenticator app two-factor before unlocking new-device enrollment"
+        )
+    secret = str(cfg.get("totp_secret") or "").strip()
+    if want and not secret:
+        raise ValueError("No authenticator secret is enrolled yet")
+    _write_ssh_panel_2fa(
+        enabled=bool(cfg.get("enabled")),
+        method=str(cfg.get("method") or "app"),
+        totp_secret=secret,
+        device_enroll_unlocked=want,
+    )
+    # Enrollment unlock opens Flint for pending LAN so new phones can reach /auth-app.
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    out: dict = {
+        "ok": True,
+        "device_enroll_unlocked": want,
+        "enroll_unlocked": want,
+        "two_factor_enabled": bool(cfg.get("enabled")),
+        "two_factor_method": str(cfg.get("method") or "app"),
+        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        "message": (
+            "New-device enrollment unlocked. Enter secret is visible in the Authenticator app "
+            f"for ~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min (or until you lock it)."
+            if want
+            else "New-device enrollment locked. Enter secret is hidden in the Authenticator app."
+        ),
+    }
+    if want and secret:
+        out["enroll"] = _totp_provisioning(secret)
+        out["enroll_expires_in"] = max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS)
+    return out
+
+
+def _normalize_vpn_ip(raw: str) -> str:
+    ip = str(raw or "").strip()
+    if "/" in ip:
+        ip = ip.split("/", 1)[0].strip()
+    return ip
+
+
+def _is_loopback_or_link_local(ip: str) -> bool:
+    ip = _normalize_vpn_ip(ip)
+    if not ip:
+        return False
+    if ip.startswith("127.") or ip == "::1":
+        return True
+    # Docker / local bridge peers that forward via Caddy.
+    if ip.startswith("172.") and re.fullmatch(r"172\.\d{1,3}\.\d{1,3}\.\d{1,3}", ip):
+        parts = [int(x) for x in ip.split(".")]
+        if 16 <= parts[1] <= 31:
+            return True
+    return False
+
+
+def request_client_ip(handler: "Handler") -> str:
+    """Best-effort real client IP when Caddy proxies to the portal.
+
+    Prefer X-Real-IP / first X-Forwarded-For hop only when the TCP peer is a
+    local proxy (loopback/docker). Otherwise use the socket peer address so
+    spoofed forwarding headers from direct clients are ignored.
+    """
+    peer = ""
+    try:
+        peer = _normalize_vpn_ip(handler.client_address[0])
+    except Exception:
+        peer = ""
+    if _is_loopback_or_link_local(peer):
+        real = _normalize_vpn_ip(handler.headers.get("X-Real-IP") or "")
+        if real and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", real):
+            return real
+        xff = str(handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        xff_ip = _normalize_vpn_ip(xff)
+        if xff_ip and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", xff_ip):
+            return xff_ip
+    return peer or "unknown"
+
+
+def _is_public_ipv4(ip: str) -> bool:
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] == 10 or parts[0] == 127:
+        return False
+    if parts[0] == 192 and parts[1] == 168:
+        return False
+    if parts[0] == 172 and 16 <= parts[1] <= 31:
+        return False
+    if parts[0] == 100 and 64 <= parts[1] <= 127:
+        return False
+    return True
+
+
+def _is_home_lan_ipv4(ip: str) -> bool:
+    """True for Flint home LAN clients (192.168.8.0/24), excluding network/broadcast."""
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 192 or parts[1] != 168 or parts[2] != 8:
+        return False
+    if parts[3] in (0, 255, 1):  # network, broadcast, Flint router
+        return False
+    return True
+
+
+def _lan_circle_skip_ips() -> set[str]:
+    """Always-on LAN infra — never park these in pending."""
+    skip = {
+        ROUTER_ADMIN_HOST,
+        PROXMOX_HOST,
+        PLEX_HOST,
+        "192.168.8.1",
+    }
+    for raw in (
+        os.environ.get("BUFFALO_HOST", ""),
+        urlparse(BUFFALO_UPSTREAM).hostname or "",
+        urlparse(NAS_FILES_UPSTREAM).hostname or "",
+        FTP_HOST,
+        os.environ.get("NAS_SMB_HOST", ""),
+    ):
+        host = str(raw or "").strip()
+        if host and (
+            _is_home_lan_ipv4(host)
+            or (host.startswith("192.168.8.") and bool(IP_RE.match(host)))
+        ):
+            skip.add(host)
+    return {_normalize_vpn_ip(x) for x in skip if x}
+
+
+def _is_circle_candidate_ip(ip: str) -> bool:
+    """Public WAN or home LAN client IP may enter the trust-circle lists."""
+    ip_n = _normalize_vpn_ip(ip)
+    return bool(ip_n) and (_is_public_ipv4(ip_n) or _is_home_lan_ipv4(ip_n))
+
+
+def _empty_vpn_allowlist() -> dict:
+    return {"allowed": [], "denied": [], "pending": [], "attempts": []}
+
+
+def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
+    """Park known LAN devices that are not allowed/denied into pending.
+
+    Both online and offline DHCP/ARP entries are offered for circle approval.
+    (Home Wi-Fi NATs to the sealed router WAN, so pending is also enforced on
+    Flint pre-NAT via ensure-lan-circle-flint-gate.sh.)
+    """
+    data = dict(data or _read_vpn_allowlist())
+    now = int(time.time())
+    try:
+        lan = read_lan_devices()
+    except Exception:
+        lan = {"ok": False, "devices": []}
+    devices = list(lan.get("devices") or []) if lan.get("ok") else []
+    if not devices:
+        return data
+
+    allowed = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in (data.get("allowed") or [])
+        if isinstance(x, dict)
+    }
+    denied = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in (data.get("denied") or [])
+        if isinstance(x, dict)
+    }
+    pending_rows = [x for x in (data.get("pending") or []) if isinstance(x, dict)]
+    skip = _lan_circle_skip_ips()
+    changed = False
+
+    candidates: list[dict] = []
+    for d in devices:
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not _is_home_lan_ipv4(ip) or ip in skip:
+            continue
+        candidates.append(d)
+
+    # Drop auto LAN-pending rows once approved/denied.
+    pending_by_ip: dict = {}
+    for row in pending_rows:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        is_lan_row = str(row.get("source") or "") in (
+            "lan-offline",
+            "lan",
+        ) or str(row.get("kind") or "") == "lan"
+        if is_lan_row and _is_home_lan_ipv4(ip) and (ip in allowed or ip in denied):
+            changed = True
+            continue
+        if ip:
+            pending_by_ip[ip] = dict(row)
+        else:
+            pending_by_ip[f"_row_{id(row)}"] = dict(row)
+
+    for d in candidates:
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not ip or ip in allowed or ip in denied:
+            continue
+        name = str(d.get("hostname") or "").strip()
+        mac = str(d.get("mac") or "").strip().lower()
+        online = bool(d.get("online"))
+        note = name or (f"LAN {mac}" if mac else "LAN device")
+        source = "lan" if online else "lan-offline"
+        existing = pending_by_ip.get(ip)
+        if existing:
+            before = dict(existing)
+            existing["last_seen"] = now
+            existing["source"] = source
+            existing["vip"] = existing.get("vip") or ""
+            existing["note"] = note[:120]
+            existing["name"] = name[:64]
+            existing["mac"] = mac
+            existing["kind"] = "lan"
+            existing["online"] = online
+            if str(existing.get("status") or "") != "denied":
+                existing["status"] = "pending"
+            if existing != before:
+                changed = True
+            continue
+        pending_by_ip[ip] = {
+            "ip": ip,
+            "vip": "",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "status": "pending",
+            "source": source,
+            "kind": "lan",
+            "note": note[:120],
+            "name": name[:64],
+            "mac": mac,
+            "online": online,
+        }
+        changed = True
+
+    data["pending"] = sorted(
+        [v for v in pending_by_ip.values() if isinstance(v, dict)],
+        key=lambda x: int(x.get("last_seen") or 0),
+        reverse=True,
+    )[:80]
+    if changed:
+        _write_vpn_allowlist(data)
+    return data
+
+
+def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
+    data = sync_offline_lan_into_pending(_read_vpn_allowlist())
+    view = _public_vpn_allowlist_view(data, for_auth_app=for_auth_app)
+    names = _lan_device_name_by_ip()
+    enrolled = auth_app_enrolled_lan_ips()
+    pending = []
+    for row in _attach_circle_device_names(view.get("pending") or [], names=names):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if ip in enrolled:
+            item["auth_app"] = True
+            item["auth_app_enrolled"] = True
+        pending.append(item)
+    allowed = _attach_circle_device_names(view.get("allowed") or [], names=names)
+    denied = _attach_circle_device_names(view.get("denied") or [], names=names)
+    recent = _attach_circle_device_names(
+        list(reversed(list(view.get("attempts") or [])[-40:])),
+        names=names,
+    )
+    return {
+        "ok": True,
+        "allowed": allowed,
+        "denied": denied,
+        "pending": pending,
+        "attempts": recent,
+        "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
+        "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
+        "sticky_file": str(STICKY_VPN_IPS_PATH),
+        "auth_app_devices": sorted(enrolled),
+        "device_names": names,
+        "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
+        "detail": (
+            "Unapproved IKEv2 clients keep internet via guest DNS; "
+            "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
+            "Home LAN devices show by device name when known from DHCP/aliases; "
+            "pending/denied LAN IPs are blocked on the Flint router before NAT — except enrolled "
+            "Authenticator phones, which keep portal access while remaining pending."
+            + (
+                ""
+                if for_auth_app
+                else " Sealed router WAN stays in the circle and is hidden from Authenticator apps."
+            )
+        ),
+    }
+
+
+def mutate_vpn_allowlist(*, action: str, ip: str, note: str = "", source: str = "security-ui") -> dict:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n or not _is_circle_candidate_ip(ip_n):
+        raise ValueError("A public WAN or home LAN (192.168.8.x) IPv4 address is required")
+    action_n = str(action or "").strip().lower()
+    if action_n not in ("approve", "revoke", "deny", "pending"):
+        raise ValueError("action must be approve, revoke, deny, or pending")
+    if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny", "pending"):
+        raise ValueError("Sealed router WAN cannot be revoked, denied, or moved to pending")
+    data = _read_vpn_allowlist()
+    now = int(time.time())
+    src = (source or "security-ui").strip()[:40] or "security-ui"
+    is_lan = _is_home_lan_ipv4(ip_n)
+    prev_hidden = False
+    prev_name = ""
+    prev_note = ""
+    for bucket in ("allowed", "pending", "denied"):
+        for prev in list(data.get(bucket) or []):
+            if isinstance(prev, dict) and _normalize_vpn_ip(prev.get("ip", "")) == ip_n:
+                if bucket == "allowed":
+                    prev_hidden = bool(prev.get("hidden"))
+                prev_name = str(prev.get("name") or prev.get("hostname") or "").strip() or prev_name
+                prev_note = str(prev.get("note") or "").strip() or prev_note
+                break
+    if is_lan and not prev_name:
+        prev_name = _lan_device_name_by_ip().get(ip_n, "")
+    device_name = prev_name
+    note_n = (note or "").strip()[:120]
+    if not note_n and device_name:
+        note_n = device_name[:120]
+    elif not note_n and prev_note:
+        note_n = prev_note[:120]
+
+    def _without(rows: list, target: str) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_ip = _normalize_vpn_ip(row.get("ip", ""))
+            if row_ip == target:
+                # Never strip sealed rows during approve rebuild either —
+                # approve path re-adds below; revoke/deny already blocked.
+                if row.get("sealed") or _is_sealed_vpn_ip(row_ip):
+                    out.append(row)
+                    continue
+                continue
+            out.append(row)
+        return out
+
+    data["allowed"] = _without(list(data.get("allowed") or []), ip_n)
+    data["denied"] = _without(list(data.get("denied") or []), ip_n)
+    data["pending"] = _without(list(data.get("pending") or []), ip_n)
+
+    if action_n == "approve":
+        if _is_sealed_vpn_ip(ip_n):
+            # Already permanent; just ensure sealed metadata.
+            data, _ = _ensure_sealed_vpn_allowlist(data)
+        else:
+            row = {
+                "ip": ip_n,
+                "note": note_n,
+                "approved_at": now,
+                "source": src,
+            }
+            if device_name:
+                row["name"] = device_name[:64]
+                row["hostname"] = device_name[:64]
+            if is_lan:
+                row["kind"] = "lan"
+                row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
+            if prev_hidden:
+                row["hidden"] = True
+            data["allowed"].append(row)
+    elif action_n == "deny":
+        deny_row = {
+            "ip": ip_n,
+            "note": note_n,
+            "denied_at": now,
+            "source": src,
+            **({"kind": "lan"} if is_lan else {}),
+        }
+        if device_name:
+            deny_row["name"] = device_name[:64]
+            deny_row["hostname"] = device_name[:64]
+        data["denied"].append(deny_row)
+        pend = {
+            "ip": ip_n,
+            "status": "denied",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": note_n,
+            **(
+                {
+                    "source": "lan-offline",
+                    "kind": "lan",
+                    "vip": "",
+                }
+                if is_lan
+                else {}
+            ),
+        }
+        if device_name:
+            pend["name"] = device_name[:64]
+            pend["hostname"] = device_name[:64]
+        data["pending"].append(pend)
+    elif action_n == "pending":
+        # Demote from allowlist back to pending (not denied).
+        pending_row = {
+            "ip": ip_n,
+            "status": "pending",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": note_n or "moved from allowlist",
+            "source": src,
+        }
+        if device_name:
+            pending_row["name"] = device_name[:64]
+            pending_row["hostname"] = device_name[:64]
+        if is_lan:
+            pending_row.update(
+                {
+                    "kind": "lan",
+                    "vip": "",
+                    "source": "lan" if src.startswith("auth-app") or src == "security-ui" else src,
+                }
+            )
+        else:
+            pending_row["vip"] = ""
+        data["pending"].append(pending_row)
+    # revoke: already removed from allowed/denied/pending (sealed preserved)
+
+    data, _ = _ensure_sealed_vpn_allowlist(data)
+    _write_vpn_allowlist(data)
+    sync_msg = _run_vpn_peer_acl_sync()
+    for_auth = str(source or "").startswith("auth-app")
+    return {
+        "ok": True,
+        "action": action_n,
+        "ip": ip_n,
+        "name": device_name or "",
+        "sync": sync_msg,
+        "vpn_allowlist": build_vpn_allowlist_status(for_auth_app=for_auth),
+    }
+
+
+def _read_vpn_allowlist() -> dict:
+    data = _empty_vpn_allowlist()
+    if VPN_ALLOWLIST_PATH.is_file():
+        try:
+            loaded = json.loads(VPN_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for key in data:
+                    if isinstance(loaded.get(key), list):
+                        data[key] = loaded[key]
+        except Exception:
+            pass
+    # Seed sticky WAN entries so existing home IP stays trusted.
+    sticky_ips: list[str] = []
+    if STICKY_VPN_IPS_PATH.is_file():
+        try:
+            for line in STICKY_VPN_IPS_PATH.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                sticky_ips.append(_normalize_vpn_ip(raw))
+        except Exception:
+            sticky_ips = []
+    allowed_set = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in data["allowed"]
+        if isinstance(x, dict)
+    }
+    changed = False
+    for ip in sticky_ips:
+        if ip and _is_public_ipv4(ip) and ip not in allowed_set and not _is_sealed_vpn_ip(ip):
+            data["allowed"].append(
+                {
+                    "ip": ip,
+                    "note": "seeded from sticky WAN",
+                    "approved_at": int(time.time()),
+                    "source": "sticky",
+                }
+            )
+            allowed_set.add(ip)
+            changed = True
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    if changed or sealed_changed or not VPN_ALLOWLIST_PATH.is_file():
+        _write_vpn_allowlist(data)
+    return data
+
+
+def _write_vpn_allowlist(data: dict) -> None:
+    data, _ = _ensure_sealed_vpn_allowlist(data)
+    VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "allowed": list(data.get("allowed") or []),
+        "denied": list(data.get("denied") or []),
+        "pending": list(data.get("pending") or []),
+        "attempts": list(data.get("attempts") or [])[-200:],
+        "updated_at": int(time.time()),
+    }
+    tmp = VPN_ALLOWLIST_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(VPN_ALLOWLIST_PATH)
+    try:
+        os.chmod(VPN_ALLOWLIST_PATH, 0o600)
+    except Exception:
+        pass
+    # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
+    lines = [
+        "# Managed by Security → VPN trust circle",
+        "# Approved sticky WAN + LAN IPs (one IPv4 /32 per line)",
+        "# Sealed router WAN IPs are always included and cannot be revoked from apps.",
+        "# Blanket 192.168.8.0/24 is never written — approved LAN /32s only.",
+    ]
+    for row in payload["allowed"]:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+            lines.append(f"{ip}/32")
+    STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_vpn_peer_acl_sync() -> str:
+    script = VPN_PEER_ACL_SCRIPT
+    if not script.is_file():
+        return "peer-acl script missing"
+    try:
+        proc = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return out[-500:] if out else ("ok" if proc.returncode == 0 else "failed")
+    except Exception as exc:
+        return str(exc)
+
+
+def verify_auth_app_totp(code: str) -> bool:
+    """Validate a TOTP from the phone authenticator PWA against the enrolled secret."""
+    st = _read_ssh_panel_2fa()
+    secret = str(st.get("totp_secret") or "").strip()
+    if not st.get("enabled") or str(st.get("method") or "") != "app" or not secret:
+        return False
+    return verify_totp_code(secret, code, window=1)
+
+
+def _auth_app_totp_client_key(client_ip: str) -> str:
+    return (_normalize_vpn_ip(client_ip) or str(client_ip or "unknown").strip() or "unknown")[:64]
+
+
+def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
+    """Validate auth-app TOTP with per-IP failure lockout (public @auth_app surface)."""
+    key = _auth_app_totp_client_key(client_ip)
+    now = time.time()
+    with _auth_app_totp_lock:
+        locked_until = float(_auth_app_totp_lockouts.get(key) or 0)
+        if locked_until > now:
+            raise ValueError(
+                f"Too many failed authenticator codes — try again in {int(locked_until - now) + 1}s"
+            )
+        # Drop stale failures outside the window.
+        fails = [
+            t
+            for t in (_auth_app_totp_fails.get(key) or [])
+            if now - float(t) <= max(30, AUTH_APP_TOTP_FAIL_WINDOW)
+        ]
+        _auth_app_totp_fails[key] = fails
+    if verify_auth_app_totp(code):
+        with _auth_app_totp_lock:
+            _auth_app_totp_fails.pop(key, None)
+            _auth_app_totp_lockouts.pop(key, None)
+        return
+    with _auth_app_totp_lock:
+        fails = list(_auth_app_totp_fails.get(key) or [])
+        fails.append(now)
+        _auth_app_totp_fails[key] = fails[-40:]
+        if len(fails) >= max(3, AUTH_APP_TOTP_MAX_FAILS):
+            _auth_app_totp_lockouts[key] = now + max(30, AUTH_APP_TOTP_LOCKOUT)
+            _auth_app_totp_fails[key] = []
+    time.sleep(min(2.0, 0.35 + 0.15 * min(10, len(fails))))
+    raise ValueError("Incorrect or missing authenticator code")
+
+
+def _auth_app_totp_from_request(handler: "Handler") -> str:
+    """TOTP must come from X-SM-Totp (or JSON body on POST) — never from query strings."""
+    hdr = str(handler.headers.get("X-SM-Totp") or "").strip()
+    if hdr:
+        return hdr
+    return ""
 
 
 def _totp_provisioning(secret_b32: str) -> dict:
@@ -11157,6 +12543,8 @@ def _totp_provisioning(secret_b32: str) -> dict:
         "account": account,
         "issuer": issuer,
         "auth_app_path": f"/auth-app-iphone.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+        "auth_app_android_path": f"/auth-app.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
     }
 
 
@@ -11273,13 +12661,28 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     _purge_ssh_panel_unlocks(now)
     two_factor = ssh_panel_2fa_enabled()
     method = ssh_panel_2fa_method() if two_factor else "email"
+    enroll_unlocked = auth_app_device_enroll_unlocked()
     required = ["portal_password"]
     if two_factor:
         required.append("app_code" if method == "app" else "email_code")
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    enroll_expires_in = 0
+    if enroll_unlocked and unlocked_at > 0:
+        enroll_expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
+    devices = list_auth_app_devices()
     base = {
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
+        "device_enroll_unlocked": enroll_unlocked,
+        "enroll_unlocked": enroll_unlocked,
+        "enroll_expires_in": enroll_expires_in,
+        "auth_app_devices": devices,
         "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_android_path": "/auth-app.html",
+        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -15563,7 +16966,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
             return
         self.send_response(302)
-        self.send_header("Location", "/login.html")
+        self.send_header("Location", "/")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
@@ -15630,10 +17033,10 @@ class Handler(BaseHTTPRequestHandler):
             body = (
                 b"<!DOCTYPE html><html><head>"
                 b'<meta charset="utf-8" />'
-                b'<meta http-equiv="refresh" content="0;url=/login.html" />'
+                b'<meta http-equiv="refresh" content="0;url=/" />'
                 b"<title>Signing out</title>"
-                b"<script>location.replace('/login.html');</script>"
-                b"</head><body>Signed out. <a href='/login.html'>Continue</a></body></html>"
+                b"<script>location.replace('/');</script>"
+                b"</head><body>Signed out. <a href='/'>Continue</a></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -15644,14 +17047,35 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path in (
+            "/",
             "/login.html",
             "/email-code-test.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
             "/api/branding",
             "/api/health",
-        ) or path.startswith("/static/"):
-            pass  # public (auth-app is the phone authenticator PWA)
+            "/api/auth-app/vpn-allowlist",
+            "/api/auth-app/enroll-status",
+            "/api/auth-app/register-device",
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+        ) or path.startswith("/static/auth-app"):
+            pass  # public (/, /login.html serve the sign-in page when logged out)
+        elif path.startswith("/static/"):
+            # Panel HTML under /static/ requires a session — only auth-app assets
+            # are public (matched above). Other static files (icons/css) stay open
+            # so login/branding can load; sensitive dashboards are gated below.
+            rel = path[len("/static/") :]
+            if rel in (
+                "index.html",
+                "files.html",
+                "nas-windows.html",
+                "windows-vpn.html",
+                "openvpn.html",
+            ) and not self._is_authed():
+                self._unauthorized(api=False)
+                return
+            pass
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
@@ -15795,7 +17219,16 @@ document.getElementById('f').onsubmit = async (e) => {
             self._json(200, {"ok": True})
             return
         if path in ("/", "/index.html"):
-            return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if self._is_authed():
+                return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if path == "/index.html":
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            # Root is the sign-in page when logged out.
+            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
         if path == "/openvpn.html":
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
@@ -15803,14 +17236,12 @@ document.getElementById('f').onsubmit = async (e) => {
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
-            # Always clear any stale session display path; if still authed, go home
-            if self._is_authed():
-                self.send_response(302)
-                self.send_header("Location", "/")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                return
-            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
+            # Keep old bookmarks working — login lives at /
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path == "/email-code-test.html":
             return self._serve_file(
                 STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
@@ -15823,6 +17254,28 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(
                 STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
             )
+        if path in (
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+        ):
+            try:
+                from urllib.parse import quote
+
+                body = load_auth_app_windows_exe()
+                name = AUTH_APP_WINDOWS_EXE_NAME
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.microsoft.portable-executable")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
@@ -16369,6 +17822,64 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, **build_vpn_allowlist_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/enroll-status":
+            try:
+                self._json(200, {"ok": True, **auth_app_enroll_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                # Header-only TOTP — never accept codes from query strings (logs/Referer).
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                )
+                # Refresh-only: never enroll a new LAN IP from a Circle GET.
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        touch_auth_app_device(
+                            lan_ip=lan_hint,
+                            note="Authenticator Circle",
+                            mode="refresh",
+                        )
+                    except Exception:
+                        pass
+                self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                )
+                lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                platform = str(self.headers.get("X-SM-Platform") or "")
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note="Authenticator app",
+                    platform=platform,
+                    mode="register",
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/security/ssh-login",
             "/api/security/ssh-keys",
@@ -16404,6 +17915,7 @@ document.getElementById('f').onsubmit = async (e) => {
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
         if path in (
+            "/",
             "/login.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
@@ -16512,7 +18024,7 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/email-code/send":
             try:
-                result = send_email_test_code(self.client_address[0])
+                result = send_email_test_code(request_client_ip(self))
                 self._json(200, result)
             except ValueError as exc:
                 self._json(429, {"ok": False, "error": str(exc)})
@@ -16523,11 +18035,75 @@ document.getElementById('f').onsubmit = async (e) => {
             try:
                 payload = self._read_json()
                 code = str((payload or {}).get("code") or "")
-                result = verify_email_test_code(self.client_address[0], code)
+                result = verify_email_test_code(request_client_ip(self), code)
                 self._json(200, result)
             except ValueError as exc:
                 time.sleep(0.25)
                 self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(code, client_ip=request_client_ip(self))
+                # Circle mutations refresh enrolled IPs only — never register new LAN.
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        touch_auth_app_device(
+                            lan_ip=lan_hint,
+                            note="Authenticator Circle",
+                            platform=str(
+                                self.headers.get("X-SM-Platform")
+                                or payload.get("platform")
+                                or ""
+                            ),
+                            mode="refresh",
+                        )
+                    except Exception:
+                        pass
+                result = mutate_vpn_allowlist(
+                    action=str(payload.get("action") or ""),
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or "from authenticator app"),
+                    source="auth-app",
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(code, client_ip=request_client_ip(self))
+                # Prefer header LAN IP; body lan_ip is fallback for older clients.
+                lan_ip = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
+                )
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note=str(payload.get("note") or "Authenticator app"),
+                    platform=str(
+                        self.headers.get("X-SM-Platform")
+                        or payload.get("platform")
+                        or ""
+                    ),
+                    mode="register",
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
@@ -16772,6 +18348,43 @@ document.getElementById('f').onsubmit = async (e) => {
                             or ""
                         ),
                     )
+                elif action in (
+                    "device_enroll",
+                    "auth_enroll",
+                    "enroll_devices",
+                    "new_devices",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    unlocked_raw = payload.get(
+                        "unlocked",
+                        payload.get(
+                            "device_enroll_unlocked",
+                            payload.get("enroll_unlocked", payload.get("enabled")),
+                        ),
+                    )
+                    if isinstance(unlocked_raw, str):
+                        unlocked = unlocked_raw.strip().lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "unlock",
+                        )
+                    else:
+                        unlocked = bool(unlocked_raw)
+                    result = set_auth_app_device_enroll(tok, unlocked=unlocked)
+                elif action in (
+                    "remove_device",
+                    "device_remove",
+                    "revoke_device",
+                    "auth_app_remove",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    result = remove_auth_app_device(
+                        tok, ip=str(payload.get("ip") or payload.get("lan_ip") or "")
+                    )
                 else:
                     result = unlock_ssh_panel(
                         tok,
@@ -16782,7 +18395,7 @@ document.getElementById('f').onsubmit = async (e) => {
                             or payload.get("app_code")
                             or ""
                         ),
-                        client_ip=self.client_address[0],
+                        client_ip=request_client_ip(self),
                     )
                 # Attach fresh ssh snapshot for UI refresh (read-only).
                 ssh = _security_sshd_config()
@@ -16806,6 +18419,26 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(200, result)
             except ValueError as exc:
                 self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                result = mutate_vpn_allowlist(
+                    action=str(payload.get("action") or ""),
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or ""),
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
