@@ -10815,7 +10815,7 @@ def send_email_test_code(client_ip: str, *, key: str | None = None) -> dict:
         "ok": True,
         "to": EMAIL_CODE_TO,
         "expires_in": EMAIL_CODE_TTL_SECONDS,
-        "message": f"Code sent to {EMAIL_CODE_TO}. Check Gmail (and Spam).",
+        "message": "Code sent. Check your email.",
     }
 
 
@@ -10938,7 +10938,7 @@ def set_ssh_panel_2fa(
             "ok": True,
             "two_factor_enabled": True,
             "email_to": EMAIL_CODE_TO,
-            "message": f"Two-factor enabled. Codes go to {EMAIL_CODE_TO}.",
+            "message": "Two-factor enabled.",
         }
     # Disable only needs the panel unlock (already checked).
     _write_ssh_panel_2fa(False)
