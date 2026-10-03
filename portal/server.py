@@ -7912,7 +7912,146 @@ def apply_portal_settings(payload: dict) -> dict:
     }
 
 
-def build_backup_status() -> dict:
+def _github_api_json(
+    url: str, token: str, timeout: float = 8.0
+) -> tuple[int, dict]:
+    """GET a GitHub API URL with a bearer token. Returns (status, json_or_empty)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ServerManager-Backup",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = _json.loads(body) if body else {}
+            except Exception:
+                data = {}
+            return int(resp.status), data if isinstance(data, dict) else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+            data = _json.loads(body) if body else {}
+        except Exception:
+            data = {}
+        return int(exc.code), data if isinstance(data, dict) else {}
+    except Exception as exc:
+        return 0, {"message": str(exc)}
+
+
+def check_github_backup_token(
+    owner: str, repo: str, token: str
+) -> dict:
+    """Validate a GitHub token can reach the backup repo (contents:write ideally)."""
+    owner = (owner or "").strip()
+    repo = (repo or "").strip()
+    token = (token or "").strip()
+    if not token:
+        return {"ok": False, "error": "GitHub token is missing"}
+    if not owner or not repo:
+        return {"ok": False, "error": "GitHub owner/repo not set"}
+
+    status, data = _github_api_json("https://api.github.com/user", token)
+    if status in (401, 403) and "Bad credentials" in str(data.get("message") or ""):
+        return {
+            "ok": False,
+            "error": "GitHub token is invalid or revoked. Create a new classic PAT (repo scope) and save it here.",
+            "http_status": status,
+        }
+    if status == 401:
+        return {
+            "ok": False,
+            "error": "GitHub token rejected (401). Paste a fresh PAT with repo access.",
+            "http_status": status,
+        }
+    if status == 0:
+        return {
+            "ok": False,
+            "error": f"Could not reach GitHub API: {data.get('message') or 'network error'}",
+            "http_status": 0,
+        }
+
+    status, data = _github_api_json(
+        f"https://api.github.com/repos/{owner}/{repo}", token
+    )
+    if status == 404:
+        return {
+            "ok": False,
+            "error": f"Repo {owner}/{repo} not found for this token (wrong name, or token lacks access).",
+            "http_status": status,
+        }
+    if status in (401, 403):
+        msg = str(data.get("message") or "forbidden")
+        return {
+            "ok": False,
+            "error": f"GitHub denied access to {owner}/{repo}: {msg}",
+            "http_status": status,
+        }
+    if status != 200:
+        return {
+            "ok": False,
+            "error": f"GitHub API returned HTTP {status} for {owner}/{repo}",
+            "http_status": status,
+        }
+
+    perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
+    can_push = bool(perms.get("push") or perms.get("admin"))
+    if perms and not can_push:
+        return {
+            "ok": False,
+            "error": f"Token can see {owner}/{repo} but cannot push. Need a PAT with Contents: Read and write.",
+            "http_status": status,
+            "private": bool(data.get("private")),
+        }
+    return {
+        "ok": True,
+        "error": "",
+        "http_status": status,
+        "private": bool(data.get("private")),
+        "full_name": str(data.get("full_name") or f"{owner}/{repo}"),
+    }
+
+
+def set_backup_timer(enabled: bool) -> tuple[bool, str]:
+    """Enable or disable the daily sm-backup.timer."""
+    unit = "sm-backup.timer"
+    if not Path(f"/etc/systemd/system/{unit}").is_file() and not Path(
+        f"/lib/systemd/system/{unit}"
+    ).is_file():
+        return False, "sm-backup.timer is not installed"
+    if enabled:
+        proc = subprocess.run(
+            ["systemctl", "enable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    else:
+        proc = subprocess.run(
+            ["systemctl", "disable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        return False, out or f"systemctl failed ({proc.returncode})"
+    state = _sh_out(["systemctl", "is-enabled", unit], timeout=4).strip()
+    active = _sh_out(["systemctl", "is-active", unit], timeout=4).strip()
+    return True, f"{unit} enabled={state} active={active}"
+
+
+def build_backup_status(*, check_token: bool = True) -> dict:
     """GitHub backup agent status for the Backup portal tab (never returns the token)."""
     installed = BACKUP_SCRIPT.is_file()
     secrets_ok = BACKUP_SECRETS.is_file()
@@ -7921,7 +8060,8 @@ def build_backup_status() -> dict:
     repo = (env.get("GITHUB_REPO") or "").strip()
     branch = (env.get("GITHUB_BRANCH") or "main").strip() or "main"
     backup_name = (env.get("BACKUP_NAME") or "vps").strip() or "vps"
-    has_token = bool((env.get("GITHUB_TOKEN") or "").strip())
+    token = (env.get("GITHUB_TOKEN") or "").strip()
+    has_token = bool(token)
     configured = installed and secrets_ok and bool(owner and repo and has_token)
 
     log_text = _read_text(str(BACKUP_LOG))
@@ -7931,7 +8071,9 @@ def build_backup_status() -> dict:
     last_message = ""
     last_at = ""
     for line in reversed(lines):
-        if "Pushed backup" in line:
+        # Prefer the most recent success OR error (do not ignore new failures
+        # just because an older "Pushed backup" line exists further up).
+        if "Pushed backup" in line or "No changes to commit" in line:
             last_ok = True
             last_message = line
             last_at = line.split(" ", 1)[0] if " " in line else ""
@@ -7965,11 +8107,32 @@ def build_backup_status() -> dict:
 
     repo_url = f"https://github.com/{owner}/{repo}" if owner and repo else ""
 
+    token_ok: bool | None = None
+    token_error = ""
+    if check_token and configured:
+        probe = check_github_backup_token(owner, repo, token)
+        token_ok = bool(probe.get("ok"))
+        token_error = str(probe.get("error") or "")
+    elif configured:
+        token_ok = None
+    else:
+        token_ok = False
+        if not installed:
+            token_error = "Backup agent is not installed on this VPS"
+        elif not has_token:
+            token_error = "GitHub token is missing"
+        elif not owner or not repo:
+            token_error = "GitHub owner/repo not set"
+
+    healthy = bool(configured and token_ok is not False and last_ok is not False)
+
     return {
-        "ok": configured and last_ok is not False,
+        "ok": healthy,
         "installed": installed,
         "configured": configured,
         "has_token": has_token,
+        "token_ok": token_ok,
+        "token_error": token_error,
         "owner": owner,
         "repo": repo,
         "branch": branch,
@@ -7987,6 +8150,102 @@ def build_backup_status() -> dict:
     }
 
 
+def apply_backup_settings(payload: dict) -> dict:
+    """Update backup secrets / daily timer from the Backup tab."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid payload")
+
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    env = _parse_env_file(BACKUP_SECRETS) if BACKUP_SECRETS.is_file() else {}
+    updates: dict[str, str] = {}
+    changed: list[str] = []
+
+    if "owner" in payload:
+        owner = str(payload.get("owner") or "").strip()
+        if owner and (not re.match(r"^[A-Za-z0-9_.-]+$", owner) or len(owner) > 64):
+            raise ValueError("invalid GitHub owner")
+        if owner and owner != (env.get("GITHUB_OWNER") or "").strip():
+            updates["GITHUB_OWNER"] = owner
+            changed.append("owner")
+    if "repo" in payload:
+        repo = str(payload.get("repo") or "").strip()
+        if repo and (not re.match(r"^[A-Za-z0-9_.-]+$", repo) or len(repo) > 100):
+            raise ValueError("invalid GitHub repo")
+        if repo and repo != (env.get("GITHUB_REPO") or "").strip():
+            updates["GITHUB_REPO"] = repo
+            changed.append("repo")
+    if "branch" in payload:
+        branch = str(payload.get("branch") or "").strip() or "main"
+        if not re.match(r"^[A-Za-z0-9_./-]+$", branch) or len(branch) > 128:
+            raise ValueError("invalid GitHub branch")
+        if branch != (env.get("GITHUB_BRANCH") or "main").strip():
+            updates["GITHUB_BRANCH"] = branch
+            changed.append("branch")
+    if "backup_name" in payload:
+        name = str(payload.get("backup_name") or "").strip() or "vps"
+        if not re.match(r"^[A-Za-z0-9_.-]+$", name) or len(name) > 64:
+            raise ValueError("invalid backup_name")
+        if name != (env.get("BACKUP_NAME") or "vps").strip():
+            updates["BACKUP_NAME"] = name
+            changed.append("backup_name")
+
+    token = str(payload.get("token") or payload.get("github_token") or "").strip()
+    if token:
+        if len(token) < 20 or len(token) > 256:
+            raise ValueError("token looks invalid (unexpected length)")
+        if any(ch.isspace() for ch in token):
+            raise ValueError("token must not contain whitespace")
+        updates["GITHUB_TOKEN"] = token
+        changed.append("token")
+
+    # Always keep GIT_NAME quoted-safe when rewriting secrets.
+    if "GIT_NAME" not in env or " " in (env.get("GIT_NAME") or ""):
+        updates.setdefault("GIT_NAME", (env.get("GIT_NAME") or "ServerManager Backup").strip() or "ServerManager Backup")
+    if "GIT_EMAIL" not in env:
+        updates.setdefault("GIT_EMAIL", "servermanager-backup@local")
+
+    if updates:
+        # Preserve existing keys we are not changing.
+        merged = dict(env)
+        merged.update(updates)
+        # Ensure required defaults exist for a working secrets file.
+        merged.setdefault("GITHUB_OWNER", "jsa00414")
+        merged.setdefault("GITHUB_REPO", "ServerManagerBackup")
+        merged.setdefault("GITHUB_BRANCH", "main")
+        merged.setdefault("BACKUP_NAME", "vps")
+        merged.setdefault("GIT_NAME", "ServerManager Backup")
+        merged.setdefault("GIT_EMAIL", "servermanager-backup@local")
+        _upsert_env_file(BACKUP_SECRETS, merged)
+        try:
+            os.chmod(BACKUP_SECRETS, 0o600)
+        except Exception:
+            pass
+
+    timer_out = ""
+    if "timer_enabled" in payload:
+        ok_t, timer_out = set_backup_timer(bool(payload.get("timer_enabled")))
+        if not ok_t:
+            raise ValueError(timer_out or "failed to update backup timer")
+        changed.append("timer")
+
+    status = build_backup_status(check_token=True)
+    # If a new token was saved but is still bad, surface that clearly.
+    if "token" in changed and status.get("token_ok") is False:
+        return {
+            "ok": False,
+            "error": status.get("token_error") or "GitHub token still invalid",
+            "changed": changed,
+            "timer": timer_out,
+            "status": status,
+        }
+    return {
+        "ok": True,
+        "changed": changed,
+        "timer": timer_out,
+        "status": status,
+    }
+
+
 def run_backup_now() -> dict:
     """Run sm-backup.sh once; returns status + command output."""
     if not BACKUP_SCRIPT.is_file():
@@ -7994,7 +8253,29 @@ def run_backup_now() -> dict:
     if not BACKUP_SECRETS.is_file():
         return {"ok": False, "error": "Missing /opt/servermanager-backup/secrets.env"}
     if _backup_running():
-        return {"ok": False, "error": "A backup is already running", "status": build_backup_status()}
+        return {"ok": False, "error": "A backup is already running", "status": build_backup_status(check_token=False)}
+
+    # Fail fast with a clear message when the PAT is dead.
+    env = _parse_env_file(BACKUP_SECRETS)
+    probe = check_github_backup_token(
+        (env.get("GITHUB_OWNER") or "").strip(),
+        (env.get("GITHUB_REPO") or "").strip(),
+        (env.get("GITHUB_TOKEN") or "").strip(),
+    )
+    if not probe.get("ok"):
+        try:
+            BACKUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {probe.get('error')}\n"
+                )
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "error": str(probe.get("error") or "GitHub token check failed"),
+            "status": build_backup_status(check_token=True),
+        }
 
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
     proc = None
@@ -8018,25 +8299,37 @@ def run_backup_now() -> dict:
             return {
                 "ok": False,
                 "error": "Backup timed out after 5 minutes",
-                "status": build_backup_status(),
+                "status": build_backup_status(check_token=False),
             }
         stdout = (stdout or "").strip()
         stderr = (stderr or "").strip()
-        env = _parse_env_file(BACKUP_SECRETS)
         tok = (env.get("GITHUB_TOKEN") or "").strip()
         if tok:
             stdout = stdout.replace(tok, "***")
             stderr = stderr.replace(tok, "***")
         ok = proc.returncode == 0
+        err_msg = ""
+        if not ok:
+            err_msg = stderr or stdout or f"backup exited {proc.returncode}"
+            # Keep a one-line ERROR in the log if the script's trap missed it.
+            if "ERROR" not in (stdout + stderr):
+                try:
+                    with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {err_msg.splitlines()[-1][:300]}\n"
+                        )
+                except Exception:
+                    pass
         return {
             "ok": ok,
             "exit_code": proc.returncode,
+            "error": err_msg if not ok else "",
             "stdout": stdout[-8000:],
             "stderr": stderr[-4000:],
-            "status": build_backup_status(),
+            "status": build_backup_status(check_token=False),
         }
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "status": build_backup_status()}
+        return {"ok": False, "error": str(exc), "status": build_backup_status(check_token=False)}
     finally:
         try:
             BACKUP_LOCK.unlink(missing_ok=True)
@@ -13784,12 +14077,26 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/backup":
+            try:
+                payload = self._read_json()
+                result = apply_backup_settings(
+                    payload if isinstance(payload, dict) else {}
+                )
+                # Always 200 so the UI can render status + token errors.
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(200, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/backup/run":
             try:
                 result = run_backup_now()
-                self._json(200 if result.get("ok") else 400, result)
+                # Always 200 so the UI can show stdout/stderr on failure.
+                self._json(200, result)
             except Exception as exc:
-                self._json(500, {"error": str(exc)})
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/bond":
             try:

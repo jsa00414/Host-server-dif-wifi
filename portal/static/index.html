@@ -1486,8 +1486,22 @@
             <div class="toolbar" style="margin-top:14px;justify-content:flex-start;gap:8px;flex-wrap:wrap">
               <button type="button" class="primary" id="backupRunBtn">Back up now</button>
               <button type="button" id="backupOpenRepoBtn">Open GitHub repo</button>
+              <label class="rule-check" style="margin-left:4px" title="Daily push at ~03:15 UTC">
+                <input type="checkbox" id="backupTimerChk" /> Daily timer
+              </label>
             </div>
-            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only. Output goes to the Activity log.</p>
+            <div class="form-grid" style="margin-top:16px;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+              <label>Owner<input id="backupOwner" type="text" autocomplete="off" spellcheck="false" placeholder="jsa00414" /></label>
+              <label>Repo<input id="backupRepo" type="text" autocomplete="off" spellcheck="false" placeholder="ServerManagerBackup" /></label>
+              <label>Branch<input id="backupBranch" type="text" autocomplete="off" spellcheck="false" placeholder="main" /></label>
+              <label style="grid-column:1/-1">GitHub token (PAT with repo access)
+                <input id="backupToken" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste new classic PAT (ghp_…) — leave blank to keep current" />
+              </label>
+            </div>
+            <div class="toolbar" style="margin-top:10px;justify-content:flex-start;gap:8px;flex-wrap:wrap">
+              <button type="button" class="primary" id="backupSaveBtn">Save backup settings</button>
+            </div>
+            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only. If the token is revoked, paste a new classic PAT with the <code>repo</code> scope, save, then Back up now.</p>
           </div>
         </div>
       </section>
@@ -3233,28 +3247,50 @@
     });
 
     let backupState = null;
+    function fillBackupForm(data) {
+      if (!data) return;
+      const owner = document.getElementById("backupOwner");
+      const repo = document.getElementById("backupRepo");
+      const branch = document.getElementById("backupBranch");
+      const timer = document.getElementById("backupTimerChk");
+      if (owner && document.activeElement !== owner) owner.value = data.owner || "";
+      if (repo && document.activeElement !== repo) repo.value = data.repo || "";
+      if (branch && document.activeElement !== branch) branch.value = data.branch || "main";
+      if (timer && document.activeElement !== timer) timer.checked = !!data.timer_enabled;
+    }
     function renderBackupStatus(data, opts = {}) {
       backupState = data || {};
       const callout = document.getElementById("backupCallout");
-      if (!data || data.error) {
+      if (!data || (data.error && !data.installed && data.configured == null)) {
         if (callout) callout.textContent = (data && data.error) || "Could not load backup status.";
         return;
       }
       const configured = !!data.configured;
       const running = !!data.running;
+      const tokenBad = data.token_ok === false;
       let msg = "";
       if (!data.installed) msg = "Backup agent is not installed on this VPS.";
       else if (!configured) msg = "Backup is not configured yet (missing GitHub repo or token).";
+      else if (tokenBad) msg = data.token_error || "GitHub token is invalid. Paste a new PAT below and Save.";
       else if (running) msg = "Backup is running now…";
       else if (data.last_ok === true) msg = `Last backup succeeded. Repo ${data.owner}/${data.repo} @ ${data.branch}.`;
-      else if (data.last_ok === false) msg = "Last backup failed. See Activity log.";
+      else if (data.last_ok === false) msg = "Last backup failed. See Activity log — often a bad/expired GitHub token.";
       else msg = `Ready. Daily backups go to ${data.owner}/${data.repo}.`;
       if (callout) callout.textContent = msg;
 
       const st = document.getElementById("bkStatus");
       const stSub = document.getElementById("bkStatusSub");
-      if (st) st.textContent = running ? "Running" : configured ? (data.last_ok === false ? "Error" : "Ready") : "Setup needed";
-      if (stSub) stSub.textContent = data.timer_enabled ? "timer on" : "timer off";
+      if (st) {
+        if (running) st.textContent = "Running";
+        else if (!configured) st.textContent = "Setup needed";
+        else if (tokenBad) st.textContent = "Token bad";
+        else if (data.last_ok === false) st.textContent = "Error";
+        else st.textContent = "Ready";
+      }
+      if (stSub) {
+        if (tokenBad) stSub.textContent = "fix PAT";
+        else stSub.textContent = data.timer_enabled ? "timer on" : "timer off";
+      }
 
       const last = document.getElementById("bkLast");
       const lastSub = document.getElementById("bkLastSub");
@@ -3271,12 +3307,14 @@
       if (repo) repo.textContent = data.repo || "—";
       if (repoSub) repoSub.textContent = data.owner ? `${data.owner} · ${data.branch || "main"}` : "—";
 
+      fillBackupForm(data);
+
       if (opts.showLog) {
         showLog("=== Backup ===\n" + (data.log_tail || "(empty log)"), !!opts.openLog);
       }
 
       const runBtn = document.getElementById("backupRunBtn");
-      if (runBtn) runBtn.disabled = running || !configured;
+      if (runBtn) runBtn.disabled = running || !configured || tokenBad;
     }
     async function refreshBackupStatus(quiet) {
       try {
@@ -3301,9 +3339,37 @@
         const data = await api("/api/backup/run", { method: "POST", body: "{}", timeoutMs: 320000 });
         if (data.status) renderBackupStatus(data.status);
         else await refreshBackupStatus(true);
-        const bits = [data.stdout, data.stderr, data.error].filter(Boolean).join("\n");
+        const bits = [data.error, data.stderr, data.stdout].filter(Boolean).join("\n");
         showLog(bits || (data.ok ? "Backup pushed." : "Backup failed."), true);
         setStatus(data.ok ? "Backup pushed" : (data.error || "Backup failed"), data.ok ? "ok" : "err");
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+        await refreshBackupStatus(true);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function saveBackupSettings() {
+      const btn = document.getElementById("backupSaveBtn");
+      if (btn) btn.disabled = true;
+      setStatus("Saving backup settings…");
+      try {
+        const payload = {
+          owner: document.getElementById("backupOwner")?.value.trim() || "",
+          repo: document.getElementById("backupRepo")?.value.trim() || "",
+          branch: document.getElementById("backupBranch")?.value.trim() || "main",
+          timer_enabled: !!document.getElementById("backupTimerChk")?.checked,
+        };
+        const token = document.getElementById("backupToken")?.value.trim() || "";
+        if (token) payload.token = token;
+        const data = await api("/api/backup", { method: "POST", body: JSON.stringify(payload) });
+        const tok = document.getElementById("backupToken");
+        if (tok) tok.value = "";
+        if (data.status) renderBackupStatus(data.status, { showLog: true, openLog: true });
+        else await refreshBackupStatus();
+        setStatus(data.ok ? "Backup settings saved" : (data.error || "Save failed"), data.ok ? "ok" : "err");
+        if (data.error) showLog(String(data.error), true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
         showLog(String(e.message || e), true);
@@ -3315,6 +3381,8 @@
 
     document.getElementById("backupRefreshBtn")?.addEventListener("click", () => refreshBackupStatus());
     document.getElementById("backupRunBtn")?.addEventListener("click", () => runBackupNow());
+    document.getElementById("backupSaveBtn")?.addEventListener("click", () => saveBackupSettings());
+    document.getElementById("backupTimerChk")?.addEventListener("change", () => saveBackupSettings());
     document.getElementById("backupOpenRepoBtn")?.addEventListener("click", () => {
       const url = backupState?.repo_url;
       if (url) window.open(url, "_blank", "noopener");
