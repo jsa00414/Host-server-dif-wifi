@@ -4154,6 +4154,8 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_hosts"] = [PROXMOX_HOST]
         out["upstream_https"] = True
         out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+        # Hypervisor UI must never be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == PLEX_PUBLIC_HOST.lower():
         out["target_host"] = PLEX_HOST
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
@@ -4167,12 +4169,14 @@ def _normalize_hookup_rule(rule: dict) -> dict:
 
 
 def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee proxmox.vpstruelord.com is present in managed hookups."""
+    """Guarantee proxmox.vpstruelord.com is present in managed hookups (VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PROXMOX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4183,7 +4187,7 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PROXMOX_PORT,
                 "name": "proxmox",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4346,30 +4350,58 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     host = PROXMOX_HOST
     port = int(rule.get("target_port") or PROXMOX_PORT)
     public = PROXMOX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     lines = [
         f"{public} {{",
-        f"\treverse_proxy https://{host}:{port} {{",
-        "\t\ttransport http {",
-        "\t\t\ttls_insecure_skip_verify",
-        "\t\t}",
-        "\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto https",
-        "\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\theader_down Location https://{host}:{port}/ https://{public}/",
-        "\t\theader_down -X-Frame-Options",
-        "\t\theader_down -Content-Security-Policy",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
     ]
+    if vpn_only:
+        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.append("\thandle @vpn_clients {")
+        indent = "\t\t"
+    else:
+        indent = "\t"
+    lines.extend(
+        [
+            f"{indent}reverse_proxy https://{host}:{port} {{",
+            f"{indent}\ttransport http {{",
+            f"{indent}\t\ttls_insecure_skip_verify",
+            f"{indent}\t}}",
+            f"{indent}\theader_up Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto https",
+            f"{indent}\theader_up X-Forwarded-For {{remote_host}}",
+            f"{indent}\theader_down Location https://{host}:{port} https://{public}",
+            f"{indent}\theader_down Location https://{host}:{port}/ https://{public}/",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                '\t\trespond "Forbidden" 403',
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
