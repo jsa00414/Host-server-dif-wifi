@@ -1,6 +1,6 @@
-# VPS cutover complete → `74.208.76.213`
+# Primary VPS: `74.208.76.213`
 
-Primary is now **74.208.76.213** (`vps2.vpstruelord.com`). Old `74.208.54.132` is retired.
+**Only VPS in use.** Former host `74.208.54.132` is decommissioned — no SSH/UI access, no dual-run bridge, do not point anything at it.
 
 ## Live now
 
@@ -11,33 +11,35 @@ Primary is now **74.208.76.213** (`vps2.vpstruelord.com`). Old `74.208.54.132` i
 | AdGuard | https://dns.vpstruelord.com/ |
 | Pi-hole | https://pihole.vpstruelord.com/ |
 
-Cloudflare A records for `*.vpstruelord.com` point at **74.208.76.213**.  
-Caddy has real TLS again. Dual-run bridge to the old VPS is removed.  
-WireGuard peers restored (same keys); server endpoint host = `74.208.76.213:5000`.
+Cloudflare A records for `*.vpstruelord.com` → **74.208.76.213**.  
+WireGuard server endpoint → **`74.208.76.213:5000`**.
 
-## Required once: update Flint (home GL-MT6000)
+## Flint (home GL-MT6000)
 
-LAN / Buffalo stay down until Flint’s WireGuard **Endpoint** leaves the old IP:
+Endpoint must be **`74.208.76.213:5000`** (not the old IP):
 
 1. On home Wi‑Fi open http://192.168.8.1  
 2. VPN → WireGuard → edit **GL-MT6000**  
-3. Set Endpoint to **`74.208.76.213:5000`**  
-   - or re-import from https://vpn.vpstruelord.com  
+3. Set Endpoint to **`74.208.76.213:5000`** or re-import from https://vpn.vpstruelord.com  
 4. Enable / reconnect  
 
-VPS copy of the client config: `/root/GL-MT6000-new-vps.conf`
+VPS copy: `/root/GL-MT6000-new-vps.conf`
 
-After reconnect: `ping 10.8.0.3` and Buffalo from the portal should work.
+## Manual DNS (truemailor.com) — still required
 
-## Manual DNS (truemailor.com)
-
-This Cloudflare token only manages `vpstruelord.com`. Still on the old IP:
+Cloudflare token in portal env only manages **`vpstruelord.com`**. Update these A records at the `truemailor.com` DNS provider to **74.208.76.213**:
 
 - `mail.truemailor.com`
 - `truemailor.com`
 - `remote.truemailor.com`
 
-Point those A records to **74.208.76.213** at their DNS provider.
+Until that change, those names still resolve to the dead old IP.
+
+## Scrub leftover old-IP refs on this VPS
+
+```bash
+bash /opt/wireguard/port-forward-ui/scripts/security/retire-old-vps-ip.sh
+```
 
 ## Deploy portal
 

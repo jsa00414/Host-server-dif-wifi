@@ -27,12 +27,12 @@ Deploy to the VPS (panel reads HTML from `static/index.html`):
 
 ```bash
 # From repo root, with SSH access to the VPS:
-VPS=root@74.208.54.132 ./portal/deploy-to-vps.sh
+VPS=root@74.208.76.213 ./portal/deploy-to-vps.sh
 
 # Or manually:
-scp portal/server.py root@74.208.54.132:/opt/wireguard/port-forward-ui/server.py
-scp portal/static/index.html root@74.208.54.132:/opt/wireguard/port-forward-ui/static/index.html
-ssh root@74.208.54.132 systemctl restart port-forward-ui
+scp portal/server.py root@74.208.76.213:/opt/wireguard/port-forward-ui/server.py
+scp portal/static/index.html root@74.208.76.213:/opt/wireguard/port-forward-ui/static/index.html
+ssh root@74.208.76.213 systemctl restart port-forward-ui
 ```
 
 Then hard-refresh the portal (Ctrl+Shift+R).

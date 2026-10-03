@@ -19,7 +19,7 @@ ACTION="${1:-status}"
 EXIT_IP="${2:-}"
 
 PUBLIC_IP="$(ip -4 -o addr show dev ens6 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1)"
-PUBLIC_IP="${PUBLIC_IP:-74.208.54.132}"
+PUBLIC_IP="${PUBLIC_IP:-74.208.76.213}"
 
 wg_easy_ip() {
   docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' wg-easy 2>/dev/null \

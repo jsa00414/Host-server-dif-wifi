@@ -20,6 +20,16 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/files.html", f"{REMOTE_UI}/static/files.html"),
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
+    (ROOT / "static/email-code-test.html", f"{REMOTE_UI}/static/email-code-test.html"),
+    (ROOT / "static/auth-app.html", f"{REMOTE_UI}/static/auth-app.html"),
+    (ROOT / "static/auth-app.webmanifest", f"{REMOTE_UI}/static/auth-app.webmanifest"),
+    (ROOT / "static/auth-app-sw.js", f"{REMOTE_UI}/static/auth-app-sw.js"),
+    (ROOT / "static/auth-app-iphone.html", f"{REMOTE_UI}/static/auth-app-iphone.html"),
+    (ROOT / "static/auth-app-iphone.webmanifest", f"{REMOTE_UI}/static/auth-app-iphone.webmanifest"),
+    (ROOT / "static/auth-app-iphone-sw.js", f"{REMOTE_UI}/static/auth-app-iphone-sw.js"),
+    (ROOT / "static/auth-app-icon-180.png", f"{REMOTE_UI}/static/auth-app-icon-180.png"),
+    (ROOT / "static/auth-app-icon-192.png", f"{REMOTE_UI}/static/auth-app-icon-192.png"),
+    (ROOT / "static/auth-app-icon-512.png", f"{REMOTE_UI}/static/auth-app-icon-512.png"),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
@@ -68,6 +78,62 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-webdav-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
     ),
+    (
+        ROOT / "scripts/backup/sm-backup.sh",
+        "/opt/servermanager-backup/sm-backup.sh",
+    ),
+    (
+        ROOT / "scripts/backup/secrets.env.example",
+        "/opt/servermanager-backup/secrets.env.example",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.service",
+        "/etc/systemd/system/sm-backup.service",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.timer",
+        "/etc/systemd/system/sm-backup.timer",
+    ),
+    (
+        ROOT / "scripts/security/harden-secret-perms.sh",
+        f"{REMOTE_UI}/scripts/security/harden-secret-perms.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-smb-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-smb-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-portal-5002-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-portal-5002-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-nas-gateways-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-nas-gateways-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-wg-easy-ui-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-wg-easy-ui-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-remote-desktop-bind.sh",
+        f"{REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-flint-forwards-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh",
+    ),
+    (
+        ROOT / "scripts/security/retire-old-vps-ip.sh",
+        f"{REMOTE_UI}/scripts/security/retire-old-vps-ip.sh",
+    ),
+    (
+        ROOT / "scripts/mail/ensure-portal-send-mailbox.sh",
+        f"{REMOTE_UI}/scripts/mail/ensure-portal-send-mailbox.sh",
+    ),
+    (
+        ROOT / "scripts/forwards/apply-lan-forwards.sh",
+        "/opt/wireguard/scripts/apply-lan-forwards.sh",
+    ),
 ]
 
 
@@ -94,9 +160,25 @@ def _client() -> paramiko.SSHClient:
         "look_for_keys": False,
     }
     if key_text:
-        connect_kwargs["pkey"] = paramiko.RSAKey.from_private_key(
-            __import__("io").StringIO(key_text)
-        )
+        import io as _io
+
+        key_file = _io.StringIO(key_text)
+        last_exc: Exception | None = None
+        pkey = None
+        for loader in (
+            paramiko.Ed25519Key.from_private_key,
+            paramiko.ECDSAKey.from_private_key,
+            paramiko.RSAKey.from_private_key,
+        ):
+            try:
+                key_file.seek(0)
+                pkey = loader(key_file)
+                break
+            except Exception as exc:  # noqa: BLE001 — try next key type
+                last_exc = exc
+        if pkey is None:
+            raise RuntimeError(f"Unsupported SSH private key format: {last_exc}")
+        connect_kwargs["pkey"] = pkey
     else:
         connect_kwargs["password"] = password
     client.connect(**connect_kwargs)
@@ -136,21 +218,74 @@ def main() -> int:
         if host == DEFAULT_HOST:
             _run(
                 client,
-                f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
+                f"chmod +x {REMOTE_UI}/scripts/security/retire-old-vps-ip.sh "
+                f"{REMOTE_UI}/scripts/mail/ensure-portal-send-mailbox.sh && "
+                f"bash {REMOTE_UI}/scripts/security/retire-old-vps-ip.sh || true; "
+                f"bash {REMOTE_UI}/scripts/mail/ensure-portal-send-mailbox.sh || true",
             )
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
-            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh",
+            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh "
+            "/opt/servermanager-backup/sm-backup.sh 2>/dev/null || true",
         )
         _run(
             client,
-            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \"import server; s=server.read_hookups_state(); print(server.write_hookups_state([r for r in s.get('rules', []) if not r.get('external')]))\"",
+            "systemctl daemon-reload && "
+            "systemctl enable --now sm-backup.timer 2>/dev/null || true && "
+            "systemctl is-enabled sm-backup.timer 2>/dev/null || true",
+        )
+        # Grafana: localhost bind + Caddy docker network + unique admin password
+        _run(
+            client,
+            f"mkdir -p {REMOTE_UI}/scripts/grafana "
+            f"{REMOTE_UI}/scripts/grafana/dashboards "
+            f"{REMOTE_UI}/scripts/grafana/prometheus "
+            f"{REMOTE_UI}/scripts/grafana/provisioning/dashboards "
+            f"{REMOTE_UI}/scripts/grafana/provisioning/datasources "
+            "/opt/grafana",
+        )
+        # Upload grafana tree via a second sftp pass (paths may be many).
+        sftp = client.open_sftp()
+        try:
+            groot = ROOT / "scripts" / "grafana"
+            for local in groot.rglob("*"):
+                if not local.is_file():
+                    continue
+                rel = local.relative_to(groot).as_posix()
+                remote = f"{REMOTE_UI}/scripts/grafana/{rel}"
+                remote_dir = str(Path(remote).parent)
+                _run(client, f"mkdir -p {remote_dir}")
+                print(f"  upload grafana/{rel} -> {remote}")
+                sftp.put(str(local), remote)
+        finally:
+            sftp.close()
+        _run(
+            client,
+            f"chmod +x {REMOTE_UI}/scripts/grafana/install-grafana.sh && "
+            f"bash {REMOTE_UI}/scripts/grafana/install-grafana.sh",
+        )
+        _run(
+            client,
+            "cd /opt/wireguard/port-forward-ui && set -a && . /opt/wireguard/port-forward-ui.env && set +a && python3 -c \""
+            "import server; "
+            "s=server.read_hookups_state(); "
+            "rules=[r for r in s.get('rules', []) if not r.get('external')]; "
+            "print(server.write_hookups_state(rules))"
+            "\"",
         )
         gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
         _run(client, f"chmod +x {gateway} && bash {gateway}")
         dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
         _run(client, f"chmod +x {dav} && bash {dav}")
+        _run(
+            client,
+            f"chmod +x {REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh "
+            f"{REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh "
+            f"/opt/wireguard/scripts/apply-lan-forwards.sh && "
+            f"bash {REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh && "
+            f"bash {REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh",
+        )
         _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
