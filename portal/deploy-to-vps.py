@@ -68,6 +68,22 @@ UPLOADS: list[tuple[Path, str]] = [
         ROOT / "scripts/nas/nas-webdav-gateway.service",
         f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
     ),
+    (
+        ROOT / "scripts/backup/sm-backup.sh",
+        "/opt/servermanager-backup/sm-backup.sh",
+    ),
+    (
+        ROOT / "scripts/backup/secrets.env.example",
+        "/opt/servermanager-backup/secrets.env.example",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.service",
+        "/etc/systemd/system/sm-backup.service",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup.timer",
+        "/etc/systemd/system/sm-backup.timer",
+    ),
 ]
 
 
@@ -141,7 +157,14 @@ def main() -> int:
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
-            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh",
+            "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh "
+            "/opt/servermanager-backup/sm-backup.sh 2>/dev/null || true",
+        )
+        _run(
+            client,
+            "systemctl daemon-reload && "
+            "systemctl enable --now sm-backup.timer 2>/dev/null || true && "
+            "systemctl is-enabled sm-backup.timer 2>/dev/null || true",
         )
         _run(
             client,
