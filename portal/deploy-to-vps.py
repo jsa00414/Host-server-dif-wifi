@@ -105,6 +105,14 @@ UPLOADS: list[tuple[Path, str]] = [
         f"{REMOTE_UI}/scripts/security/harden-wg-easy-ui-vpn-only.sh",
     ),
     (
+        ROOT / "scripts/security/harden-remote-desktop-bind.sh",
+        f"{REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh",
+    ),
+    (
+        ROOT / "scripts/security/harden-flint-forwards-vpn-only.sh",
+        f"{REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh",
+    ),
+    (
         ROOT / "scripts/forwards/apply-lan-forwards.sh",
         "/opt/wireguard/scripts/apply-lan-forwards.sh",
     ),
@@ -233,6 +241,14 @@ def main() -> int:
         _run(client, f"chmod +x {gateway} && bash {gateway}")
         dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
         _run(client, f"chmod +x {dav} && bash {dav}")
+        _run(
+            client,
+            f"chmod +x {REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh "
+            f"{REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh "
+            f"/opt/wireguard/scripts/apply-lan-forwards.sh && "
+            f"bash {REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh && "
+            f"bash {REMOTE_UI}/scripts/security/harden-flint-forwards-vpn-only.sh",
+        )
         _run(client, "systemctl restart openvpn-server-sm 2>/dev/null || systemctl restart openvpn@server 2>/dev/null || true")
     finally:
         client.close()
