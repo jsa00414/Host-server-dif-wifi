@@ -537,6 +537,23 @@
     body.tab-circle .dock .install {
       display: none !important;
     }
+    /* VPN trust circle: no brand mark / logo */
+    body.tab-circle .top .mark,
+    body.tab-circle .top .brand {
+      display: none !important;
+    }
+    body.tab-circle .top {
+      padding-top: calc(8px + var(--safe-top));
+      padding-bottom: 4px;
+    }
+    body.tab-circle .top .title,
+    body.tab-circle .top .sub {
+      display: none !important;
+    }
+    /* Allowed tab: no approve-IP / refresh controls */
+    body.circle-allowed .circle-add {
+      display: none !important;
+    }
     @supports (padding: max(0px)) {
       body {
         /* keep full-bleed; safe areas applied on sections */
@@ -674,6 +691,7 @@
     function setCircleOpen(open) {
       circleOpen = !!open && unlocked;
       document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      if (!circleOpen) document.body.classList.remove("circle-allowed");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
         els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
@@ -800,7 +818,7 @@
       pinMode = false;
       circleOpen = false;
       circleData = null;
-      document.body.classList.remove("tab-circle", "is-unlocked");
+      document.body.classList.remove("tab-circle", "circle-allowed", "is-unlocked");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
@@ -845,7 +863,7 @@
       circleOpen = false;
       unlocked = false;
       pinMode = false;
-      document.body.classList.remove("tab-circle", "is-unlocked");
+      document.body.classList.remove("tab-circle", "circle-allowed", "is-unlocked");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
@@ -1075,9 +1093,11 @@
       if (!els.circlePane) return;
       if (!account || !unlocked || !circleOpen) {
         els.circlePane.hidden = true;
+        document.body.classList.remove("circle-allowed");
         return;
       }
       els.circlePane.hidden = false;
+      document.body.classList.toggle("circle-allowed", circleView === "allowed");
       const allowed = circleData?.allowed || [];
       const pending = circleData?.pending || [];
       const attempts = circleData?.attempts || [];

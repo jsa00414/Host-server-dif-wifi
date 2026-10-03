@@ -125,6 +125,23 @@
     body.tab-circle .code-pane > .bar {
       display: none !important;
     }
+    /* VPN trust circle: no brand mark / logo */
+    body.tab-circle header .mark,
+    body.tab-circle header .brand {
+      display: none !important;
+    }
+    body.tab-circle header h1 {
+      display: none !important;
+    }
+    body.tab-circle header {
+      padding-top: calc(8px + var(--sat, env(safe-area-inset-top, 0px)));
+      padding-bottom: 4px;
+      min-height: 0;
+    }
+    /* Allowed tab: no approve-IP / refresh controls */
+    body.circle-allowed .circle-add {
+      display: none !important;
+    }
     .tabs {
       display: none;
       gap: 0;
@@ -641,6 +658,7 @@
     function setCircleOpen(open) {
       circleOpen = !!open;
       document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      if (!circleOpen) document.body.classList.remove("circle-allowed");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
         els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
@@ -955,9 +973,11 @@
       if (!els.circlePane) return;
       if (!account || !unlocked || !circleOpen) {
         els.circlePane.hidden = true;
+        document.body.classList.remove("circle-allowed");
         return;
       }
       els.circlePane.hidden = false;
+      document.body.classList.toggle("circle-allowed", circleView === "allowed");
       const allowed = circleData?.allowed || [];
       const pending = circleData?.pending || [];
       const attempts = circleData?.attempts || [];
@@ -1062,7 +1082,7 @@
       pinMode = false;
       circleData = null;
       circleOpen = false;
-      document.body.classList.remove("tab-circle");
+      document.body.classList.remove("tab-circle", "circle-allowed");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
