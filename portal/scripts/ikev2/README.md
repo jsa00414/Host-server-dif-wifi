@@ -69,3 +69,11 @@ bash /opt/ikev2/ensure-ikev2-forward.sh   # installs NO-HAIRPIN-MASQ RETURN rule
 bash /opt/ikev2/ensure-ikev2-peer-acl.sh  # also allows 74.208.76.213/32 in Caddy
 ```
 
+## Portal tab flashes then blank (HTTP/3)
+
+UDP/443 is WireGuard on this host. Caddy must not advertise HTTP/3:
+
+```bash
+bash /opt/ikev2/ensure-caddy-no-h3.sh
+```
+

@@ -167,6 +167,13 @@ if [[ -f "$PEER_ACL_SRC" ]]; then
   bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
 fi
 
+NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"
+if [[ -f "$NOH3_SRC" ]]; then
+  cp -f "$NOH3_SRC" "$IKEV2_DIR/ensure-caddy-no-h3.sh"
+  chmod 0755 "$IKEV2_DIR/ensure-caddy-no-h3.sh"
+  bash "$IKEV2_DIR/ensure-caddy-no-h3.sh" || true
+fi
+
 systemctl enable strongswan-starter >/dev/null 2>&1 || true
 systemctl restart strongswan-starter
 sleep 1
