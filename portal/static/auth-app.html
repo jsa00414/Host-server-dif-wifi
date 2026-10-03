@@ -237,10 +237,68 @@
     }
     .empty[hidden],
     .code-shell[hidden],
+    .lock[hidden],
     button[hidden],
     .install:not(.show) {
       display: none !important;
     }
+    .lock {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: var(--muted);
+      font-size: .9rem;
+      line-height: 1.45;
+      padding: 24px calc(18px + var(--safe-right)) 24px calc(18px + var(--safe-left));
+      gap: 14px;
+      min-height: 36dvh;
+      border-top: 1px solid rgba(170,210,185,.08);
+      border-bottom: 1px solid rgba(170,210,185,.08);
+    }
+    .lock .face {
+      width: 78px;
+      height: 78px;
+      border-radius: 22px;
+      border: 1px solid rgba(61,222,160,.4);
+      background:
+        radial-gradient(circle at 40% 30%, rgba(138,240,196,.35), transparent 50%),
+        rgba(61,222,160,.1);
+      display: grid;
+      place-items: center;
+      font-size: 1.45rem;
+      color: var(--accent);
+    }
+    .lock h2 {
+      margin: 0;
+      color: var(--text);
+      font-size: 1.15rem;
+    }
+    .lock p { margin: 0; max-width: 20rem; }
+    .pin-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(280px, 100%);
+    }
+    .pin-row[hidden] { display: none !important; }
+    .pin-row input {
+      width: 100%;
+      text-align: center;
+      letter-spacing: .35em;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 1.3rem;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      color: var(--text);
+      padding: 14px 12px;
+    }
+    body.is-unlocked .sub { display: none; }
+    body.is-unlocked .install { display: none !important; }
+    body.has-account:not(.is-unlocked) .tabs { display: none !important; }
     .toast {
       position: fixed;
       left: 50%;
@@ -443,6 +501,18 @@
   </header>
 
   <div class="stage" id="stage">
+    <section class="lock" id="lockView" hidden>
+      <div class="face" aria-hidden="true">◉</div>
+      <h2 id="lockTitle">Windows Hello required</h2>
+      <p id="lockSub">Unlock with Windows Hello to see your ServerManager codes.</p>
+      <button type="button" class="primary" id="bioUnlockBtn" style="width:min(280px,100%)">Unlock with Windows Hello</button>
+      <button type="button" id="setupBioBtn" style="width:min(280px,100%)" hidden>Set up Windows Hello</button>
+      <button type="button" id="usePinBtn" style="width:min(280px,100%)" hidden>Use PIN instead</button>
+      <div class="pin-row" id="pinRow" hidden>
+        <input id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="••••" />
+        <button type="button" class="primary" id="pinSubmitBtn">Unlock with PIN</button>
+      </div>
+    </section>
     <div class="code-shell" id="codeShell" hidden>
       <div class="acct" id="acctLabel"></div>
       <div class="code" id="codeView">------</div>
@@ -470,6 +540,7 @@
       <div class="install" id="installHint"></div>
       <div class="actions">
         <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+        <button type="button" id="lockNowBtn" hidden>Lock</button>
         <button type="button" id="installBtn" hidden>Add to Home Screen</button>
         <button type="button" id="manualBtn">Enter secret</button>
         <button type="button" class="danger" id="clearBtn" hidden>Remove account</button>
@@ -488,16 +559,29 @@
 
   <script>
     const STORE_KEY = "sm.auth.totp.v1";
+    const BIO_KEY = "sm.auth.bio.cred.v1";
+    const PIN_KEY = "sm.auth.pin.hash.v1";
     const PERIOD = 30;
     const DIGITS = 6;
+    const LOCK_AFTER_MS = 45_000;
 
     const els = {
+      lockView: document.getElementById("lockView"),
+      lockTitle: document.getElementById("lockTitle"),
+      lockSub: document.getElementById("lockSub"),
+      bioUnlockBtn: document.getElementById("bioUnlockBtn"),
+      setupBioBtn: document.getElementById("setupBioBtn"),
+      usePinBtn: document.getElementById("usePinBtn"),
+      pinRow: document.getElementById("pinRow"),
+      pinInput: document.getElementById("pinInput"),
+      pinSubmitBtn: document.getElementById("pinSubmitBtn"),
       codeShell: document.getElementById("codeShell"),
       emptyView: document.getElementById("emptyView"),
       acctLabel: document.getElementById("acctLabel"),
       codeView: document.getElementById("codeView"),
       tickBar: document.getElementById("tickBar"),
       copyBtn: document.getElementById("copyBtn"),
+      lockNowBtn: document.getElementById("lockNowBtn"),
       clearBtn: document.getElementById("clearBtn"),
       installBtn: document.getElementById("installBtn"),
       installHint: document.getElementById("installHint"),
@@ -522,18 +606,29 @@
     let account = null;
     let deferredPrompt = null;
     let toastTimer = null;
+    let idleTimer = null;
+    let busy = false;
+    let unlocked = false;
+    let pinMode = false;
     let circleData = null;
     let circleLoading = false;
     let circleOpen = false;
 
+    function isWindows() {
+      return /Windows/i.test(navigator.userAgent || "") || /Win/.test(navigator.platform || "");
+    }
+    function bioLabel() {
+      return isWindows() ? "Windows Hello" : "Biometrics";
+    }
+
     function setCircleOpen(open) {
-      circleOpen = !!open;
-      document.body.classList.toggle("tab-circle", !!(account && circleOpen));
+      circleOpen = !!open && unlocked;
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
         els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
       }
-      if (account) {
+      if (account && unlocked) {
         els.copyBtn.hidden = circleOpen;
         els.clearBtn.hidden = circleOpen;
         els.manualBtn.hidden = circleOpen;
@@ -551,6 +646,122 @@
       els.toast.classList.add("show");
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+    }
+
+    function b64urlFromBuf(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function bufFromB64url(s) {
+      const pad = "=".repeat((4 - (s.length % 4)) % 4);
+      const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function randomBytes(n) {
+      const out = new Uint8Array(n);
+      crypto.getRandomValues(out);
+      return out;
+    }
+    function loadBioCredId() {
+      return localStorage.getItem(BIO_KEY) || "";
+    }
+    function saveBioCredId(id) {
+      localStorage.setItem(BIO_KEY, id);
+    }
+    async function bioAvailable() {
+      try {
+        if (!window.PublicKeyCredential) return false;
+        if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+          return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    async function enrollBio() {
+      const label = bioLabel();
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32),
+          rp: { name: "ServerManager Auth", id: location.hostname },
+          user: {
+            id: randomBytes(16),
+            name: "sm-auth-android",
+            displayName: "SM Auth",
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+            residentKey: "preferred",
+          },
+          timeout: 90_000,
+        },
+      });
+      if (!cred || !cred.rawId) throw new Error(`${label} setup failed`);
+      saveBioCredId(b64urlFromBuf(cred.rawId));
+      return true;
+    }
+    async function verifyBio() {
+      const label = bioLabel();
+      const id = loadBioCredId();
+      if (!id) throw new Error(`${label} is not set up yet`);
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: randomBytes(32),
+          rpId: location.hostname,
+          allowCredentials: [{ type: "public-key", id: bufFromB64url(id) }],
+          userVerification: "required",
+          timeout: 90_000,
+        },
+      });
+      if (!assertion) throw new Error(`${label} cancelled`);
+      return true;
+    }
+    async function hashPin(pin) {
+      const data = new TextEncoder().encode(`sm-auth-android:${pin}`);
+      const dig = await crypto.subtle.digest("SHA-256", data);
+      return Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    function loadPinHash() {
+      return localStorage.getItem(PIN_KEY) || "";
+    }
+    async function withBusy(fn) {
+      if (busy) return;
+      busy = true;
+      try { await fn(); }
+      finally { busy = false; }
+    }
+    function bumpIdle() {
+      clearTimeout(idleTimer);
+      if (!unlocked || !account) return;
+      idleTimer = setTimeout(() => lockNow("Locked after inactivity"), LOCK_AFTER_MS);
+    }
+    function lockNow(msg) {
+      unlocked = false;
+      pinMode = false;
+      circleOpen = false;
+      circleData = null;
+      document.body.classList.remove("tab-circle", "is-unlocked");
+      if (els.circleToggle) {
+        els.circleToggle.setAttribute("aria-pressed", "false");
+        els.circleToggle.textContent = "VPN trust circle";
+      }
+      els.codeView.textContent = "------";
+      if (els.pinInput) els.pinInput.value = "";
+      if (els.circlePane) els.circlePane.hidden = true;
+      clearTimeout(idleTimer);
+      render();
+      if (msg) toast(msg);
     }
 
     function loadAccount() {
@@ -572,6 +783,9 @@
     function saveAccount(next) {
       localStorage.setItem(STORE_KEY, JSON.stringify(next));
       account = next;
+      unlocked = false;
+      pinMode = false;
+      circleOpen = false;
       render();
     }
 
@@ -580,7 +794,9 @@
       account = null;
       circleData = null;
       circleOpen = false;
-      document.body.classList.remove("tab-circle");
+      unlocked = false;
+      pinMode = false;
+      document.body.classList.remove("tab-circle", "is-unlocked");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
@@ -665,7 +881,7 @@
     }
 
     async function fetchCircle() {
-      if (!account) return;
+      if (!account || !unlocked) return;
       circleLoading = true;
       try {
         const code = await currentTotpCode();
@@ -687,6 +903,10 @@
     }
 
     async function mutateCircle(action, ip, note) {
+      if (!unlocked) {
+        toast("Unlock first");
+        return;
+      }
       if (!ip) {
         toast("Enter a WAN IP");
         return;
@@ -703,6 +923,7 @@
         circleData = data.vpn_allowlist || data;
         renderCircle();
         toast(`${action}d ${ip}`);
+        bumpIdle();
       } catch (err) {
         toast(String(err?.message || err));
       }
@@ -710,7 +931,7 @@
 
     function renderCircle() {
       if (!els.circlePane) return;
-      if (!account || !circleOpen) {
+      if (!account || !unlocked || !circleOpen) {
         els.circlePane.hidden = true;
         return;
       }
@@ -762,7 +983,10 @@
     }
 
     async function tick() {
-      if (!account) return;
+      if (!account || !unlocked) {
+        els.codeView.textContent = "------";
+        return;
+      }
       try {
         const code = await totpAt(account.secret);
         els.codeView.textContent = code;
@@ -809,12 +1033,65 @@
     }
 
     function render() {
+      const hasBio = !!loadBioCredId();
+      const hasPin = !!loadPinHash();
+      const label = bioLabel();
       document.body.classList.toggle("has-account", !!account);
-      document.body.classList.toggle("tab-circle", !!(account && circleOpen));
-      if (account) {
+      document.body.classList.toggle("is-unlocked", !!(account && unlocked));
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      if (!account) {
+        els.lockView.hidden = true;
+        els.codeShell.hidden = true;
+        els.emptyView.hidden = false;
+        els.copyBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        els.clearBtn.hidden = true;
+        els.manualBtn.hidden = false;
+        if (els.tabBar) els.tabBar.hidden = true;
+        els.codeView.textContent = "------";
+        if (els.circlePane) els.circlePane.hidden = true;
+        circleData = null;
+        circleOpen = false;
+        unlocked = false;
+        updateInstallUi();
+        return;
+      }
+      els.emptyView.hidden = true;
+      if (!unlocked) {
+        els.lockView.hidden = false;
+        els.codeShell.hidden = true;
+        els.copyBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        els.clearBtn.hidden = true;
+        els.manualBtn.hidden = true;
+        els.manualForm.classList.remove("show");
+        if (els.tabBar) els.tabBar.hidden = true;
+        if (els.circlePane) els.circlePane.hidden = true;
+        if (pinMode && hasPin) {
+          els.lockTitle.textContent = "Enter PIN";
+          els.lockSub.textContent = "Unlock with your app PIN.";
+          els.bioUnlockBtn.hidden = true;
+          els.setupBioBtn.hidden = true;
+          els.usePinBtn.hidden = true;
+          els.pinRow.hidden = false;
+          setTimeout(() => els.pinInput.focus(), 40);
+        } else {
+          els.lockTitle.textContent = `${label} required`;
+          els.lockSub.textContent = hasBio
+            ? `Unlock with ${label} to see your ServerManager codes.`
+            : `Set up ${label} once, then unlock to see your codes.`;
+          els.bioUnlockBtn.hidden = !hasBio;
+          els.bioUnlockBtn.textContent = `Unlock with ${label}`;
+          els.setupBioBtn.hidden = hasBio;
+          els.setupBioBtn.textContent = `Set up ${label}`;
+          els.usePinBtn.hidden = !hasPin;
+          els.pinRow.hidden = true;
+        }
+      } else {
+        els.lockView.hidden = true;
         els.codeShell.hidden = false;
-        els.emptyView.hidden = true;
         els.copyBtn.hidden = circleOpen;
+        els.lockNowBtn.hidden = false;
         els.clearBtn.hidden = circleOpen;
         els.manualBtn.hidden = circleOpen;
         if (els.tabBar) els.tabBar.hidden = false;
@@ -825,30 +1102,15 @@
         els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
         if (circleOpen) els.manualForm.classList.remove("show");
         tick();
+        bumpIdle();
         renderCircle();
         if (circleOpen && !circleData && !circleLoading) fetchCircle();
-      } else {
-        els.codeShell.hidden = true;
-        els.emptyView.hidden = false;
-        els.copyBtn.hidden = true;
-        els.clearBtn.hidden = true;
-        els.manualBtn.hidden = false;
-        if (els.tabBar) els.tabBar.hidden = true;
-        els.codeView.textContent = "------";
-        if (els.circlePane) els.circlePane.hidden = true;
-        circleData = null;
-        circleOpen = false;
-        document.body.classList.remove("tab-circle");
-        if (els.circleToggle) {
-          els.circleToggle.setAttribute("aria-pressed", "false");
-          els.circleToggle.textContent = "VPN trust circle";
-        }
       }
       updateInstallUi();
     }
 
     els.copyBtn.addEventListener("click", async () => {
-      if (circleOpen) return;
+      if (!unlocked || circleOpen) return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try {
@@ -857,16 +1119,21 @@
       } catch (_) {
         toast(code);
       }
+      bumpIdle();
     });
+
+    els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
 
     els.clearBtn.addEventListener("click", () => {
       if (confirm("Remove the authenticator account from this phone?")) clearAccount();
     });
 
     els.manualBtn.addEventListener("click", () => {
+      if (!unlocked) return;
       if (circleOpen) setCircleOpen(false);
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
+      bumpIdle();
     });
 
     els.saveManualBtn.addEventListener("click", () => {
@@ -881,7 +1148,7 @@
         account: (els.accountInput.value || "portal").trim() || "portal",
       });
       els.secretInput.value = "";
-      toast("Saved on this phone");
+      toast(loadBioCredId() ? "Saved on this phone" : `Saved — set up ${bioLabel()}`);
       history.replaceState(null, "", location.pathname);
     });
 
@@ -893,12 +1160,76 @@
       updateInstallUi();
     });
 
-    els.circleToggle?.addEventListener("click", () => setCircleOpen(!circleOpen));
+    els.bioUnlockBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        await verifyBio();
+        unlocked = true;
+        pinMode = false;
+        render();
+        toast("Unlocked");
+      } catch (err) {
+        unlocked = false;
+        render();
+        toast(String(err?.message || err || `${bioLabel()} failed`));
+      }
+    }));
+    els.setupBioBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        if (!(await bioAvailable())) {
+          toast(`${bioLabel()} not available in this browser`);
+          return;
+        }
+        await enrollBio();
+        unlocked = true;
+        pinMode = false;
+        render();
+        toast(`${bioLabel()} enabled`);
+      } catch (err) {
+        toast(String(err?.message || err || `${bioLabel()} setup cancelled`));
+      }
+    }));
+    els.usePinBtn.addEventListener("click", () => {
+      pinMode = true;
+      render();
+    });
+    els.pinSubmitBtn.addEventListener("click", () => withBusy(async () => {
+      const pin = String(els.pinInput.value || "").trim();
+      if (pin.length < 4) {
+        toast("Enter your PIN");
+        return;
+      }
+      const expected = loadPinHash();
+      const got = await hashPin(pin);
+      if (!expected || got !== expected) {
+        toast("Incorrect PIN");
+        return;
+      }
+      unlocked = true;
+      pinMode = false;
+      els.pinInput.value = "";
+      render();
+      toast("Unlocked");
+    }));
+    els.pinInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        els.pinSubmitBtn.click();
+      }
+    });
+
+    els.circleToggle?.addEventListener("click", () => {
+      if (!unlocked) return;
+      setCircleOpen(!circleOpen);
+      bumpIdle();
+    });
     els.circleRefreshBtn?.addEventListener("click", async () => {
+      if (!unlocked) return;
       await fetchCircle();
       toast("Refreshed");
+      bumpIdle();
     });
     els.circleApproveBtn?.addEventListener("click", async () => {
+      if (!unlocked) return;
       const ip = String(els.circleIpInput?.value || "").trim();
       await mutateCircle("approve", ip, "manual from Android auth app");
       if (els.circleIpInput) els.circleIpInput.value = "";
@@ -909,14 +1240,27 @@
       deferredPrompt = ev;
       updateInstallUi();
     });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && unlocked) lockNow();
+    });
+    window.addEventListener("pagehide", () => {
+      if (unlocked) lockNow();
+    });
+    window.addEventListener("blur", () => {
+      if (unlocked) lockNow();
+    });
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => {
+      document.addEventListener(ev, bumpIdle, { passive: true });
+    });
 
     const fromHash = parseHash();
     if (fromHash) {
       saveAccount(fromHash);
       history.replaceState(null, "", location.pathname);
-      toast("Account saved on this phone");
+      toast(loadBioCredId() ? "Account saved on this phone" : `Account saved — set up ${bioLabel()}`);
     } else {
       account = loadAccount();
+      unlocked = false;
       render();
     }
 
