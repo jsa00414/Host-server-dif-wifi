@@ -58,54 +58,54 @@
       text-align: center;
     }
     .mark {
-      width: 42px;
-      height: 42px;
-      margin: 0 auto 12px;
-      border-radius: 14px;
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      border-radius: 18px;
       border: 1px solid rgba(61,222,160,.42);
       background:
         radial-gradient(circle at 35% 30%, rgba(138,240,196,.55), transparent 45%),
         linear-gradient(160deg, rgba(61,222,160,.28), rgba(61,222,160,.06));
-      box-shadow: 0 10px 28px rgba(0,0,0,.28);
+      box-shadow: 0 12px 32px rgba(0,0,0,.3);
       position: relative;
     }
     .mark::after {
       content: "";
       position: absolute;
-      inset: 12px;
+      inset: 15px;
       border-radius: 50%;
-      border: 2px solid rgba(61,222,160,.9);
-      box-shadow: inset 0 0 0 5px rgba(5,8,7,.55);
+      border: 2.5px solid rgba(61,222,160,.9);
+      box-shadow: inset 0 0 0 6px rgba(5,8,7,.55);
     }
     .brand {
       margin: 0;
       color: var(--accent);
-      font-size: clamp(1.35rem, 6.2vw, 1.7rem);
+      font-size: clamp(1.85rem, 8.5vw, 2.35rem);
       font-weight: 700;
-      letter-spacing: -.045em;
-      line-height: 1.05;
+      letter-spacing: -.05em;
+      line-height: 1.02;
       text-transform: none;
     }
     h1 {
-      margin: 6px 0 0;
-      font-size: .92rem;
+      margin: 8px 0 0;
+      font-size: 1.05rem;
       font-weight: 500;
       letter-spacing: .01em;
       color: var(--muted);
     }
     body.is-unlocked .mark {
-      width: 28px;
-      height: 28px;
+      width: 34px;
+      height: 34px;
       margin-bottom: 8px;
-      border-radius: 9px;
+      border-radius: 10px;
     }
     body.is-unlocked .mark::after {
-      inset: 8px;
+      inset: 9px;
       border-width: 1.5px;
-      box-shadow: inset 0 0 0 3px rgba(5,8,7,.55);
+      box-shadow: inset 0 0 0 3.5px rgba(5,8,7,.55);
     }
     body.is-unlocked .brand {
-      font-size: 1.05rem;
+      font-size: 1.2rem;
       letter-spacing: -.03em;
     }
     body.is-unlocked h1 { display: none; }
