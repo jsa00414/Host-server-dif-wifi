@@ -4161,6 +4161,8 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
+        # Media server must not be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == GRAFANA_PUBLIC_HOST.lower():
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
@@ -4195,12 +4197,14 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox)."""
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox, VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PLEX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4211,7 +4215,7 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PLEX_PORT,
                 "name": "plex-server",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4446,6 +4450,11 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
     claimed = _plex_is_claimed()
@@ -4465,57 +4474,78 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         setup_path = "/web/index.html"
     # After claim, PMS often requires TLS on :32400 ("secure connections required").
     upstream = f"https://{host}:{port}"
+    # Indent: site → optional vpn handle → path handle → reverse_proxy options
+    base = "\t\t" if vpn_only else "\t"
+    opt = base + "\t\t"  # options inside reverse_proxy inside path handle
     # Pass through client headers (especially X-Plex-*). Do NOT rewrite
     # X-Plex-Client-Identifier to empty — that breaks PlayQueue ("loading items").
     proxy_common = [
-        "\t\t\ttransport http {",
-        "\t\t\t\ttls_insecure_skip_verify",
-        "\t\t\t}",
+        f"{opt}transport http {{",
+        f"{opt}\ttls_insecure_skip_verify",
+        f"{opt}}}",
         # Keep public Host so PMS/web client stay aligned with plex.vpstruelord.com
-        "\t\t\theader_up Host {host}",
-        f"\t\t\theader_up X-Forwarded-Host {public}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Real-IP {remote_host}",
-        "\t\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\t\theader_down Location http://{public} https://{public}",
-        f"\t\t\theader_down Location https://{public} https://{public}",
-        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location http://{host} https://{public}",
-        "\t\t\theader_down -X-Frame-Options",
-        "\t\t\theader_down -Content-Security-Policy",
+        f"{opt}header_up Host {{host}}",
+        f"{opt}header_up X-Forwarded-Host {public}",
+        f"{opt}header_up X-Forwarded-Proto {{scheme}}",
+        f"{opt}header_up X-Real-IP {{remote_host}}",
+        f"{opt}header_up X-Forwarded-For {{remote_host}}",
+        f"{opt}header_down Location http://{public} https://{public}",
+        f"{opt}header_down Location https://{public} https://{public}",
+        f"{opt}header_down Location http://{host}:{port} https://{public}",
+        f"{opt}header_down Location https://{host}:{port} https://{public}",
+        f"{opt}header_down Location http://{host} https://{public}",
+        f"{opt}header_down -X-Frame-Options",
+        f"{opt}header_down -Content-Security-Policy",
     ]
-    lines = [
-        f"{public} {{",
-        # Claim helper (plex.tv claim code) — portal serves the form + API.
-        "\thandle /claim* {",
-        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
-        "\t}",
-        # Land on web UI (setup only while unclaimed).
-        "\t@plexroot path / /web /web/",
-        f"\tredir @plexroot {setup_path} 302",
-        # Media streams should not be gzip-buffered.
-        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
-        "\thandle @plexmedia {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t\tflush_interval -1",
-        "\t\t}",
-        "\t}",
-        "\thandle {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t}",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
-    ]
+    lines = [f"{public} {{"]
+    if vpn_only:
+        lines.append(f"\t@vpn_clients client_ip {VPN_CLIENT_CIDRS}")
+        lines.append("\thandle @vpn_clients {")
+    lines.extend(
+        [
+            # Claim helper (plex.tv claim code) — portal serves the form + API.
+            f"{base}handle /claim* {{",
+            f"{base}\treverse_proxy {DOCKER_HOST_GW}:5002",
+            f"{base}}}",
+            # Land on web UI (setup only while unclaimed).
+            f"{base}@plexroot path / /web /web/",
+            f"{base}redir @plexroot {setup_path} 302",
+            # Media streams should not be gzip-buffered.
+            f"{base}@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+            f"{base}handle @plexmedia {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{opt}flush_interval -1",
+            f"{base}\t}}",
+            f"{base}}}",
+            f"{base}handle {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{base}\t}}",
+            f"{base}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                '\t\trespond "Forbidden" 403',
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -8260,6 +8290,7 @@ def _security_domain_exposure() -> list[dict]:
         "buffalo.vpstruelord.com",
         "files.vpstruelord.com",
         "proxmox.vpstruelord.com",
+        "plex.vpstruelord.com",
         "grafana.vpstruelord.com",
         "pihole.vpstruelord.com",
         "dns.vpstruelord.com",
