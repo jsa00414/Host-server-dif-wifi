@@ -29,6 +29,24 @@ No private CA install is required.
 | DNS | AdGuard `10.42.42.44` (portal VIP `10.11.0.1`) |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 
+## Windows drops / “terminated by the remote computer” (phone OK)
+
+Windows MOBIKE will path-flip onto Flint’s OpenVPN (`10.9.0.2`) when strongSwan
+advertises private `ADD_4_ADDR` (docker/tun). Phone usually stays on the WAN.
+
+Public mode must:
+
+1. `mobike=no` on `ikev2-eap` (and restart strongSwan after editing)
+2. `interfaces_use = ens6` so only `74.208.76.213` is advertised
+3. `ensure-ikev2-no-nest.sh` — drop UDP 500/4500 from `tun0` / `10.9.0.0/24`
+
+```bash
+bash /opt/ikev2/ensure-ikev2-public.sh
+bash /opt/ikev2/ensure-ikev2-no-nest.sh
+```
+
+Then on the PC: disconnect VPN → optional re-run `Setup-ServerManagerVpn.ps1` → reconnect.
+
 ## IKEv2 via OpenVPN (optional nested mode)
 
 Default is **public** IKEv2 on UDP 500/4500. To lock IKEv2 behind OpenVPN instead:

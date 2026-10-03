@@ -3,19 +3,23 @@
 #
 # Windows/iOS exclude the VPN gateway public IP from the tunnel, so HTTPS to
 # portal.vpstruelord.com often arrives from the peer WAN IP (not 10.10.0.x).
-# Split-DNS to 10.9.0.1 helps when the client uses VPN DNS; this ACL covers
-# DoH / DNS-leak / gateway-exclusion cases while an SA is up.
+# Split-DNS helps when the client uses VPN DNS; this ACL covers DoH / DNS-leak /
+# gateway-exclusion cases while an SA is up.
+#
+# Sticky IPs in /opt/servermanager/panel/caddy-sticky-vpn-ips.txt survive
+# disconnects (home WAN) so router/portal keep working without a live SA.
 set -euo pipefail
 
 CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 STATE_DIR="${IKEV2_PEER_ACL_DIR:-/var/lib/servermanager}"
 STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
-BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32"
+STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
+BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
-export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE BASE_CIDRS_DEFAULT
+export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE BASE_CIDRS_DEFAULT
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$(dirname "$STICKY_FILE")"
 
 python3 - <<'PY'
 import os
@@ -26,9 +30,12 @@ from pathlib import Path
 caddyfile = Path(os.environ.get("CADDYFILE", "/opt/truemail/Caddyfile"))
 env_file = Path(os.environ.get("PORTAL_ENV_FILE", "/opt/wireguard/port-forward-ui.env"))
 state_file = Path(os.environ.get("STATE_FILE", "/var/lib/servermanager/ikev2-peer-ips.txt"))
+sticky_file = Path(
+    os.environ.get("STICKY_FILE", "/opt/servermanager/panel/caddy-sticky-vpn-ips.txt")
+)
 base_default = os.environ.get(
     "BASE_CIDRS_DEFAULT",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32",
+    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 
 PRIVATE = [
@@ -48,10 +55,14 @@ def is_public_ipv4(ip: str) -> bool:
 
 def peer_ips() -> list[str]:
     try:
-        out = subprocess.check_output(["ipsec", "statusall"], text=True, stderr=subprocess.STDOUT)
+        out = subprocess.check_output(
+            ["ipsec", "statusall"], text=True, stderr=subprocess.STDOUT
+        )
     except Exception:
         try:
-            out = subprocess.check_output(["ipsec", "status"], text=True, stderr=subprocess.STDOUT)
+            out = subprocess.check_output(
+                ["ipsec", "status"], text=True, stderr=subprocess.STDOUT
+            )
         except Exception:
             return []
     found = []
@@ -63,46 +74,71 @@ def peer_ips() -> list[str]:
     return found
 
 
+def load_sticky_cidrs() -> list[str]:
+    out: list[str] = []
+    if not sticky_file.is_file():
+        return out
+    for line in sticky_file.read_text().splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        if "/" not in raw:
+            raw = f"{raw}/32"
+        if raw not in out:
+            out.append(raw)
+    return out
+
+
 def load_base_cidrs() -> list[str]:
     base = base_default.split()
+    sticky = set(load_sticky_cidrs())
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
             if line.startswith("VPN_CLIENT_CIDRS="):
                 raw = line.split("=", 1)[1].strip().strip('"').strip("'")
                 parts = raw.split()
-                # Drop previously injected peer /32s (public singles), but keep the
-                # VPS public /32 used for hairpin ACL.
+                # Drop previously injected peer /32s (public singles), but keep
+                # the VPS public /32 and sticky home-WAN entries.
                 cleaned = []
                 for p in parts:
                     if p.endswith("/32"):
                         ip = p[:-3]
-                        if is_public_ipv4(ip) and ip != "74.208.76.213":
+                        if is_public_ipv4(ip) and ip != "74.208.76.213" and p not in sticky:
                             continue
                     cleaned.append(p)
                 if cleaned:
                     base = cleaned
                 break
-    # Ensure IKEv2 pool + VPS public IP (hairpin) always present
+    # Ensure IKEv2 pool + portal VIP + VPS public IP (hairpin) always present
     if "10.10.0.0/24" not in base:
         base.append("10.10.0.0/24")
+    if "10.11.0.1/32" not in base:
+        base.append("10.11.0.1/32")
     if "74.208.76.213/32" not in base:
         base.append("74.208.76.213/32")
+    for s in sticky:
+        if s not in base:
+            base.append(s)
     return base
 
 
 peers = peer_ips()
 base = load_base_cidrs()
 peer_cidrs = [f"{ip}/32" for ip in peers]
-combined = base + [c for c in peer_cidrs if c not in base]
+sticky_cidrs = load_sticky_cidrs()
+combined = base[:]
+for c in peer_cidrs + sticky_cidrs:
+    if c not in combined:
+        combined.append(c)
 combined_s = " ".join(combined)
 
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
 if prev == cur and caddyfile.is_file():
-    # Still rewrite if Caddyfile lost peer entries (portal regen).
     text = caddyfile.read_text()
-    if peers and all(f"{ip}/32" in text for ip in peers):
-        print(f"OK unchanged ({len(peers)} peers)")
+    needed = peers + [c[:-3] for c in sticky_cidrs if c.endswith("/32")]
+    if needed and all(f"{ip}/32" in text for ip in needed):
+        print(f"OK unchanged ({len(peers)} peers, {len(sticky_cidrs)} sticky)")
         raise SystemExit(0)
 
 state_file.write_text(cur + ("\n" if cur else ""))
@@ -130,8 +166,10 @@ if not caddyfile.is_file():
 
 text = caddyfile.read_text()
 
+
 def _repl(m):
     return f"{m.group(1)}@vpn_clients client_ip {combined_s}"
+
 
 pat = re.compile(r"^([ \t]*)@vpn_clients (?:client_ip|remote_ip) (.+)$", re.M)
 new_text, n = pat.subn(_repl, text)
@@ -142,16 +180,24 @@ else:
     print(f"patched {n} Caddy @vpn_clients lines")
 
 print("peers:", ", ".join(peers) if peers else "(none)")
+print("sticky:", ", ".join(sticky_cidrs) if sticky_cidrs else "(none)")
 print("cidrs:", combined_s)
 
 # Reload Caddy
 reload = subprocess.run(
-    ["docker", "exec", "truemail-caddy-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
+    [
+        "docker",
+        "exec",
+        "truemail-caddy-1",
+        "caddy",
+        "reload",
+        "--config",
+        "/etc/caddy/Caddyfile",
+    ],
     capture_output=True,
     text=True,
 )
 if reload.returncode != 0:
-    # fallback: restart container
     print("caddy reload failed:", (reload.stderr or reload.stdout)[:300])
     subprocess.check_call(["docker", "restart", "truemail-caddy-1"])
     print("restarted truemail-caddy-1")
