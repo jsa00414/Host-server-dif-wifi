@@ -15586,8 +15586,13 @@ document.getElementById('f').onsubmit = async (e) => {
             try:
                 status = build_security_status()
                 tok = parse_session_cookie(self.headers.get("Cookie"))
+                lock = ssh_panel_unlock_status(tok)
                 if isinstance(status.get("ssh"), dict):
-                    status["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
+                    if lock.get("unlocked"):
+                        status["ssh"]["panel_lock"] = lock
+                    else:
+                        # Hide SSH status details until the panel is unlocked.
+                        status["ssh"] = {"panel_lock": lock, "ok": True}
                 self._json(200, status)
             except Exception as exc:
                 self._json(500, {"error": str(exc)})

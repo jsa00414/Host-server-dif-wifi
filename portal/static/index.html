@@ -3605,24 +3605,30 @@
         const unlocked = !!panelLock.unlocked;
         const unlockSecs = panelLock.unlock_seconds || 300;
         const expiresIn = panelLock.expires_in || 0;
-        const lockBanner = unlocked
-          ? `<div class="sec-ssh-lock unlocked">
-              <div class="lock-title">Unlocked ${secSev("ok")}</div>
-              <div class="lock-sub">Changes allowed for ~${escHtml(Math.max(1, Math.ceil(expiresIn / 60)))} min. Relock when finished.</div>
-              <div class="sec-login-actions">
-                <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
-              </div>
-            </div>`
-          : `<div class="sec-ssh-lock">
+        if (!unlocked) {
+          sshEl.innerHTML = `
+            <div class="sec-ssh-lock">
               <div class="lock-title">Locked ${secSev("medium")}</div>
-              <div class="lock-sub">Status is visible. To change login method, root SSH, users, or keys, re-enter the <strong>portal admin password</strong> (unlocks for ${escHtml(Math.round(unlockSecs / 60))} minutes).</div>
+              <div class="lock-sub">Login method, keys, and users are hidden. Re-enter the <strong>portal admin password</strong> to unlock for ${escHtml(Math.round(unlockSecs / 60))} minutes.</div>
               <div class="sec-ssh-lock-form">
                 <input type="password" id="secSshUnlockPass" placeholder="Portal password" autocomplete="current-password" />
                 <button type="button" class="primary" id="secSshUnlockBtn">Unlock</button>
               </div>
             </div>`;
+          document.getElementById("secSshUnlockBtn")?.addEventListener("click", () => unlockSshPanel());
+          document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") unlockSshPanel();
+          });
+          scheduleSshPanelRelock(0);
+        } else {
         sshEl.innerHTML = `
-          ${lockBanner}
+          <div class="sec-ssh-lock unlocked">
+            <div class="lock-title">Unlocked ${secSev("ok")}</div>
+            <div class="lock-sub">Changes allowed for ~${escHtml(Math.max(1, Math.ceil(expiresIn / 60)))} min. Relock when finished.</div>
+            <div class="sec-login-actions">
+              <button type="button" class="ghost" id="secSshLockBtn">Lock panel</button>
+            </div>
+          </div>
           <div class="meta-grid">
             <div class="meta-box"><label>Login method</label><div>${escHtml(methodLabel)}</div></div>
             <div class="meta-box"><label>Password login</label><div>${escHtml(ssh.password_authentication ?? "—")}</div></div>
@@ -3631,7 +3637,7 @@
           </div>
           <div class="method-sub" style="margin:8px 0 4px">${escHtml(hint)} ${escHtml(lockHint)}</div>
 
-          <div class="sec-ssh-controls" data-locked="${unlocked ? "0" : "1"}">
+          <div class="sec-ssh-controls" data-locked="0">
             <div class="sec-login-method">
               <div>
                 <div class="method-label">${escHtml(methodLabel)}</div>
@@ -3692,10 +3698,6 @@
               rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
             }</tbody></table>
           </div>`;
-        document.getElementById("secSshUnlockBtn")?.addEventListener("click", () => unlockSshPanel());
-        document.getElementById("secSshUnlockPass")?.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter") unlockSshPanel();
-        });
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
@@ -3709,6 +3711,7 @@
           btn.addEventListener("click", () => removeSshAuthorizedKey(btn.getAttribute("data-index"), btn.getAttribute("data-fp")));
         });
         scheduleSshPanelRelock(expiresIn);
+        }
       }
 
       const domEl = document.getElementById("secDomains");
