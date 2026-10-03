@@ -93,6 +93,7 @@
       width: 100%;
       max-width: 100vw;
       min-height: 0;
+      position: relative;
     }
     .code-shell {
       flex: 1 1 auto;
@@ -285,36 +286,45 @@
       color: var(--muted);
     }
     .circle {
-      width: 100%;
-      border-top: 1px solid rgba(170,210,185,.1);
-      padding: 12px calc(12px + var(--safe-right)) 4px calc(12px + var(--safe-left));
+      position: absolute;
+      inset: 0;
+      width: auto;
+      border: 0;
+      border-radius: 0;
+      padding: 12px calc(12px + var(--safe-right)) 12px calc(12px + var(--safe-left));
       text-align: left;
-      background: rgba(0,0,0,.16);
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      z-index: 5;
     }
     .circle[hidden] { display: none !important; }
     .circle h3 {
       margin: 0 0 4px;
-      font-size: .78rem;
+      font-size: .9rem;
       letter-spacing: .04em;
       text-transform: uppercase;
       color: var(--accent);
     }
     .circle .sub {
-      margin: 0 0 10px;
+      margin: 0 0 12px;
       color: var(--muted);
-      font-size: .72rem;
+      font-size: .74rem;
       line-height: 1.4;
     }
     .circle .meta {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-bottom: 10px;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex: 0 0 auto;
     }
     .circle .meta div {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
+      border-radius: 12px;
+      padding: 10px 12px;
       background: rgba(255,255,255,.03);
     }
     .circle .meta label {
@@ -323,48 +333,52 @@
       font-size: .62rem;
       margin-bottom: 2px;
     }
-    .circle .meta strong { font-size: .9rem; }
+    .circle .meta strong { font-size: 1rem; }
     .circle-list {
       display: flex;
       flex-direction: column;
       gap: 8px;
       margin-bottom: 10px;
-      max-height: 260px;
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .circle-row {
       border: 1px solid var(--line);
       border-radius: 12px;
-      padding: 10px;
+      padding: 12px;
       background: rgba(255,255,255,.03);
     }
     .circle-row .ip {
       font-family: "IBM Plex Mono", monospace;
-      font-size: .86rem;
+      font-size: .9rem;
       word-break: break-all;
     }
     .circle-row .info {
       color: var(--muted);
-      font-size: .68rem;
+      font-size: .7rem;
       margin-top: 4px;
     }
     .circle-row .row-actions {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px;
-      margin-top: 8px;
+      margin-top: 10px;
     }
     .circle-empty {
       color: var(--muted);
-      font-size: .74rem;
-      padding: 6px 2px 10px;
+      font-size: .78rem;
+      padding: 18px 4px;
+      text-align: center;
     }
     .circle-add {
       display: grid;
       gap: 8px;
-      margin-top: 4px;
-      padding-top: 8px;
+      margin-top: auto;
+      padding-top: 10px;
       border-top: 1px solid var(--line);
+      flex: 0 0 auto;
     }
     .circle-add input {
       width: 100%;
@@ -375,6 +389,42 @@
       padding: 12px 14px;
       font: inherit;
       font-size: .84rem;
+    }
+    .tabs {
+      display: none;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      width: 100%;
+    }
+    body.has-account .tabs { display: grid; }
+    .tabs button {
+      min-height: 44px;
+      border-radius: 12px;
+      font-size: .8rem;
+      letter-spacing: .02em;
+    }
+    .tabs button.active {
+      background: rgba(61,222,160,.2);
+      border-color: rgba(61,222,160,.55);
+      color: #d9ffe9;
+    }
+    body.tab-circle .code-shell > .acct,
+    body.tab-circle .code-shell > .code,
+    body.tab-circle .code-shell > .bar {
+      display: none !important;
+    }
+    body.tab-circle .code-shell {
+      justify-content: stretch;
+      align-items: stretch;
+    }
+    body.tab-circle .dock .actions #copyBtn,
+    body.tab-circle .dock .actions #manualBtn,
+    body.tab-circle .dock .actions #clearBtn,
+    body.tab-circle .dock .actions #installBtn,
+    body.tab-circle .dock .manual,
+    body.tab-circle .dock .hint,
+    body.tab-circle .dock .install {
+      display: none !important;
     }
     @supports (padding: max(0px)) {
       body {
@@ -395,23 +445,27 @@
       <div class="acct" id="acctLabel"></div>
       <div class="code" id="codeView">------</div>
       <div class="bar"><i id="tickBar"></i></div>
+      <section class="circle" id="circlePane" hidden>
+        <h3>VPN trust circle</h3>
+        <p class="sub">Pending WAN IPs stay on guest DNS until you approve them here with your authenticator code.</p>
+        <div class="meta">
+          <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
+          <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
+        </div>
+        <div class="circle-list" id="circleList"><div class="circle-empty">Open Circle to load the list.</div></div>
+        <div class="circle-add">
+          <input id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
+          <button type="button" class="primary" id="circleApproveBtn">Approve into circle</button>
+          <button type="button" id="circleRefreshBtn">Refresh list</button>
+        </div>
+      </section>
     </div>
     <div class="empty" id="emptyView">No account saved yet. Open the setup link from the portal Security tab on this phone.</div>
-    <section class="circle" id="circlePane" hidden>
-      <h3>VPN trust circle</h3>
-      <p class="sub">Pending WAN IPs stay on guest DNS until you approve them here with your authenticator code.</p>
-      <div class="meta">
-        <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
-        <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
-      </div>
-      <div class="circle-list" id="circleList"><div class="circle-empty">Loading…</div></div>
-      <div class="circle-add">
-        <input id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
-        <button type="button" class="primary" id="circleApproveBtn">Approve into circle</button>
-        <button type="button" id="circleRefreshBtn">Refresh list</button>
-      </div>
-    </section>
     <div class="dock">
+      <div class="tabs" id="tabBar" hidden>
+        <button type="button" class="active" id="tabCodesBtn" data-tab="codes">Codes</button>
+        <button type="button" id="tabCircleBtn" data-tab="circle">Circle</button>
+      </div>
       <div class="install" id="installHint"></div>
       <div class="actions">
         <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
@@ -460,6 +514,9 @@
       circleIpInput: document.getElementById("circleIpInput"),
       circleApproveBtn: document.getElementById("circleApproveBtn"),
       circleRefreshBtn: document.getElementById("circleRefreshBtn"),
+      tabBar: document.getElementById("tabBar"),
+      tabCodesBtn: document.getElementById("tabCodesBtn"),
+      tabCircleBtn: document.getElementById("tabCircleBtn"),
     };
 
     let account = null;
@@ -467,6 +524,23 @@
     let toastTimer = null;
     let circleData = null;
     let circleLoading = false;
+    let activeTab = "codes";
+
+    function setActiveTab(tab) {
+      activeTab = tab === "circle" ? "circle" : "codes";
+      document.body.classList.toggle("tab-circle", !!(account && activeTab === "circle"));
+      els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
+      els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
+      if (account) {
+        els.copyBtn.hidden = activeTab !== "codes";
+        if (activeTab === "circle") {
+          renderCircle();
+          if (!circleData && !circleLoading) fetchCircle();
+        } else if (els.circlePane) {
+          els.circlePane.hidden = true;
+        }
+      }
+    }
 
     function toast(msg) {
       els.toast.textContent = msg;
@@ -500,6 +574,9 @@
     function clearAccount() {
       localStorage.removeItem(STORE_KEY);
       account = null;
+      circleData = null;
+      activeTab = "codes";
+      document.body.classList.remove("tab-circle");
       render();
       toast("Account removed");
     }
@@ -625,7 +702,7 @@
 
     function renderCircle() {
       if (!els.circlePane) return;
-      if (!account) {
+      if (!account || activeTab !== "circle") {
         els.circlePane.hidden = true;
         return;
       }
@@ -725,29 +802,39 @@
 
     function render() {
       document.body.classList.toggle("has-account", !!account);
+      document.body.classList.toggle("tab-circle", !!(account && activeTab === "circle"));
       if (account) {
         els.codeShell.hidden = false;
         els.emptyView.hidden = true;
-        els.copyBtn.hidden = false;
-        els.clearBtn.hidden = false;
+        els.copyBtn.hidden = activeTab !== "codes";
+        els.clearBtn.hidden = activeTab !== "codes";
+        els.manualBtn.hidden = activeTab !== "codes";
+        if (els.tabBar) els.tabBar.hidden = false;
+        els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
+        els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
         els.acctLabel.textContent = `${account.issuer} · ${account.account}`;
-        els.manualForm.classList.remove("show");
+        if (activeTab !== "codes") els.manualForm.classList.remove("show");
         tick();
         renderCircle();
-        if (!circleData && !circleLoading) fetchCircle();
+        if (activeTab === "circle" && !circleData && !circleLoading) fetchCircle();
       } else {
         els.codeShell.hidden = true;
         els.emptyView.hidden = false;
         els.copyBtn.hidden = true;
         els.clearBtn.hidden = true;
+        els.manualBtn.hidden = false;
+        if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
         if (els.circlePane) els.circlePane.hidden = true;
         circleData = null;
+        activeTab = "codes";
+        document.body.classList.remove("tab-circle");
       }
       updateInstallUi();
     }
 
     els.copyBtn.addEventListener("click", async () => {
+      if (activeTab !== "codes") return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try {
@@ -763,6 +850,7 @@
     });
 
     els.manualBtn.addEventListener("click", () => {
+      if (activeTab !== "codes") setActiveTab("codes");
       els.manualForm.classList.toggle("show");
       if (els.manualForm.classList.contains("show")) els.secretInput.focus();
     });
@@ -791,6 +879,8 @@
       updateInstallUi();
     });
 
+    els.tabCodesBtn?.addEventListener("click", () => setActiveTab("codes"));
+    els.tabCircleBtn?.addEventListener("click", () => setActiveTab("circle"));
     els.circleRefreshBtn?.addEventListener("click", async () => {
       await fetchCircle();
       toast("Refreshed");

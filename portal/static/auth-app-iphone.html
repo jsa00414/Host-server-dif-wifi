@@ -114,46 +114,76 @@
       padding-bottom: 4px;
     }
     body.is-unlocked {
-      overflow: auto;
-      overscroll-behavior: contain;
+      overflow: hidden;
     }
     body.is-unlocked main {
-      justify-content: flex-start;
-      overflow: auto;
+      justify-content: stretch;
+      overflow: hidden;
+      min-height: 0;
+    }
+    body.tab-circle .code-pane > .code,
+    body.tab-circle .code-pane > .bar {
+      display: none !important;
+    }
+    .tabs {
+      display: none;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 0;
+    }
+    body.is-unlocked .tabs { display: grid; }
+    .tabs button {
+      min-height: 44px;
+      border-radius: 12px;
+      font-size: .8rem;
+      letter-spacing: .02em;
+    }
+    .tabs button.active {
+      background: rgba(61,222,160,.2);
+      border-color: rgba(61,222,160,.55);
+      color: #d9ffe9;
     }
     .circle {
-      width: min(420px, calc(100% - 28px));
-      margin: 4px auto 0;
-      padding: 12px 12px 4px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(0,0,0,.22);
+      position: absolute;
+      inset: 0;
+      width: auto;
+      margin: 0;
+      padding: 12px calc(14px + var(--sar)) 12px calc(14px + var(--sal));
+      border: 0;
+      border-radius: 0;
+      background: transparent;
       text-align: left;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      animation: rise .28s ease both;
     }
     .circle[hidden] { display: none !important; }
     .circle h3 {
       margin: 0 0 4px;
-      font-size: .78rem;
+      font-size: .9rem;
       letter-spacing: .04em;
       text-transform: uppercase;
       color: var(--accent);
     }
     .circle .sub {
-      margin: 0 0 10px;
+      margin: 0 0 12px;
       color: var(--muted);
-      font-size: .72rem;
+      font-size: .74rem;
       line-height: 1.4;
     }
     .circle .meta {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-bottom: 10px;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex: 0 0 auto;
     }
     .circle .meta div {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
+      border-radius: 12px;
+      padding: 10px 12px;
       background: rgba(255,255,255,.03);
     }
     .circle .meta label {
@@ -163,7 +193,7 @@
       margin-bottom: 2px;
     }
     .circle .meta strong {
-      font-size: .9rem;
+      font-size: 1rem;
       font-weight: 600;
     }
     .circle-list {
@@ -171,46 +201,50 @@
       flex-direction: column;
       gap: 8px;
       margin-bottom: 10px;
-      max-height: 240px;
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .circle-row {
       border: 1px solid var(--line);
       border-radius: 12px;
-      padding: 10px;
+      padding: 12px;
       background: rgba(255,255,255,.03);
     }
     .circle-row .ip {
       font-family: "IBM Plex Mono", monospace;
-      font-size: .86rem;
+      font-size: .9rem;
       word-break: break-all;
     }
     .circle-row .info {
       color: var(--muted);
-      font-size: .68rem;
+      font-size: .7rem;
       margin-top: 4px;
     }
     .circle-row .row-actions {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px;
-      margin-top: 8px;
+      margin-top: 10px;
     }
     .circle-row .row-actions button {
-      min-height: 40px;
-      font-size: .78rem;
+      min-height: 42px;
+      font-size: .8rem;
     }
     .circle-empty {
       color: var(--muted);
-      font-size: .74rem;
-      padding: 6px 2px 10px;
+      font-size: .78rem;
+      padding: 18px 4px;
+      text-align: center;
     }
     .circle-add {
       display: grid;
       gap: 8px;
-      margin-top: 4px;
-      padding-top: 8px;
+      margin-top: auto;
+      padding-top: 10px;
       border-top: 1px solid var(--line);
+      flex: 0 0 auto;
     }
     .circle-add input {
       width: 100%;
@@ -222,6 +256,25 @@
       font: inherit;
       font-size: .84rem;
     }
+    .code-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      position: relative;
+      gap: 22px;
+      padding: 0 0 24px;
+      min-height: 0;
+    }
+    body.tab-circle .code-pane {
+      justify-content: stretch;
+      align-items: stretch;
+      gap: 0;
+      padding: 0;
+    }
+    body.tab-circle .actions #copyBtn { display: none !important; }
     main {
       min-height: 0;
       display: flex;
@@ -363,7 +416,11 @@
       grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
+    body.tab-circle .actions {
+      grid-template-columns: 1fr;
+    }
     .actions:empty { display: none; }
+    body.is-unlocked .install { display: none !important; }
     button {
       appearance: none;
       border: 1px solid var(--line);
@@ -444,7 +501,7 @@
           <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
           <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
         </div>
-        <div class="circle-list" id="circleList"><div class="circle-empty">Unlock, then pull to refresh.</div></div>
+        <div class="circle-list" id="circleList"><div class="circle-empty">Unlock, then open Circle.</div></div>
         <div class="circle-add">
           <input id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
           <button type="button" class="primary" id="circleApproveBtn">Approve into circle</button>
@@ -456,6 +513,10 @@
   </main>
 
   <footer>
+    <div class="tabs" id="tabBar" hidden>
+      <button type="button" class="active" id="tabCodesBtn" data-tab="codes">Codes</button>
+      <button type="button" id="tabCircleBtn" data-tab="circle">Circle</button>
+    </div>
     <div class="install" id="installHint"></div>
     <div class="actions">
       <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
@@ -497,6 +558,9 @@
       circleIpInput: document.getElementById("circleIpInput"),
       circleApproveBtn: document.getElementById("circleApproveBtn"),
       circleRefreshBtn: document.getElementById("circleRefreshBtn"),
+      tabBar: document.getElementById("tabBar"),
+      tabCodesBtn: document.getElementById("tabCodesBtn"),
+      tabCircleBtn: document.getElementById("tabCircleBtn"),
     };
 
     let account = null;
@@ -507,6 +571,21 @@
     let pinMode = false;
     let circleData = null;
     let circleLoading = false;
+    let activeTab = "codes";
+
+    function setActiveTab(tab) {
+      activeTab = tab === "circle" ? "circle" : "codes";
+      document.body.classList.toggle("tab-circle", activeTab === "circle");
+      els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
+      els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
+      if (account && unlocked) {
+        els.copyBtn.hidden = activeTab !== "codes";
+        if (activeTab === "circle") {
+          renderCircle();
+          if (!circleData && !circleLoading) fetchCircle();
+        }
+      }
+    }
 
     function toast(msg) {
       els.toast.textContent = msg;
@@ -713,7 +792,7 @@
     }
     function renderCircle() {
       if (!els.circlePane) return;
-      if (!account || !unlocked) {
+      if (!account || !unlocked || activeTab !== "circle") {
         els.circlePane.hidden = true;
         return;
       }
@@ -808,6 +887,8 @@
       unlocked = false;
       pinMode = false;
       circleData = null;
+      activeTab = "codes";
+      document.body.classList.remove("tab-circle");
       els.codeView.textContent = "------";
       els.pinInput.value = "";
       if (els.circlePane) els.circlePane.hidden = true;
@@ -819,12 +900,14 @@
       const hasFace = !!loadFaceCredId();
       const hasPin = !!loadPinHash();
       document.body.classList.toggle("is-unlocked", !!(account && unlocked));
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && activeTab === "circle"));
       if (!account) {
         els.lockView.hidden = true;
         els.codePane.hidden = true;
         els.emptyView.hidden = false;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
+        if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
         updateInstallUi();
         return;
@@ -835,6 +918,7 @@
         els.codePane.hidden = true;
         els.copyBtn.hidden = true;
         els.lockNowBtn.hidden = true;
+        if (els.tabBar) els.tabBar.hidden = true;
         if (pinMode && hasPin) {
           els.lockTitle.textContent = "Enter PIN";
           els.lockSub.textContent = "Unlock with your app PIN.";
@@ -857,12 +941,15 @@
       } else {
         els.lockView.hidden = true;
         els.codePane.hidden = false;
-        els.copyBtn.hidden = false;
+        els.copyBtn.hidden = activeTab !== "codes";
         els.lockNowBtn.hidden = false;
+        if (els.tabBar) els.tabBar.hidden = false;
+        els.tabCodesBtn?.classList.toggle("active", activeTab === "codes");
+        els.tabCircleBtn?.classList.toggle("active", activeTab === "circle");
         tick();
         bumpIdle();
         renderCircle();
-        if (!circleData && !circleLoading) fetchCircle();
+        if (activeTab === "circle" && !circleData && !circleLoading) fetchCircle();
       }
       updateInstallUi();
     }
@@ -933,6 +1020,14 @@
       }
     });
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
+    els.tabCodesBtn?.addEventListener("click", () => {
+      setActiveTab("codes");
+      bumpIdle();
+    });
+    els.tabCircleBtn?.addEventListener("click", () => {
+      setActiveTab("circle");
+      bumpIdle();
+    });
     els.circleRefreshBtn?.addEventListener("click", () => withBusy(async () => {
       await fetchCircle();
       toast(circleLoading ? "Loading…" : "Refreshed");
@@ -944,7 +1039,7 @@
       if (els.circleIpInput) els.circleIpInput.value = "";
     }));
     els.copyBtn.addEventListener("click", async () => {
-      if (!unlocked) return;
+      if (!unlocked || activeTab !== "codes") return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try { await navigator.clipboard.writeText(code); toast("Copied"); }
