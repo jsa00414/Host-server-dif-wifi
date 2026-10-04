@@ -90,6 +90,72 @@ def denied_ips() -> set[str]:
 
 DENIED_IPS = denied_ips()
 
+# Chrome-like unreachable body (Caddy interpolates {host}). No Forbidden ACL signal.
+_UNREACHABLE_HTML = (
+    "<!DOCTYPE html><html lang=en><meta charset=utf-8>"
+    "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+    "<title>{host}</title>"
+    "<style>"
+    "html,body{margin:0;background:#fff;color:#202124;"
+    "font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}"
+    ".w{max-width:420px;margin:14vh auto 0;padding:0 28px}"
+    "svg{width:72px;height:72px;margin:0 0 16px;opacity:.55;display:block}"
+    "h1{font-size:1.4rem;font-weight:700;margin:0 0 12px;letter-spacing:-.01em}"
+    "p{font-size:.95rem;line-height:1.45;margin:0 0 8px}"
+    ".try{margin-top:16px}.try b{font-weight:600}"
+    "ul{margin:4px 0 16px 1.15em;padding:0}li{margin:4px 0}"
+    ".code{color:#5f6368;font-size:.75rem;letter-spacing:.04em;margin:16px 0 22px;"
+    "text-transform:uppercase}"
+    "button{display:block;width:100%;border:0;border-radius:24px;padding:12px 18px;"
+    "background:#1a73e8;color:#fff;font-size:1rem;font-weight:500}"
+    "button:active{background:#1765cc}"
+    ".d{text-align:center;margin-top:14px}"
+    ".d a{color:#1a73e8;text-decoration:none;font-size:.95rem}"
+    "</style>"
+    "<div class=w>"
+    "<svg viewBox=\"0 0 24 24\" aria-hidden=true>"
+    "<path fill=\"#80868b\" d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 "
+    "2-2V8l-6-6zm1 7V3.5L19.5 9H15z\"/>"
+    "<circle cx=\"9.2\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
+    "<circle cx=\"14.8\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
+    "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"1.2\" stroke-linecap=\"round\" "
+    "d=\"M9.5 17.2c1.2-1 3.8-1 5 0\"/>"
+    "</svg>"
+    "<h1>This site can&#39;t be reached</h1>"
+    "<p><strong>{host}</strong>&#39;s server IP address could not be found.</p>"
+    "<p class=try><b>Try:</b></p>"
+    "<ul><li>Checking the connection</li></ul>"
+    "<p class=code>ERR_NAME_NOT_RESOLVED</p>"
+    "<button type=button onclick=\"location.reload()\">Reload</button>"
+    "<p class=d><a href=\"#\" id=det "
+    "onclick=\"this.textContent=this.textContent==='Details'?"
+    "'DNS_PROBE_FINISHED_NXDOMAIN':'Details';return false\">Details</a></p>"
+    "</div>"
+)
+
+
+def unreachable_respond_block(indent: str) -> str:
+    return (
+        f'{indent}header Content-Type "text/html; charset=utf-8"\n'
+        f"{indent}header -Server\n"
+        f"{indent}respond `{_UNREACHABLE_HTML}` 404\n"
+    )
+
+
+def scrub_forbidden_responds(text: str) -> tuple[str, bool]:
+    """Replace legacy respond \"Forbidden\" 403 with Chrome-like unreachable page."""
+
+    def repl(m: re.Match) -> str:
+        return unreachable_respond_block(m.group(1)).rstrip("\n")
+
+    new, n = re.subn(
+        r'^([ \t]*)respond "Forbidden" 403\s*$',
+        repl,
+        text,
+        flags=re.M,
+    )
+    return new, n > 0
+
 
 def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
     """Keep site-level @denied_wan handles on portal + router (incl. auth-app)."""
@@ -114,7 +180,7 @@ def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
             f"\n\t# Hard-deny shared campus/ISP egress (never trust; includes auth-app).\n"
             f"\t@denied_wan client_ip {denied_s}\n"
             f"\thandle @denied_wan {{\n"
-            f'\t\trespond "Forbidden" 403\n'
+            f"{unreachable_respond_block(chr(9)+chr(9))}"
             f"\t}}\n"
         )
         text = text[: brace + 1] + insert + text[brace + 1 :]
@@ -470,15 +536,19 @@ if prev == cur and caddyfile.is_file():
     blanket_lan_gone = "192.168.8.0/24" not in live
     denied_gone = all(f"{ip}/32" not in live for ip in DENIED_IPS)
     text2, deny_changed = ensure_denied_wan_blocks(text)
-    if deny_changed:
+    text2, forbid_changed = scrub_forbidden_responds(text2)
+    if deny_changed or forbid_changed:
         caddyfile.write_text(text2)
         text = text2
+        if forbid_changed:
+            print("scrubbed Forbidden responds → unreachable page")
     if (
         trusted_needed
         and all(f"{ip}/32" in live for ip in trusted_needed)
         and blanket_lan_gone
         and denied_gone
         and not deny_changed
+        and not forbid_changed
     ):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
         if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
@@ -487,6 +557,24 @@ if prev == cur and caddyfile.is_file():
                 f"{len(allowed_ips)} allowlisted, {len(lan_ips)} lan)"
             )
             raise SystemExit(0)
+
+    # Forbidden scrub alone: reload Caddy and stop (CIDRs already current).
+    if forbid_changed and not deny_changed:
+        reload = subprocess.run(
+            [
+                "docker",
+                "exec",
+                "truemail-caddy-1",
+                "caddy",
+                "reload",
+                "--config",
+                "/etc/caddy/Caddyfile",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        print("caddy reload:", "ok" if reload.returncode == 0 else reload.stderr[-400:])
+        raise SystemExit(0 if reload.returncode == 0 else 1)
 
 state_file.write_text(cur + ("\n" if cur else ""))
 
@@ -521,6 +609,9 @@ if not caddyfile.is_file():
 
 text = caddyfile.read_text()
 text, _ = ensure_denied_wan_blocks(text)
+text, forbid_n = scrub_forbidden_responds(text)
+if forbid_n:
+    print("scrubbed Forbidden responds → unreachable page")
 
 
 def _repl(m):

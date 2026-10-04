@@ -4457,7 +4457,7 @@ def _router_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4518,7 +4518,7 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4659,7 +4659,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4989,8 +4989,8 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
     """Public Authenticator host (keys.*) — reachable from home WiFi too.
 
     Do not apply campus @denied_wan here. Home LAN phones egress via the shared
-    campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll show
-    Forbidden. Portal/router stay campus-denied; keys is gated by enroll unlock
+    campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll look
+    unreachable. Portal/router stay campus-denied; keys is gated by enroll unlock
     + TOTP secret instead.
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
@@ -5090,7 +5090,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
             # otherwise a stolen session cookie can cat/download off-VPN while
-            # /login (portal root) remains VPN-gated (403).
+            # /login (portal root) remains VPN-gated (stealth unreachable page).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             if r.get("vpn_only"):
@@ -5106,7 +5106,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\t}")
                 lines.append("\t\t}")
                 lines.append("\t\thandle {")
-                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
                 lines.append("\t\t}")
             else:
                 lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -5132,7 +5132,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\t}")
                 lines.append("\t\t}")
                 lines.append("\t\thandle {")
-                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
                 lines.append("\t\t}")
             else:
                 lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -5153,7 +5153,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
                 lines.append("\thandle {")
-                lines.append('\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t"))
                 lines.append("\t}")
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
@@ -11622,6 +11622,61 @@ def _allowlisted_lan_ips() -> set[str]:
     return out
 
 
+def _caddy_unreachable_respond_lines(indent: str) -> list[str]:
+    """Chrome-like DNS failure page instead of advertising Forbidden 403.
+
+    Hostname still resolves (TLS terminates), but the body mimics
+    ERR_NAME_NOT_RESOLVED so out-of-circle visitors do not see an ACL deny.
+    """
+    # Single backtick string so Caddy interpolates {host}. No backticks inside body.
+    body = (
+        "<!DOCTYPE html><html lang=en><meta charset=utf-8>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+        "<title>{host}</title>"
+        "<style>"
+        "html,body{margin:0;background:#fff;color:#202124;"
+        "font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}"
+        ".w{max-width:420px;margin:14vh auto 0;padding:0 28px}"
+        "svg{width:72px;height:72px;margin:0 0 16px;opacity:.55;display:block}"
+        "h1{font-size:1.4rem;font-weight:700;margin:0 0 12px;letter-spacing:-.01em}"
+        "p{font-size:.95rem;line-height:1.45;margin:0 0 8px}"
+        ".try{margin-top:16px}.try b{font-weight:600}"
+        "ul{margin:4px 0 16px 1.15em;padding:0}li{margin:4px 0}"
+        ".code{color:#5f6368;font-size:.75rem;letter-spacing:.04em;margin:16px 0 22px;"
+        "text-transform:uppercase}"
+        "button{display:block;width:100%;border:0;border-radius:24px;padding:12px 18px;"
+        "background:#1a73e8;color:#fff;font-size:1rem;font-weight:500}"
+        "button:active{background:#1765cc}"
+        ".d{text-align:center;margin-top:14px}"
+        ".d a{color:#1a73e8;text-decoration:none;font-size:.95rem}"
+        "</style>"
+        "<div class=w>"
+        "<svg viewBox=\"0 0 24 24\" aria-hidden=true>"
+        "<path fill=\"#80868b\" d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 "
+        "2-2V8l-6-6zm1 7V3.5L19.5 9H15z\"/>"
+        "<circle cx=\"9.2\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
+        "<circle cx=\"14.8\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
+        "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"1.2\" stroke-linecap=\"round\" "
+        "d=\"M9.5 17.2c1.2-1 3.8-1 5 0\"/>"
+        "</svg>"
+        "<h1>This site can&#39;t be reached</h1>"
+        "<p><strong>{host}</strong>&#39;s server IP address could not be found.</p>"
+        "<p class=try><b>Try:</b></p>"
+        "<ul><li>Checking the connection</li></ul>"
+        "<p class=code>ERR_NAME_NOT_RESOLVED</p>"
+        "<button type=button onclick=\"location.reload()\">Reload</button>"
+        "<p class=d><a href=\"#\" id=det "
+        "onclick=\"this.textContent=this.textContent==='Details'?"
+        "'DNS_PROBE_FINISHED_NXDOMAIN':'Details';return false\">Details</a></p>"
+        "</div>"
+    )
+    return [
+        f'{indent}header Content-Type "text/html; charset=utf-8"',
+        f"{indent}header -Server",
+        f"{indent}respond `{body}` 404",
+    ]
+
+
 def _caddy_denied_wan_lines(indent: str) -> list[str]:
     """Explicit deny matchers — win before @vpn_clients if an IP was wrongly allowlisted."""
     denied = _denied_vpn_ips()
@@ -11631,7 +11686,7 @@ def _caddy_denied_wan_lines(indent: str) -> list[str]:
     return [
         f"{indent}@denied_wan client_ip {denied_s}",
         f"{indent}handle @denied_wan {{",
-        f'{indent}\trespond "Forbidden" 403',
+        *_caddy_unreachable_respond_lines(f"{indent}\t"),
         f"{indent}}}",
     ]
 
