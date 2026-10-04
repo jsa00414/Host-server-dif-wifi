@@ -1223,7 +1223,7 @@
           const name = String(row.name || row.hostname || "").trim();
           const title = name || row.ip;
           const detail = isLan
-            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${(row.key_bound || a.key_bound) ? " · key-bound" : ""}}${row.online ? " · online" : " · offline"}`
+            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${row.key_bound ? " · key-bound" : ""}${row.online ? " · online" : " · offline"}`
             : `${esc(row.ip)} · ${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
           blocks.push(`<div class="circle-row">
             <div class="ip">${esc(title)}</div>
