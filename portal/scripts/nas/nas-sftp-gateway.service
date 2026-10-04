@@ -1,0 +1,15 @@
+[Unit]
+Description=ServerManager SFTP gateway (NAS over SSH/SFTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/opt/wireguard/port-forward-ui.env
+EnvironmentFile=-/opt/wireguard/nas-sftp-gateway/runtime.env
+ExecStart=/opt/wireguard/nas-sftp-gateway/run.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
