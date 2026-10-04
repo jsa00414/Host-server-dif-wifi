@@ -44,3 +44,26 @@ install -m 644 /opt/openvpn/scripts/ccd-windows /opt/openvpn/ccd/windows
 3. Connect, then open https://portal.vpstruelord.com
 
 On Flint: disable WireGuard, import OpenVPN, enable. Endpoint `74.208.76.213:443` TCP (sslh) or `:8443`.
+
+## Reinstall server (keep PKI / client profiles)
+
+Do **not** wipe `/opt/openvpn/easy-rsa` or `/opt/openvpn/clients` — that invalidates
+Flint/phone/Windows certs. Package + service refresh only:
+
+```bash
+systemctl stop openvpn-server-sm
+tar -C /opt -czf /root/openvpn-pki-$(date +%Y%m%d%H%M).tgz openvpn
+apt-get install --reinstall -y openvpn easy-rsa
+# refresh unit + conf + scripts from repo (or /opt/openvpn/scripts copies)
+install -m 0644 /opt/openvpn/scripts/server.conf /opt/openvpn/server.conf
+install -m 0644 /opt/openvpn/scripts/openvpn-server-sm.service /etc/systemd/system/openvpn-server-sm.service
+systemctl daemon-reload
+: > /var/log/openvpn.log
+systemctl restart openvpn-server-sm sslh
+ss -tlnp | grep -E ':443|:8443'
+head /var/log/openvpn-status.log
+```
+
+OpenVPN 2.6 needs `data-ciphers` (CBC alone is ignored for negotiation). Flint
+reconnects on its own once the server is listening again; if home killswitch is
+up with no WAN, toggle OpenVPN on the Flint UI at `192.168.8.1`.
