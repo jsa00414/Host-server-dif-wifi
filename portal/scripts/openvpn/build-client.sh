@@ -1,5 +1,6 @@
 #!/bin/bash
 # Build / refresh an OpenVPN client .ovpn (expects cert already issued).
+# Profiles are OpenVPN Connect–compatible (no Community-only directives).
 set -euo pipefail
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 NAME="${1:?client name}"
@@ -10,6 +11,8 @@ ROOT=/opt/openvpn
 PKI=$ROOT/easy-rsa/pki
 OUT="$ROOT/clients/${NAME}.ovpn"
 REDIRECT="${OVPN_REDIRECT_GATEWAY:-}"
+# connect = OpenVPN Connect (Windows/iOS/Android); community = classic GUI extras
+STYLE="${OVPN_PROFILE_STYLE:-connect}"
 
 [ -f "$PKI/issued/${NAME}.crt" ] || { echo "missing cert $NAME" >&2; exit 1; }
 [ -f "$PKI/private/${NAME}.key" ] || { echo "missing key $NAME" >&2; exit 1; }
@@ -30,21 +33,31 @@ fi
   echo "dev tun"
   echo "proto ${PROTO}"
   echo "remote ${HOST} ${PORT}"
-  echo "resolv-retry infinite"
   echo "nobind"
-  echo "persist-key"
-  echo "persist-tun"
   echo "remote-cert-tls server"
   echo "cipher AES-256-CBC"
   echo "auth SHA256"
   echo "key-direction 1"
   echo "verb 3"
-  echo "mute 20"
-  echo "connect-retry 2"
+  # Community-only options break OpenVPN Connect ("unsupported options"):
+  # resolv-retry, persist-key, persist-tun, mute, connect-retry, block-outside-dns
+  if [ "$STYLE" = "community" ]; then
+    echo "resolv-retry infinite"
+    echo "persist-key"
+    echo "persist-tun"
+    echo "mute 20"
+    echo "connect-retry 2"
+  fi
   if [ "$REDIRECT" = "1" ] || [ "$REDIRECT" = "true" ] || [ "$REDIRECT" = "yes" ]; then
-    echo "redirect-gateway def1 bypass-dhcp"
-    echo "dhcp-option DNS 1.1.1.1"
-    echo "dhcp-option DNS 8.8.8.8"
+    echo "redirect-gateway def1"
+    # AdGuard directly (split-DNS for vpn-only hosts). Portal stays on public A;
+    # sticky WAN ACL covers Windows gateway-IP exclusion.
+    echo "dhcp-option DNS 10.42.42.44"
+    echo "route 10.42.42.0 255.255.255.0 vpn_gateway"
+    echo "route 10.11.0.1 255.255.255.255 vpn_gateway"
+    if [ "$STYLE" = "community" ]; then
+      echo "block-outside-dns"
+    fi
   fi
   echo "route 192.168.8.0 255.255.255.0 vpn_gateway"
   echo "route 10.8.0.0 255.255.255.0 vpn_gateway"

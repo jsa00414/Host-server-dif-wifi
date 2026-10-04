@@ -7,9 +7,10 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 IKEV2_DIR="${IKEV2_DIR:-/opt/ikev2}"
 IKEV2_HOST="${IKEV2_HOST:-portal.vpstruelord.com}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
-IKEV2_DNS="${IKEV2_DNS:-10.9.0.1}"
+IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
+GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 LE_LIVE="${IKEV2_LE_LIVE:-/etc/letsencrypt/live/ikev2-portal-rsa}"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/acme}"
@@ -85,6 +86,7 @@ conn %default
     dpdaction=clear
     dpddelay=300s
     rekey=no
+    mobike=no
     left=%any
     leftid=@${IKEV2_HOST}
     leftcert=server.crt
@@ -96,12 +98,61 @@ conn %default
 
 conn ikev2-eap
     also=%default
+    mobike=no
     leftauth=pubkey
     rightauth=eap-mschapv2
     rightsendcert=never
     eap_identity=%identity
     auto=add
+
+# Do not ESP-encrypt packets sourced from the VPS public IP. Full-tunnel
+# Windows clients hairpin HTTPS to portal/router via the tunnel; without
+# this bypass, replies leave in the clear and browsers time out.
+conn passthrough-vps
+    type=passthrough
+    left=%any
+    leftsubnet=${VPS_PUBLIC_IP:-74.208.76.213}/32
+    right=%any
+    rightsubnet=0.0.0.0/0
+    authby=never
+    auto=route
 EOF
+
+# Bind charon to WAN only. Advertising docker/tun private ADD_4_ADDR makes
+# Windows MOBIKE flip the SA onto Flint OpenVPN (10.9.0.2) and die.
+WAN_IF="${IKEV2_WAN_IF:-$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')}"
+WAN_IF="${WAN_IF:-ens6}"
+CHARON_MAIN="${CHARON_MAIN:-/etc/strongswan.d/charon.conf}"
+if [[ -f "$CHARON_MAIN" ]]; then
+  WAN_IF="$WAN_IF" CHARON_MAIN="$CHARON_MAIN" python3 - <<'PY'
+from pathlib import Path
+import os, re
+p = Path(os.environ["CHARON_MAIN"])
+t = p.read_text()
+wan = os.environ["WAN_IF"]
+if re.search(r"(?m)^\s*interfaces_use\s*=", t):
+    t = re.sub(r"(?m)^\s*#?\s*interfaces_use\s*=.*$", f"    interfaces_use = {wan}", t, count=1)
+else:
+    t = t.replace("charon {\n", f"charon {{\n    interfaces_use = {wan}\n", 1)
+p.write_text(t)
+print(f"set interfaces_use = {wan} in {p}")
+PY
+fi
+KN="/etc/strongswan.d/charon/kernel-netlink.conf"
+if [[ -f "$KN" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path("/etc/strongswan.d/charon/kernel-netlink.conf")
+t = p.read_text()
+for key, val in (("roam_events", "no"), ("process_route", "no")):
+    if re.search(rf"(?m)^\s*#?\s*{key}\s*=", t):
+        t = re.sub(rf"(?m)^\s*#?\s*{key}\s*=\s*.*$", f"    {key} = {val}", t, count=1)
+    else:
+        t = t.replace("kernel-netlink {\n", f"kernel-netlink {{\n    {key} = {val}\n", 1)
+p.write_text(t)
+PY
+fi
 
 cat > /etc/ipsec.secrets << EOF
 # ServerManager IKEv2 secrets
@@ -117,16 +168,60 @@ for plug in eap-mschapv2 eap-identity openssl pem pkcs1 pubkey x509 revocation a
   fi
 done
 
-ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
-ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+# Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
+#   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh
+_ikev2_install_script() {
+  local src="$1" dest="$2"
+  [[ -f "$src" ]] || return 1
+  if [[ "$(readlink -f "$src" 2>/dev/null || echo "$src")" != "$(readlink -f "$dest" 2>/dev/null || echo "$dest")" ]]; then
+    cp -f "$src" "$dest"
+  fi
+  chmod 0755 "$dest"
+  return 0
+}
+
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  VIA_OVPN_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-via-openvpn.sh"
+  if _ikev2_install_script "$VIA_OVPN_SRC" "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh"; then
+    bash "$IKEV2_DIR/ensure-ikev2-via-openvpn.sh" || true
+  fi
+else
+  PUBLIC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-public.sh"
+  if _ikev2_install_script "$PUBLIC_SRC" "$IKEV2_DIR/ensure-ikev2-public.sh"; then
+    bash "$IKEV2_DIR/ensure-ikev2-public.sh" || true
+  else
+    ufw allow 500/udp comment "IKEv2 IKE" >/dev/null 2>&1 || true
+    ufw allow 4500/udp comment "IKEv2 NAT-T" >/dev/null 2>&1 || true
+  fi
+  NO_NEST_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-no-nest.sh"
+  if _ikev2_install_script "$NO_NEST_SRC" "$IKEV2_DIR/ensure-ikev2-no-nest.sh"; then
+    bash "$IKEV2_DIR/ensure-ikev2-no-nest.sh" || true
+  fi
+fi
+# Host INPUT: narrow HTTPS; full access is allowlist-gated per VIP
+ufw delete allow from 10.10.0.0/24 >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 443 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
+ufw allow from 10.10.0.0/24 to any port 80 proto tcp comment "IKEv2 base HTTPS" >/dev/null 2>&1 || true
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
 iptables -C FORWARD -d 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.10.0.0/24 -j ACCEPT
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
+# Pool-wide guest DNS (trusted VIPs upgraded to AdGuard by ensure-vpn-client-gate.sh)
+for proto in udp tcp; do
+  while iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" || true
+  done
+  while iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" || true
+  done
+  # Before Docker LOCAL for 10.42.42.44
+  iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p "$proto" --dport 53 \
+    -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
+done
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \
   || iptables -t nat -I POSTROUTING 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT 2>/dev/null \
@@ -143,6 +238,34 @@ if [[ -f "$SCRIPT_SRC" && "$SCRIPT_SRC" != "$IKEV2_DIR/Setup-ServerManagerVpn.ps
   cp -f "$SCRIPT_SRC" "$IKEV2_DIR/Setup-ServerManagerVpn.ps1"
 fi
 
+# VPN-only admin hostnames → 10.11.0.1 lo VIP (avoid public-IP exclusion → 403)
+SPLIT_DNS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-vpn-split-dns.sh"
+if _ikev2_install_script "$SPLIT_DNS_SRC" "$IKEV2_DIR/ensure-vpn-split-dns.sh"; then
+  bash "$IKEV2_DIR/ensure-vpn-split-dns.sh" || true
+fi
+
+# Allow active IKEv2 peer WAN IPs in Caddy (Windows DoH / gateway exclusion)
+PEER_ACL_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-ikev2-peer-acl.sh"
+PEER_SVC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.service"
+PEER_TMR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sm-ikev2-peer-acl.timer"
+LAN_GATE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-lan-circle-flint-gate.sh"
+if _ikev2_install_script "$PEER_ACL_SRC" "$IKEV2_DIR/ensure-ikev2-peer-acl.sh"; then
+  [[ -f "$PEER_SVC_SRC" ]] && cp -f "$PEER_SVC_SRC" /etc/systemd/system/sm-ikev2-peer-acl.service
+  [[ -f "$PEER_TMR_SRC" ]] && cp -f "$PEER_TMR_SRC" /etc/systemd/system/sm-ikev2-peer-acl.timer
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now sm-ikev2-peer-acl.timer >/dev/null 2>&1 || true
+  bash "$IKEV2_DIR/ensure-ikev2-peer-acl.sh" || true
+fi
+if [[ -f "$LAN_GATE_SRC" ]]; then
+  _ikev2_install_script "$LAN_GATE_SRC" "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" || true
+  chmod +x "$IKEV2_DIR/ensure-lan-circle-flint-gate.sh" 2>/dev/null || true
+fi
+
+NOH3_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-caddy-no-h3.sh"
+if _ikev2_install_script "$NOH3_SRC" "$IKEV2_DIR/ensure-caddy-no-h3.sh"; then
+  bash "$IKEV2_DIR/ensure-caddy-no-h3.sh" || true
+fi
+
 systemctl enable strongswan-starter >/dev/null 2>&1 || true
 systemctl restart strongswan-starter
 sleep 1
@@ -156,3 +279,10 @@ echo "  Password: ${IKEV2_PASS}"
 echo "  Pool:     ${IKEV2_POOL}"
 echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
 echo "  Cert:     ${LE_LIVE}"
+echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
+echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"
+if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
+  echo "  Mode:     IKEv2 via OpenVPN only (tun0)"
+else
+  echo "  Mode:     public IKEv2 (UDP 500/4500)"
+fi

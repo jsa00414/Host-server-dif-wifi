@@ -141,6 +141,12 @@ PY
   fi
 fi
 
+# Keep public :1445 on VPN/LAN only (do not leave Anywhere UFW from DNAT apply).
+HARDEN_NAS="${SCRIPT_DIR}/../security/harden-nas-gateways-vpn-only.sh"
+if [[ -x "$HARDEN_NAS" ]]; then
+  NAS_SMB_PUBLIC_PORT="$PUBLIC_PORT" bash "$HARDEN_NAS" || true
+fi
+
 sleep 2
 if smbclient "//127.0.0.1/${NAS_SHARE}" -p "$GATEWAY_PORT" -U "${NAS_USER}%${NAS_PASS}" -c 'ls' >/dev/null 2>&1; then
   echo "NAS SMB gateway OK on 127.0.0.1:${GATEWAY_PORT} (public ${PUBLIC_PORT})"
