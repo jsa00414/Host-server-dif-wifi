@@ -107,6 +107,18 @@ done
   docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}' 2>/dev/null || true
 } > "$DEST/meta/status.txt"
 
+# Panel trust-circle state (allowlist / sticky / devices / encrypted enroll vault)
+mkdir -p "$DEST/panel"
+for f in vpn-allowlist.json caddy-sticky-vpn-ips.txt auth-app-devices.json ssh-panel-2fa.json \
+         enroll-secrets.enc enroll-vault.key webauthn-credentials.json; do
+  [[ -f "/opt/servermanager/panel/$f" ]] && cp -a "/opt/servermanager/panel/$f" "$DEST/panel/" || true
+done
+# OpenVPN CCD pins
+if [[ -d /opt/openvpn/ccd ]]; then
+  mkdir -p "$DEST/openvpn/ccd"
+  rsync -a /opt/openvpn/ccd/ "$DEST/openvpn/ccd/" 2>/dev/null || true
+fi
+
 # Never commit live GitHub token mirror
 rm -f "$DEST/dns/secrets.env" 2>/dev/null || true
 find "$DEST" -name 'secrets.env' -delete 2>/dev/null || true

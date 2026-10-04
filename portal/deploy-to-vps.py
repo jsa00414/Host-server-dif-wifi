@@ -138,6 +138,22 @@ UPLOADS: list[tuple[Path, str]] = [
         f"{REMOTE_UI}/scripts/security/retire-old-vps-ip.sh",
     ),
     (
+        ROOT / "scripts/security/check-circle-drift.sh",
+        f"{REMOTE_UI}/scripts/security/check-circle-drift.sh",
+    ),
+    (
+        ROOT / "scripts/security/sm-circle-drift.service",
+        "/etc/systemd/system/sm-circle-drift.service",
+    ),
+    (
+        ROOT / "scripts/security/sm-circle-drift.timer",
+        "/etc/systemd/system/sm-circle-drift.timer",
+    ),
+    (
+        ROOT / "scripts/backup/sm-backup-restore-drill.sh",
+        "/opt/servermanager-backup/sm-backup-restore-drill.sh",
+    ),
+    (
         ROOT / "scripts/ikev2/ensure-lan-circle-flint-gate.sh",
         "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
     ),
@@ -282,6 +298,29 @@ def main() -> int:
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
+            f"mkdir -p {REMOTE_UI}/sm && "
+            f"python3 -m pip install --quiet 'webauthn>=2.0' || pip3 install --quiet 'webauthn>=2.0' || true",
+        )
+        for local in (ROOT / "sm").rglob("*"):
+            if not local.is_file() or "__pycache__" in local.parts:
+                continue
+            rel = local.relative_to(ROOT).as_posix()
+            remote = f"{REMOTE_UI}/{rel}"
+            _run(client, f"mkdir -p {Path(remote).parent.as_posix()}")
+            print(f"  upload {rel} -> {remote}")
+            _sftp_put(client, local, remote)
+        _run(
+            client,
+            "chmod +x /opt/wireguard/port-forward-ui/scripts/security/check-circle-drift.sh "
+            "/opt/servermanager-backup/sm-backup-restore-drill.sh 2>/dev/null || true; "
+            "systemctl daemon-reload; "
+            "systemctl enable --now sm-circle-drift.timer 2>/dev/null || true; "
+            "mkdir -p /var/lib/node_exporter/textfile_collector; "
+            "bash /opt/wireguard/port-forward-ui/scripts/security/check-circle-drift.sh || true; "
+            "bash /opt/servermanager-backup/sm-backup-restore-drill.sh || true",
+        )
+        _run(
+            client,
             "chmod +x /opt/openvpn/scripts/client-connect.sh /opt/openvpn/scripts/client-disconnect.sh /opt/openvpn/scripts/flint-allow-vpn-ssh.sh "
             "/opt/servermanager-backup/sm-backup.sh 2>/dev/null || true",
         )
@@ -325,8 +364,16 @@ def main() -> int:
             "print(server.write_hookups_state(rules))"
             "\"",
         )
-        gateway = f"{REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh"
-        _run(client, f"chmod +x {gateway} && bash {gateway}")
+        # FTP gateway retired by default (NAS_FTP_RETIRED=1).
+        _run(
+            client,
+            "set -a; . /opt/wireguard/port-forward-ui.env; set +a; "
+            "if [ \"${NAS_FTP_RETIRED:-1}\" = \"0\" ]; then "
+            f"chmod +x {REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh && "
+            f"bash {REMOTE_UI}/scripts/nas/install-nas-ftp-gateway.sh; "
+            "else systemctl disable --now nas-ftp-gateway.service 2>/dev/null || true; "
+            "echo FTP retired; fi",
+        )
         dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
         _run(client, f"chmod +x {dav} && bash {dav}")
         sftp_gw = f"{REMOTE_UI}/scripts/nas/install-nas-sftp-gateway.sh"

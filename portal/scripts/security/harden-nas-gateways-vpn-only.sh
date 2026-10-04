@@ -10,6 +10,7 @@ PASV_START="${NAS_FTP_PASV_START:-50100}"
 PASV_END="${NAS_FTP_PASV_END:-50200}"
 SMB_PORT="${NAS_SMB_PUBLIC_PORT:-1445}"
 SFTP_PORT="${NAS_SFTP_PUBLIC_PORT:-2123}"
+FTP_RETIRED="${NAS_FTP_RETIRED:-1}"
 
 sources=()
 for p in ${VPN_UFW_FROM//,/ }; do
@@ -77,14 +78,21 @@ for _ in $(seq 1 80); do
 done
 
 for src in "${sources[@]}"; do
-  ufw allow from "$src" to any port "$FTP_PORT" proto tcp comment "nas-ftp-vpn" >/dev/null || true
-  ufw allow from "$src" to any port "${PASV_START}:${PASV_END}" proto tcp comment "nas-ftp-pasv-vpn" >/dev/null || true
+  if [[ "$FTP_RETIRED" != "1" && "$FTP_RETIRED" != "true" && "$FTP_RETIRED" != "yes" ]]; then
+    ufw allow from "$src" to any port "$FTP_PORT" proto tcp comment "nas-ftp-vpn" >/dev/null || true
+    ufw allow from "$src" to any port "${PASV_START}:${PASV_END}" proto tcp comment "nas-ftp-pasv-vpn" >/dev/null || true
+  fi
   ufw allow from "$src" to any port "$SMB_PORT" proto tcp comment "nas-smb-vpn" >/dev/null || true
   ufw allow from "$src" to any port "$SMB_PORT" proto udp comment "nas-smb-vpn" >/dev/null || true
   ufw allow from "$src" to any port "$SFTP_PORT" proto tcp comment "nas-sftp-vpn" >/dev/null || true
 done
 
-echo "ufw: ${FTP_PORT}/tcp + ${PASV_START}-${PASV_END}/tcp + ${SMB_PORT}/tcp|udp + ${SFTP_PORT}/tcp → VPN/LAN"
+if [[ "$FTP_RETIRED" == "1" || "$FTP_RETIRED" == "true" || "$FTP_RETIRED" == "yes" ]]; then
+  echo "ufw: FTP retired — ${SMB_PORT}/tcp|udp + ${SFTP_PORT}/tcp → VPN/LAN (no ${FTP_PORT}/PASV)"
+  systemctl disable --now nas-ftp-gateway.service 2>/dev/null || true
+else
+  echo "ufw: ${FTP_PORT}/tcp + ${PASV_START}-${PASV_END}/tcp + ${SMB_PORT}/tcp|udp + ${SFTP_PORT}/tcp → VPN/LAN"
+fi
 
 # :1445 is DNAT'd (FORWARD path). UFW INPUT alone cannot lock it —
 # rewrite SERVERMANAGER_DNAT so only VPN/LAN sources are redirected.

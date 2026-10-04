@@ -31,6 +31,11 @@ from urllib.parse import parse_qs, urlparse, urljoin
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+# Extracted modules (auth / VPN circle / NAS) — keep handlers in this file.
+from sm import auth as sm_auth
+from sm import nas as sm_nas
+from sm import vpn_circle as sm_vpn_circle
+
 CONF_PATH = Path(os.environ.get("FORWARDS_CONF", "/opt/servermanager/scripts/forwards.conf"))
 APPLY_SCRIPT = Path(
     os.environ.get("APPLY_SCRIPT", "/opt/servermanager/scripts/apply-lan-forwards.sh")
@@ -2498,6 +2503,7 @@ def build_nas_windows_status() -> dict:
         unc = f"\\\\{NAS_SMB_PUBLIC_HOST}@{NAS_SMB_PUBLIC_PORT}\\{NAS_SMB_SHARE}"
     else:
         unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
+    ui = sm_nas.nas_ui_copy()
     return {
         "ok": bool(st.get("ok")),
         "host": NAS_SMB_PUBLIC_HOST,
@@ -2519,6 +2525,9 @@ def build_nas_windows_status() -> dict:
         "ftp_ip": NAS_SMB_PUBLIC_IP,
         "ftp_port": NAS_FTP_PUBLIC_PORT,
         "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
+        "ftp_retired": ui["ftp_retired"],
+        "ftp_message": ui["ftp_message"],
+        "preferred_protocols": ui["preferred"],
         "sftp_host": NAS_SMB_PUBLIC_HOST,
         "sftp_port": NAS_SFTP_PUBLIC_PORT,
         "sftp_username": NAS_SFTP_PUBLIC_USER,
@@ -11132,6 +11141,7 @@ def begin_portal_login(
     method = portal_login_2fa_method()
     login_token = secrets.token_urlsafe(24)
     now = time.time()
+    passkeys = sm_auth.webauthn_status().get("credential_count", 0) > 0
     _purge_pending_logins(now)
     with _pending_logins_lock:
         _pending_logins[login_token] = {
@@ -11139,6 +11149,7 @@ def begin_portal_login(
             "user": AUTH_USER,
             "ip": client_ip or "",
             "method": method,
+            "passkey_ok": passkeys,
         }
     if method == "app":
         return {
@@ -11146,7 +11157,12 @@ def begin_portal_login(
             "need_code": True,
             "two_factor_method": "app",
             "login_token": login_token,
-            "message": "Enter the code from your Authenticator app.",
+            "passkey_available": passkeys,
+            "message": (
+                "Enter the Authenticator code, or use a passkey."
+                if passkeys
+                else "Enter the code from your Authenticator app."
+            ),
         }
     sent = send_email_test_code(client_ip or "login", key=f"portal-login:{login_token}")
     return {
@@ -11154,6 +11170,7 @@ def begin_portal_login(
         "need_code": True,
         "two_factor_method": "email",
         "login_token": login_token,
+        "passkey_available": passkeys,
         "message": sent.get("message") or "Enter the email verification code.",
     }
 
@@ -11177,8 +11194,7 @@ def complete_portal_login(
         raise ValueError("Login session expired. Sign in again.")
     method = str(pending.get("method") or "email")
     if method == "app":
-        secret = str(_read_ssh_panel_2fa().get("totp_secret") or "")
-        if not verify_totp_code(secret, code):
+        if not _verify_any_enroll_totp(code):
             st = ip_jail_record_failure(client_ip, reason="login_totp")
             time.sleep(0.25)
             if st.get("locked"):
@@ -11200,6 +11216,15 @@ def complete_portal_login(
         _pending_logins.pop(token, None)
     ip_jail_clear_success(client_ip)
     session = create_session()
+    try:
+        sm_auth.send_portal_login_email(
+            client_ip=client_ip or "",
+            user=AUTH_USER,
+            method=method,
+            smtp_send=_smtp_send_email,
+        )
+    except Exception:
+        pass
     return {
         "ok": True,
         "need_code": False,
@@ -11207,6 +11232,62 @@ def complete_portal_login(
         "session": session,
         "message": "Signed in.",
     }
+
+
+def complete_portal_login_passkey(
+    *,
+    login_token: str,
+    credential: dict,
+    client_ip: str = "",
+) -> dict:
+    """Step 2 alternate: WebAuthn passkey assertion after password OK."""
+    ip_jail_assert_allowed(client_ip)
+    token = str(login_token or "").strip()
+    if not token:
+        raise ValueError("Login session expired. Sign in again.")
+    now = time.time()
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        pending = _pending_logins.get(token)
+    if not pending or float(pending.get("exp") or 0) <= now:
+        raise ValueError("Login session expired. Sign in again.")
+    try:
+        sm_auth.finish_webauthn_authentication(credential=credential)
+    except Exception:
+        st = ip_jail_record_failure(client_ip, reason="login_passkey")
+        if st.get("locked"):
+            raise ValueError(
+                f"Too many failed passkey attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            ) from None
+        raise ValueError("Passkey verification failed") from None
+    with _pending_logins_lock:
+        _pending_logins.pop(token, None)
+    ip_jail_clear_success(client_ip)
+    session = create_session()
+    try:
+        sm_auth.send_portal_login_email(
+            client_ip=client_ip or "",
+            user=AUTH_USER,
+            method="passkey",
+            smtp_send=_smtp_send_email,
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "need_code": False,
+        "user": AUTH_USER,
+        "session": session,
+        "message": "Signed in with passkey.",
+    }
+
+
+def _verify_any_enroll_totp(code: str) -> bool:
+    legacy = str(_read_ssh_panel_2fa().get("totp_secret") or "")
+    for secret in sm_auth.list_verifiable_totp_secrets(legacy):
+        if verify_totp_code(secret, code, window=1):
+            return True
+    return False
 
 
 # --- Email verification code test (portalvpsserver@truemailor.com → Gmail) ---
@@ -12123,6 +12204,16 @@ def touch_auth_app_device(
             raise ValueError(
                 "New Authenticator device enrollment is locked in Security"
             )
+        enroll_cfg = _read_ssh_panel_2fa()
+        allowed_ip = _normalize_vpn_ip(str(enroll_cfg.get("device_enroll_for_ip") or ""))
+        if allowed_ip and ip != allowed_ip:
+            raise ValueError(
+                f"Enrollment is unlocked only for {allowed_ip} — this device is {ip}"
+            )
+        if not allowed_ip:
+            raise ValueError(
+                "Enrollment unlock is missing a registering device IP — unlock again from Security"
+            )
         enrolled_count = sum(
             1
             for row in by_ip.values()
@@ -12131,21 +12222,6 @@ def touch_auth_app_device(
         )
         if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
             raise ValueError("Too many enrolled Authenticator devices")
-        # One new LAN IP per unlock window — spoofed X-SM-Lan-Ip cannot mass-exempt.
-        unlocked_at = int(_read_ssh_panel_2fa().get("device_enroll_unlocked_at") or 0)
-        if unlocked_at > 0:
-            registered_this_window = sum(
-                1
-                for row in by_ip.values()
-                if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
-                and row.get("enrolled", True)
-                and int(row.get("first_seen") or 0) >= unlocked_at
-            )
-            if registered_this_window >= 1:
-                raise ValueError(
-                    "Only one new Authenticator device can enroll per unlock — "
-                    "lock and unlock again in Security to add another"
-                )
         newly_enrolled = True
     elif pub_n and existing:
         # Re-bind / rotate key on already-enrolled device when Security unlocks enrollment.
@@ -12179,12 +12255,26 @@ def touch_auth_app_device(
     if newly_enrolled:
         try:
             st = _read_ssh_panel_2fa()
+            pending_secret = ""
+            vault = sm_auth.read_enroll_vault()
+            sid = str(st.get("device_enroll_secret_id") or "")
+            for row in vault.get("secrets") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") == sid:
+                    pending_secret = str(row.get("secret") or "")
+                    break
+            sm_auth.mark_enroll_secret_enrolled(
+                secret=pending_secret,
+                for_ip=str(st.get("device_enroll_for_ip") or ip),
+                device_ip=ip,
+            )
             if st.get("device_enroll_unlocked"):
                 _write_ssh_panel_2fa(
                     enabled=bool(st.get("enabled")),
                     method=str(st.get("method") or "app"),
                     totp_secret=str(st.get("totp_secret") or ""),
                     device_enroll_unlocked=False,
+                    device_enroll_for_ip="",
+                    device_enroll_secret_id="",
                 )
         except Exception:
             pass
@@ -12541,6 +12631,8 @@ def _read_ssh_panel_2fa() -> dict:
             "updated_at": data.get("updated_at"),
             "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
             "device_enroll_unlocked_at": int(data.get("device_enroll_unlocked_at") or 0),
+            "device_enroll_for_ip": _normalize_vpn_ip(str(data.get("device_enroll_for_ip") or "")),
+            "device_enroll_secret_id": str(data.get("device_enroll_secret_id") or ""),
         }
     except Exception:
         return {
@@ -12618,7 +12710,9 @@ def auth_app_enroll_status() -> dict:
     return {
         "enroll_unlocked": unlocked,
         "device_enroll_unlocked": unlocked,
+        "device_enroll_for_ip": str(st.get("device_enroll_for_ip") or ""),
         "enroll_expires_in": expires_in,
+        "enroll_vault": sm_auth.vault_public_summary(),
         **keys_auth_urls(),
         "message": (
             "Enrollment unlocked — Enter secret is available in the Authenticator app."
@@ -12635,6 +12729,8 @@ def _write_ssh_panel_2fa(
     method: str = "email",
     totp_secret: str = "",
     device_enroll_unlocked: bool | None = None,
+    device_enroll_for_ip: str | None = None,
+    device_enroll_secret_id: str | None = None,
 ) -> None:
     SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
     method_n = "app" if str(method).lower() == "app" else "email"
@@ -12652,6 +12748,19 @@ def _write_ssh_panel_2fa(
         unlocked_at = int(time.time()) if enroll_flag else 0
     elif not enroll_flag:
         unlocked_at = 0
+    for_ip = (
+        _normalize_vpn_ip(device_enroll_for_ip)
+        if device_enroll_for_ip is not None
+        else str(prev.get("device_enroll_for_ip") or "")
+    )
+    secret_id = (
+        str(device_enroll_secret_id)
+        if device_enroll_secret_id is not None
+        else str(prev.get("device_enroll_secret_id") or "")
+    )
+    if not enroll_flag:
+        for_ip = ""
+        secret_id = ""
     payload = {
         "enabled": bool(enabled),
         "method": method_n,
@@ -12660,13 +12769,16 @@ def _write_ssh_panel_2fa(
         "email_to": EMAIL_CODE_TO,
         "device_enroll_unlocked": enroll_flag,
         "device_enroll_unlocked_at": unlocked_at if enroll_flag else 0,
+        "device_enroll_for_ip": for_ip,
+        "device_enroll_secret_id": secret_id,
     }
     if not enabled:
-        # Keep secret only while enabled as app; wipe on disable for safety.
         payload["totp_secret"] = ""
         payload["method"] = method_n
-        # Disabling 2FA also locks new-device enrollment.
         payload["device_enroll_unlocked"] = False
+        payload["device_enroll_unlocked_at"] = 0
+        payload["device_enroll_for_ip"] = ""
+        payload["device_enroll_secret_id"] = ""
     with _ssh_panel_2fa_lock:
         SSH_PANEL_2FA_PATH.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
@@ -12677,8 +12789,13 @@ def _write_ssh_panel_2fa(
             pass
 
 
-def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
-    """Lock/unlock Enter-secret enrollment for new Authenticator devices."""
+def set_auth_app_device_enroll(
+    token: str | None,
+    *,
+    unlocked: bool,
+    device_ip: str = "",
+) -> dict:
+    """Lock/unlock Enter-secret enrollment for a single registering device IP."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     st = ssh_panel_unlock_status(token)
@@ -12693,13 +12810,34 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
     secret = str(cfg.get("totp_secret") or "").strip()
     if want and not secret:
         raise ValueError("No authenticator secret is enrolled yet")
-    _write_ssh_panel_2fa(
-        enabled=bool(cfg.get("enabled")),
-        method=str(cfg.get("method") or "app"),
-        totp_secret=secret,
-        device_enroll_unlocked=want,
-    )
-    # Enrollment unlock opens Flint for pending LAN so new phones can reach /auth-app.
+    enroll_row = None
+    for_ip = ""
+    if want:
+        sm_auth.ensure_legacy_secret_in_vault(secret, label="primary")
+        for_ip = _normalize_vpn_ip(device_ip)
+        if not for_ip or not _is_home_lan_ipv4(for_ip):
+            raise ValueError(
+                "Unlock requires the registering device LAN IP (192.168.8.x) — "
+                "only that phone can enroll this secret"
+            )
+        enroll_row = sm_auth.generate_enroll_secret(for_ip=for_ip, label=f"enroll-{for_ip}")
+        _write_ssh_panel_2fa(
+            enabled=bool(cfg.get("enabled")),
+            method=str(cfg.get("method") or "app"),
+            totp_secret=secret,
+            device_enroll_unlocked=True,
+            device_enroll_for_ip=for_ip,
+            device_enroll_secret_id=str(enroll_row.get("id") or ""),
+        )
+    else:
+        _write_ssh_panel_2fa(
+            enabled=bool(cfg.get("enabled")),
+            method=str(cfg.get("method") or "app"),
+            totp_secret=secret,
+            device_enroll_unlocked=False,
+            device_enroll_for_ip="",
+            device_enroll_secret_id="",
+        )
     lan_gate = Path(
         os.environ.get(
             "LAN_CIRCLE_FLINT_GATE_SCRIPT",
@@ -12716,22 +12854,26 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
             )
         except Exception:
             pass
+    show_secret = str((enroll_row or {}).get("secret") or "") if want else ""
     out: dict = {
         "ok": True,
         "device_enroll_unlocked": want,
         "enroll_unlocked": want,
+        "device_enroll_for_ip": for_ip if want else "",
         "two_factor_enabled": bool(cfg.get("enabled")),
         "two_factor_method": str(cfg.get("method") or "app"),
+        "enroll_vault": sm_auth.vault_public_summary(),
         **keys_auth_urls(),
         "message": (
-            "New-device enrollment unlocked. Enter secret is visible in the Authenticator app "
-            f"for ~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min (or until you lock it)."
+            f"New-device enrollment unlocked for {for_ip} only. A fresh secret was "
+            f"generated (previous enrolled secrets kept, encrypted). Auto-locks in "
+            f"~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min."
             if want
             else "New-device enrollment locked. Enter secret is hidden in the Authenticator app."
         ),
     }
-    if want and secret:
-        out["enroll"] = _totp_provisioning(secret)
+    if want and show_secret:
+        out["enroll"] = _totp_provisioning(show_secret)
         out["enroll_expires_in"] = max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS)
     return out
 
@@ -13276,12 +13418,11 @@ def _run_vpn_peer_acl_sync() -> str:
 
 
 def verify_auth_app_totp(code: str) -> bool:
-    """Validate a TOTP from the phone authenticator PWA against the enrolled secret."""
+    """Validate a TOTP from the phone authenticator PWA against enrolled secrets."""
     st = _read_ssh_panel_2fa()
-    secret = str(st.get("totp_secret") or "").strip()
-    if not st.get("enabled") or str(st.get("method") or "") != "app" or not secret:
+    if not st.get("enabled") or str(st.get("method") or "") != "app":
         return False
-    return verify_totp_code(secret, code, window=1)
+    return _verify_any_enroll_totp(code)
 
 
 def _auth_app_totp_client_key(client_ip: str) -> str:
@@ -13627,6 +13768,10 @@ def set_ssh_panel_2fa(
                 time.sleep(0.25)
                 raise ValueError("Incorrect authenticator code")
             _write_ssh_panel_2fa(enabled=True, method="app", totp_secret=secret)
+            try:
+                sm_auth.ensure_legacy_secret_in_vault(secret, label="primary")
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "two_factor_enabled": True,
@@ -13698,7 +13843,10 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
         "two_factor_method": method,
         "device_enroll_unlocked": enroll_unlocked,
         "enroll_unlocked": enroll_unlocked,
+        "device_enroll_for_ip": str(st.get("device_enroll_for_ip") or ""),
         "enroll_expires_in": enroll_expires_in,
+        "enroll_vault": sm_auth.vault_public_summary(),
+        "passkeys": sm_auth.webauthn_status(),
         "auth_app_devices": devices,
         **keys_auth_urls(),
         "email_to": EMAIL_CODE_TO,
@@ -19092,10 +19240,27 @@ document.getElementById('f').onsubmit = async (e) => {
                 login_token = str(
                     payload.get("login_token") or payload.get("pending_token") or ""
                 ).strip()
+                passkey_cred = payload.get("passkey") or payload.get("credential")
             except Exception:
                 self._json(400, {"error": "invalid json"})
                 return
             try:
+                if login_token and isinstance(passkey_cred, dict):
+                    result = complete_portal_login_passkey(
+                        login_token=login_token,
+                        credential=passkey_cred,
+                        client_ip=request_client_ip(self),
+                    )
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "user": result.get("user") or AUTH_USER,
+                            "message": result.get("message") or "Signed in.",
+                        },
+                        set_cookie=str(result.get("session") or ""),
+                    )
+                    return
                 if login_token and code:
                     result = complete_portal_login(
                         login_token=login_token,
@@ -19132,6 +19297,73 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(403, {"error": str(exc)})
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security/circle-drift":
+            if not self._require_auth(api=True):
+                return
+            try:
+                report = sm_vpn_circle.run_circle_drift_check(
+                    smtp_send=_smtp_send_email,
+                    email_to=EMAIL_CODE_TO,
+                    email_on_drift=False,
+                )
+                self._json(200, {"ok": True, **report})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/passkey":
+            if not self._require_auth(api=True):
+                return
+            try:
+                payload = self._read_json() if self.command == "POST" else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                action = str(payload.get("action") or "status").strip().lower()
+                if self.command == "GET" or action == "status":
+                    self._json(200, {"ok": True, **sm_auth.webauthn_status()})
+                    return
+                if not self._require_ssh_panel_unlock():
+                    return
+                if action in ("register_begin", "begin_register"):
+                    opts = sm_auth.begin_webauthn_registration(
+                        user_id=AUTH_USER, user_name=AUTH_USER
+                    )
+                    self._json(200, {"ok": True, "options": opts})
+                    return
+                if action in ("register_finish", "finish_register"):
+                    result = sm_auth.finish_webauthn_registration(
+                        credential=payload.get("credential") or {},
+                        name=str(payload.get("name") or ""),
+                    )
+                    self._json(200, result)
+                    return
+                if action in ("remove", "delete"):
+                    result = sm_auth.remove_webauthn_credential(
+                        str(payload.get("id") or payload.get("credential_id") or "")
+                    )
+                    self._json(200, result)
+                    return
+                self._json(400, {"ok": False, "error": "Unknown passkey action"})
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/login/passkey-options":
+            # Public after password step: client already has login_token.
+            try:
+                payload = self._read_json()
+                token = str((payload or {}).get("login_token") or "").strip()
+                with _pending_logins_lock:
+                    pending = _pending_logins.get(token) if token else None
+                if not pending or float(pending.get("exp") or 0) <= time.time():
+                    raise ValueError("Login session expired")
+                opts = sm_auth.begin_webauthn_authentication()
+                self._json(200, {"ok": True, "options": opts})
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/email-code/send":
             try:
@@ -19573,7 +19805,16 @@ document.getElementById('f').onsubmit = async (e) => {
                         )
                     else:
                         unlocked = bool(unlocked_raw)
-                    result = set_auth_app_device_enroll(tok, unlocked=unlocked)
+                    result = set_auth_app_device_enroll(
+                        tok,
+                        unlocked=unlocked,
+                        device_ip=str(
+                            payload.get("device_ip")
+                            or payload.get("lan_ip")
+                            or payload.get("ip")
+                            or ""
+                        ),
+                    )
                 elif action in (
                     "remove_device",
                     "device_remove",
