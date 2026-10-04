@@ -4986,47 +4986,48 @@ def _as_bool(value) -> bool:
 
 
 def _keys_hookup_site_lines(rule: dict) -> list[str]:
-    """Public Authenticator host (keys.*) — not VPN-gated; campus deny still applies."""
+    """Public Authenticator host (keys.*) — reachable from home WiFi too.
+
+    Do not apply campus @denied_wan here. Home LAN phones egress via the shared
+    campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll show
+    Forbidden. Portal/router stay campus-denied; keys is gated by enroll unlock
+    + TOTP secret instead.
+    """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     lines = [
         f"{public} {{",
         "\tencode gzip",
+        "\t@root path /",
+        "\tredir @root /auth-app.html 302",
+        "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+        "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+        "/static/auth-app.html /static/auth-app-iphone.html "
+        "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+        "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+        "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+        "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
+        "\thandle @auth {",
+        f"\t\treverse_proxy {upstream} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Forwarded-For {remote_host}",
+        "\t\t\theader_up X-Real-IP {remote_host}",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        '\t\trespond "Not Found" 404',
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        "\t}",
+        "}",
+        "",
     ]
-    lines.extend(_caddy_denied_wan_lines("\t"))
-    lines.extend(
-        [
-            "\t@root path /",
-            "\tredir @root /auth-app.html 302",
-            "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
-            "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
-            "/static/auth-app.html /static/auth-app-iphone.html "
-            "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
-            "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
-            "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
-            "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
-            "\thandle @auth {",
-            f"\t\treverse_proxy {upstream} {{",
-            "\t\t\theader_up Host {host}",
-            "\t\t\theader_up X-Forwarded-Host {host}",
-            "\t\t\theader_up X-Forwarded-Proto {scheme}",
-            "\t\t\theader_up X-Forwarded-For {remote_host}",
-            "\t\t\theader_up X-Real-IP {remote_host}",
-            "\t\t}",
-            "\t}",
-            "\thandle {",
-            '\t\trespond "Not Found" 404',
-            "\t}",
-            "\theader {",
-            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-            "\t\tX-Content-Type-Options nosniff",
-            "\t\tReferrer-Policy strict-origin-when-cross-origin",
-            '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
-            "\t}",
-            "}",
-            "",
-        ]
-    )
     return lines
 
 
