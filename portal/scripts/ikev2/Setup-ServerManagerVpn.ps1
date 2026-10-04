@@ -47,10 +47,36 @@ Set-VpnConnectionIPsecConfiguration `
   -AllUserConnection `
   -Force
 
+try {
+  Set-VpnConnection -Name $Name -AllUserConnection -DnsSuffix "vpstruelord.com" -Force -ErrorAction Stop
+} catch {
+  Write-Host "Note: could not set VpnConnection DnsSuffix ($($_.Exception.Message))"
+}
+
+# Disable Windows MOBIKE path flips (phone does not do this; PC often nests via Flint OVPN)
+try {
+  Set-VpnConnection -Name $Name -AllUserConnection -IdleDisconnectSeconds 0 -Force -ErrorAction SilentlyContinue
+} catch {}
+$mobKeys = @(
+  "HKLM:\SYSTEM\CurrentControlSet\Services\RasMan\Parameters",
+  "HKLM:\SYSTEM\CurrentControlSet\Services\RasMan\PPP\EAP\25"
+)
+foreach ($k in $mobKeys) {
+  New-Item -Path $k -Force -ErrorAction SilentlyContinue | Out-Null
+}
+# Prefer staying on the original IKE path (home WAN), not a later private/OVPN address
+try {
+  New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\RasMan\Parameters" `
+    -Name "DisableMobility" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+
 Write-Host ""
 Write-Host "Done. Connect from Settings -> Network & internet -> VPN -> $Name"
 Write-Host "  Username: $Username"
 Write-Host "  Password: (Portal -> Windows VPN)"
 Write-Host "Server uses a public Let's Encrypt RSA certificate (no extra CA install)."
+Write-Host "If portal is Forbidden after connect: flush DNS (ipconfig /flushdns) and retry."
+Write-Host "If connect drops with 'terminated by the remote computer': disconnect, run this"
+Write-Host "  script again as Administrator, then reconnect (MOBIKE/path-flip fix)."
 Write-Host "Press Enter to close..."
 [void][System.Console]::ReadLine()

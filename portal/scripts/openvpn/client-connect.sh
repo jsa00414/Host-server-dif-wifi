@@ -56,5 +56,18 @@ push_flint_lan_allow() {
 if [ "${common_name:-}" = "flint" ]; then
   prefer_ovpn_lan_routes
   push_flint_lan_allow
+  # Non-blocking: keep Flint VPN in policy mode so home Wi‑Fi uses WAN.
+  (
+    sleep 4
+    POLICY_SCRIPT="${OVPN_POLICY_SCRIPT:-/opt/openvpn/scripts/ensure-flint-ovpn-policy.sh}"
+    [ -x "$POLICY_SCRIPT" ] && bash "$POLICY_SCRIPT" || true
+  ) >/tmp/sm-ovpn-flint-policy.log 2>&1 &
+  # Non-blocking: re-apply pending LAN circle blocks on Flint after reconnect.
+  (
+    sleep 6
+    LAN_GATE="${LAN_CIRCLE_FLINT_GATE_SCRIPT:-/opt/ikev2/ensure-lan-circle-flint-gate.sh}"
+    [ -f "$LAN_GATE" ] || exit 0
+    bash "$LAN_GATE" || true
+  ) >/tmp/sm-ovpn-lan-circle.log 2>&1 &
 fi
 exit 0
