@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Block pending/denied home-LAN clients from reaching the portal on Flint
-# *before* NAT. Caddy only sees the sealed router WAN after MASQUERADE, so
-# per-device pending cannot be enforced in @vpn_clients alone.
+# Home-LAN trust circle gate on Flint (pre-NAT):
+#   1) REJECT pending/denied/keyless LAN sources to VPS :80,:443
+#   2) Force those same LAN IPs onto guest DNS (public resolver) so they
+#      do not receive AdGuard admin rewrites (proxmox/plex/portal VIP names)
 #
-# Approved LAN /32s are NOT blocked (and are also synced into Caddy for any
-# path that preserves the real LAN source IP).
+# Enrolled Authenticator LAN IPs and the timed enroll-unlock window are
+# exempt (phones must reach portal/keys and may keep circle DNS).
+# Key-bound allowlisted LAN /32s are NOT gated.
 set -euo pipefail
 
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
@@ -15,11 +17,17 @@ BLOCK_FILE="${LAN_CIRCLE_BLOCK_FILE:-/opt/servermanager/panel/lan-circle-block.t
 OVPN_GW="${OVPN_FLINT_IP:-10.9.0.2}"
 VPS_IP="${VPS_PUBLIC_IP:-74.208.76.213}"
 CHAIN="${LAN_CIRCLE_IPT_CHAIN:-SM-LAN-CIRCLE}"
+GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+GUEST_DNS_CHAIN="${LAN_GUEST_DNS_IPT_CHAIN:-SM-LAN-GUEST-DNS}"
 
 # shellcheck disable=SC1090
 set -a
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 set +a
+
+# Re-read after env file (env may override defaults).
+GUEST_DNS="${VPN_GUEST_DNS:-$GUEST_DNS}"
+GUEST_DNS="${GUEST_DNS:-1.1.1.1}"
 
 PASS="${ROUTER_PASS:-}"
 if [ -z "$PASS" ] && [ -n "${ROUTER_PASS_B64:-}" ]; then
@@ -38,7 +46,7 @@ command -v sshpass >/dev/null 2>&1 || {
   exit 0
 }
 
-export ALLOWLIST_FILE AUTH_APP_DEVICES_FILE SSH_PANEL_2FA_FILE BLOCK_FILE VPS_IP
+export ALLOWLIST_FILE AUTH_APP_DEVICES_FILE SSH_PANEL_2FA_FILE BLOCK_FILE VPS_IP GUEST_DNS
 BLOCK_LIST="$(
   python3 - <<'PY'
 import json
@@ -55,6 +63,7 @@ ssh_2fa = Path(
 )
 block_file = Path(os.environ.get("BLOCK_FILE", "/opt/servermanager/panel/lan-circle-block.txt"))
 vps = os.environ.get("VPS_IP", "74.208.76.213").strip() or "74.208.76.213"
+guest_dns = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
 
 
 def norm(raw: str) -> str:
@@ -84,7 +93,7 @@ if allow.is_file():
     except Exception:
         pass
 
-# Enrolled Authenticator phones keep portal access while remaining pending.
+# Enrolled Authenticator phones keep portal + circle DNS while remaining pending.
 enrolled: set[str] = set()
 if auth_dev.is_file():
     try:
@@ -187,6 +196,7 @@ block_file.parent.mkdir(parents=True, exist_ok=True)
 lines = [
     "# Managed by ensure-lan-circle-flint-gate.sh",
     f"# Reject these LAN sources to {vps}:80,443 on Flint (pre-NAT).",
+    f"# Same set is forced to guest DNS {guest_dns} (no AdGuard admin rewrites).",
     f"# Enrolled Authenticators exempt: {', '.join(sorted(enrolled)) or '(none)'}",
     f"# enroll_unlocked={int(enroll_unlocked)}",
     "# one IPv4 per line",
@@ -219,23 +229,30 @@ done
   exit 0
 }
 
-# Build remote script with embedded block list + VPS IP.
+# Build remote script with embedded block list + VPS IP + guest DNS.
 REMOTE_SCRIPT="$(
-  BLOCK_LIST="$BLOCK_LIST" VPS_IP="$VPS_IP" CHAIN="$CHAIN" python3 - <<'PY'
+  BLOCK_LIST="$BLOCK_LIST" VPS_IP="$VPS_IP" CHAIN="$CHAIN" \
+  GUEST_DNS="$GUEST_DNS" GUEST_DNS_CHAIN="$GUEST_DNS_CHAIN" python3 - <<'PY'
 import os
 
 vps = os.environ.get("VPS_IP", "74.208.76.213")
 chain = os.environ.get("CHAIN", "SM-LAN-CIRCLE")
+guest = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
+gd_chain = os.environ.get("GUEST_DNS_CHAIN", "SM-LAN-GUEST-DNS")
 blocks = [b.strip() for b in (os.environ.get("BLOCK_LIST") or "").splitlines() if b.strip()]
 print("set -e")
 print(f'VPS="{vps}"')
 print(f'CHAIN="{chain}"')
-print("iptables -t filter -N \"$CHAIN\" 2>/dev/null || iptables -t filter -F \"$CHAIN\"")
+print(f'GUEST_DNS="{guest}"')
+print(f'GD_CHAIN="{gd_chain}"')
+
+# --- Portal HTTPS reject (filter) ---
+print('iptables -t filter -N "$CHAIN" 2>/dev/null || iptables -t filter -F "$CHAIN"')
 print("# Ensure jump exists near the top of forwarding (GL.iNet uses forwarding_rule)")
 print("if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then")
-print("  iptables -t filter -C forwarding_rule -j \"$CHAIN\" 2>/dev/null || iptables -t filter -I forwarding_rule 1 -j \"$CHAIN\"")
+print('  iptables -t filter -C forwarding_rule -j "$CHAIN" 2>/dev/null || iptables -t filter -I forwarding_rule 1 -j "$CHAIN"')
 print("else")
-print("  iptables -t filter -C FORWARD -j \"$CHAIN\" 2>/dev/null || iptables -t filter -I FORWARD 1 -j \"$CHAIN\"")
+print('  iptables -t filter -C FORWARD -j "$CHAIN" 2>/dev/null || iptables -t filter -I FORWARD 1 -j "$CHAIN"')
 print("fi")
 for ip in blocks:
     print(
@@ -246,8 +263,93 @@ for ip in blocks:
         f'iptables -t filter -A "$CHAIN" -s {ip}/32 -d "$VPS"/32 -p udp '
         f'-m multiport --dports 80,443 -j REJECT --reject-with icmp-port-unreachable'
     )
-print(f'echo "lan-circle: blocked {len(blocks)} LAN IP(s) to {vps}:80,443 on Flint"')
+
+# --- Guest DNS (nat): same blocked set → public resolver, skip AdGuard ---
+print('iptables -t nat -N "$GD_CHAIN" 2>/dev/null || iptables -t nat -F "$GD_CHAIN"')
+print('iptables -t nat -C PREROUTING -j "$GD_CHAIN" 2>/dev/null || iptables -t nat -I PREROUTING 1 -j "$GD_CHAIN"')
+# Drop stale SM-LAN-GUEST-DNS helpers from dns_dispatcher / POSTROUTING / filter
+print(
+    r"""
+# Clear prior per-IP helpers tagged SM-LAN-GUEST-DNS (idempotent rebuild).
+_clear_comment() {
+  table="$1"; chain="$2"; tag="$3"
+  while true; do
+    line="$(iptables -t "$table" -S "$chain" 2>/dev/null | grep -F "$tag" | head -1 || true)"
+    [ -n "$line" ] || break
+    # Convert -A/-I listing to -D delete
+    del="$(echo "$line" | sed 's/^-A /-D /; s/^-I /-D /')"
+    eval "iptables -t $table $del" 2>/dev/null || break
+  done
+}
+if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then
+  _clear_comment nat dns_dispatcher SM-LAN-GUEST-DNS
+fi
+_clear_comment nat POSTROUTING SM-LAN-GUEST-DNS
+if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then
+  _clear_comment filter forwarding_rule SM-LAN-GUEST-DNS
+else
+  _clear_comment filter FORWARD SM-LAN-GUEST-DNS
+fi
+"""
+)
+for ip in blocks:
+    # Skip Flint's AdGuard / dns_dispatcher force for this LAN client.
+    print(
+        "if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then\n"
+        f'  iptables -t nat -C dns_dispatcher -s {ip}/32 -m comment '
+        f'--comment SM-LAN-GUEST-DNS -j RETURN 2>/dev/null || '
+        f'iptables -t nat -I dns_dispatcher 1 -s {ip}/32 -m comment '
+        f'--comment SM-LAN-GUEST-DNS -j RETURN\n'
+        "fi"
+    )
+    print(
+        f'iptables -t nat -A "$GD_CHAIN" -s {ip}/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j DNAT --to-destination "$GUEST_DNS":53'
+    )
+    print(
+        f'iptables -t nat -A "$GD_CHAIN" -s {ip}/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j DNAT --to-destination "$GUEST_DNS":53'
+    )
+    print(
+        f'iptables -t nat -C POSTROUTING -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE 2>/dev/null || '
+        f'iptables -t nat -I POSTROUTING 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE'
+    )
+    print(
+        f'iptables -t nat -C POSTROUTING -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE 2>/dev/null || '
+        f'iptables -t nat -I POSTROUTING 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE'
+    )
+    print(
+        "if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then\n"
+        f'  iptables -t filter -C forwarding_rule -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT 2>/dev/null || '
+        f'iptables -t filter -I forwarding_rule 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT\n'
+        f'  iptables -t filter -C forwarding_rule -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT 2>/dev/null || '
+        f'iptables -t filter -I forwarding_rule 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT\n'
+        "else\n"
+        f'  iptables -t filter -C FORWARD -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT 2>/dev/null || '
+        f'iptables -t filter -I FORWARD 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT\n'
+        f'  iptables -t filter -C FORWARD -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT 2>/dev/null || '
+        f'iptables -t filter -I FORWARD 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j ACCEPT\n'
+        "fi"
+    )
+
+print(
+    f'echo "lan-circle: blocked {len(blocks)} LAN IP(s) to {vps}:80,443; '
+    f'guest DNS {guest} for same set"'
+)
 print('iptables -t filter -S "$CHAIN" | head -40')
+print('iptables -t nat -S "$GD_CHAIN" | head -40')
 PY
 )"
 
@@ -255,4 +357,4 @@ echo "$REMOTE_SCRIPT" | sshpass -e ssh -o StrictHostKeyChecking=no \
   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
   -o ConnectTimeout=8 "root@${FLINT_HOST}" sh -s
 
-echo "lan-circle: applied via ${FLINT_HOST} ($(echo "$BLOCK_LIST" | grep -c . || true) blocked)"
+echo "lan-circle: applied via ${FLINT_HOST} ($(echo "$BLOCK_LIST" | grep -c . || true) blocked + guest DNS ${GUEST_DNS})"

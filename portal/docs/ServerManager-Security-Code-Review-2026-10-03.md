@@ -117,7 +117,8 @@ Flint gate treats keyless "allowed" LAN as blocked until scrub:
 ```
 allowed = { ip for row in allowed if is_home_lan(ip) and row.pubkey }
 keyless_allowed = { ip for row in allowed if is_home_lan(ip) and not row.pubkey }
-# keyless + pending -> REJECT to VPS :80,:443 unless enrolled / enroll-unlocked
+# keyless + pending -> REJECT to VPS :80,:443 AND guest DNS (1.1.1.1)
+# unless enrolled / enroll-unlocked (those keep portal + AdGuard/circle DNS)
 ```
 
 **Live verification (4 Oct):** injected keyless 192.168.8.199; peer-acl scrubbed it to pending and Flint REJECT'd it within one timer tick. Six production LAN members (.137/.163/.164/.214/.243/.250) remain - each key-bound.

@@ -12969,10 +12969,10 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
         "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
-            "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
-            "Home LAN devices show by device name when known from DHCP/aliases; "
-            "pending/denied LAN IPs are blocked on the Flint router before NAT — except enrolled "
-            "Authenticator phones, which keep portal access while remaining pending."
+            "approve with an Authenticator key bind to enter the trust circle. "
+            "Home LAN pending/denied/keyless IPs are REJECT'd to the VPS :80/:443 on Flint "
+            "and forced to the same guest DNS (no AdGuard admin rewrites) — except enrolled "
+            "Authenticator phones, which keep portal access and circle DNS while remaining pending."
             + (
                 ""
                 if for_auth_app

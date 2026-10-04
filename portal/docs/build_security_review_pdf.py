@@ -130,10 +130,11 @@ Flint gate treats keyless "allowed" LAN as blocked until scrub:
 ```
 allowed = { ip for row in allowed if is_home_lan(ip) and row.pubkey }
 keyless_allowed = { ip for row in allowed if is_home_lan(ip) and not row.pubkey }
-# keyless + pending -> REJECT to VPS :80,:443 unless enrolled / enroll-unlocked
+# keyless + pending -> REJECT to VPS :80,:443 AND guest DNS (1.1.1.1)
+# unless enrolled / enroll-unlocked (those keep portal + AdGuard/circle DNS)
 ```
 
-**Live verification (4 Oct):** injected keyless 192.168.8.199; peer-acl scrubbed it to pending and Flint REJECT'd it within one timer tick. Six production LAN members (.137/.163/.164/.214/.243/.250) remain - each key-bound.
+**Live verification (4 Oct):** injected keyless 192.168.8.199; peer-acl scrubbed it to pending and Flint REJECT'd it within one timer tick. Injected pending 192.168.8.198 also received SM-LAN-GUEST-DNS DNAT to 1.1.1.1. Six production LAN members (.137/.163/.164/.214/.243/.250) remain - each key-bound.
 
 ---
 
@@ -250,7 +251,7 @@ UFW limit + connlimit + MaxAuthTries 3. Residual: slow distributed scans.
 Pending login + Authenticator TOTP + Secure cookie. Residual: stolen live session until expiry.
 
 ### D.3 Unapproved friend on home Wi-Fi
-Flint SM-LAN-CIRCLE REJECT pending/keyless to VPS :80/:443; Authenticator must approve with key. Residual: other LAN services need host firewalls.
+Flint SM-LAN-CIRCLE REJECT pending/keyless to VPS :80/:443 and SM-LAN-GUEST-DNS forces the same set to 1.1.1.1 (no AdGuard admin rewrites). Authenticator must approve with key. Residual: other LAN services need host firewalls; guest DNS is bypassable if the client hardcodes a resolver and Flint does not redirect it.
 
 ### D.4 VPN client not in circle
 Guest DNS; no sticky ACL; no key bind. Residual: raw-IP if routing is broad.
@@ -373,7 +374,7 @@ allowed_ips = {
     and normalize_ip(x.get("ip", ""))
     and row_is_circle_trusted(x)
 }
-# trusted VIP => AdGuard DNS + host INPUT; else guest DNS
+# trusted VIP/LAN => AdGuard DNS + host INPUT; else guest DNS (IKEv2 VIP + home LAN)
 ```
 
 ### C.3 Peer ACL: no sticky seed
