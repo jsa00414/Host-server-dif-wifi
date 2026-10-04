@@ -32,9 +32,19 @@ fi
   echo "client"
   echo "dev tun"
   echo "proto ${PROTO}"
-  echo "remote ${HOST} ${PORT}"
+  # Prefer direct OpenVPN :8443, then sslh :443 (campus UFW must not deny 443).
+  if [[ "${PORT}" == "443" ]]; then
+    echo "remote ${HOST} 8443"
+    echo "remote ${HOST} 443"
+  else
+    echo "remote ${HOST} ${PORT}"
+  fi
   echo "nobind"
   echo "remote-cert-tls server"
+  # OpenVPN 2.6+: negotiate AEAD; keep CBC for older peers / GL.iNet fallback.
+  # Must intersect with server data-ciphers (Flint advertises GCM-only in IV_CIPHERS).
+  echo "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC"
+  echo "data-ciphers-fallback AES-256-CBC"
   echo "cipher AES-256-CBC"
   echo "auth SHA256"
   echo "key-direction 1"

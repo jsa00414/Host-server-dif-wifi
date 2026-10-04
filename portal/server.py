@@ -132,6 +132,8 @@ OVPN_WINDOWS_NAME = os.environ.get("OVPN_WINDOWS_NAME", "windows.ovpn")
 # Optional shared-secret download link (works without portal login / for Caddy
 # public path allow). Empty = token downloads disabled.
 OVPN_WINDOWS_DL_TOKEN = os.environ.get("OVPN_WINDOWS_DL_TOKEN", "").strip()
+# Same pattern for Flint / GL.iNet QR import (profile is too large for one QR).
+OVPN_FLINT_DL_TOKEN = os.environ.get("OVPN_FLINT_DL_TOKEN", "").strip()
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
@@ -18046,8 +18048,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
+            "/api/openvpn/flint",
+            "/download/flint.ovpn",
+            "/download/GL-MT6000.ovpn",
         ):
-            pass  # public Windows OpenVPN download (token checked below)
+            pass  # public OpenVPN download (token checked in handlers below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif path in ("/api/email-code/send", "/api/email-code/verify"):
@@ -18581,7 +18586,17 @@ document.getElementById('f').onsubmit = async (e) => {
             "/download/flint.ovpn",
             "/download/GL-MT6000.ovpn",
         ):
-            if not self._require_auth(api=True):
+            # Portal login OR shared download token (QR / phone camera → URL).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_FLINT_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_FLINT_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
                 return
             try:
                 from urllib.parse import quote
