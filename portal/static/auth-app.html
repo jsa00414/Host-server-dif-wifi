@@ -600,6 +600,7 @@
         <div class="circle-add">
           <input id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
           <button type="button" class="primary" id="circleApproveBtn">Approve into circle</button>
+          <button type="button" id="circleAuthorizeBtn">Authorize network</button>
           <button type="button" id="circleRefreshBtn">Refresh list</button>
         </div>
       </section>
@@ -1073,16 +1074,19 @@
       if (!unlocked) { toast("Unlock first"); return; }
       try {
         if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
+        // Home WiFi (192.168.8.x): approve this device's LAN IP into the circle.
+        // Campus shared WAN cannot be leased/allowlisted — LAN approve is the path.
+        const lanIp = await detectHomeLanIp();
+        if (lanIp && String(lanIp).startsWith("192.168.8.")) {
+          await mutateCircle("approve", lanIp, "authorized network · this device");
+          return;
+        }
         const code = await currentTotpCode();
-        // Authorize the WAN/public IP seen by the server for this browser.
-        const probe = await fetch("/api/auth-app/enroll-status", { cache: "no-store" });
-        const status = await probe.json().catch(() => ({}));
-        // Use client-reported LAN if home, else ask server via lease on connection IP.
-        // Lease is always for request_client_ip — sign with key bound to that IP.
-        // We discover bound IPs from local key store; prefer the one matching sticky WAN.
         const store = SmCircleCrypto.loadStore();
         const ips = Object.keys(store || {});
-        if (!ips.length) throw new Error("No circle keys yet — approve an IP first");
+        if (!ips.length) {
+          throw new Error("No circle keys yet — Approve your device IP first, then try again");
+        }
         let used = null;
         let lastErr = null;
         for (const ip of ips) {
@@ -1230,7 +1234,6 @@
             <div class="info">${detail}</div>
             <div class="row-actions">
               <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
-          <button type="button" class="ghost" id="circleAuthorizeBtn">Authorize network</button>
               <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
             </div>
           </div>`);
