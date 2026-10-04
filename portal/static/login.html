@@ -213,8 +213,8 @@
         twoFactorMethod === "email" ? "Email code" : "Authenticator code";
       const sub = document.getElementById("sub");
       sub.textContent = message || (twoFactorMethod === "email"
-        ? "Enter the code from your email."
-        : "Enter the code from your Authenticator app.");
+        ? "Enter the portal sign-in code from your email."
+        : "Enter a fresh Authenticator code for portal sign-in.");
       sub.classList.add("show");
       document.getElementById("btn").textContent = "Verify & sign in";
       document.getElementById("backBtn").classList.add("show");
