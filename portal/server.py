@@ -1783,6 +1783,11 @@ GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0
 GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 
+try:
+    import media_tmdb as _media_tmdb
+except Exception:
+    _media_tmdb = None  # type: ignore
+
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
 PROXMOX_SSH_USER = os.environ.get("PROXMOX_SSH_USER", "root").strip() or "root"
 PROXMOX_SSH_KEY = os.environ.get("PROXMOX_SSH_KEY", "/root/.ssh/id_ed25519").strip() or "/root/.ssh/id_ed25519"
@@ -7659,7 +7664,18 @@ def _elements_sanitize_filename(name: str) -> str:
 
 
 def elements_upload_media(
-    library: str, filename: str, data: bytes, *, process: bool = False
+    library: str,
+    filename: str,
+    data: bytes,
+    *,
+    process: bool = False,
+    show_name: str = "",
+    year: str = "",
+    season: int | None = None,
+    episode: int | None = None,
+    episode_title: str = "",
+    tmdb_id: int | None = None,
+    full_form: bool = False,
 ) -> dict:
     """Upload a media file into one of the four Elements library inboxes."""
     lib = str(library or "").strip().lower().replace(" ", "-").replace("_", "-")
@@ -7708,6 +7724,92 @@ def elements_upload_media(
             f"file too large ({len(data)} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
         )
     name = _elements_sanitize_filename(filename)
+    rel_under_inbox = name
+    plex_meta: dict = {}
+    is_tv = kind in ("tvshows", "kids-tvshows")
+    is_movie = kind in ("movies", "kids-movies")
+    if is_movie and (full_form or show_name):
+        if not _media_tmdb:
+            raise RuntimeError("TMDB helper unavailable")
+        title = str(show_name or "").strip()
+        yr = str(year or "").strip()
+        if tmdb_id and (not title or not yr):
+            try:
+                info = _media_tmdb.movie_details(int(tmdb_id))
+                if not title:
+                    title = str(info.get("title") or info.get("name") or "").strip()
+                if not yr:
+                    yr = str(info.get("year") or "").strip()
+            except Exception:
+                pass
+        if not title:
+            raise ValueError("Movie title required for full movie form")
+        rel_under_inbox, name = _media_tmdb.build_movie_upload_name_from_form(
+            filename,
+            title=title,
+            year=yr,
+        )
+        name = _elements_sanitize_filename(name)
+        rel_under_inbox = name
+        plex_meta = {
+            "title": title,
+            "year": yr,
+            "tmdb_id": int(tmdb_id) if tmdb_id else 0,
+            "relpath": rel_under_inbox,
+            "media_type": "movie",
+        }
+    elif is_tv and (full_form or show_name):
+        if not _media_tmdb:
+            raise RuntimeError("TMDB helper unavailable")
+        show = str(show_name or "").strip()
+        if not show:
+            raise ValueError("Show name required for full TV form")
+        # Optionally fill episode title from TMDB when id+season+episode given.
+        ep_title = str(episode_title or "").strip()
+        yr = str(year or "").strip()
+        sn = season
+        en = episode
+        if sn is None or en is None:
+            gsn, gen = _media_tmdb.guess_season_episode(name)
+            sn = sn if sn is not None else gsn
+            en = en if en is not None else gen
+        if tmdb_id and sn and en and not ep_title:
+            try:
+                season_info = _media_tmdb.tv_season(int(tmdb_id), int(sn))
+                for ep in season_info.get("episodes") or []:
+                    if int(ep.get("episode_number") or 0) == int(en):
+                        ep_title = str(ep.get("name") or "").strip()
+                        break
+                if not yr:
+                    yr = str((season_info.get("show") or {}).get("year") or "")
+                if not show:
+                    show = str((season_info.get("show") or {}).get("name") or show)
+            except Exception:
+                pass
+        rel_under_inbox, name = _media_tmdb.build_upload_name_from_form(
+            filename,
+            show_name=show,
+            year=yr,
+            season=int(sn) if sn is not None else None,
+            episode=int(en) if en is not None else None,
+            episode_title=ep_title,
+        )
+        # sanitize each path segment
+        parts = []
+        for part in rel_under_inbox.replace("\\", "/").split("/"):
+            parts.append(_elements_sanitize_filename(part))
+        rel_under_inbox = "/".join(parts)
+        name = parts[-1]
+        plex_meta = {
+            "show_name": show,
+            "year": yr,
+            "season": int(sn) if sn is not None else 0,
+            "episode": int(en) if en is not None else 0,
+            "episode_title": ep_title,
+            "tmdb_id": int(tmdb_id) if tmdb_id else 0,
+            "relpath": rel_under_inbox,
+            "media_type": "tv",
+        }
     # Ensure drive is attached + inbox dirs exist
     prep = proxmox_ssh(
         f"{PROXMOX_ELEMENTS_CMD} status; "
@@ -7726,7 +7828,8 @@ def elements_upload_media(
             raise RuntimeError(
                 _elements_ssh_out(att) or "Elements not mounted; attach failed"
             )
-    dest = f"/mnt/plex-usb/{sub}/{name}"
+    dest = f"/mnt/plex-usb/{sub}/{rel_under_inbox}"
+    dest_dir = str(Path(dest).parent).replace("'", "")
     # Stream bytes over SSH stdin
     timeout = max(300, len(data) // (512 * 1024) + 120)
     cmd = [
@@ -7740,7 +7843,7 @@ def elements_upload_media(
         "-o",
         "ConnectTimeout=8",
         f"{PROXMOX_SSH_USER}@{PROXMOX_SSH_HOST}",
-        f"cat > {shlex.quote(dest)}",
+        f"mkdir -p {shlex.quote(dest_dir)} && cat > {shlex.quote(dest)}",
     ]
     proc = subprocess.run(
         cmd, input=data, capture_output=True, timeout=timeout
@@ -7757,6 +7860,8 @@ def elements_upload_media(
         "path": dest,
         "processed": False,
     }
+    if plex_meta:
+        result["plex"] = plex_meta
     if process:
         run = elements_set("pipeline")
         result["processed"] = True
@@ -7769,6 +7874,19 @@ def elements_upload_media(
             pass
     return result
 
+
+
+def tmdb_status() -> dict:
+    configured = bool(_media_tmdb and _media_tmdb.tmdb_configured())
+    return {
+        "ok": True,
+        "configured": configured,
+        "message": (
+            "TMDB ready"
+            if configured
+            else "Set TMDB_API_KEY in port-forward-ui.env"
+        ),
+    }
 
 def _active_session_count() -> int:
     with _sessions_lock:
@@ -15077,6 +15195,77 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc), "installed": False})
             return
+        if path == "/api/media/tmdb":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, tmdb_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/media/tmdb/search":
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                qs = parse_qs(urlparse(self.path).query)
+                q = (qs.get("q") or qs.get("query") or [""])[0]
+                page = int((qs.get("page") or ["1"])[0] or 1)
+                kind = (
+                    qs.get("type") or qs.get("media_type") or qs.get("kind") or ["tv"]
+                )[0].strip().lower()
+                if kind in ("movie", "movies", "film", "films"):
+                    self._json(200, _media_tmdb.search_movie(q, page=page))
+                else:
+                    self._json(200, _media_tmdb.search_tv(q, page=page))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path.startswith("/api/media/tmdb/movie/"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                rest = path[len("/api/media/tmdb/movie/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    raise ValueError("tmdb id required")
+                self._json(200, _media_tmdb.movie_details(int(parts[0])))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path.startswith("/api/media/tmdb/tv/"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                rest = path[len("/api/media/tmdb/tv/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    raise ValueError("tmdb id required")
+                tv_id = int(parts[0])
+                qs = parse_qs(urlparse(self.path).query)
+                if len(parts) >= 3 and parts[1] == "season":
+                    season_n = int(parts[2])
+                    self._json(200, _media_tmdb.tv_season(tv_id, season_n))
+                elif qs.get("season"):
+                    self._json(
+                        200, _media_tmdb.tv_season(tv_id, int(qs["season"][0]))
+                    )
+                else:
+                    self._json(200, _media_tmdb.tv_details(tv_id))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/health":
             self._json(200, {"ok": True})
             return
@@ -15799,6 +15988,29 @@ document.getElementById('f').onsubmit = async (e) => {
                     "yes",
                     "on",
                 )
+                full_form = (qs.get("full_form") or qs.get("tv_form") or ["0"])[0] in (
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                )
+                show_name = (
+                    qs.get("show")
+                    or qs.get("show_name")
+                    or qs.get("movie")
+                    or qs.get("title")
+                    or [""]
+                )[0]
+                year = (qs.get("year") or [""])[0]
+                episode_title = (
+                    qs.get("episode_title") or qs.get("ep_title") or [""]
+                )[0]
+                season_raw = (qs.get("season") or qs.get("s") or [""])[0]
+                episode_raw = (qs.get("episode") or qs.get("e") or [""])[0]
+                tmdb_raw = (qs.get("tmdb_id") or qs.get("tmdb") or [""])[0]
+                season = int(season_raw) if str(season_raw).isdigit() else None
+                episode = int(episode_raw) if str(episode_raw).isdigit() else None
+                tmdb_id = int(tmdb_raw) if str(tmdb_raw).isdigit() else None
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 if length <= 0:
                     raise ValueError("empty upload")
@@ -15812,7 +16024,17 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(
                     200,
                     elements_upload_media(
-                        library, filename, data, process=process
+                        library,
+                        filename,
+                        data,
+                        process=process,
+                        show_name=show_name,
+                        year=year,
+                        season=season,
+                        episode=episode,
+                        episode_title=episode_title,
+                        tmdb_id=tmdb_id,
+                        full_form=full_form,
                     ),
                 )
             except ValueError as exc:
