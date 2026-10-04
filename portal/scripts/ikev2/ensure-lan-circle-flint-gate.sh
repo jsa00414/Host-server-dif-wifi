@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Home-LAN trust circle gate on Flint (pre-NAT):
 #   1) REJECT pending/denied/keyless LAN sources to VPS :80,:443
-#   2) Force those same LAN IPs onto guest DNS (public resolver) so they
-#      do not receive AdGuard admin rewrites (proxmox/plex/portal VIP names)
+#   2) Force those same LAN IPs onto guest DNS (sm-guest-dns / VPN_GUEST_DNS)
+#      which NXDOMAINs portal/router/admin names (real browser DNS error page)
+#      and does not apply AdGuard admin rewrites.
 #
 # Enrolled Authenticator LAN IPs and the timed enroll-unlock window are
 # exempt (phones must reach portal/keys and may keep circle DNS).
