@@ -35,6 +35,10 @@ fi
   echo "remote ${HOST} ${PORT}"
   echo "nobind"
   echo "remote-cert-tls server"
+  # OpenVPN 2.6+: negotiate AEAD; keep CBC for older peers / GL.iNet fallback.
+  # Must intersect with server data-ciphers (Flint advertises GCM-only in IV_CIPHERS).
+  echo "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC"
+  echo "data-ciphers-fallback AES-256-CBC"
   echo "cipher AES-256-CBC"
   echo "auth SHA256"
   echo "key-direction 1"
