@@ -4564,8 +4564,8 @@
           openEmailCodePopup({
             title: isApp ? "Authenticator code" : "Email code",
             subtitle: isApp
-              ? "Open the ServerManager Authenticator app on your phone and enter the 6-digit code."
-              : "Enter the verification code from your email.",
+              ? "Enter a fresh 6-digit Authenticator code for Settings unlock (a code already used to sign in will not work)."
+              : "Enter the Settings unlock code from your email (portal sign-in codes will not work here).",
             onSubmit: (c) => unlockSshPanel(c),
             onCancel: () => {
               window.__sshUnlockNeedCode = false;

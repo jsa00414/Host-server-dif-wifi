@@ -11272,19 +11272,23 @@ def begin_portal_login(
             "login_token": login_token,
             "passkey_available": passkeys,
             "message": (
-                "Enter the Authenticator code, or use a passkey."
+                "Enter a fresh Authenticator code for portal sign-in, or use a passkey."
                 if passkeys
-                else "Enter the code from your Authenticator app."
+                else "Enter a fresh Authenticator code for portal sign-in."
             ),
         }
-    sent = send_email_test_code(client_ip or "login", key=f"portal-login:{login_token}")
+    sent = send_email_test_code(
+        client_ip or "login",
+        key=f"portal-login:{login_token}",
+        purpose="portal-login",
+    )
     return {
         "ok": True,
         "need_code": True,
         "two_factor_method": "email",
         "login_token": login_token,
         "passkey_available": passkeys,
-        "message": sent.get("message") or "Enter the email verification code.",
+        "message": sent.get("message") or "Enter the portal sign-in email code.",
     }
 
 
@@ -11307,17 +11311,22 @@ def complete_portal_login(
         raise ValueError("Login session expired. Sign in again.")
     method = str(pending.get("method") or "email")
     if method == "app":
-        if not _verify_any_enroll_totp(code):
+        if not _verify_any_enroll_totp(code, purpose="portal-login"):
             st = ip_jail_record_failure(client_ip, reason="login_totp")
             time.sleep(0.25)
             if st.get("locked"):
                 raise ValueError(
                     f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
                 )
-            raise ValueError("Incorrect authenticator code")
+            raise ValueError("Incorrect or already-used authenticator code")
     else:
         try:
-            verify_email_test_code(client_ip or "login", code, key=f"portal-login:{token}")
+            verify_email_test_code(
+                client_ip or "login",
+                code,
+                key=f"portal-login:{token}",
+                purpose="portal-login",
+            )
         except Exception:
             st = ip_jail_record_failure(client_ip, reason="login_email_code")
             if st.get("locked"):
@@ -11395,10 +11404,14 @@ def complete_portal_login_passkey(
     }
 
 
-def _verify_any_enroll_totp(code: str) -> bool:
+def _verify_any_enroll_totp(code: str, *, purpose: str) -> bool:
+    """Accept any enrolled TOTP once for a single purpose (login ≠ Settings unlock)."""
+    purpose_n = str(purpose or "").strip().lower()
+    if not purpose_n:
+        return False
     legacy = str(_read_ssh_panel_2fa().get("totp_secret") or "")
     for secret in sm_auth.list_verifiable_totp_secrets(legacy):
-        if verify_totp_code(secret, code, window=1):
+        if verify_and_consume_totp(secret, code, purpose=purpose_n, window=1):
             return True
     return False
 
@@ -11487,10 +11500,11 @@ def _smtp_send_email(
         s.send_message(msg)
 
 
-def _email_code_html(code: str, *, minutes: int) -> str:
+def _email_code_html(code: str, *, minutes: int, purpose_label: str = "verification") -> str:
     """Transactional HTML email for a one-time portal code (spam-filter friendly)."""
     digits = "".join(ch for ch in str(code) if ch.isdigit())
     mins = max(1, int(minutes))
+    label = str(purpose_label or "verification").strip() or "verification"
     # Keep markup simple: tables + inline styles only. Avoid gradients/web fonts
     # that Gmail often treats as promotional.
     return f"""<!DOCTYPE html>
@@ -11499,11 +11513,11 @@ def _email_code_html(code: str, *, minutes: int) -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light only" />
-  <title>Your verification code</title>
+  <title>Your {label} code</title>
 </head>
 <body style="margin:0;padding:0;background:#f4f6f5;color:#14201b;">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
-    Your ServerManager verification code is {digits}. Valid for {mins} minutes.
+    Your ServerManager {label} code is {digits}. Valid for {mins} minutes. This code only works for {label}.
   </div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f4f6f5;padding:28px 12px;">
     <tr>
@@ -11516,12 +11530,12 @@ def _email_code_html(code: str, *, minutes: int) -> str:
           </tr>
           <tr>
             <td align="center" style="padding:4px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:1.3;color:#14201b;font-weight:700;">
-              Your verification code
+              Your {label} code
             </td>
           </tr>
           <tr>
             <td align="center" style="padding:12px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#4a5c54;">
-              Use this code to continue signing in. It expires in {mins} minutes.
+              Use this code only for {label}. It expires in {mins} minutes and will not work for other unlocks.
             </td>
           </tr>
           <tr>
@@ -11542,9 +11556,36 @@ def _email_code_html(code: str, *, minutes: int) -> str:
 </html>"""
 
 
-def send_email_test_code(client_ip: str, *, key: str | None = None) -> dict:
-    """Generate + email a 6-digit code (rate-limited per key/IP)."""
-    store_key = (key or client_ip or "unknown").strip() or "unknown"
+_EMAIL_PURPOSE_LABELS = {
+    "portal-login": "portal sign-in",
+    "ssh-unlock": "Settings SSH unlock",
+    "ssh-2fa-enable": "enable Settings two-factor",
+    "email-test": "email delivery test",
+}
+
+
+def _email_purpose_label(purpose: str) -> str:
+    key = str(purpose or "").strip().lower()
+    return _EMAIL_PURPOSE_LABELS.get(key, key.replace("-", " ") or "verification")
+
+
+def send_email_test_code(
+    client_ip: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    """Generate + email a 6-digit code bound to one purpose (rate-limited per key)."""
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown email code purpose")
+    # Always purpose-prefix the store key so login / Settings / test never share OTPs.
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
     now = time.time()
     with _email_codes_lock:
         last = float(_email_code_last_send.get(store_key) or 0)
@@ -11556,17 +11597,20 @@ def send_email_test_code(client_ip: str, *, key: str | None = None) -> dict:
             "hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
             "expires": now + max(60, EMAIL_CODE_TTL_SECONDS),
             "attempts": 0,
+            "purpose": purpose_n,
         }
         _email_code_last_send[store_key] = now
 
     minutes = max(1, EMAIL_CODE_TTL_SECONDS // 60)
+    label = _email_purpose_label(purpose_n)
     # Keep digits out of the subject — OTP-in-subject is a common spam signal.
-    subject = "Your ServerManager verification code"
+    subject = f"Your ServerManager {label} code"
     body = (
-        f"Your ServerManager verification code is: {code}\n\n"
+        f"Your ServerManager {label} code is: {code}\n\n"
+        f"This code is only for {label}. It will not unlock other portal actions.\n"
         f"This code expires in {minutes} minutes.\n"
     )
-    html = _email_code_html(code, minutes=minutes)
+    html = _email_code_html(code, minutes=minutes, purpose_label=label)
     try:
         _smtp_send_email(
             to_addr=EMAIL_CODE_TO, subject=subject, body=body, html=html
@@ -11579,13 +11623,28 @@ def send_email_test_code(client_ip: str, *, key: str | None = None) -> dict:
     return {
         "ok": True,
         "to": EMAIL_CODE_TO,
+        "purpose": purpose_n,
         "expires_in": EMAIL_CODE_TTL_SECONDS,
-        "message": "Code sent. Check your email.",
+        "message": f"Code sent for {label}. Check your email.",
     }
 
 
-def verify_email_test_code(client_ip: str, code: str, *, key: str | None = None) -> dict:
-    store_key = (key or client_ip or "unknown").strip() or "unknown"
+def verify_email_test_code(
+    client_ip: str,
+    code: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown email code purpose")
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
     raw = re.sub(r"\D+", "", str(code or ""))
     if len(raw) != 6:
         raise ValueError("Enter the 6-digit code")
@@ -11594,6 +11653,8 @@ def verify_email_test_code(client_ip: str, code: str, *, key: str | None = None)
         entry = _email_codes.get(store_key)
         if not entry:
             raise ValueError("No code pending — send a new one")
+        if str(entry.get("purpose") or "") != purpose_n:
+            raise ValueError("Code is for a different action — request a new one")
         if float(entry.get("expires") or 0) <= now:
             _email_codes.pop(store_key, None)
             raise ValueError("Code expired — send a new one")
@@ -11609,7 +11670,8 @@ def verify_email_test_code(client_ip: str, code: str, *, key: str | None = None)
         _email_codes.pop(store_key, None)
     return {
         "ok": True,
-        "message": "Code accepted. Email path works.",
+        "purpose": purpose_n,
+        "message": f"Code accepted for {_email_purpose_label(purpose_n)}.",
     }
 
 
@@ -12716,6 +12778,66 @@ def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
     return False
 
 
+# Burned TOTP timesteps so the same 30s code cannot unlock portal login AND Settings.
+_totp_used: dict[str, dict] = {}
+_totp_used_lock = threading.Lock()
+TOTP_USED_TTL_SECONDS = 120
+
+
+def _totp_secret_fingerprint(secret_b32: str) -> str:
+    norm = str(secret_b32 or "").strip().upper().replace(" ", "")
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:24]
+
+
+def _purge_totp_used(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    dead = [k for k, v in _totp_used.items() if float(v.get("exp") or 0) <= ts]
+    for k in dead:
+        _totp_used.pop(k, None)
+
+
+def verify_and_consume_totp(
+    secret_b32: str,
+    code: str,
+    *,
+    purpose: str,
+    window: int = 1,
+) -> bool:
+    """Verify a TOTP and burn that timestep so it cannot be reused for another purpose.
+
+    Portal sign-in and Settings SSH unlock share the same authenticator secret; without
+    consumption, one 6-digit code would satisfy both within the same 30s window.
+    """
+    purpose_n = str(purpose or "").strip().lower()
+    if not purpose_n:
+        return False
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6 or not secret_b32:
+        return False
+    now = time.time()
+    matched_step: int | None = None
+    for skew in range(-window, window + 1):
+        t = now + skew * 30
+        expect = _totp_at(secret_b32, t)
+        if hmac.compare_digest(expect, raw):
+            matched_step = int(t // 30)
+            break
+    if matched_step is None:
+        return False
+    used_key = f"{_totp_secret_fingerprint(secret_b32)}:{matched_step}"
+    with _totp_used_lock:
+        _purge_totp_used(now)
+        prev = _totp_used.get(used_key)
+        if prev is not None:
+            # Already spent (same or different purpose) — require a fresh code.
+            return False
+        _totp_used[used_key] = {
+            "purpose": purpose_n,
+            "exp": now + max(60, TOTP_USED_TTL_SECONDS),
+        }
+    return True
+
+
 def _read_ssh_panel_2fa() -> dict:
     try:
         if not SSH_PANEL_2FA_PATH.is_file():
@@ -13530,12 +13652,12 @@ def _run_vpn_peer_acl_sync() -> str:
         return str(exc)
 
 
-def verify_auth_app_totp(code: str) -> bool:
+def verify_auth_app_totp(code: str, *, purpose: str = "auth-app") -> bool:
     """Validate a TOTP from the phone authenticator PWA against enrolled secrets."""
     st = _read_ssh_panel_2fa()
     if not st.get("enabled") or str(st.get("method") or "") != "app":
         return False
-    return _verify_any_enroll_totp(code)
+    return _verify_any_enroll_totp(code, purpose=purpose)
 
 
 def _auth_app_totp_client_key(client_ip: str) -> str:
@@ -13780,10 +13902,12 @@ def build_ip_jail_status() -> dict:
         }
 
 
-def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
+def require_auth_app_totp(
+    code: str, *, client_ip: str = "", purpose: str = "auth-app"
+) -> None:
     """Validate auth-app TOTP with same-day IP jail (3 fails → 5 min)."""
     ip_jail_assert_allowed(client_ip)
-    if verify_auth_app_totp(code):
+    if verify_auth_app_totp(code, purpose=purpose):
         ip_jail_clear_success(client_ip)
         return
     st = ip_jail_record_failure(client_ip, reason="auth_app_totp")
@@ -13792,7 +13916,7 @@ def require_auth_app_totp(code: str, *, client_ip: str = "") -> None:
         raise ValueError(
             f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
         )
-    raise ValueError("Incorrect or missing authenticator code")
+    raise ValueError("Incorrect, missing, or already-used authenticator code")
 
 
 def _auth_app_totp_from_request(handler: "Handler") -> str:
@@ -13877,9 +14001,9 @@ def set_ssh_panel_2fa(
                     "email_to": EMAIL_CODE_TO,
                     "message": "Scan the QR in the Authenticator app, then enter the 6-digit code.",
                 }
-            if not verify_totp_code(secret, code):
+            if not verify_and_consume_totp(secret, code, purpose="ssh-2fa-enroll"):
                 time.sleep(0.25)
-                raise ValueError("Incorrect authenticator code")
+                raise ValueError("Incorrect or already-used authenticator code")
             _write_ssh_panel_2fa(enabled=True, method="app", totp_secret=secret)
             try:
                 sm_auth.ensure_legacy_secret_in_vault(secret, label="primary")
@@ -13896,7 +14020,9 @@ def set_ssh_panel_2fa(
         # Email method
         key = f"ssh-2fa-enable:{token}"
         if not str(code or "").strip():
-            sent = send_email_test_code(client_ip or "panel", key=key)
+            sent = send_email_test_code(
+                client_ip or "panel", key=key, purpose="ssh-2fa-enable"
+            )
             return {
                 "ok": True,
                 "need_code": True,
@@ -13906,7 +14032,9 @@ def set_ssh_panel_2fa(
                 "message": sent.get("message")
                 or "Enter the email code to enable two-factor.",
             }
-        verify_email_test_code(client_ip or "panel", code, key=key)
+        verify_email_test_code(
+            client_ip or "panel", code, key=key, purpose="ssh-2fa-enable"
+        )
         _write_ssh_panel_2fa(enabled=True, method="email", totp_secret="")
         return {
             "ok": True,
@@ -14028,20 +14156,22 @@ def unlock_ssh_panel(
                     "expires_at": None,
                     "expires_in": 0,
                     "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
-                    "message": "Enter the code from the Authenticator app.",
+                    "message": "Enter a fresh Authenticator code for Settings unlock.",
                 }
-            if not verify_totp_code(secret, code):
+            if not verify_and_consume_totp(secret, code, purpose="ssh-unlock"):
                 st = ip_jail_record_failure(client_ip, reason="ssh_panel_totp")
                 time.sleep(0.25)
                 if st.get("locked"):
                     raise ValueError(
                         f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
                     )
-                raise ValueError("Incorrect authenticator code")
+                raise ValueError("Incorrect or already-used authenticator code")
         else:
             key = f"ssh-unlock:{token}"
             if not str(code or "").strip():
-                sent = send_email_test_code(client_ip or "panel", key=key)
+                sent = send_email_test_code(
+                    client_ip or "panel", key=key, purpose="ssh-unlock"
+                )
                 return {
                     "ok": True,
                     "unlocked": False,
@@ -14053,10 +14183,12 @@ def unlock_ssh_panel(
                     "expires_in": 0,
                     "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
                     "message": sent.get("message")
-                    or "Enter the email verification code to unlock.",
+                    or "Enter the Settings unlock email code.",
                 }
             try:
-                verify_email_test_code(client_ip or "panel", code, key=key)
+                verify_email_test_code(
+                    client_ip or "panel", code, key=key, purpose="ssh-unlock"
+                )
             except Exception:
                 st = ip_jail_record_failure(client_ip, reason="ssh_panel_email_code")
                 if st.get("locked"):
@@ -19228,6 +19360,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
                     client_ip=request_client_ip(self),
+                    purpose="auth-app-vpn-allowlist",
                 )
                 # Refresh-only: never enroll a new LAN IP from a Circle GET.
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
@@ -19267,6 +19400,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
                     client_ip=request_client_ip(self),
+                    purpose="auth-app-register-device",
                 )
                 lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
                 platform = str(self.headers.get("X-SM-Platform") or "")
@@ -19296,6 +19430,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
                     client_ip=request_client_ip(self),
+                    purpose="auth-app-circle-lease",
                 )
                 client_ip = request_client_ip(self)
                 proof = verify_circle_device_proof(
@@ -19550,7 +19685,10 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/email-code/send":
             try:
-                result = send_email_test_code(request_client_ip(self))
+                ip = request_client_ip(self)
+                result = send_email_test_code(
+                    ip, key=f"email-test:{ip}", purpose="email-test"
+                )
                 self._json(200, result)
             except ValueError as exc:
                 self._json(429, {"ok": False, "error": str(exc)})
@@ -19561,7 +19699,10 @@ document.getElementById('f').onsubmit = async (e) => {
             try:
                 payload = self._read_json()
                 code = str((payload or {}).get("code") or "")
-                result = verify_email_test_code(request_client_ip(self), code)
+                ip = request_client_ip(self)
+                result = verify_email_test_code(
+                    ip, code, key=f"email-test:{ip}", purpose="email-test"
+                )
                 self._json(200, result)
             except ValueError as exc:
                 time.sleep(0.25)
@@ -19581,7 +19722,11 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
-                require_auth_app_totp(code, client_ip=request_client_ip(self))
+                require_auth_app_totp(
+                    code,
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-vpn-allowlist",
+                )
                 action = str(payload.get("action") or "").strip().lower()
                 target_ip = _normalize_vpn_ip(payload.get("ip") or "")
                 pub = str(
@@ -19654,7 +19799,11 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not isinstance(payload, dict):
                     payload = {}
                 code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
-                require_auth_app_totp(code, client_ip=request_client_ip(self))
+                require_auth_app_totp(
+                    code,
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-register-device",
+                )
                 # Prefer header LAN IP; body lan_ip is fallback for older clients.
                 lan_ip = _normalize_vpn_ip(
                     self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
@@ -19697,6 +19846,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
                     client_ip=request_client_ip(self),
+                    purpose="auth-app-circle-lease",
                 )
                 client_ip = request_client_ip(self)
                 proof = verify_circle_device_proof(
