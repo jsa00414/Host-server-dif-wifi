@@ -105,16 +105,12 @@ def compute_circle_drift() -> dict:
 
     sticky_not_allow = sorted(sticky - allow)
     allow_not_sticky = sorted(allow - sticky)
-    # Caddy sticky /32s should match sticky file; pools are ignored above.
+    # Caddy sticky /32s should include sticky file entries; extra Caddy /32s
+    # (peer ACL LAN hosts) are informational only.
     sticky_not_caddy = sorted(sticky - caddy) if caddy else []
     caddy_not_sticky = sorted(caddy - sticky) if caddy else []
 
-    drifted = bool(
-        sticky_not_allow
-        or allow_not_sticky
-        or sticky_not_caddy
-        or caddy_not_sticky
-    )
+    drifted = bool(sticky_not_allow or allow_not_sticky or sticky_not_caddy)
     return {
         "ok": not drifted,
         "drifted": drifted,

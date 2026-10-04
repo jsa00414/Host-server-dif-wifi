@@ -5,6 +5,8 @@ set -euo pipefail
 
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 UI_ROOT="${PORTAL_UI_ROOT:-/opt/wireguard/port-forward-ui}"
+PYTHON_BIN="${UI_ROOT}/.venv/bin/python"
+[[ -x "$PYTHON_BIN" ]] || PYTHON_BIN=python3
 
 set -a
 # shellcheck disable=SC1090
@@ -15,7 +17,7 @@ cd "$UI_ROOT"
 export CIRCLE_DRIFT_METRICS_PATH="${CIRCLE_DRIFT_METRICS_PATH:-/var/lib/node_exporter/textfile_collector/circle_drift.prom}"
 mkdir -p "$(dirname "$CIRCLE_DRIFT_METRICS_PATH")"
 
-python3 - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import os, sys
 sys.path.insert(0, os.environ.get("PORTAL_UI_ROOT", "/opt/wireguard/port-forward-ui"))
 import server

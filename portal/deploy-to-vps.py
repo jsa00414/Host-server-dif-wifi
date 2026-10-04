@@ -295,11 +295,23 @@ def main() -> int:
                 f"bash {REMOTE_UI}/scripts/security/retire-old-vps-ip.sh || true; "
                 f"bash {REMOTE_UI}/scripts/mail/ensure-portal-send-mailbox.sh || true",
             )
-        _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
-            f"mkdir -p {REMOTE_UI}/sm && "
-            f"python3 -m pip install --quiet 'webauthn>=2.0' || pip3 install --quiet 'webauthn>=2.0' || true",
+            f"mkdir -p {REMOTE_UI}/sm /var/lib/node_exporter/textfile_collector && "
+            "export DEBIAN_FRONTEND=noninteractive; "
+            "apt-get install -y -qq python3.12-venv >/dev/null 2>&1 || apt-get install -y -qq python3-venv >/dev/null 2>&1 || true; "
+            f"python3 -m venv {REMOTE_UI}/.venv; "
+            f"{REMOTE_UI}/.venv/bin/pip install -q --upgrade pip; "
+            f"{REMOTE_UI}/.venv/bin/pip install -q 'webauthn>=2.0'; "
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "import re\n"
+            "u=Path('/etc/systemd/system/port-forward-ui.service')\n"
+            "t=u.read_text()\n"
+            "t2=re.sub(r'^ExecStart=.*$', "
+            f"'ExecStart={REMOTE_UI}/.venv/bin/python {REMOTE_UI}/server.py', t, count=1, flags=re.M)\n"
+            "u.write_text(t2)\n"
+            "PY",
         )
         for local in (ROOT / "sm").rglob("*"):
             if not local.is_file() or "__pycache__" in local.parts:
@@ -309,13 +321,12 @@ def main() -> int:
             _run(client, f"mkdir -p {Path(remote).parent.as_posix()}")
             print(f"  upload {rel} -> {remote}")
             _sftp_put(client, local, remote)
+        _run(client, "systemctl daemon-reload && systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
             "chmod +x /opt/wireguard/port-forward-ui/scripts/security/check-circle-drift.sh "
             "/opt/servermanager-backup/sm-backup-restore-drill.sh 2>/dev/null || true; "
-            "systemctl daemon-reload; "
             "systemctl enable --now sm-circle-drift.timer 2>/dev/null || true; "
-            "mkdir -p /var/lib/node_exporter/textfile_collector; "
             "bash /opt/wireguard/port-forward-ui/scripts/security/check-circle-drift.sh || true; "
             "bash /opt/servermanager-backup/sm-backup-restore-drill.sh || true",
         )
