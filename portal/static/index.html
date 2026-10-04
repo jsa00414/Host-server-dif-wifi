@@ -917,6 +917,91 @@
       color: var(--muted);
       font-size: .72rem;
     }
+    .media-tv-form {
+      display: none;
+      width: 100%;
+      text-align: left;
+      gap: 8px;
+      margin-top: 4px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(0,0,0,.18);
+    }
+    .media-tv-form.is-open { display: grid; }
+    .media-tv-form label {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: .72rem;
+      font-weight: 600;
+    }
+    .media-tv-form input, .media-tv-form select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--bg0);
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+      font-size: .82rem;
+    }
+    .media-tv-form .tv-form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .media-tv-form .tv-search-results {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      max-height: 140px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--bg0);
+    }
+    .media-tv-form .tv-search-results:empty { display: none; }
+    .media-tv-form .tv-search-results li {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+      font-size: .78rem;
+    }
+    .media-tv-form .tv-search-results li:last-child { border-bottom: 0; }
+    .media-tv-form .tv-search-results li:hover,
+    .media-tv-form .tv-search-results li.is-on {
+      background: rgba(61,222,160,.12);
+      color: var(--accent);
+    }
+    .media-tv-form .tv-preview {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .68rem;
+      color: var(--accent);
+      word-break: break-all;
+      min-height: 1.2em;
+    }
+    .tv-form-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      color: var(--text);
+      font-size: .78rem;
+      font-weight: 600;
+      margin: 4px 0;
+      justify-self: start;
+      width: 100%;
+    }
+    .tv-form-toggle input { width: auto; margin: 0; }
+    .media-drop.has-tv-form { cursor: default; min-height: 0; align-content: start; }
+    .media-drop.has-tv-form .media-drop-hit {
+      cursor: pointer;
+      width: 100%;
+      display: grid;
+      gap: 8px;
+      justify-items: center;
+    }
     .media-file-list {
       margin: 0;
       padding: 0;
@@ -1444,18 +1529,74 @@
             <ul class="media-file-list" id="mediaKidsMovieQueue" aria-live="polite"></ul>
             <input type="file" id="mediaKidsMovieInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
           </div>
-          <div class="media-drop" id="mediaDropTv" tabindex="0" role="button" aria-label="Upload TV shows">
-            <h3>TV Shows</h3>
-            <p>Drop episodes here. Best name: <code>Show Name S01E02.mkv</code></p>
+          <div class="media-drop has-tv-form" id="mediaDropTv" tabindex="0" role="button" aria-label="Upload TV shows">
+            <div class="media-drop-hit" data-tv-hit="tvshows">
+              <h3>TV Shows</h3>
+              <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
+            </div>
+            <label class="tv-form-toggle"><input type="checkbox" id="mediaTvFormToggle" /> Full TV show form (TMDB)</label>
+            <div class="media-tv-form" id="mediaTvForm" data-library="tvshows">
+              <label>Search TMDB
+                <input type="search" id="mediaTvSearch" placeholder="Show name…" autocomplete="off" />
+              </label>
+              <ul class="tv-search-results" id="mediaTvResults"></ul>
+              <label>Show folder
+                <input type="text" id="mediaTvShowName" placeholder="Show Name (2020)" />
+              </label>
+              <div class="tv-form-row">
+                <label>Year <input type="text" id="mediaTvYear" maxlength="4" placeholder="2020" /></label>
+                <label>TMDB id <input type="text" id="mediaTvTmdbId" placeholder="optional" /></label>
+              </div>
+              <div class="tv-form-row">
+                <label>Season
+                  <select id="mediaTvSeason"><option value="">auto</option></select>
+                </label>
+                <label>Episode
+                  <select id="mediaTvEpisode"><option value="">auto from filename</option></select>
+                </label>
+              </div>
+              <label>Episode title
+                <input type="text" id="mediaTvEpTitle" placeholder="optional" />
+              </label>
+              <div class="tv-preview" id="mediaTvPreview">Plex path preview…</div>
+            </div>
             <div class="media-drop-actions">
               <button type="button" class="primary" id="mediaUploadTvBtn">Choose TV files</button>
             </div>
             <ul class="media-file-list" id="mediaTvQueue" aria-live="polite"></ul>
             <input type="file" id="mediaTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
           </div>
-          <div class="media-drop" id="mediaDropKidsTv" tabindex="0" role="button" aria-label="Upload kids TV shows">
-            <h3>Kids TV Shows</h3>
-            <p>Drop episodes here. Best name: <code>Show Name S01E02.mkv</code></p>
+          <div class="media-drop has-tv-form" id="mediaDropKidsTv" tabindex="0" role="button" aria-label="Upload kids TV shows">
+            <div class="media-drop-hit" data-tv-hit="kids-tvshows">
+              <h3>Kids TV Shows</h3>
+              <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
+            </div>
+            <label class="tv-form-toggle"><input type="checkbox" id="mediaKidsTvFormToggle" /> Full TV show form (TMDB)</label>
+            <div class="media-tv-form" id="mediaKidsTvForm" data-library="kids-tvshows">
+              <label>Search TMDB
+                <input type="search" id="mediaKidsTvSearch" placeholder="Show name…" autocomplete="off" />
+              </label>
+              <ul class="tv-search-results" id="mediaKidsTvResults"></ul>
+              <label>Show folder
+                <input type="text" id="mediaKidsTvShowName" placeholder="Show Name (2020)" />
+              </label>
+              <div class="tv-form-row">
+                <label>Year <input type="text" id="mediaKidsTvYear" maxlength="4" placeholder="2020" /></label>
+                <label>TMDB id <input type="text" id="mediaKidsTvTmdbId" placeholder="optional" /></label>
+              </div>
+              <div class="tv-form-row">
+                <label>Season
+                  <select id="mediaKidsTvSeason"><option value="">auto</option></select>
+                </label>
+                <label>Episode
+                  <select id="mediaKidsTvEpisode"><option value="">auto from filename</option></select>
+                </label>
+              </div>
+              <label>Episode title
+                <input type="text" id="mediaKidsTvEpTitle" placeholder="optional" />
+              </label>
+              <div class="tv-preview" id="mediaKidsTvPreview">Plex path preview…</div>
+            </div>
             <div class="media-drop-actions">
               <button type="button" class="primary" id="mediaUploadKidsTvBtn">Choose kids TV</button>
             </div>
@@ -4171,9 +4312,283 @@
         setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
       }
     }
+    const TV_FORM_IDS = {
+      tvshows: {
+        toggle: "mediaTvFormToggle",
+        form: "mediaTvForm",
+        search: "mediaTvSearch",
+        results: "mediaTvResults",
+        show: "mediaTvShowName",
+        year: "mediaTvYear",
+        tmdb: "mediaTvTmdbId",
+        season: "mediaTvSeason",
+        episode: "mediaTvEpisode",
+        epTitle: "mediaTvEpTitle",
+        preview: "mediaTvPreview",
+      },
+      "kids-tvshows": {
+        toggle: "mediaKidsTvFormToggle",
+        form: "mediaKidsTvForm",
+        search: "mediaKidsTvSearch",
+        results: "mediaKidsTvResults",
+        show: "mediaKidsTvShowName",
+        year: "mediaKidsTvYear",
+        tmdb: "mediaKidsTvTmdbId",
+        season: "mediaKidsTvSeason",
+        episode: "mediaKidsTvEpisode",
+        epTitle: "mediaKidsTvEpTitle",
+        preview: "mediaKidsTvPreview",
+      },
+    };
+    const tvFormState = {
+      tvshows: { seasons: [], episodes: [], searchTimer: null },
+      "kids-tvshows": { seasons: [], episodes: [], searchTimer: null },
+    };
+
+    function tvFormEls(library) {
+      const ids = TV_FORM_IDS[library];
+      if (!ids) return null;
+      const out = {};
+      for (const [k, id] of Object.entries(ids)) out[k] = document.getElementById(id);
+      return out;
+    }
+
+    function tvFormActive(library) {
+      const els = tvFormEls(library);
+      return !!(els && els.toggle && els.toggle.checked && els.form && els.form.classList.contains("is-open"));
+    }
+
+    function collectTvFormMeta(library) {
+      if (!tvFormActive(library)) return null;
+      const els = tvFormEls(library);
+      if (!els) return null;
+      const show = (els.show?.value || "").trim();
+      if (!show) {
+        throw new Error("Enter a show name (or pick one from TMDB) before uploading");
+      }
+      const year = (els.year?.value || "").trim();
+      const tmdb = (els.tmdb?.value || "").trim();
+      const season = (els.season?.value || "").trim();
+      const episode = (els.episode?.value || "").trim();
+      const episodeTitle = (els.epTitle?.value || "").trim();
+      return {
+        full_form: "1",
+        show,
+        year,
+        tmdb_id: tmdb,
+        season,
+        episode,
+        episode_title: episodeTitle,
+      };
+    }
+
+    function updateTvPreview(library) {
+      const els = tvFormEls(library);
+      if (!els || !els.preview) return;
+      const show = (els.show?.value || "").trim() || "Show Name";
+      const year = (els.year?.value || "").trim();
+      const folder = year && /^\d{4}$/.test(year) && !show.includes("(" + year + ")")
+        ? `${show} (${year})`
+        : show;
+      const sn = parseInt(els.season?.value || "0", 10) || 0;
+      const en = parseInt(els.episode?.value || "0", 10) || 0;
+      const title = (els.epTitle?.value || "").trim();
+      const seasonFolder = sn > 0 ? `Season ${String(sn).padStart(2, "0")}` : "Season XX";
+      let epName = `${folder} - S${String(sn || 0).padStart(2, "0")}E${String(en || 0).padStart(2, "0")}`;
+      if (title) epName += ` - ${title}`;
+      epName += ".mkv";
+      if (sn <= 0 || en <= 0) {
+        els.preview.textContent = `${folder}/${seasonFolder}/… (season & episode from form or filename)`;
+      } else {
+        els.preview.textContent = `${folder}/${seasonFolder}/${epName}`;
+      }
+    }
+
+    function fillSeasonSelect(library, seasons) {
+      const els = tvFormEls(library);
+      if (!els || !els.season) return;
+      const prev = els.season.value;
+      els.season.innerHTML = '<option value="">auto</option>';
+      (seasons || []).forEach((s) => {
+        const sn = Number(s.season_number);
+        if (sn < 0) return;
+        const opt = document.createElement("option");
+        opt.value = String(sn);
+        const count = s.episode_count ? ` · ${s.episode_count} ep` : "";
+        opt.textContent = `${s.name || ("Season " + sn)}${count}`;
+        els.season.appendChild(opt);
+      });
+      if (prev && [...els.season.options].some((o) => o.value === prev)) {
+        els.season.value = prev;
+      } else {
+        const first = (seasons || []).find((s) => Number(s.season_number) > 0);
+        if (first) els.season.value = String(first.season_number);
+      }
+      tvFormState[library].seasons = seasons || [];
+    }
+
+    function fillEpisodeSelect(library, episodes) {
+      const els = tvFormEls(library);
+      if (!els || !els.episode) return;
+      const prev = els.episode.value;
+      els.episode.innerHTML = '<option value="">auto from filename</option>';
+      (episodes || []).forEach((ep) => {
+        const en = Number(ep.episode_number);
+        if (en <= 0) return;
+        const opt = document.createElement("option");
+        opt.value = String(en);
+        opt.dataset.title = ep.name || "";
+        opt.textContent = `E${String(en).padStart(2, "0")}${ep.name ? " · " + ep.name : ""}`;
+        els.episode.appendChild(opt);
+      });
+      if (prev && [...els.episode.options].some((o) => o.value === prev)) {
+        els.episode.value = prev;
+      }
+      tvFormState[library].episodes = episodes || [];
+      updateTvPreview(library);
+    }
+
+    async function loadTvSeasonEpisodes(library) {
+      const els = tvFormEls(library);
+      if (!els) return;
+      const tid = (els.tmdb?.value || "").trim();
+      const sn = (els.season?.value || "").trim();
+      if (!tid || !/^\d+$/.test(tid) || !sn) {
+        fillEpisodeSelect(library, []);
+        return;
+      }
+      try {
+        const data = await api(`/api/media/tmdb/tv/${encodeURIComponent(tid)}/season/${encodeURIComponent(sn)}`);
+        fillEpisodeSelect(library, data.episodes || []);
+      } catch (e) {
+        fillEpisodeSelect(library, []);
+        setStatus(String(e.message || e), "err");
+      }
+    }
+
+    async function selectTmdbShow(library, hit) {
+      const els = tvFormEls(library);
+      if (!els || !hit) return;
+      els.show.value = hit.name || "";
+      els.year.value = hit.year || "";
+      els.tmdb.value = hit.id ? String(hit.id) : "";
+      els.epTitle.value = "";
+      els.results.innerHTML = "";
+      updateTvPreview(library);
+      if (!hit.id) return;
+      try {
+        const details = await api(`/api/media/tmdb/tv/${encodeURIComponent(hit.id)}`);
+        if (details.name) els.show.value = details.name;
+        if (details.year) els.year.value = details.year;
+        fillSeasonSelect(library, details.seasons || []);
+        await loadTvSeasonEpisodes(library);
+        updateTvPreview(library);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+
+    async function searchTmdbShows(library, query) {
+      const els = tvFormEls(library);
+      if (!els || !els.results) return;
+      const q = String(query || "").trim();
+      if (q.length < 2) {
+        els.results.innerHTML = "";
+        return;
+      }
+      try {
+        const data = await api("/api/media/tmdb/search?q=" + encodeURIComponent(q));
+        const rows = data.results || [];
+        els.results.innerHTML = "";
+        if (!rows.length) {
+          const li = document.createElement("li");
+          li.textContent = "No TMDB matches";
+          li.style.cursor = "default";
+          els.results.appendChild(li);
+          return;
+        }
+        rows.slice(0, 12).forEach((hit) => {
+          const li = document.createElement("li");
+          li.textContent = `${hit.name}${hit.year ? " (" + hit.year + ")" : ""}`;
+          li.title = hit.overview || "";
+          li.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            [...els.results.querySelectorAll("li")].forEach((n) => n.classList.remove("is-on"));
+            li.classList.add("is-on");
+            selectTmdbShow(library, hit);
+          });
+          els.results.appendChild(li);
+        });
+      } catch (e) {
+        els.results.innerHTML = "";
+        const li = document.createElement("li");
+        li.textContent = String(e.message || e);
+        li.style.cursor = "default";
+        els.results.appendChild(li);
+      }
+    }
+
+    function wireTvForm(library) {
+      const els = tvFormEls(library);
+      if (!els || !els.toggle || !els.form) return;
+      const syncOpen = () => {
+        els.form.classList.toggle("is-open", !!els.toggle.checked);
+        if (els.toggle.checked) updateTvPreview(library);
+      };
+      els.toggle.addEventListener("change", syncOpen);
+      syncOpen();
+      els.search?.addEventListener("input", () => {
+        clearTimeout(tvFormState[library].searchTimer);
+        tvFormState[library].searchTimer = setTimeout(() => {
+          searchTmdbShows(library, els.search.value);
+        }, 280);
+      });
+      els.search?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          clearTimeout(tvFormState[library].searchTimer);
+          searchTmdbShows(library, els.search.value);
+        }
+      });
+      ["show", "year", "epTitle"].forEach((k) => {
+        els[k]?.addEventListener("input", () => updateTvPreview(library));
+      });
+      els.season?.addEventListener("change", async () => {
+        updateTvPreview(library);
+        await loadTvSeasonEpisodes(library);
+      });
+      els.episode?.addEventListener("change", () => {
+        const opt = els.episode.selectedOptions?.[0];
+        if (opt && opt.dataset.title) els.epTitle.value = opt.dataset.title;
+        updateTvPreview(library);
+      });
+      els.tmdb?.addEventListener("change", async () => {
+        const tid = (els.tmdb.value || "").trim();
+        if (!tid || !/^\d+$/.test(tid)) return;
+        try {
+          const details = await api(`/api/media/tmdb/tv/${encodeURIComponent(tid)}`);
+          if (details.name && !(els.show.value || "").trim()) els.show.value = details.name;
+          if (details.year && !(els.year.value || "").trim()) els.year.value = details.year;
+          fillSeasonSelect(library, details.seasons || []);
+          await loadTvSeasonEpisodes(library);
+          updateTvPreview(library);
+        } catch (e) {
+          setStatus(String(e.message || e), "err");
+        }
+      });
+    }
+
     async function uploadElementsMedia(library, fileList) {
       const files = Array.from(fileList || []);
       if (!files.length || elementsBusy) return;
+      let tvMeta = null;
+      try {
+        tvMeta = collectTvFormMeta(library);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        return;
+      }
       elementsBusy = true;
       let done = 0;
       resetMediaQueue(library, files);
@@ -4190,8 +4605,19 @@
             uploadPct: pct,
           });
           setStatus(`Uploading ${file.name} to Elements ${library}…`);
-          const url = "/api/elements/upload?library=" + encodeURIComponent(library)
-            + "&filename=" + encodeURIComponent(file.name);
+          const params = new URLSearchParams();
+          params.set("library", library);
+          params.set("filename", file.name);
+          if (tvMeta) {
+            params.set("full_form", "1");
+            if (tvMeta.show) params.set("show", tvMeta.show);
+            if (tvMeta.year) params.set("year", tvMeta.year);
+            if (tvMeta.tmdb_id) params.set("tmdb_id", tvMeta.tmdb_id);
+            if (tvMeta.season) params.set("season", tvMeta.season);
+            if (tvMeta.episode) params.set("episode", tvMeta.episode);
+            if (tvMeta.episode_title) params.set("episode_title", tvMeta.episode_title);
+          }
+          const url = "/api/elements/upload?" + params.toString();
           const res = await fetch(url, {
             method: "POST",
             credentials: "same-origin",
@@ -4212,7 +4638,7 @@
         }
         elementsBusy = false;
         setStatus(`Uploaded ${done} file(s). Sorting into Plex…`, "ok");
-        showLog(`Elements upload ${library}: ${done} file(s)`, true);
+        showLog(`Elements upload ${library}: ${done} file(s)${tvMeta ? " (TMDB form)" : ""}`, true);
         await refreshElementsSettings();
         // Auto-run pipeline so uploads appear in Plex without a second click.
         await setElementsAction("pipeline");
@@ -4235,11 +4661,14 @@
       if (!drop || !input) return;
       const openPicker = () => { if (!elementsBusy) input.click(); };
       drop.addEventListener("click", (ev) => {
-        if (ev.target.closest("button, input, a, label")) return;
+        if (ev.target.closest("button, input, a, label, select, textarea, .media-tv-form, .tv-search-results")) return;
+        // When the full form is open, only the header hit-area opens the picker.
+        if (tvFormActive(library) && !ev.target.closest(".media-drop-hit, .media-drop-actions")) return;
         openPicker();
       });
       drop.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
+          if (ev.target.closest("input, select, textarea, label, button")) return;
           ev.preventDefault();
           openPicker();
         }
@@ -4314,6 +4743,8 @@
     wireMediaDrop("mediaDropKidsMovies", "mediaKidsMovieInput", "kids-movies");
     wireMediaDrop("mediaDropTv", "mediaTvInput", "tvshows");
     wireMediaDrop("mediaDropKidsTv", "mediaKidsTvInput", "kids-tvshows");
+    wireTvForm("tvshows");
+    wireTvForm("kids-tvshows");
     document.getElementById("settingsDefaultView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
