@@ -3947,7 +3947,8 @@
           <div class="sec-ssh-section" id="secVpnCircleBlock">
             <h4>VPN trust circle</h4>
             <p class="sec-users" id="secVpnCircleHint" style="margin:0 0 10px">
-              Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle. LAN devices that are not currently plugged in also show in pending.
+              Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle.
+              Key confirmed shows Ed25519 binding from Authenticator for each allowlisted IP.
             </p>
             <div class="meta-grid" id="secVpnCircleMeta"></div>
             <h4 style="margin:14px 0 6px;font-size:13px">Allowed list</h4>
@@ -4073,20 +4074,28 @@
         const ip = String(row?.ip || "").trim();
         return String(row?.name || row?.hostname || nameMap[ip] || "").trim();
       };
+      const allowedRows = circle.allowed || [];
+      const needKey = allowedRows.filter((r) => r && !r.sealed && r.source !== "router");
+      const keyBound = needKey.filter((r) => !!r.key_bound).length;
+      const keyTotal = needKey.length;
       circleMeta.innerHTML = `
-        <div class="meta-box"><label>Allowlisted</label><div>${escHtml((circle.allowed || []).length)}</div></div>
+        <div class="meta-box"><label>Allowlisted</label><div>${escHtml(allowedRows.length)}</div></div>
         <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
+        <div class="meta-box"><label>Key confirmed</label><div>${escHtml(keyBound)} / ${escHtml(keyTotal)}</div></div>
         <div class="meta-box"><label>Guest DNS</label><div><code>${escHtml(circle.guest_dns || "1.1.1.1")}</code></div></div>
         <div class="meta-box"><label>Circle DNS</label><div><code>${escHtml(circle.circle_dns || "10.42.42.44")}</code></div></div>`;
       const hint = document.getElementById("secVpnCircleHint");
-      if (hint && circle.detail) hint.textContent = circle.detail;
+      if (hint) {
+        const base = circle.detail || "Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle.";
+        hint.textContent = `${base} Key confirmed = Ed25519 bound on Authenticator for that IP.`;
+      }
       const allowedEl = document.getElementById("secVpnAllowed");
       if (allowedEl) {
-        const rows = circle.allowed || [];
+        const rows = allowedRows;
         if (!rows.length) {
           allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
         } else {
-          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>Note</th><th></th></tr></thead><tbody>${
+          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>Key</th><th>Note</th><th></th></tr></thead><tbody>${
             rows.map((r) => {
               const sealed = !!(r.sealed || r.source === "router");
               const hiddenFromApps = !!(!sealed && r.hidden);
@@ -4095,6 +4104,12 @@
               const note = sealed
                 ? (r.note || "Flint router WAN (sealed)")
                 : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
+              const kid = String(r.key_id || "").trim();
+              const keyCell = sealed
+                ? `<span class="sec-users">n/a</span>`
+                : (r.key_bound
+                  ? `${secSev("ok")} <span class="sec-users">confirmed</span>${kid ? ` <code title="key id">${escHtml(kid.slice(0, 8))}</code>` : ""}`
+                  : `${secSev("warn")} <span class="sec-users">missing</span>`);
               const action = sealed
                 ? `<span class="sec-users">sealed</span>`
                 : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
@@ -4102,6 +4117,7 @@
               return `<tr>
               <td><strong>${escHtml(name || "—")}</strong></td>
               <td><code>${escHtml(r.ip)}</code></td>
+              <td style="white-space:nowrap">${keyCell}</td>
               <td class="sec-users">${escHtml(note)}</td>
               <td style="white-space:nowrap">${action}</td>
             </tr>`;
