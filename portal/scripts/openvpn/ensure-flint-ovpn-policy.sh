@@ -29,18 +29,22 @@ for s in $(uci show ovpnclient 2>/dev/null | sed -n "s/^\(ovpnclient\.[^=]*\)\.l
 done
 uci commit ovpnclient
 # DNS fix only — do not change route_policy.global.mode
+# Prefer Automatic DNS and do not override VPN DNS. When the tunnel drops,
+# AdGuard (10.42.42.44) is unreachable — auto mode must fall back to WAN DNS
+# so the LAN still has internet (and can reconnect OpenVPN).
 uci set gl-dns-v2.@dns[0].mode='auto' 2>/dev/null || true
 uci set gl-dns-v2.@dns[0].override_vpn='0' 2>/dev/null || true
 uci set gl-dns-v2.@dns[0].manual_enable='0' 2>/dev/null || true
 uci commit gl-dns-v2 2>/dev/null || true
 while uci -q delete dhcp.@dnsmasq[0].server; do :; done
 uci set dhcp.@dnsmasq[0].noresolv='0' 2>/dev/null || true
+# Never pin dnsmasq exclusively to AdGuard — leave resolvconf/WAN as backup.
 uci commit dhcp 2>/dev/null || true
 /etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true
-# AdGuard (10.42.42.44) must go via OVPN — otherwise global-VPN DNS (dnsmasq
-# on :4153) leaks to WAN and LAN clients get no replies.
+# Prefer AdGuard via OVPN while the tunnel is up (metric beats WAN).
 ip route replace 10.42.42.0/24 dev ovpnclient1 metric 10 2>/dev/null || true
 ip route replace 10.42.42.0/24 dev ovpnclient1 table 1011 2>/dev/null || true
-ip route replace 10.42.42.44/32 dev ovpnclient1 metric 5 2>/dev/null || true
+ip route replace 10.42.42.44/32 via 10.9.0.1 metric 5 2>/dev/null \
+  || ip route replace 10.42.42.44/32 dev ovpnclient1 metric 5 2>/dev/null || true
 echo "flint vpn mode=$(uci get route_policy.global.mode) local_access=1 dns=$(uci get gl-dns-v2.@dns[0].mode 2>/dev/null) override_vpn=$(uci get gl-dns-v2.@dns[0].override_vpn 2>/dev/null) adguard_via=$(ip route get 10.42.42.44 2>/dev/null | head -1)"
 REMOTE
