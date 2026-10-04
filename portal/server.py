@@ -7723,7 +7723,38 @@ def elements_upload_media(
     rel_under_inbox = name
     plex_meta: dict = {}
     is_tv = kind in ("tvshows", "kids-tvshows")
-    if is_tv and (full_form or show_name):
+    is_movie = kind in ("movies", "kids-movies")
+    if is_movie and (full_form or show_name):
+        if not _media_tmdb:
+            raise RuntimeError("TMDB helper unavailable")
+        title = str(show_name or "").strip()
+        yr = str(year or "").strip()
+        if tmdb_id and (not title or not yr):
+            try:
+                info = _media_tmdb.movie_details(int(tmdb_id))
+                if not title:
+                    title = str(info.get("title") or info.get("name") or "").strip()
+                if not yr:
+                    yr = str(info.get("year") or "").strip()
+            except Exception:
+                pass
+        if not title:
+            raise ValueError("Movie title required for full movie form")
+        rel_under_inbox, name = _media_tmdb.build_movie_upload_name_from_form(
+            filename,
+            title=title,
+            year=yr,
+        )
+        name = _elements_sanitize_filename(name)
+        rel_under_inbox = name
+        plex_meta = {
+            "title": title,
+            "year": yr,
+            "tmdb_id": int(tmdb_id) if tmdb_id else 0,
+            "relpath": rel_under_inbox,
+            "media_type": "movie",
+        }
+    elif is_tv and (full_form or show_name):
         if not _media_tmdb:
             raise RuntimeError("TMDB helper unavailable")
         show = str(show_name or "").strip()
@@ -7773,6 +7804,7 @@ def elements_upload_media(
             "episode_title": ep_title,
             "tmdb_id": int(tmdb_id) if tmdb_id else 0,
             "relpath": rel_under_inbox,
+            "media_type": "tv",
         }
     # Ensure drive is attached + inbox dirs exist
     prep = proxmox_ssh(
@@ -13108,7 +13140,29 @@ document.getElementById('f').onsubmit = async (e) => {
                 qs = parse_qs(urlparse(self.path).query)
                 q = (qs.get("q") or qs.get("query") or [""])[0]
                 page = int((qs.get("page") or ["1"])[0] or 1)
-                self._json(200, _media_tmdb.search_tv(q, page=page))
+                kind = (
+                    qs.get("type") or qs.get("media_type") or qs.get("kind") or ["tv"]
+                )[0].strip().lower()
+                if kind in ("movie", "movies", "film", "films"):
+                    self._json(200, _media_tmdb.search_movie(q, page=page))
+                else:
+                    self._json(200, _media_tmdb.search_tv(q, page=page))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path.startswith("/api/media/tmdb/movie/"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                rest = path[len("/api/media/tmdb/movie/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    raise ValueError("tmdb id required")
+                self._json(200, _media_tmdb.movie_details(int(parts[0])))
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:
@@ -13818,7 +13872,13 @@ document.getElementById('f').onsubmit = async (e) => {
                     "yes",
                     "on",
                 )
-                show_name = (qs.get("show") or qs.get("show_name") or [""])[0]
+                show_name = (
+                    qs.get("show")
+                    or qs.get("show_name")
+                    or qs.get("movie")
+                    or qs.get("title")
+                    or [""]
+                )[0]
                 year = (qs.get("year") or [""])[0]
                 episode_title = (
                     qs.get("episode_title") or qs.get("ep_title") or [""]

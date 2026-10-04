@@ -68,6 +68,21 @@ class TestPlexNaming(unittest.TestCase):
         self.assertIn("Season 03", rel)
         self.assertIn("S03E10", rel)
 
+    def test_movie_filename(self):
+        self.assertEqual(
+            tmdb.plex_movie_filename("Inception", "2010", "mkv"),
+            "Inception (2010).mkv",
+        )
+
+    def test_build_movie_from_form(self):
+        rel, base = tmdb.build_movie_upload_name_from_form(
+            "clip.mp4",
+            title="Inception",
+            year="2010",
+        )
+        self.assertEqual(rel, "Inception (2010).mp4")
+        self.assertEqual(base, rel)
+
     def test_unsafe_chars_stripped(self):
         folder = tmdb.plex_show_folder_name('Foo/Bar:Baz', "2020")
         self.assertNotIn("/", folder)

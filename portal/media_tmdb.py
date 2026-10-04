@@ -1,4 +1,4 @@
-"""TMDB helpers for Plex TV upload naming."""
+"""TMDB helpers for Plex TV / movie upload naming."""
 from __future__ import annotations
 
 import json
@@ -79,11 +79,63 @@ def search_tv(query: str, *, page: int = 1, include_adult: bool = False) -> dict
                 "overview": str(row.get("overview") or "")[:400],
                 "poster_path": str(row.get("poster_path") or ""),
                 "popularity": float(row.get("popularity") or 0),
+                "media_type": "tv",
             }
         )
     return {
         "ok": True,
         "configured": True,
+        "media_type": "tv",
+        "query": q,
+        "page": int(data.get("page") or 1),
+        "total_pages": int(data.get("total_pages") or 1),
+        "total_results": int(data.get("total_results") or len(results)),
+        "results": results,
+    }
+
+
+def search_movie(query: str, *, page: int = 1, include_adult: bool = False) -> dict:
+    q = str(query or "").strip()
+    if len(q) < 1:
+        raise ValueError("Search query required")
+    data = _tmdb_request(
+        "/search/movie",
+        {
+            "query": q,
+            "page": max(1, int(page or 1)),
+            "include_adult": "true" if include_adult else "false",
+            "language": "en-US",
+        },
+    )
+    results = []
+    for row in data.get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        year = ""
+        release = str(row.get("release_date") or "")
+        if len(release) >= 4 and release[:4].isdigit():
+            year = release[:4]
+        title = str(row.get("title") or row.get("original_title") or "").strip()
+        results.append(
+            {
+                "id": int(row.get("id") or 0),
+                "name": title,
+                "title": title,
+                "original_name": str(row.get("original_title") or "").strip(),
+                "original_title": str(row.get("original_title") or "").strip(),
+                "year": year,
+                "release_date": release,
+                "overview": str(row.get("overview") or "")[:400],
+                "poster_path": str(row.get("poster_path") or ""),
+                "popularity": float(row.get("popularity") or 0),
+                "media_type": "movie",
+                "filename": plex_movie_filename(title, year, "mkv") if title else "",
+            }
+        )
+    return {
+        "ok": True,
+        "configured": True,
+        "media_type": "movie",
         "query": q,
         "page": int(data.get("page") or 1),
         "total_pages": int(data.get("total_pages") or 1),
@@ -132,6 +184,31 @@ def tv_details(tv_id: int) -> dict:
         "folder_name": plex_show_folder_name(
             str(data.get("name") or data.get("original_name") or "").strip(), year
         ),
+    }
+
+
+def movie_details(movie_id: int) -> dict:
+    mid = int(movie_id or 0)
+    if mid <= 0:
+        raise ValueError("tmdb id required")
+    data = _tmdb_request(f"/movie/{mid}", {"language": "en-US"})
+    year = ""
+    release = str(data.get("release_date") or "")
+    if len(release) >= 4 and release[:4].isdigit():
+        year = release[:4]
+    title = str(data.get("title") or data.get("original_title") or "").strip()
+    return {
+        "ok": True,
+        "id": mid,
+        "name": title,
+        "title": title,
+        "original_title": str(data.get("original_title") or "").strip(),
+        "year": year,
+        "release_date": release,
+        "overview": str(data.get("overview") or "")[:800],
+        "poster_path": str(data.get("poster_path") or ""),
+        "filename": plex_movie_filename(title, year, "mkv"),
+        "folder_name": plex_show_folder_name(title, year),
     }
 
 
@@ -194,6 +271,12 @@ def plex_show_folder_name(show_name: str, year: str = "") -> str:
     if y.isdigit() and len(y) == 4 and f"({y})" not in name:
         return f"{name} ({y})"
     return name
+
+
+def plex_movie_filename(title: str, year: str = "", ext: str = "mkv") -> str:
+    folder = plex_show_folder_name(title, year)
+    ext_n = str(ext or "mkv").lstrip(".").lower() or "mkv"
+    return f"{folder}.{ext_n}"
 
 
 def plex_episode_filename(
@@ -300,3 +383,18 @@ def build_upload_name_from_form(
         ext=ext,
     )
     return rel, rel.rsplit("/", 1)[-1]
+
+
+def build_movie_upload_name_from_form(
+    original_filename: str,
+    *,
+    title: str,
+    year: str = "",
+) -> tuple[str, str]:
+    """Return (relative_path_under_inbox, basename) for a plex-named movie."""
+    name = _clean_name(title)
+    if not name:
+        raise ValueError("Movie title required for full movie form")
+    ext = PathName(original_filename).suffix.lstrip(".") or "mkv"
+    fname = plex_movie_filename(name, year, ext)
+    return fname, fname
