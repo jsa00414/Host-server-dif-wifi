@@ -446,14 +446,67 @@ def ensure_pool_guest_dns() -> None:
             f"{guest_dns}:53",
         ]
         if not iptables_ok(check):
-            # Append so SM-VPN-TRUST-DNS-* VIP rules inserted at #1 stay ahead.
+            # Insert near top so we beat Docker LOCAL for 10.42.42.44; trust
+            # VIP rules are re-inserted at #1 after this on each gate run.
             subprocess.run(
                 [
                     "iptables",
                     "-t",
                     "nat",
-                    "-A",
+                    "-I",
                     "PREROUTING",
+                    "1",
+                    "-s",
+                    pool,
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-IKEV2-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{guest_dns}:53",
+                ],
+                check=False,
+            )
+        else:
+            # Already present somewhere — move to #1 by delete+insert.
+            subprocess.run(
+                [
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-D",
+                    "PREROUTING",
+                    "-s",
+                    pool,
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-IKEV2-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{guest_dns}:53",
+                ],
+                check=False,
+            )
+            subprocess.run(
+                [
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-I",
+                    "PREROUTING",
+                    "1",
                     "-s",
                     pool,
                     "-p",

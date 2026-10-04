@@ -48,8 +48,9 @@ iptables -C FORWARD -s "$IKEV2_POOL" -m comment --comment SM-IKEV2-FWD -j ACCEPT
 iptables -C FORWARD -d "$IKEV2_POOL" -m comment --comment SM-IKEV2-FWD -j ACCEPT 2>/dev/null \
   || iptables -I FORWARD 1 -d "$IKEV2_POOL" -m comment --comment SM-IKEV2-FWD -j ACCEPT
 
-# DNS: pool-wide guest resolver. Append (not -I 1) so SM-VPN-TRUST-DNS-* VIP
-# rules installed by ensure-vpn-client-gate.sh stay ahead of this catch-all.
+# DNS: pool-wide guest resolver. Insert near the top so we run BEFORE Docker's
+# dst-type LOCAL catch for 10.42.42.44 (AdGuard). Trusted VIP rules are
+# re-inserted at #1 by ensure-vpn-client-gate.sh after this.
 # Migrate away from the old pool→AdGuard DNAT if still present.
 for proto in udp tcp; do
   while iptables -t nat -C PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
@@ -57,10 +58,14 @@ for proto in udp tcp; do
     iptables -t nat -D PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
       -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" || true
   done
-  iptables -t nat -C PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
-      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null \
-    || iptables -t nat -A PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
-      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
+  # Refresh guest DNAT at position 1 (delete+insert) so order stays correct.
+  while iptables -t nat -C PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -s "$IKEV2_POOL" -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" || true
+  done
+  iptables -t nat -I PREROUTING 1 -s "$IKEV2_POOL" -p "$proto" --dport 53 \
+    -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
 done
 # AdGuard path still needed for trusted VIP upgrades
 iptables -t nat -C POSTROUTING -s "$IKEV2_POOL" -d "$DNS_NET" -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \

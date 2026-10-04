@@ -213,10 +213,14 @@ for proto in udp tcp; do
     iptables -t nat -D PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
       -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" || true
   done
-  iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
-      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null \
-    || iptables -t nat -A PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
-      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
+  while iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" || true
+  done
+  # Before Docker LOCAL for 10.42.42.44
+  iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p "$proto" --dport 53 \
+    -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
 done
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \
   || iptables -t nat -I POSTROUTING 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE
