@@ -16,6 +16,13 @@ scrape_configs:
           instance: vps
           host: vpstruelord-vps
 
+  - job_name: circle-drift-textfile
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          instance: vps
+          collector: textfile
+
   - job_name: docker
     static_configs:
       - targets: ["docker-stats:9487"]

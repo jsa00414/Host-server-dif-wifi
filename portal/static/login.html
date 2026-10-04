@@ -154,6 +154,7 @@
         </label>
         <p class="err" id="err" aria-live="polite"></p>
         <button type="submit" id="btn">Sign in</button>
+        <button type="button" class="ghost" id="passkeyBtn">Use passkey</button>
         <button type="button" class="ghost" id="backBtn">Back</button>
       </form>
     </div>
@@ -161,6 +162,33 @@
   <script>
     let loginToken = "";
     let twoFactorMethod = "app";
+    let passkeyAvailable = false;
+
+    function b64urlToBuf(b64url) {
+      const pad = "=".repeat((4 - (b64url.length % 4)) % 4);
+      const b64 = (b64url + pad).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(b64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out.buffer;
+    }
+    function bufToB64url(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    }
+    function publicKeyFromJson(options) {
+      const o = structuredClone(options);
+      o.challenge = b64urlToBuf(o.challenge);
+      if (o.allowCredentials) {
+        o.allowCredentials = o.allowCredentials.map((c) => ({
+          ...c,
+          id: b64urlToBuf(c.id),
+        }));
+      }
+      return o;
+    }
 
     async function loadBrand() {
       try {
@@ -173,8 +201,9 @@
       } catch (_) {}
     }
 
-    function showCodeStep(method, message) {
+    function showCodeStep(method, message, passkeyOk) {
       twoFactorMethod = method || "app";
+      passkeyAvailable = !!passkeyOk;
       document.getElementById("credsWrap").className = "hide";
       document.getElementById("user").required = false;
       document.getElementById("pass").required = false;
@@ -189,6 +218,9 @@
       sub.classList.add("show");
       document.getElementById("btn").textContent = "Verify & sign in";
       document.getElementById("backBtn").classList.add("show");
+      const pk = document.getElementById("passkeyBtn");
+      if (passkeyAvailable && window.PublicKeyCredential) pk.classList.add("show");
+      else pk.classList.remove("show");
       const code = document.getElementById("code");
       code.value = "";
       code.focus();
@@ -196,6 +228,7 @@
 
     function showPasswordStep() {
       loginToken = "";
+      passkeyAvailable = false;
       document.getElementById("credsWrap").className = "show";
       document.getElementById("user").required = true;
       document.getElementById("pass").required = true;
@@ -203,12 +236,57 @@
       document.getElementById("sub").classList.remove("show");
       document.getElementById("btn").textContent = "Sign in";
       document.getElementById("backBtn").classList.remove("show");
+      document.getElementById("passkeyBtn").classList.remove("show");
       document.getElementById("pass").focus();
     }
 
     document.getElementById("backBtn").addEventListener("click", () => {
       showPasswordStep();
       document.getElementById("err").textContent = "";
+    });
+
+    document.getElementById("passkeyBtn").addEventListener("click", async () => {
+      const err = document.getElementById("err");
+      const btn = document.getElementById("passkeyBtn");
+      err.textContent = "";
+      btn.disabled = true;
+      try {
+        if (!loginToken) throw new Error("Sign in with password first");
+        const optRes = await fetch("/api/login/passkey-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ login_token: loginToken }),
+        });
+        const optData = await optRes.json().catch(() => ({}));
+        if (!optRes.ok) throw new Error(optData.error || "Passkey options failed");
+        const assertion = await navigator.credentials.get({
+          publicKey: publicKeyFromJson(optData.options),
+        });
+        const cred = {
+          id: assertion.id,
+          rawId: bufToB64url(assertion.rawId),
+          type: assertion.type,
+          response: {
+            clientDataJSON: bufToB64url(assertion.response.clientDataJSON),
+            authenticatorData: bufToB64url(assertion.response.authenticatorData),
+            signature: bufToB64url(assertion.response.signature),
+            userHandle: assertion.response.userHandle
+              ? bufToB64url(assertion.response.userHandle)
+              : null,
+          },
+        };
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ login_token: loginToken, passkey: cred }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Passkey login failed");
+        location.href = "/";
+      } catch (ex) {
+        err.textContent = ex.message || "Passkey failed";
+        btn.disabled = false;
+      }
     });
 
     document.getElementById("form").addEventListener("submit", async (e) => {
@@ -237,7 +315,7 @@
         if (data.need_code) {
           loginToken = data.login_token || "";
           if (!loginToken) throw new Error("Login challenge missing");
-          showCodeStep(data.two_factor_method, data.message);
+          showCodeStep(data.two_factor_method, data.message, data.passkey_available);
           btn.disabled = false;
           return;
         }

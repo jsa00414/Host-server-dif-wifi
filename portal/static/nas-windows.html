@@ -83,7 +83,7 @@
   <div class="wrap">
     <p class="eyebrow">ServerManager</p>
     <h1>NAS in File Explorer</h1>
-    <p class="sub">Map your Buffalo NAS as a network drive over <strong>VPN or home Wi‑Fi</strong> (<code id="routeHint">portal.vpstruelord.com:1445</code> → NAS SMB).</p>
+    <p class="sub">Map your Buffalo NAS as a network drive over <strong>VPN or home Wi‑Fi</strong>. Prefer <strong>SFTP</strong> or <strong>WebDAV</strong> (FTP gateway retired).</p>
     <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
 
     <div class="grid">
@@ -122,18 +122,21 @@
     </section>
 
     <section class="panel">
-      <div class="panel-head"><h2>RaiDrive (recommended for Windows)</h2></div>
+      <div class="panel-head"><h2>FTP (retired)</h2></div>
       <div class="panel-body">
-        <p class="hint">Map the NAS as a drive letter over FTP. Requires <strong>VPN or home Wi‑Fi</strong>. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
-        <div class="creds">
+        <p class="hint" id="ftpRetiredHint">FTP on :2121 is retired. Prefer SFTP (:2123) or WebDAV (<code>https://portal.vpstruelord.com/dav</code>) over VPN / home Wi‑Fi.</p>
+        <div class="creds" hidden>
           <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
           <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
           <div><span class="k">Account</span><span id="ftpUser">admin</span></div>
-          <div><span class="k">Password</span><span>same as above</span></div>
-          <div><span class="k">Drive</span><span>Z:</span></div>
         </div>
-        <p class="hint">Use <strong>Passive (PASV)</strong> mode. Connect at sign-in if offered. For File Explorer FTP use <code>ftp://admin@portal.vpstruelord.com:2121/disk1</code> (browse only — opening files in Explorer FTP is limited).</p>
-        <p class="hint"><strong>Better for Explorer (VPN/home Wi‑Fi):</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>WebDAV (recommended for Explorer)</h2></div>
+      <div class="panel-body">
+        <p class="hint">Map network drive to <code>https://portal.vpstruelord.com/dav</code>. Requires <strong>VPN or home Wi‑Fi</strong>. Username <code>admin</code>, same password. Root is disk1.</p>
       </div>
     </section>
 
@@ -182,11 +185,12 @@
         $("driveHint").textContent = (d.drive || "Z") + ":";
         const host = d.host || "portal.vpstruelord.com";
         const smbPort = d.smb_port || 1445;
-        $("routeHint").textContent = `${host}:${smbPort}`;
+        if ($("routeHint")) $("routeHint").textContent = `${host}:${smbPort}`;
         $("manualPort").textContent = String(smbPort);
-        $("ftpHost").textContent = d.ftp_host || host;
-        $("ftpPort").textContent = String(d.ftp_port || 2121);
-        $("ftpUser").textContent = d.ftp_username || "admin";
+        if ($("ftpHost")) $("ftpHost").textContent = d.ftp_host || host;
+        if ($("ftpPort")) $("ftpPort").textContent = String(d.ftp_port || 2121);
+        if ($("ftpUser")) $("ftpUser").textContent = d.ftp_username || "admin";
+        if ($("ftpRetiredHint") && d.ftp_message) $("ftpRetiredHint").textContent = d.ftp_message;
         if ($("sftpHost")) $("sftpHost").textContent = d.sftp_host || host;
         if ($("sftpPort")) $("sftpPort").textContent = String(d.sftp_port || 2123);
         if ($("sftpUser")) $("sftpUser").textContent = d.sftp_username || d.ftp_username || "admin";

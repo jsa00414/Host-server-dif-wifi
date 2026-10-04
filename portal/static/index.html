@@ -3839,11 +3839,14 @@
               <div class="method-label">New authenticator devices · ${deviceEnrollUnlocked ? "Unlocked" : "Locked"}</div>
               <div class="method-sub">${
                 deviceEnrollUnlocked
-                  ? `Enter secret is visible in the Authenticator app so a new phone can enroll${panelLock.enroll_expires_in ? ` · auto-locks in ~${Math.max(1, Math.ceil(panelLock.enroll_expires_in / 60))} min` : ""}. Lock when finished.`
-                  : "Locked — Enter secret is hidden in the Authenticator app. Unlock only while adding a new device."
+                  ? `Unlocked for ${escHtml(panelLock.device_enroll_for_ip || "one LAN IP")} only — fresh secret generated; previous enrolled secrets kept encrypted${panelLock.enroll_expires_in ? ` · auto-locks in ~${Math.max(1, Math.ceil(panelLock.enroll_expires_in / 60))} min` : ""}.`
+                  : "Locked — Enter secret is hidden. Unlock only for the registering phone’s LAN IP."
               }</div>
+              ${!deviceEnrollUnlocked ? `<div style="margin-top:8px"><label class="method-sub">Registering device LAN IP
+                <input id="secDeviceEnrollIp" placeholder="192.168.8.x" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg0);color:inherit;font:inherit" />
+              </label></div>` : ""}
               ${deviceEnrollUnlocked ? `<div class="sec-enroll-box" id="secDeviceEnrollBox" style="margin-top:10px;text-align:left">
-                <div class="method-sub" style="margin:0 0 8px">Enrollment open — use Enter secret in the app, or open a setup link:</div>
+                <div class="method-sub" style="margin:0 0 8px">Enrollment open for <code>${escHtml(panelLock.device_enroll_for_ip || "")}</code> — use Enter secret in the app, or open a setup link:</div>
                 <div class="sec-login-actions">
                   <a class="primary-link" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
                   <a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a>
@@ -4381,9 +4384,16 @@
       if (toggle) toggle.disabled = true;
       if (!silent) setStatus(unlocked ? "Unlocking new-device enrollment…" : "Locking new-device enrollment…");
       try {
+        let deviceIp = (opts && opts.device_ip) || "";
+        if (unlocked && !deviceIp) {
+          const input = document.getElementById("secDeviceEnrollIp");
+          deviceIp = (input && input.value.trim()) || prompt("Registering device LAN IP (192.168.8.x)") || "";
+        }
+        const body = { action: "device_enroll", unlocked: !!unlocked };
+        if (unlocked) body.device_ip = deviceIp;
         const result = await api("/api/security/ssh-unlock", {
           method: "POST",
-          body: JSON.stringify({ action: "device_enroll", unlocked: !!unlocked }),
+          body: JSON.stringify(body),
           timeoutMs: 20000,
         });
         if (!silent) setStatus(result.message || (unlocked ? "Enrollment unlocked" : "Enrollment locked"), "ok");
