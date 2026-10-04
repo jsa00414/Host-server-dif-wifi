@@ -2357,8 +2357,8 @@ VPN_CIRCLE_DENIED_IPS = os.environ.get(
 # Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
 VPN_UFW_FROM = os.environ.get(
     "VPN_UFW_FROM",
-    "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24",
-).strip() or "10.8.0.0/24 10.9.0.0/24 100.64.0.0/10 192.168.8.0/24"
+    "10.8.0.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 192.168.8.0/24",
+).strip() or "10.8.0.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 192.168.8.0/24"
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
 PIHOLE_SSO_URL = os.environ.get(
     "PIHOLE_SSO_URL", "https://pihole.vpstruelord.com/sm-autologin"
@@ -2420,6 +2420,10 @@ NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
 NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
 NAS_FTP_PUBLIC_USER = (
     os.environ.get("NAS_FTP_PUBLIC_USER", "admin").strip() or "admin"
+)
+NAS_SFTP_PUBLIC_PORT = int(os.environ.get("NAS_SFTP_PUBLIC_PORT", "2123"))
+NAS_SFTP_PUBLIC_USER = (
+    os.environ.get("NAS_SFTP_PUBLIC_USER", NAS_FTP_PUBLIC_USER).strip() or NAS_FTP_PUBLIC_USER
 )
 
 
@@ -2515,6 +2519,9 @@ def build_nas_windows_status() -> dict:
         "ftp_ip": NAS_SMB_PUBLIC_IP,
         "ftp_port": NAS_FTP_PUBLIC_PORT,
         "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
+        "sftp_host": NAS_SMB_PUBLIC_HOST,
+        "sftp_port": NAS_SFTP_PUBLIC_PORT,
+        "sftp_username": NAS_SFTP_PUBLIC_USER,
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -12985,7 +12992,7 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
         "denied": denied,
         "pending": pending,
         "attempts": recent,
-        "guest_dns": os.environ.get("VPN_GUEST_DNS", "1.1.1.1"),
+        "guest_dns": os.environ.get("VPN_GUEST_DNS", "10.42.42.45"),
         "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
         "sticky_file": str(STICKY_VPN_IPS_PATH),
         "auth_app_devices": sorted(enrolled),

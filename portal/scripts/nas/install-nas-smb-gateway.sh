@@ -22,20 +22,14 @@ set +a
 NAS_HOST="${NAS_SMB_HOST:-${FTP_HOST:-192.168.8.159}}"
 NAS_SHARE="${NAS_SMB_SHARE:-share}"
 NAS_USER="${FTP_USER:-${BUFFALO_USER:-admin}}"
-NAS_PASS="${BUFFALO_PASS:-}"
+# Prefer B64 password so `$` / `*` in secrets are never shell-expanded.
+NAS_PASS=""
 if [[ -n "${BUFFALO_PASS_B64:-}" ]]; then
-  NAS_PASS="$(python3 - <<'PY'
-import os, base64
-print(base64.b64decode(os.environ["BUFFALO_PASS_B64"]).decode())
-PY
-)"
-fi
-if [[ -z "$NAS_PASS" && -n "${NAS_SMB_PASS_B64:-}" ]]; then
-  NAS_PASS="$(python3 - <<'PY'
-import os, base64
-print(base64.b64decode(os.environ["NAS_SMB_PASS_B64"]).decode())
-PY
-)"
+  NAS_PASS="$(BUFFALO_PASS_B64="$BUFFALO_PASS_B64" python3 -c 'import os,base64; print(base64.b64decode(os.environ["BUFFALO_PASS_B64"]).decode())')"
+elif [[ -n "${NAS_SMB_PASS_B64:-}" ]]; then
+  NAS_PASS="$(NAS_SMB_PASS_B64="$NAS_SMB_PASS_B64" python3 -c 'import os,base64; print(base64.b64decode(os.environ["NAS_SMB_PASS_B64"]).decode())')"
+else
+  NAS_PASS="${BUFFALO_PASS:-${NAS_SMB_PASS:-}}"
 fi
 if [[ -z "$NAS_PASS" ]]; then
   echo "NAS password not configured in $ENV_FILE" >&2
@@ -77,7 +71,11 @@ chmod 600 "$ROOT/credentials"
 install -m 0644 "$SCRIPT_DIR/smb-gateway.smb.conf" "$ROOT/smb.conf"
 sed -i "s|//192.168.8.159/share|//${NAS_HOST}/${NAS_SHARE}|g" "$ROOT/smb.conf"
 
-FSTAB_LINE="//${NAS_HOST}/${NAS_SHARE} ${MOUNT} cifs credentials=${ROOT}/credentials,file_mode=0660,dir_mode=0770,_netdev,nofail 0 0"
+# Remove legacy misnamed mount unit (Where= must match unit name).
+rm -f /etc/systemd/system/nas-smb-gateway.mount
+systemctl daemon-reload
+
+FSTAB_LINE="//${NAS_HOST}/${NAS_SHARE} ${MOUNT} cifs credentials=${ROOT}/credentials,file_mode=0660,dir_mode=0770,iocharset=utf8,_netdev,nofail 0 0"
 modprobe cifs 2>/dev/null || true
 modprobe nls_utf8 2>/dev/null || true
 if ! grep -qF "$MOUNT" /etc/fstab; then

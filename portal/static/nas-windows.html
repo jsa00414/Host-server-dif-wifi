@@ -83,7 +83,7 @@
   <div class="wrap">
     <p class="eyebrow">ServerManager</p>
     <h1>NAS in File Explorer</h1>
-    <p class="sub">Map your Buffalo NAS as a network drive in Windows via the portal public route (<code id="routeHint">portal.vpstruelord.com:1445</code> → NAS SMB). No home LAN VPN required.</p>
+    <p class="sub">Map your Buffalo NAS as a network drive over <strong>VPN or home Wi‑Fi</strong> (<code id="routeHint">portal.vpstruelord.com:1445</code> → NAS SMB).</p>
     <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
 
     <div class="grid">
@@ -124,7 +124,7 @@
     <section class="panel">
       <div class="panel-head"><h2>RaiDrive (recommended for Windows)</h2></div>
       <div class="panel-body">
-        <p class="hint">Map the NAS as a normal drive letter over public FTP — no VPN required. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
+        <p class="hint">Map the NAS as a drive letter over FTP. Requires <strong>VPN or home Wi‑Fi</strong>. Install <a href="https://www.raidrive.com" target="_blank" rel="noopener">RaiDrive</a>, then Add → NAS → FTP:</p>
         <div class="creds">
           <div><span class="k">Address</span><span id="ftpHost">portal.vpstruelord.com</span></div>
           <div><span class="k">Port</span><span id="ftpPort">2121</span></div>
@@ -133,7 +133,21 @@
           <div><span class="k">Drive</span><span>Z:</span></div>
         </div>
         <p class="hint">Use <strong>Passive (PASV)</strong> mode. Connect at sign-in if offered. For File Explorer FTP use <code>ftp://admin@portal.vpstruelord.com:2121/disk1</code> (browse only — opening files in Explorer FTP is limited).</p>
-        <p class="hint"><strong>Better for Explorer:</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
+        <p class="hint"><strong>Better for Explorer (VPN/home Wi‑Fi):</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>SFTP (WinSCP / FileZilla / macOS)</h2></div>
+      <div class="panel-body">
+        <p class="hint">VPN or home Wi‑Fi required. Protocol <strong>SFTP</strong> (not FTP):</p>
+        <div class="creds">
+          <div><span class="k">Host</span><span id="sftpHost">portal.vpstruelord.com</span></div>
+          <div><span class="k">Port</span><span id="sftpPort">2123</span></div>
+          <div><span class="k">Username</span><span id="sftpUser">admin</span></div>
+          <div><span class="k">Password</span><span>same as above</span></div>
+        </div>
+        <p class="hint">Example: <code>sftp://admin@portal.vpstruelord.com:2123/</code></p>
       </div>
     </section>
   </div>
@@ -173,6 +187,9 @@
         $("ftpHost").textContent = d.ftp_host || host;
         $("ftpPort").textContent = String(d.ftp_port || 2121);
         $("ftpUser").textContent = d.ftp_username || "admin";
+        if ($("sftpHost")) $("sftpHost").textContent = d.sftp_host || host;
+        if ($("sftpPort")) $("sftpPort").textContent = String(d.sftp_port || 2123);
+        if ($("sftpUser")) $("sftpUser").textContent = d.sftp_username || d.ftp_username || "admin";
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;
