@@ -3,12 +3,16 @@
 Server lives on the VPS at `/opt/openvpn`. Clients:
 
 - Flint site-to-site: `flint.ovpn` / `GL-MT6000.ovpn` (no full-tunnel) — **VIP `10.9.0.2`**
-- Phone: `james-iphone.ovpn` (full tunnel)
+- Phone: `james-iphone.ovpn` (full tunnel) — **VIP `10.9.0.3`**
+- Test phone: `test-phone.ovpn` — **VIP `10.9.0.4`**
 - Windows PC: `windows.ovpn` (full tunnel + AdGuard DNS) — **VIP `10.9.0.10`**
 
-CCD files under `/opt/openvpn/ccd/` pin those addresses. Do not let Windows (or
-any other client) take `10.9.0.2` — Caddy proxies `router.vpstruelord.com` to
-that VIP, so a stolen address produces HTTP 502.
+CCD files under `/opt/openvpn/ccd/` pin those addresses. **Never** let a phone,
+Windows, or any other client take `10.9.0.2` — that VIP is Flint’s site-to-site
+address. When something else steals it, home Wi‑Fi/LAN loses its data plane
+(OpenVPN still “connected”, but Flint can no longer route), and Caddy’s
+`router.vpstruelord.com` upstream 502s. Install the matching `ccd-*` files before
+issuing a new client cert.
 
 Also never DNAT public TCP 8443 to Flint HTTPS; OpenVPN owns that port.
 
