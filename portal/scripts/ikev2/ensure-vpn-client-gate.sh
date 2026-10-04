@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Gate IKEv2 clients into the "trust circle":
 #   - Allowlisted WAN/VIP → AdGuard DNS + host INPUT (admin VIP path)
-#   - Everyone else → internet OK, but DNS forced to guest resolver (no admin rewrites)
+#   - Everyone else → internet OK on guest DNS (no admin rewrites)
+#
+# Pool-wide default is guest DNS (VPN_GUEST_DNS). This script upgrades trusted
+# VIPs to AdGuard and keeps those VIP rules ahead of the pool DNAT.
 #
 # Called from sm-ikev2-peer-acl.service after the Caddy sticky ACL sync.
 set -euo pipefail
@@ -224,10 +227,59 @@ def iptables_ok(cmd: list[str]) -> bool:
     return subprocess.run(cmd, capture_output=True).returncode == 0
 
 
-def ensure_guest_dns(vip: str, enable: bool) -> None:
-    """DNAT this IKEv2 VIP's DNS to guest resolver (bypass AdGuard admin rewrites)."""
-    comment = f"SM-VPN-GUEST-DNS-{vip}"
+def ensure_trusted_adguard_dns(vip: str, enable: bool) -> None:
+    """Upgrade this trusted VIP from pool guest DNS to AdGuard admin rewrites."""
+    comment = f"SM-VPN-TRUST-DNS-{vip}"
+    legacy_guest = f"SM-VPN-GUEST-DNS-{vip}"
     for proto in ("udp", "tcp"):
+        # Drop legacy guest-per-VIP rules (pool is guest by default now).
+        legacy_check = [
+            "iptables",
+            "-t",
+            "nat",
+            "-C",
+            "PREROUTING",
+            "-s",
+            f"{vip}/32",
+            "-p",
+            proto,
+            "--dport",
+            "53",
+            "-m",
+            "comment",
+            "--comment",
+            legacy_guest,
+            "-j",
+            "DNAT",
+            "--to-destination",
+            f"{guest_dns}:53",
+        ]
+        if iptables_ok(legacy_check):
+            subprocess.run(
+                [
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-D",
+                    "PREROUTING",
+                    "-s",
+                    f"{vip}/32",
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    legacy_guest,
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{guest_dns}:53",
+                ],
+                check=False,
+            )
+
         check = [
             "iptables",
             "-t",
@@ -247,10 +299,11 @@ def ensure_guest_dns(vip: str, enable: bool) -> None:
             "-j",
             "DNAT",
             "--to-destination",
-            f"{guest_dns}:53",
+            f"{adguard}:53",
         ]
         exists = iptables_ok(check)
         if enable and not exists:
+            # Insert ahead of pool-wide guest DNAT so trusted VIP wins.
             subprocess.run(
                 [
                     "iptables",
@@ -272,7 +325,7 @@ def ensure_guest_dns(vip: str, enable: bool) -> None:
                     "-j",
                     "DNAT",
                     "--to-destination",
-                    f"{guest_dns}:53",
+                    f"{adguard}:53",
                 ],
                 check=False,
             )
@@ -297,13 +350,13 @@ def ensure_guest_dns(vip: str, enable: bool) -> None:
                     "-j",
                     "DNAT",
                     "--to-destination",
-                    f"{guest_dns}:53",
+                    f"{adguard}:53",
                 ],
                 check=False,
             )
 
 
-def list_guest_dns_vips() -> set[str]:
+def list_trust_dns_vips() -> set[str]:
     proc = subprocess.run(
         ["iptables", "-t", "nat", "-S", "PREROUTING"],
         capture_output=True,
@@ -311,12 +364,113 @@ def list_guest_dns_vips() -> set[str]:
     )
     found = set()
     for line in (proc.stdout or "").splitlines():
-        if "SM-VPN-GUEST-DNS-" not in line:
-            continue
-        m = re.search(r"SM-VPN-GUEST-DNS-(\d+\.\d+\.\d+\.\d+)", line)
+        m = re.search(r"SM-VPN-TRUST-DNS-(\d+\.\d+\.\d+\.\d+)", line)
         if m:
             found.add(m.group(1))
+        m2 = re.search(r"SM-VPN-GUEST-DNS-(\d+\.\d+\.\d+\.\d+)", line)
+        if m2:
+            found.add(m2.group(1))
     return found
+
+
+def ensure_pool_guest_dns() -> None:
+    """Pool-wide IKEv2 DNS → guest resolver (replaces old AdGuard pool DNAT)."""
+    for proto in ("udp", "tcp"):
+        while iptables_ok(
+            [
+                "iptables",
+                "-t",
+                "nat",
+                "-C",
+                "PREROUTING",
+                "-s",
+                pool,
+                "-p",
+                proto,
+                "--dport",
+                "53",
+                "-m",
+                "comment",
+                "--comment",
+                "SM-IKEV2-DNS",
+                "-j",
+                "DNAT",
+                "--to-destination",
+                f"{adguard}:53",
+            ]
+        ):
+            subprocess.run(
+                [
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-D",
+                    "PREROUTING",
+                    "-s",
+                    pool,
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-IKEV2-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{adguard}:53",
+                ],
+                check=False,
+            )
+
+        check = [
+            "iptables",
+            "-t",
+            "nat",
+            "-C",
+            "PREROUTING",
+            "-s",
+            pool,
+            "-p",
+            proto,
+            "--dport",
+            "53",
+            "-m",
+            "comment",
+            "--comment",
+            "SM-IKEV2-DNS",
+            "-j",
+            "DNAT",
+            "--to-destination",
+            f"{guest_dns}:53",
+        ]
+        if not iptables_ok(check):
+            # Append so SM-VPN-TRUST-DNS-* VIP rules inserted at #1 stay ahead.
+            subprocess.run(
+                [
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-A",
+                    "PREROUTING",
+                    "-s",
+                    pool,
+                    "-p",
+                    proto,
+                    "--dport",
+                    "53",
+                    "-m",
+                    "comment",
+                    "--comment",
+                    "SM-IKEV2-DNS",
+                    "-j",
+                    "DNAT",
+                    "--to-destination",
+                    f"{guest_dns}:53",
+                ],
+                check=False,
+            )
 
 
 def ufw_replace_blanket() -> None:
@@ -401,9 +555,11 @@ denied_ips = {
 
 sync_sticky(data["allowed"])
 ufw_replace_blanket()
+ensure_pool_guest_dns()
 
 sessions = peer_sessions()
 active_guest = set()
+active_trusted = set()
 pending_map = {normalize_ip(x.get("ip", "")): x for x in data["pending"] if isinstance(x, dict)}
 attempts = [x for x in data["attempts"] if isinstance(x, dict)]
 
@@ -411,9 +567,11 @@ for s in sessions:
     wan = s["wan"]
     vip = s["vip"]
     trusted = wan in allowed_ips
-    ensure_guest_dns(vip, enable=not trusted)
+    ensure_trusted_adguard_dns(vip, enable=trusted)
     ufw_set_trusted(vip, enable=trusted)
-    if not trusted:
+    if trusted:
+        active_trusted.add(vip)
+    else:
         active_guest.add(vip)
         # Track attempt / pending
         row = pending_map.get(wan) or {
@@ -442,12 +600,11 @@ for s in sessions:
             }
         )
 
-# Drop guest DNAT for VIPs no longer connected
-for vip in list_guest_dns_vips():
-    if vip not in active_guest and vip not in {s["vip"] for s in sessions if s["wan"] in allowed_ips}:
-        # still connected trusted → already disabled above; leftover orphans:
-        if vip not in {s["vip"] for s in sessions}:
-            ensure_guest_dns(vip, enable=False)
+# Drop trust/legacy VIP DNAT for VIPs no longer connected
+live_vips = {s["vip"] for s in sessions}
+for vip in list_trust_dns_vips():
+    if vip not in live_vips:
+        ensure_trusted_adguard_dns(vip, enable=False)
 
 # Keep pending for currently interesting IPs (active or recent 7d),
 # and preserve LAN-offline pending rows seeded by the portal.
@@ -482,7 +639,8 @@ data["attempts"] = attempts[-200:]
 save_allowlist(data)
 
 print(
-    f"gate: sessions={len(sessions)} trusted={sum(1 for s in sessions if s['wan'] in allowed_ips)} "
-    f"guest_dns={len(active_guest)} allowed={len(allowed_ips)} pending={len(data['pending'])}"
+    f"gate: sessions={len(sessions)} trusted={len(active_trusted)} "
+    f"guest_dns={len(active_guest)} allowed={len(allowed_ips)} pending={len(data['pending'])} "
+    f"pool_dns={guest_dns}"
 )
 PY

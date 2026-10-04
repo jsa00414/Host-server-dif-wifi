@@ -10,6 +10,7 @@ IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
 IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
+GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 LE_LIVE="${IKEV2_LE_LIVE:-/etc/letsencrypt/live/ikev2-portal-rsa}"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/acme}"
@@ -205,10 +206,18 @@ iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-I
   || iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o ens6 -m comment --comment SM-IKEV2-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.10.0.0/24 -j ACCEPT
 iptables -C FORWARD -d 10.10.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.10.0.0/24 -j ACCEPT
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p udp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
-iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null \
-  || iptables -t nat -I PREROUTING 1 -s 10.10.0.0/24 -p tcp --dport 53 -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53"
+# Pool-wide guest DNS (trusted VIPs upgraded to AdGuard by ensure-vpn-client-gate.sh)
+for proto in udp tcp; do
+  while iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" || true
+  done
+  iptables -t nat -C PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53" 2>/dev/null \
+    || iptables -t nat -A PREROUTING -s 10.10.0.0/24 -p "$proto" --dport 53 \
+      -m comment --comment SM-IKEV2-DNS -j DNAT --to-destination "${GUEST_DNS}:53"
+done
 iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE 2>/dev/null \
   || iptables -t nat -I POSTROUTING 1 -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j MASQUERADE
 iptables -C FORWARD -s 10.10.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-IKEV2-DNS -j ACCEPT 2>/dev/null \
