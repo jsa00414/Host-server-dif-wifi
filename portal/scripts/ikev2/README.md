@@ -78,6 +78,11 @@ bash /opt/ikev2/ensure-vpn-split-dns.sh
 AdGuard rewrites VPN-gated hostnames to `10.11.0.1` (lo VIP) so traffic stays on-tunnel
 with a private source IP that matches Caddy `@vpn_clients`.
 
+**Guest vs trust DNS:** unapproved IKEv2 peers are DNAT'd pool-wide to
+`VPN_GUEST_DNS` (default `1.1.1.1`) so they never see those admin rewrites.
+Allowlisted / sticky WAN peers get a per-VIP DNAT upgrade to AdGuard
+(`ensure-vpn-client-gate.sh`).
+
 After applying: **disconnect/reconnect VPN** (or flush DNS), then open the portal.
 
 ## Windows still Forbidden (DoH / gateway exclusion)
