@@ -132,6 +132,7 @@ OVPN_WINDOWS_NAME = os.environ.get("OVPN_WINDOWS_NAME", "windows.ovpn")
 # Optional shared-secret download link (works without portal login / for Caddy
 # public path allow). Empty = token downloads disabled.
 OVPN_WINDOWS_DL_TOKEN = os.environ.get("OVPN_WINDOWS_DL_TOKEN", "").strip()
+OVPN_PHONE_DL_TOKEN = os.environ.get("OVPN_PHONE_DL_TOKEN", "").strip()
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
@@ -5079,9 +5080,12 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\thandle @auth_app_legacy {")
             lines.append(f"\t\tredir https://{keys_domain}{{uri}} 302")
             lines.append("\t}")
-            # Public Windows OpenVPN profile download (token enforced in portal app)
-            lines.append("\t@ovpn_windows_dl path /api/openvpn/windows /download/windows.ovpn")
-            lines.append("\thandle @ovpn_windows_dl {")
+            # Public OpenVPN profile downloads (token enforced in portal app)
+            lines.append(
+                "\t@ovpn_public_dl path /api/openvpn/windows /download/windows.ovpn "
+                "/api/openvpn/phone /download/james-iphone.ovpn"
+            )
+            lines.append("\thandle @ovpn_public_dl {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
@@ -9846,7 +9850,15 @@ def build_portal_settings() -> dict:
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
-        {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
+        {
+            "id": "ovpn-phone",
+            "label": "OpenVPN iPhone (.ovpn)",
+            "url": (
+                f"https://{host}/api/openvpn/phone?t={OVPN_PHONE_DL_TOKEN}"
+                if OVPN_PHONE_DL_TOKEN
+                else f"https://{host}/api/openvpn/phone"
+            ),
+        },
         {
             "id": "ovpn-windows",
             "label": "OpenVPN Windows (.ovpn)",
@@ -18202,8 +18214,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
+            "/api/openvpn/phone",
+            "/download/james-iphone.ovpn",
         ):
-            pass  # public Windows OpenVPN download (token checked below)
+            pass  # public OpenVPN downloads (token checked below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif path in ("/api/email-code/send", "/api/email-code/verify"):
@@ -18762,7 +18776,17 @@ document.getElementById('f').onsubmit = async (e) => {
             "/api/openvpn/phone",
             "/download/james-iphone.ovpn",
         ):
-            if not self._require_auth(api=True):
+            # Allow either portal login OR shared download token (public Caddy path).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_PHONE_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_PHONE_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
                 return
             try:
                 from urllib.parse import quote
