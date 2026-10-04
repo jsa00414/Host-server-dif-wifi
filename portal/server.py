@@ -48,6 +48,7 @@ AUTH_USER = os.environ.get("PF_USER", "admin")
 AUTH_PASS = os.environ.get("PF_PASS", "")
 PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
+KEYS_HOST = os.environ.get("KEYS_HOST", "keys.vpstruelord.com").strip() or "keys.vpstruelord.com"
 BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
 BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
@@ -1764,6 +1765,10 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
 
 
 ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
+# Authenticator (keys) public host — intentionally not VPN-gated.
+KEYS_PUBLIC_HOST = (
+    os.environ.get("KEYS_PUBLIC_HOST", KEYS_HOST).strip() or KEYS_HOST
+)
 # LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
 ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
 ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
@@ -1966,7 +1971,7 @@ AUTH_APP_WINDOWS_EXE_PATHS = (
 
 
 def load_auth_app_windows_exe() -> bytes:
-    """Windows Authenticator .exe (WebView2 shell around /auth-app.html)."""
+    """Windows Authenticator .exe (WebView2 shell around keys.*/auth-app.html)."""
     for path in AUTH_APP_WINDOWS_EXE_PATHS:
         if path.is_file():
             return path.read_bytes()
@@ -4303,6 +4308,77 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def keys_public_base() -> str:
+    host = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip().rstrip("/")
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"https://{host}"
+
+
+def keys_auth_urls(*, secret_hash: str = "", issuer: str = "", account: str = "") -> dict:
+    """Absolute Authenticator URLs on keys.* (not the VPN-gated portal host)."""
+    base = keys_public_base()
+    frag = ""
+    if secret_hash:
+        from urllib.parse import quote
+
+        frag = (
+            f"#secret={secret_hash}"
+            f"&issuer={quote(issuer or 'ServerManager')}"
+            f"&account={quote(account or AUTH_USER)}"
+        )
+    return {
+        "auth_app_path": f"{base}/auth-app-iphone.html{frag}",
+        "auth_app_android_path": f"{base}/auth-app.html{frag}",
+        "auth_app_windows_path": f"{base}/download/ServerManagerAuthenticator.exe",
+        "keys_host": KEYS_PUBLIC_HOST,
+    }
+
+
+def _cookie_parent_domain() -> str:
+    """e.g. portal.vpstruelord.com → .vpstruelord.com for cross-subdomain leases."""
+    host = (PORTAL_HOST or "portal.vpstruelord.com").split(":")[0].strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        return "." + ".".join(parts[-2:])
+    return ""
+
+
+def ensure_keys_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee keys.vpstruelord.com is present (Authenticator, public)."""
+    domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    out = list(rules or [])
+    for i, r in enumerate(out):
+        if str(r.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **r,
+                    "enabled": True,
+                    "domain": domain,
+                    "target_host": r.get("target_host") or DOCKER_HOST_GW,
+                    "target_port": int(r.get("target_port") or 5002),
+                    "name": "keys-authenticator",
+                    "external": False,
+                    "vpn_only": False,
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": DOCKER_HOST_GW,
+                "target_port": 5002,
+                "name": "keys-authenticator",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4312,7 +4388,9 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    return ensure_keys_hookup(
+        ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    )
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -4907,6 +4985,51 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
+def _keys_hookup_site_lines(rule: dict) -> list[str]:
+    """Public Authenticator host (keys.*) — not VPN-gated; campus deny still applies."""
+    public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
+    lines = [
+        f"{public} {{",
+        "\tencode gzip",
+    ]
+    lines.extend(_caddy_denied_wan_lines("\t"))
+    lines.extend(
+        [
+            "\t@root path /",
+            "\tredir @root /auth-app.html 302",
+            "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+            "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+            "/static/auth-app.html /static/auth-app-iphone.html "
+            "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+            "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+            "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+            "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
+            "\thandle @auth {",
+            f"\t\treverse_proxy {upstream} {{",
+            "\t\t\theader_up Host {host}",
+            "\t\t\theader_up X-Forwarded-Host {host}",
+            "\t\t\theader_up X-Forwarded-Proto {scheme}",
+            "\t\t\theader_up X-Forwarded-For {remote_host}",
+            "\t\t\theader_up X-Real-IP {remote_host}",
+            "\t\t}",
+            "\t}",
+            "\thandle {",
+            '\t\trespond "Not Found" 404',
+            "\t}",
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
+    return lines
+
+
 def serialize_hookups_caddy(rules: list[dict]) -> str:
     vpn_cidrs = effective_vpn_client_cidrs()
     lines = [
@@ -4918,8 +5041,12 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
     active = [r for r in rules if r.get("enabled", True) and not r.get("external")]
     if not active:
         lines.append("# (no managed domain hookups enabled)")
+    keys_domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     for r in active:
         domain = r["domain"]
+        if domain == keys_domain:
+            lines.extend(_keys_hookup_site_lines(r))
+            continue
         if domain == ROUTER_PUBLIC_HOST.lower():
             lines.extend(_router_hookup_site_lines(r))
             continue
@@ -4937,6 +5064,20 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             # Site-level deny first so shared campus egress cannot use public
             # auth-app paths either (phones on cellular still work from other IPs).
             lines.extend(_caddy_denied_wan_lines("\t"))
+            # Legacy Authenticator URLs on portal → keys host.
+            lines.append(
+                "\t@auth_app_legacy path /auth-app.html /auth-app-iphone.html "
+                "/static/auth-app.html /static/auth-app-iphone.html "
+                "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+                "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+                "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+                "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+                "/download/ServerManagerAuthenticator.exe /api/auth-app/* "
+                "/api/auth-app/windows-exe"
+            )
+            lines.append("\thandle @auth_app_legacy {")
+            lines.append(f"\t\tredir https://{keys_domain}{{uri}} 302")
+            lines.append("\t}")
             # Public Windows OpenVPN profile download (token enforced in portal app)
             lines.append("\t@ovpn_windows_dl path /api/openvpn/windows /download/windows.ovpn")
             lines.append("\thandle @ovpn_windows_dl {")
@@ -4944,27 +5085,6 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\t}")
-            lines.append("\t}")
-            # Authenticator PWA + APIs stay reachable without VPN circle membership
-            # so enrolled phones can manage pending while LAN pending is enforced.
-            lines.append(
-                "\t@auth_app path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
-                "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
-                "/static/auth-app.html /static/auth-app-iphone.html "
-                "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
-                "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
-                "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
-                "/download/ServerManagerAuthenticator.exe "
-                "/api/auth-app/windows-exe"
-            )
-            lines.append("\thandle @auth_app {")
-            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
-            lines.append("\t\t\theader_up Host {host}")
-            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
-            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\t\theader_up X-Forwarded-For {remote_host}")
-            lines.append("\t\t\theader_up X-Real-IP {remote_host}")
             lines.append("\t\t}")
             lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
@@ -7433,9 +7553,7 @@ def _security_sshd_config() -> dict:
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "two_factor_enabled": two_factor,
         "two_factor_method": method,
-        "auth_app_path": "/auth-app-iphone.html",
-        "auth_app_android_path": "/auth-app.html",
-        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        **keys_auth_urls(),
         "email_to": EMAIL_CODE_TO,
         "required": required,
     }
@@ -11736,8 +11854,11 @@ def issue_circle_lease(*, ip: str, key_id: str) -> tuple[str, dict]:
         _circle_lease_secret(), payload_b64.encode("ascii"), hashlib.sha256
     ).hexdigest()
     token = f"{payload_b64}.{sig}"
+    parent = _cookie_parent_domain()
+    domain_part = f"; Domain={parent}" if parent else ""
     cookie = (
-        f"{CIRCLE_LEASE_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; "
+        f"{CIRCLE_LEASE_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax"
+        f"{domain_part}; "
         f"Max-Age={int(max(300.0, CIRCLE_LEASE_HOURS * 3600))}"
     )
     return cookie, payload
@@ -12407,9 +12528,7 @@ def auth_app_enroll_status() -> dict:
         "enroll_unlocked": unlocked,
         "device_enroll_unlocked": unlocked,
         "enroll_expires_in": expires_in,
-        "auth_app_path": "/auth-app-iphone.html",
-        "auth_app_android_path": "/auth-app.html",
-        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        **keys_auth_urls(),
         "message": (
             "Enrollment unlocked — Enter secret is available in the Authenticator app."
             + (f" Auto-locks in ~{max(1, expires_in // 60)} min." if expires_in else "")
@@ -12512,9 +12631,7 @@ def set_auth_app_device_enroll(token: str | None, *, unlocked: bool) -> dict:
         "enroll_unlocked": want,
         "two_factor_enabled": bool(cfg.get("enabled")),
         "two_factor_method": str(cfg.get("method") or "app"),
-        "auth_app_path": "/auth-app-iphone.html",
-        "auth_app_android_path": "/auth-app.html",
-        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        **keys_auth_urls(),
         "message": (
             "New-device enrollment unlocked. Enter secret is visible in the Authenticator app "
             f"for ~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min (or until you lock it)."
@@ -13362,9 +13479,7 @@ def _totp_provisioning(secret_b32: str) -> dict:
         "otpauth_url": uri,
         "account": account,
         "issuer": issuer,
-        "auth_app_path": f"/auth-app-iphone.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
-        "auth_app_android_path": f"/auth-app.html#secret={secret_b32}&issuer={quote(issuer)}&account={quote(account)}",
-        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        **keys_auth_urls(secret_hash=secret_b32, issuer=issuer, account=account),
     }
 
 
@@ -13432,7 +13547,7 @@ def set_ssh_panel_2fa(
                 "two_factor_enabled": True,
                 "two_factor_method": "app",
                 "email_to": EMAIL_CODE_TO,
-                "auth_app_path": "/auth-app-iphone.html",
+                "auth_app_path": keys_auth_urls()["auth_app_path"],
                 "message": "Authenticator app two-factor enabled.",
             }
         # Email method
@@ -13500,9 +13615,7 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
         "enroll_unlocked": enroll_unlocked,
         "enroll_expires_in": enroll_expires_in,
         "auth_app_devices": devices,
-        "auth_app_path": "/auth-app-iphone.html",
-        "auth_app_android_path": "/auth-app.html",
-        "auth_app_windows_path": "/download/ServerManagerAuthenticator.exe",
+        **keys_auth_urls(),
         "email_to": EMAIL_CODE_TO,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
@@ -13564,7 +13677,7 @@ def unlock_ssh_panel(
                     "need_code": True,
                     "two_factor_enabled": True,
                     "two_factor_method": "app",
-                    "auth_app_path": "/auth-app-iphone.html",
+                    "auth_app_path": keys_auth_urls()["auth_app_path"],
                     "email_to": EMAIL_CODE_TO,
                     "expires_at": None,
                     "expires_in": 0,
@@ -13617,7 +13730,7 @@ def unlock_ssh_panel(
         "need_code": False,
         "two_factor_enabled": two_factor,
         "two_factor_method": method if two_factor else "email",
-        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_path": keys_auth_urls()["auth_app_path"],
         "email_to": EMAIL_CODE_TO,
         "expires_at": int(exp),
         "expires_in": int(exp - now),
@@ -13637,7 +13750,7 @@ def lock_ssh_panel(token: str | None) -> dict:
         "need_code": False,
         "two_factor_enabled": ssh_panel_2fa_enabled(),
         "two_factor_method": method,
-        "auth_app_path": "/auth-app-iphone.html",
+        "auth_app_path": keys_auth_urls()["auth_app_path"],
         "email_to": EMAIL_CODE_TO,
         "expires_at": None,
         "expires_in": 0,

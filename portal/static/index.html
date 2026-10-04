@@ -3785,9 +3785,9 @@
         const twoFactor = !!panelLock.two_factor_enabled;
         const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
         const deviceEnrollUnlocked = !!panelLock.device_enroll_unlocked;
-        const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
-        const authAppAndroidPath = panelLock.auth_app_android_path || "/auth-app.html";
-        const authAppWindowsPath = panelLock.auth_app_windows_path || "/download/ServerManagerAuthenticator.exe";
+        const authAppPath = panelLock.auth_app_path || "https://keys.vpstruelord.com/auth-app-iphone.html";
+        const authAppAndroidPath = panelLock.auth_app_android_path || "https://keys.vpstruelord.com/auth-app.html";
+        const authAppWindowsPath = panelLock.auth_app_windows_path || "https://keys.vpstruelord.com/download/ServerManagerAuthenticator.exe";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
@@ -4201,8 +4201,8 @@
       const enrollHtml = enroll
         ? `<div class="sec-enroll-box">
             <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows. On Windows, download the .exe.</div>
-            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
-            <a class="ghost" href="${escHtml(enroll.auth_app_windows_path || "/download/ServerManagerAuthenticator.exe")}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
+            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "https://keys.vpstruelord.com/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+            <a class="ghost" href="${escHtml(enroll.auth_app_windows_path || "https://keys.vpstruelord.com/download/ServerManagerAuthenticator.exe")}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
             <canvas id="secEnrollQr" width="180" height="180" aria-label="Authenticator QR"></canvas>
             <div class="secret">${escHtml(enroll.secret || "")}</div>
           </div>`
