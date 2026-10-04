@@ -2338,6 +2338,10 @@ NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
 NAS_FTP_PUBLIC_USER = (
     os.environ.get("NAS_FTP_PUBLIC_USER", "admin").strip() or "admin"
 )
+NAS_SFTP_PUBLIC_PORT = int(os.environ.get("NAS_SFTP_PUBLIC_PORT", "2123"))
+NAS_SFTP_PUBLIC_USER = (
+    os.environ.get("NAS_SFTP_PUBLIC_USER", NAS_FTP_PUBLIC_USER).strip() or NAS_FTP_PUBLIC_USER
+)
 
 
 def _load_nas_smb_pass() -> str:
@@ -2432,6 +2436,9 @@ def build_nas_windows_status() -> dict:
         "ftp_ip": NAS_SMB_PUBLIC_IP,
         "ftp_port": NAS_FTP_PUBLIC_PORT,
         "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
+        "sftp_host": NAS_SMB_PUBLIC_HOST,
+        "sftp_port": NAS_SFTP_PUBLIC_PORT,
+        "sftp_username": NAS_SFTP_PUBLIC_USER,
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -2986,7 +2993,7 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
         raise ValueError("vps rules must be a list")
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT}
+    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT, NAS_SFTP_PUBLIC_PORT}
     protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:

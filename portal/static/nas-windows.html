@@ -136,6 +136,20 @@
         <p class="hint"><strong>Better for Explorer:</strong> Map network drive to <code>https://portal.vpstruelord.com/dav</code> (WebDAV). Username <code>admin</code>, same password. Opens folders/files normally; root is disk1.</p>
       </div>
     </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>SFTP (WinSCP / FileZilla / macOS)</h2></div>
+      <div class="panel-body">
+        <p class="hint">VPN or home Wi‑Fi required. Protocol <strong>SFTP</strong> (not FTP):</p>
+        <div class="creds">
+          <div><span class="k">Host</span><span id="sftpHost">portal.vpstruelord.com</span></div>
+          <div><span class="k">Port</span><span id="sftpPort">2123</span></div>
+          <div><span class="k">Username</span><span id="sftpUser">admin</span></div>
+          <div><span class="k">Password</span><span>same as above</span></div>
+        </div>
+        <p class="hint">Example: <code>sftp://admin@portal.vpstruelord.com:2123/</code></p>
+      </div>
+    </section>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -173,6 +187,9 @@
         $("ftpHost").textContent = d.ftp_host || host;
         $("ftpPort").textContent = String(d.ftp_port || 2121);
         $("ftpUser").textContent = d.ftp_username || "admin";
+        $("sftpHost").textContent = d.sftp_host || host;
+        $("sftpPort").textContent = String(d.sftp_port || 2123);
+        $("sftpUser").textContent = d.sftp_username || d.ftp_username || "admin";
       } catch (e) {
         $("statusPill").className = "pill err";
         $("statusPill").innerHTML = `<span class="dot"></span><span>${esc(e.message)}</span>`;
