@@ -12825,7 +12825,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
             return
         self.send_response(302)
-        self.send_header("Location", "/login.html")
+        self.send_header("Location", "/")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
@@ -12876,10 +12876,10 @@ class Handler(BaseHTTPRequestHandler):
             body = (
                 b"<!DOCTYPE html><html><head>"
                 b'<meta charset="utf-8" />'
-                b'<meta http-equiv="refresh" content="0;url=/login.html" />'
+                b'<meta http-equiv="refresh" content="0;url=/" />'
                 b"<title>Signing out</title>"
-                b"<script>location.replace('/login.html');</script>"
-                b"</head><body>Signed out. <a href='/login.html'>Continue</a></body></html>"
+                b"<script>location.replace('/');</script>"
+                b"</head><body>Signed out. <a href='/'>Continue</a></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -12889,8 +12889,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
-            pass  # public
+        if path in ("/", "/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+            pass  # public (root serves login when signed out)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif not self._is_authed():
@@ -13027,7 +13027,10 @@ document.getElementById('f').onsubmit = async (e) => {
             self._json(200, {"ok": True})
             return
         if path in ("/", "/index.html"):
-            return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if self._is_authed():
+                return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            # Signed-out root is the login page (canonical URL: /)
+            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
         if path == "/openvpn.html":
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
@@ -13035,14 +13038,12 @@ document.getElementById('f').onsubmit = async (e) => {
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
-            # Always clear any stale session display path; if still authed, go home
-            if self._is_authed():
-                self.send_response(302)
-                self.send_header("Location", "/")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                return
-            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
+            # Canonical login URL is /
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
@@ -13523,7 +13524,7 @@ document.getElementById('f').onsubmit = async (e) => {
     def do_HEAD(self) -> None:  # noqa: N802
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+        if path in ("/", "/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             return self.do_GET()
