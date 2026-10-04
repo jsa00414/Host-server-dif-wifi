@@ -999,19 +999,17 @@
       word-break: break-all;
       min-height: 1.2em;
     }
-    .tv-form-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      color: var(--text);
+    .tv-form-toggle-btn {
+      justify-self: start;
+      margin: 4px 0;
       font-size: .78rem;
       font-weight: 600;
-      margin: 4px 0;
-      justify-self: start;
-      width: 100%;
     }
-    .tv-form-toggle input { width: auto; margin: 0; }
+    .tv-form-toggle-btn.is-on {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(61,222,160,.12);
+    }
     .media-drop.has-tv-form { cursor: default; min-height: 0; align-content: start; }
     .media-drop.has-tv-form .media-drop-hit {
       cursor: pointer;
@@ -1552,7 +1550,7 @@
               <h3>TV Shows</h3>
               <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
             </div>
-            <label class="tv-form-toggle"><input type="checkbox" id="mediaTvFormToggle" /> Full TV show form (TMDB)</label>
+            <button type="button" class="ghost tv-form-toggle-btn" id="mediaTvFormToggle" aria-pressed="false">Full TV show form</button>
             <div class="media-tv-form" id="mediaTvForm" data-library="tvshows">
               <label>Search TMDB
                 <input type="search" id="mediaTvSearch" placeholder="Show name…" autocomplete="off" />
@@ -1592,7 +1590,7 @@
               <h3>Kids TV Shows</h3>
               <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
             </div>
-            <label class="tv-form-toggle"><input type="checkbox" id="mediaKidsTvFormToggle" /> Full TV show form (TMDB)</label>
+            <button type="button" class="ghost tv-form-toggle-btn" id="mediaKidsTvFormToggle" aria-pressed="false">Full TV show form</button>
             <div class="media-tv-form" id="mediaKidsTvForm" data-library="kids-tvshows">
               <label>Search TMDB
                 <input type="search" id="mediaKidsTvSearch" placeholder="Show name…" autocomplete="off" />
@@ -4383,7 +4381,7 @@
 
     function tvFormActive(library) {
       const els = tvFormEls(library);
-      return !!(els && els.toggle && els.toggle.checked && els.form && els.form.classList.contains("is-open"));
+      return !!(els && els.toggle && els.toggle.getAttribute("aria-pressed") === "true" && els.form && els.form.classList.contains("is-open"));
     }
 
     function collectTvFormMeta(library) {
@@ -4580,9 +4578,12 @@
     function startTvFormUpload(library) {
       const els = tvFormEls(library);
       if (!els) return;
-      if (els.toggle && !els.toggle.checked) {
-        els.toggle.checked = true;
+      if (els.toggle && els.toggle.getAttribute("aria-pressed") !== "true") {
+        els.toggle.setAttribute("aria-pressed", "true");
+        els.toggle.classList.add("is-on");
         els.form?.classList.add("is-open");
+        syncTvFormUploadBtn(library);
+        updateTvPreview(library);
       }
       try {
         collectTvFormMeta(library);
@@ -4601,15 +4602,22 @@
     function wireTvForm(library) {
       const els = tvFormEls(library);
       if (!els || !els.toggle || !els.form) return;
-      const syncOpen = () => {
-        els.form.classList.toggle("is-open", !!els.toggle.checked);
-        if (els.toggle.checked) {
+      const setOpen = (open) => {
+        els.toggle.setAttribute("aria-pressed", open ? "true" : "false");
+        els.toggle.classList.toggle("is-on", !!open);
+        els.toggle.textContent = open ? "Hide full TV show form" : "Full TV show form";
+        els.form.classList.toggle("is-open", !!open);
+        if (open) {
           updateTvPreview(library);
           syncTvFormUploadBtn(library);
         }
       };
-      els.toggle.addEventListener("change", syncOpen);
-      syncOpen();
+      els.toggle.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setOpen(els.toggle.getAttribute("aria-pressed") !== "true");
+      });
+      setOpen(false);
       syncTvFormUploadBtn(library);
       els.search?.addEventListener("input", () => {
         clearTimeout(tvFormState[library].searchTimer);
