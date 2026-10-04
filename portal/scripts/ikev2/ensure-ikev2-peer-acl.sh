@@ -90,71 +90,142 @@ def denied_ips() -> set[str]:
 
 DENIED_IPS = denied_ips()
 
-# Chrome-like unreachable body (Caddy interpolates {host}). No Forbidden ACL signal.
+# Chrome mobile net-error interstitial. Caddy fills {host}. Version in HTML.
+_NETERR_VER = "3"
 _UNREACHABLE_HTML = (
-    "<!DOCTYPE html><html lang=en><meta charset=utf-8>"
-    "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+    "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
+    "<meta name=viewport content=\"width=device-width,initial-scale=1,"
+    "maximum-scale=1,user-scalable=no\">"
+    "<meta name=color-scheme content=light>"
+    "<meta name=theme-color content=#fff>"
     "<title>{host}</title>"
+    f"<!--sm-neterr:{_NETERR_VER}-->"
     "<style>"
-    "html,body{margin:0;background:#fff;color:#202124;"
-    "font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}"
-    ".w{max-width:420px;margin:14vh auto 0;padding:0 28px}"
-    "svg{width:72px;height:72px;margin:0 0 16px;opacity:.55;display:block}"
-    "h1{font-size:1.4rem;font-weight:700;margin:0 0 12px;letter-spacing:-.01em}"
-    "p{font-size:.95rem;line-height:1.45;margin:0 0 8px}"
-    ".try{margin-top:16px}.try b{font-weight:600}"
-    "ul{margin:4px 0 16px 1.15em;padding:0}li{margin:4px 0}"
-    ".code{color:#5f6368;font-size:.75rem;letter-spacing:.04em;margin:16px 0 22px;"
-    "text-transform:uppercase}"
-    "button{display:block;width:100%;border:0;border-radius:24px;padding:12px 18px;"
-    "background:#1a73e8;color:#fff;font-size:1rem;font-weight:500}"
-    "button:active{background:#1765cc}"
-    ".d{text-align:center;margin-top:14px}"
-    ".d a{color:#1a73e8;text-decoration:none;font-size:.95rem}"
-    "</style>"
-    "<div class=w>"
-    "<svg viewBox=\"0 0 24 24\" aria-hidden=true>"
-    "<path fill=\"#80868b\" d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 "
-    "2-2V8l-6-6zm1 7V3.5L19.5 9H15z\"/>"
-    "<circle cx=\"9.2\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
-    "<circle cx=\"14.8\" cy=\"14\" r=\".85\" fill=\"#80868b\"/>"
-    "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"1.2\" stroke-linecap=\"round\" "
-    "d=\"M9.5 17.2c1.2-1 3.8-1 5 0\"/>"
-    "</svg>"
-    "<h1>This site can&#39;t be reached</h1>"
-    "<p><strong>{host}</strong>&#39;s server IP address could not be found.</p>"
-    "<p class=try><b>Try:</b></p>"
-    "<ul><li>Checking the connection</li></ul>"
-    "<p class=code>ERR_NAME_NOT_RESOLVED</p>"
-    "<button type=button onclick=\"location.reload()\">Reload</button>"
-    "<p class=d><a href=\"#\" id=det "
-    "onclick=\"this.textContent=this.textContent==='Details'?"
-    "'DNS_PROBE_FINISHED_NXDOMAIN':'Details';return false\">Details</a></p>"
-    "</div>"
+    "*{box-sizing:border-box}"
+    "html{background:#fff;-webkit-text-size-adjust:100%}"
+    "body{margin:0;background:#fff;color:#312f2f;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+    "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;"
+    "-webkit-font-smoothing:antialiased}"
+    ".interstitial-wrapper{box-sizing:border-box;font-size:1em;"
+    "line-height:1.55em;margin:0 auto;max-width:600px;"
+    "padding:72px 24px 40px;width:100%}"
+    ".icon{height:72px;margin:0 0 28px;width:72px}"
+    "h1{color:#312f2f;font-size:1.5em;font-weight:700;"
+    "line-height:1.25em;margin:0 0 14px}"
+    "#main-message p{display:block;margin:0 0 0}"
+    "#main-message .error-code{color:#696969;font-size:.8em;"
+    "margin-top:14px;text-transform:none;letter-spacing:0}"
+    "#suggestions-list{margin-top:16px}"
+    "#suggestions-list p{margin:0}"
+    "#suggestions-list ul{margin:6px 0 0;padding:0 0 0 18px}"
+    "#suggestions-list li{margin:0 0 4px;padding:0}"
+    "#buttons{margin:28px 0 0}"
+    "#buttons .blue-button{appearance:none;-webkit-appearance:none;"
+    "background:#1a73e8;border:0;border-radius:24px;color:#fff;"
+    "cursor:pointer;display:block;font:inherit;font-size:15px;"
+    "font-weight:500;margin:0;padding:12px 16px;text-align:center;"
+    "text-decoration:none;width:100%}"
+    "#buttons .blue-button:active{background:#1765cc}"
+    "#details{display:none;color:#696969;font-size:.85em;margin:18px 0 0;"
+    "line-height:1.45}"
+    "#details.show{display:block}"
+    "#details-button{background:0 0;border:0;color:#1a73e8;cursor:pointer;"
+    "display:block;font:inherit;font-size:15px;margin:16px auto 0;"
+    "padding:8px;text-align:center;width:100%}"
+    "@media (max-width:420px){"
+    ".interstitial-wrapper{padding-top:56px;padding-left:22px;padding-right:22px}"
+    "h1{font-size:1.35em}"
+    "}"
+    "</style></head><body>"
+    "<div class=interstitial-wrapper>"
+    "<div id=main-content>"
+    "<div class=icon aria-hidden=true>"
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"72\" height=\"72\" viewBox=\"0 0 48 48\">"
+    "<path fill=\"#dadce0\" d=\"M28 4H12c-2.2 0-4 1.8-4 4v32c0 2.2 1.8 4 4 4h24c2.2 0 4-1.8 "
+    "4-4V16L28 4z\"/>"
+    "<path fill=\"#bdc1c6\" d=\"M28 4v10c0 1.1.9 2 2 2h10L28 4z\"/>"
+    "<circle fill=\"#80868b\" cx=\"18.5\" cy=\"28\" r=\"2\"/>"
+    "<circle fill=\"#80868b\" cx=\"29.5\" cy=\"28\" r=\"2\"/>"
+    "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"2\" stroke-linecap=\"round\" "
+    "d=\"M19 34c1.8-1.6 8.2-1.6 10 0\"/>"
+    "</svg></div>"
+    "<div id=main-message>"
+    "<h1>This site can&#8217;t be reached</h1>"
+    "<p><strong id=host>{host}</strong>&#8217;s server IP address could not be found.</p>"
+    "<div id=suggestions-list><p>Try:</p>"
+    "<ul><li>Checking the connection</li></ul></div>"
+    "<div class=error-code>ERR_NAME_NOT_RESOLVED</div>"
+    "</div></div>"
+    "<div id=buttons>"
+    "<button class=blue-button type=button id=reload>Reload</button>"
+    "<button type=button id=details-button>Details</button>"
+    "<div id=details>"
+    "DNS_PROBE_FINISHED_NXDOMAIN<br>"
+    "The server at <span id=host2>{host}</span> can&#8217;t be found, "
+    "because the DNS lookup failed. DNS is the network service that "
+    "translates a website&#8217;s name to its internet address."
+    "</div></div></div>"
+    "<script>"
+    "(function(){"
+    "var h=location.hostname||'{host}';"
+    "var el=document.getElementById('host'); if(el) el.textContent=h;"
+    "var e2=document.getElementById('host2'); if(e2) e2.textContent=h;"
+    "document.title=h;"
+    "document.getElementById('reload').onclick=function(){location.reload()};"
+    "document.getElementById('details-button').onclick=function(){"
+    "var d=document.getElementById('details');"
+    "var on=d.classList.toggle('show');"
+    "this.textContent=on?'Hide details':'Details';"
+    "};"
+    "})();"
+    "</script>"
+    "</body></html>"
 )
 
 
 def unreachable_respond_block(indent: str) -> str:
     return (
         f'{indent}header Content-Type "text/html; charset=utf-8"\n'
+        f'{indent}header Cache-Control "no-store"\n'
         f"{indent}header -Server\n"
         f"{indent}respond `{_UNREACHABLE_HTML}` 404\n"
     )
 
 
 def scrub_forbidden_responds(text: str) -> tuple[str, bool]:
-    """Replace legacy respond \"Forbidden\" 403 with Chrome-like unreachable page."""
+    """Replace Forbidden 403 and refresh outdated stealth net-error pages."""
 
-    def repl(m: re.Match) -> str:
+    def repl_indent(m: re.Match) -> str:
         return unreachable_respond_block(m.group(1)).rstrip("\n")
 
+    changed = False
     new, n = re.subn(
         r'^([ \t]*)respond "Forbidden" 403\s*$',
-        repl,
+        repl_indent,
         text,
         flags=re.M,
     )
-    return new, n > 0
+    if n:
+        text = new
+        changed = True
+
+    # Refresh any prior stealth page that is not the current version.
+    ver_tag = f"sm-neterr:{_NETERR_VER}"
+    if "ERR_NAME_NOT_RESOLVED" in text and ver_tag not in text:
+        new, n = re.subn(
+            r'^([ \t]*)header Content-Type "text/html; charset=utf-8"\n'
+            r'(?:\1header Cache-Control "no-store"\n)?'
+            r'\1header -Server\n'
+            r'\1respond `[^`]*ERR_NAME_NOT_RESOLVED[^`]*` 404\s*$',
+            repl_indent,
+            text,
+            flags=re.M,
+        )
+        if n:
+            text = new
+            changed = True
+    return text, changed
 
 
 def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
