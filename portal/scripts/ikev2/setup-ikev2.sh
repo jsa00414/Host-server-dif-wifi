@@ -7,10 +7,14 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 IKEV2_DIR="${IKEV2_DIR:-/opt/ikev2}"
 IKEV2_HOST="${IKEV2_HOST:-portal.vpstruelord.com}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
-IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
 GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+# Push guest DNS to Windows (INTERNAL_IP4_DNS). Pool DNAT also sends guests
+# here; trusted VIPs are upgraded to AdGuard by ensure-vpn-client-gate.sh.
+# Do NOT push 10.42.42.44 by default — that disagrees with guest DNAT and can
+# leave Windows hung on "Assigning IPv4" / broken DNS until trust rules exist.
+IKEV2_DNS="${IKEV2_DNS:-$GUEST_DNS}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 LE_LIVE="${IKEV2_LE_LIVE:-/etc/letsencrypt/live/ikev2-portal-rsa}"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/acme}"
@@ -87,15 +91,17 @@ conn %default
     dpddelay=300s
     rekey=no
     mobike=no
+    fragmentation=yes
     left=%any
     leftid=@${IKEV2_HOST}
     leftcert=server.crt
     leftsendcert=always
     leftsubnet=0.0.0.0/0
-    rightsourceip=${IKEV2_POOL}
-    rightdns=${IKEV2_DNS}
     right=%any
 
+# VIP/DNS stay on the EAP conn only. Putting rightsourceip in %default makes
+# passthrough-vps inherit the pool ("reusing virtual IP address pool") and
+# can leave Windows stuck on "Assigning IPv4".
 conn ikev2-eap
     also=%default
     mobike=no
@@ -103,6 +109,8 @@ conn ikev2-eap
     rightauth=eap-mschapv2
     rightsendcert=never
     eap_identity=%identity
+    rightsourceip=${IKEV2_POOL}
+    rightdns=${IKEV2_DNS}
     auto=add
 
 # Do not ESP-encrypt packets sourced from the VPS public IP. Full-tunnel
@@ -167,6 +175,21 @@ for plug in eap-mschapv2 eap-identity openssl pem pkcs1 pubkey x509 revocation a
     sed -i "s/load = no/load = yes/g" "$conf" || true
   fi
 done
+
+# Never use the DHCP plugin for Windows VIP assignment. With no DHCP server
+# on the VPS it hangs the CP/INTERNAL_IP4_ADDRESS exchange ("Assigning IPv4").
+# Address pool comes from rightsourceip above (in-memory stroke pool).
+DHCP_CONF="/etc/strongswan.d/charon/dhcp.conf"
+if [[ -f "$DHCP_CONF" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path("/etc/strongswan.d/charon/dhcp.conf")
+t = re.sub(r"(?m)^(\s*)load\s*=\s*\S+", r"\1load = no", p.read_text())
+p.write_text(t)
+print("dhcp plugin load = no")
+PY
+fi
 
 # Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
 #   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh
@@ -277,9 +300,10 @@ echo "  Server:   ${IKEV2_HOST}"
 echo "  User:     ${IKEV2_USER}"
 echo "  Password: ${IKEV2_PASS}"
 echo "  Pool:     ${IKEV2_POOL}"
-echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
+echo "  DNS push: ${IKEV2_DNS} (guest default)"
+echo "  Circle:   AdGuard ${ADGUARD_DNS} via trust VIP DNAT"
 echo "  Cert:     ${LE_LIVE}"
-echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
+echo "  SplitDNS: vpn/admin hosts → ${ADGUARD_DNS} rewrite → 10.11.0.1"
 echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"
 if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
   echo "  Mode:     IKEv2 via OpenVPN only (tun0)"

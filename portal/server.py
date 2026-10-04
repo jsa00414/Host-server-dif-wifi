@@ -1887,7 +1887,14 @@ IKEV2_HOST = os.environ.get("IKEV2_HOST", PORTAL_HOST or "portal.vpstruelord.com
 )
 IKEV2_USER = os.environ.get("IKEV2_USER", "windows").strip() or "windows"
 IKEV2_POOL = os.environ.get("IKEV2_POOL", "10.10.0.0/24").strip() or "10.10.0.0/24"
-IKEV2_DNS = os.environ.get("IKEV2_DNS", "10.9.0.1").strip() or "10.9.0.1"
+# Guest resolver pushed as INTERNAL_IP4_DNS. Trust circle is upgraded to
+# AdGuard (OVPN_DNS_ADGUARD) per-VIP by ensure-vpn-client-gate.sh — never
+# advertise tun0 10.9.0.1 (IKEv2 clients black-hole POINTOPOINT).
+IKEV2_DNS = (
+    os.environ.get("IKEV2_DNS")
+    or os.environ.get("VPN_GUEST_DNS")
+    or "1.1.1.1"
+).strip() or "1.1.1.1"
 IKEV2_SERVICE = os.environ.get("IKEV2_SERVICE", "strongswan-starter").strip() or "strongswan-starter"
 
 
@@ -1942,7 +1949,9 @@ def build_ikev2_status() -> dict:
         "password": password,
         "pool": IKEV2_POOL,
         "dns": IKEV2_DNS,
+        "guest_dns": IKEV2_DNS,
         "adguard": OVPN_DNS_ADGUARD,
+        "circle_dns": OVPN_DNS_ADGUARD,
         "ports": "UDP 500 / 4500",
         "peers": peers[:20],
         "ps1": "/api/ikev2/windows-ps1",
