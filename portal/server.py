@@ -1715,6 +1715,59 @@ ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
+SESSIONS_PATH = Path(
+    os.environ.get(
+        "SESSIONS_PATH",
+        "/opt/servermanager/panel/sessions.json",
+    )
+)
+
+
+def _persist_sessions_unlocked() -> None:
+    """Write session tokens to disk so panel restarts keep users signed in."""
+    try:
+        now = time.time()
+        payload = {
+            "sessions": {
+                str(k): float(v)
+                for k, v in _sessions.items()
+                if float(v) > now
+            }
+        }
+        SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SESSIONS_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(SESSIONS_PATH)
+        try:
+            os.chmod(SESSIONS_PATH, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _load_sessions() -> None:
+    if not SESSIONS_PATH.is_file():
+        return
+    try:
+        data = json.loads(SESSIONS_PATH.read_text(encoding="utf-8"))
+        rows = data.get("sessions") if isinstance(data, dict) else None
+        if not isinstance(rows, dict):
+            return
+        now = time.time()
+        with _sessions_lock:
+            for token, exp in rows.items():
+                try:
+                    exp_f = float(exp)
+                except Exception:
+                    continue
+                if token and exp_f > now:
+                    _sessions[str(token)] = exp_f
+    except Exception:
+        pass
+
+
+_load_sessions()
 # Timed unlock for Security → VPS login method & SSH keys mutations.
 SSH_PANEL_UNLOCK_SECONDS = int(os.environ.get("SSH_PANEL_UNLOCK_SECONDS", "300"))
 _ssh_panel_unlocks: dict[str, float] = {}
@@ -10107,6 +10160,7 @@ def apply_portal_settings(payload: dict) -> dict:
         with _sessions_lock:
             sessions_cleared = len(_sessions)
             _sessions.clear()
+            _persist_sessions_unlocked()
         changed.append("sessions")
 
     return {
@@ -11161,6 +11215,8 @@ def _purge_sessions(now: float | None = None) -> None:
     dead = [k for k, exp in _sessions.items() if exp <= now]
     for k in dead:
         _sessions.pop(k, None)
+    if dead:
+        _persist_sessions_unlocked()
 
 
 def create_session() -> str:
@@ -11168,6 +11224,7 @@ def create_session() -> str:
     with _sessions_lock:
         _purge_sessions()
         _sessions[token] = time.time() + SESSION_HOURS * 3600
+        _persist_sessions_unlocked()
     return token
 
 
@@ -11176,6 +11233,7 @@ def destroy_session(token: str | None) -> None:
         return
     with _sessions_lock:
         _sessions.pop(token, None)
+        _persist_sessions_unlocked()
     with _ssh_panel_unlocks_lock:
         _ssh_panel_unlocks.pop(token, None)
 
