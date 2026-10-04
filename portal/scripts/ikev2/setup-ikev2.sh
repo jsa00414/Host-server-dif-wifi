@@ -87,15 +87,17 @@ conn %default
     dpddelay=300s
     rekey=no
     mobike=no
+    fragmentation=yes
     left=%any
     leftid=@${IKEV2_HOST}
     leftcert=server.crt
     leftsendcert=always
     leftsubnet=0.0.0.0/0
-    rightsourceip=${IKEV2_POOL}
-    rightdns=${IKEV2_DNS}
     right=%any
 
+# VIP/DNS stay on the EAP conn only. Putting rightsourceip in %default makes
+# passthrough-vps inherit the pool ("reusing virtual IP address pool") and
+# can leave Windows stuck on "Assigning IPv4".
 conn ikev2-eap
     also=%default
     mobike=no
@@ -103,6 +105,8 @@ conn ikev2-eap
     rightauth=eap-mschapv2
     rightsendcert=never
     eap_identity=%identity
+    rightsourceip=${IKEV2_POOL}
+    rightdns=${IKEV2_DNS}
     auto=add
 
 # Do not ESP-encrypt packets sourced from the VPS public IP. Full-tunnel
@@ -167,6 +171,21 @@ for plug in eap-mschapv2 eap-identity openssl pem pkcs1 pubkey x509 revocation a
     sed -i "s/load = no/load = yes/g" "$conf" || true
   fi
 done
+
+# Never use the DHCP plugin for Windows VIP assignment. With no DHCP server
+# on the VPS it hangs the CP/INTERNAL_IP4_ADDRESS exchange ("Assigning IPv4").
+# Address pool comes from rightsourceip above (in-memory stroke pool).
+DHCP_CONF="/etc/strongswan.d/charon/dhcp.conf"
+if [[ -f "$DHCP_CONF" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path("/etc/strongswan.d/charon/dhcp.conf")
+t = re.sub(r"(?m)^(\s*)load\s*=\s*\S+", r"\1load = no", p.read_text())
+p.write_text(t)
+print("dhcp plugin load = no")
+PY
+fi
 
 # Public IKEv2 on WAN (UDP 500/4500). Optional nested mode:
 #   IKEV2_VIA_OPENVPN=1 bash setup → ensure-ikev2-via-openvpn.sh

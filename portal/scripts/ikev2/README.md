@@ -28,6 +28,24 @@ No private CA install is required.
 | Pool | `10.10.0.0/24` |
 | DNS | AdGuard `10.42.42.44` (portal VIP `10.11.0.1`) |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
+| VIP source | in-memory `rightsourceip` pool (DHCP plugin **must stay load=no**) |
+
+## Windows stuck on “Assigning IPv4”
+
+That status is the INTERNAL_IP4_ADDRESS / CP stage. Two server-side traps:
+
+1. **DHCP plugin** (`/etc/strongswan.d/charon/dhcp.conf` `load = yes`) with no DHCP
+   server — charon waits forever and Windows never gets a VIP.
+2. **`rightsourceip` on `conn %default`** — `passthrough-vps` inherits the pool
+   (“reusing virtual IP address pool”) and trap install fails.
+
+`setup-ikev2.sh` keeps the VIP/DNS options on `ikev2-eap` only and forces
+`dhcp` `load = no`. After a fix, restart under systemd:
+
+```bash
+systemctl restart strongswan-starter
+ipsec statusall   # pool on ikev2-eap; passthrough-vps should be PASS/shunt
+```
 
 ## Windows drops / “terminated by the remote computer” (phone OK)
 
