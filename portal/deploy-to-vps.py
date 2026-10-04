@@ -82,6 +82,14 @@ UPLOADS: list[tuple[Path, str]] = [
         f"{REMOTE_UI}/scripts/nas/nas-webdav-gateway.service",
     ),
     (
+        ROOT / "scripts/nas/install-nas-sftp-gateway.sh",
+        f"{REMOTE_UI}/scripts/nas/install-nas-sftp-gateway.sh",
+    ),
+    (
+        ROOT / "scripts/nas/nas-sftp-gateway.service",
+        f"{REMOTE_UI}/scripts/nas/nas-sftp-gateway.service",
+    ),
+    (
         ROOT / "scripts/backup/sm-backup.sh",
         "/opt/servermanager-backup/sm-backup.sh",
     ),
@@ -132,6 +140,14 @@ UPLOADS: list[tuple[Path, str]] = [
     (
         ROOT / "scripts/ikev2/ensure-lan-circle-flint-gate.sh",
         "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+    ),
+    (
+        ROOT / "scripts/ikev2/ensure-ikev2-forward.sh",
+        "/opt/ikev2/ensure-ikev2-forward.sh",
+    ),
+    (
+        ROOT / "scripts/ikev2/ensure-vpn-client-gate.sh",
+        "/opt/ikev2/ensure-vpn-client-gate.sh",
     ),
     (
         ROOT / "scripts/mail/ensure-portal-send-mailbox.sh",
@@ -313,6 +329,17 @@ def main() -> int:
         _run(client, f"chmod +x {gateway} && bash {gateway}")
         dav = f"{REMOTE_UI}/scripts/nas/install-nas-webdav-gateway.sh"
         _run(client, f"chmod +x {dav} && bash {dav}")
+        sftp_gw = f"{REMOTE_UI}/scripts/nas/install-nas-sftp-gateway.sh"
+        _run(client, f"chmod +x {sftp_gw} && bash {sftp_gw}")
+        _run(
+            client,
+            f"chmod +x {REMOTE_UI}/scripts/security/harden-nas-gateways-vpn-only.sh "
+            f"/opt/ikev2/ensure-ikev2-forward.sh "
+            f"/opt/ikev2/ensure-vpn-client-gate.sh "
+            f"/opt/ikev2/ensure-lan-circle-flint-gate.sh && "
+            f"bash {REMOTE_UI}/scripts/security/harden-nas-gateways-vpn-only.sh && "
+            f"bash /opt/ikev2/ensure-ikev2-forward.sh",
+        )
         _run(
             client,
             f"chmod +x {REMOTE_UI}/scripts/security/harden-remote-desktop-bind.sh "

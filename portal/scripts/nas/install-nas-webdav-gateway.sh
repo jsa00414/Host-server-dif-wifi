@@ -102,17 +102,32 @@ if begin in text and end in text:
 
 if "@nasdav path" not in text:
     marker = "\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*\n"
+    # Mirror @nasmedia: require VPN/LAN client_ip, else abort.
     insert = (
         "\t@nasdav path /dav /dav/*\n"
         "\thandle @nasdav {\n"
-        "\t\turi strip_prefix /dav\n"
-        "\t\treverse_proxy 172.18.0.1:2122 {\n"
-        "\t\t\theader_up Host {host}\n"
-        "\t\t\theader_up X-Forwarded-Host {host}\n"
-        "\t\t\theader_up X-Forwarded-Proto {scheme}\n"
+        "\t\t@vpn_clients client_ip {vpn_cidrs}\n"
+        "\t\thandle @vpn_clients {\n"
+        "\t\t\turi strip_prefix /dav\n"
+        "\t\t\treverse_proxy 172.18.0.1:2122 {\n"
+        "\t\t\t\theader_up Host {host}\n"
+        "\t\t\t\theader_up X-Forwarded-Host {host}\n"
+        "\t\t\t\theader_up X-Forwarded-Proto {scheme}\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\thandle {\n"
+        "\t\t\tabort\n"
         "\t\t}\n"
         "\t}\n"
     )
+    # Fill vpn_cidrs from an existing @vpn_clients line in this file.
+    import re
+    m = re.search(r"@vpn_clients client_ip ([^\n]+)", text)
+    cidrs = m.group(1).strip() if m else (
+        "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 "
+        "100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
+    )
+    insert = insert.replace("{vpn_cidrs}", cidrs)
     if marker not in text:
         raise SystemExit("portal @nasmedia marker not found")
     text = text.replace(marker, insert + marker, 1)

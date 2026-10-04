@@ -8,7 +8,7 @@ set -euo pipefail
 
 ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
 STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
-GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+GUEST_DNS="${VPN_GUEST_DNS:-10.42.42.45}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
 
@@ -24,7 +24,7 @@ from pathlib import Path
 
 allow_path = Path(os.environ["ALLOWLIST_FILE"])
 sticky_path = Path(os.environ["STICKY_FILE"])
-guest_dns = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
+guest_dns = os.environ.get("GUEST_DNS", "10.42.42.45").strip() or "10.42.42.45"
 pool = os.environ.get("IKEV2_POOL", "10.10.0.0/24")
 adguard = os.environ.get("ADGUARD_DNS", "10.42.42.44")
 now = int(time.time())

@@ -18,7 +18,7 @@ BLOCK_FILE="${LAN_CIRCLE_BLOCK_FILE:-/opt/servermanager/panel/lan-circle-block.t
 OVPN_GW="${OVPN_FLINT_IP:-10.9.0.2}"
 VPS_IP="${VPS_PUBLIC_IP:-74.208.76.213}"
 CHAIN="${LAN_CIRCLE_IPT_CHAIN:-SM-LAN-CIRCLE}"
-GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+GUEST_DNS="${VPN_GUEST_DNS:-10.42.42.45}"
 GUEST_DNS_CHAIN="${LAN_GUEST_DNS_IPT_CHAIN:-SM-LAN-GUEST-DNS}"
 
 # shellcheck disable=SC1090
@@ -28,7 +28,7 @@ set +a
 
 # Re-read after env file (env may override defaults).
 GUEST_DNS="${VPN_GUEST_DNS:-$GUEST_DNS}"
-GUEST_DNS="${GUEST_DNS:-1.1.1.1}"
+GUEST_DNS="${GUEST_DNS:-10.42.42.45}"
 
 PASS="${ROUTER_PASS:-}"
 if [ -z "$PASS" ] && [ -n "${ROUTER_PASS_B64:-}" ]; then
@@ -64,7 +64,7 @@ ssh_2fa = Path(
 )
 block_file = Path(os.environ.get("BLOCK_FILE", "/opt/servermanager/panel/lan-circle-block.txt"))
 vps = os.environ.get("VPS_IP", "74.208.76.213").strip() or "74.208.76.213"
-guest_dns = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
+guest_dns = os.environ.get("GUEST_DNS", "10.42.42.45").strip() or "10.42.42.45"
 
 
 def norm(raw: str) -> str:
@@ -238,7 +238,7 @@ import os
 
 vps = os.environ.get("VPS_IP", "74.208.76.213")
 chain = os.environ.get("CHAIN", "SM-LAN-CIRCLE")
-guest = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
+guest = os.environ.get("GUEST_DNS", "10.42.42.45").strip() or "10.42.42.45"
 gd_chain = os.environ.get("GUEST_DNS_CHAIN", "SM-LAN-GUEST-DNS")
 blocks = [b.strip() for b in (os.environ.get("BLOCK_LIST") or "").splitlines() if b.strip()]
 print("set -e")
