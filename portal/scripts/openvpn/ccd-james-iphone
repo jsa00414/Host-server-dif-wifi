@@ -1,0 +1,3 @@
+# Reserved: 10.9.0.2 is flint only (Caddy router.vpstruelord.com upstream).
+# Phone clients must not steal that VIP — full-tunnel phones get .3+.
+ifconfig-push 10.9.0.3 255.255.255.0

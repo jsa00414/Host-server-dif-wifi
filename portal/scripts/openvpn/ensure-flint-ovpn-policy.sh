@@ -44,3 +44,11 @@ ip route replace 10.42.42.0/24 dev ovpnclient1 table 1011 2>/dev/null || true
 ip route replace 10.42.42.44/32 dev ovpnclient1 metric 5 2>/dev/null || true
 echo "flint vpn mode=$(uci get route_policy.global.mode) local_access=1 dns=$(uci get gl-dns-v2.@dns[0].mode 2>/dev/null) override_vpn=$(uci get gl-dns-v2.@dns[0].override_vpn 2>/dev/null) adguard_via=$(ip route get 10.42.42.44 2>/dev/null | head -1)"
 REMOTE
+
+# After DNS fix, keep LAN→portal via OVPN (campus WAN is Caddy-denied).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$SCRIPT_DIR/ensure-lan-portal-via-ovpn.sh" ]; then
+  bash "$SCRIPT_DIR/ensure-lan-portal-via-ovpn.sh" || true
+elif [ -x /opt/openvpn/ensure-lan-portal-via-ovpn.sh ]; then
+  bash /opt/openvpn/ensure-lan-portal-via-ovpn.sh || true
+fi

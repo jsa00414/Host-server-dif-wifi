@@ -132,6 +132,7 @@ OVPN_WINDOWS_NAME = os.environ.get("OVPN_WINDOWS_NAME", "windows.ovpn")
 # Optional shared-secret download link (works without portal login / for Caddy
 # public path allow). Empty = token downloads disabled.
 OVPN_WINDOWS_DL_TOKEN = os.environ.get("OVPN_WINDOWS_DL_TOKEN", "").strip()
+OVPN_PHONE_DL_TOKEN = os.environ.get("OVPN_PHONE_DL_TOKEN", "").strip()
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
@@ -4457,7 +4458,7 @@ def _router_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4518,7 +4519,7 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4659,7 +4660,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
             [
                 "\t}",
                 "\thandle {",
-                '\t\trespond "Forbidden" 403',
+                *_caddy_unreachable_respond_lines("\t\t"),
                 "\t}",
             ]
         )
@@ -4986,47 +4987,48 @@ def _as_bool(value) -> bool:
 
 
 def _keys_hookup_site_lines(rule: dict) -> list[str]:
-    """Public Authenticator host (keys.*) — not VPN-gated; campus deny still applies."""
+    """Public Authenticator host (keys.*) — reachable from home WiFi too.
+
+    Do not apply campus @denied_wan here. Home LAN phones egress via the shared
+    campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll look
+    unreachable. Portal/router stay campus-denied; keys is gated by enroll unlock
+    + TOTP secret instead.
+    """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     lines = [
         f"{public} {{",
         "\tencode gzip",
+        "\t@root path /",
+        "\tredir @root /auth-app.html 302",
+        "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+        "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+        "/static/auth-app.html /static/auth-app-iphone.html "
+        "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+        "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+        "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+        "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
+        "\thandle @auth {",
+        f"\t\treverse_proxy {upstream} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Forwarded-For {remote_host}",
+        "\t\t\theader_up X-Real-IP {remote_host}",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        '\t\trespond "Not Found" 404',
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        "\t}",
+        "}",
+        "",
     ]
-    lines.extend(_caddy_denied_wan_lines("\t"))
-    lines.extend(
-        [
-            "\t@root path /",
-            "\tredir @root /auth-app.html 302",
-            "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
-            "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
-            "/static/auth-app.html /static/auth-app-iphone.html "
-            "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
-            "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
-            "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
-            "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
-            "\thandle @auth {",
-            f"\t\treverse_proxy {upstream} {{",
-            "\t\t\theader_up Host {host}",
-            "\t\t\theader_up X-Forwarded-Host {host}",
-            "\t\t\theader_up X-Forwarded-Proto {scheme}",
-            "\t\t\theader_up X-Forwarded-For {remote_host}",
-            "\t\t\theader_up X-Real-IP {remote_host}",
-            "\t\t}",
-            "\t}",
-            "\thandle {",
-            '\t\trespond "Not Found" 404',
-            "\t}",
-            "\theader {",
-            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-            "\t\tX-Content-Type-Options nosniff",
-            "\t\tReferrer-Policy strict-origin-when-cross-origin",
-            '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
-            "\t}",
-            "}",
-            "",
-        ]
-    )
     return lines
 
 
@@ -5078,9 +5080,12 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\thandle @auth_app_legacy {")
             lines.append(f"\t\tredir https://{keys_domain}{{uri}} 302")
             lines.append("\t}")
-            # Public Windows OpenVPN profile download (token enforced in portal app)
-            lines.append("\t@ovpn_windows_dl path /api/openvpn/windows /download/windows.ovpn")
-            lines.append("\thandle @ovpn_windows_dl {")
+            # Public OpenVPN profile downloads (token enforced in portal app)
+            lines.append(
+                "\t@ovpn_public_dl path /api/openvpn/windows /download/windows.ovpn "
+                "/api/openvpn/phone /download/james-iphone.ovpn"
+            )
+            lines.append("\thandle @ovpn_public_dl {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
@@ -5089,7 +5094,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
             # otherwise a stolen session cookie can cat/download off-VPN while
-            # /login (portal root) remains VPN-gated (403).
+            # /login (portal root) remains VPN-gated (stealth unreachable page).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             if r.get("vpn_only"):
@@ -5105,7 +5110,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\t}")
                 lines.append("\t\t}")
                 lines.append("\t\thandle {")
-                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
                 lines.append("\t\t}")
             else:
                 lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -5131,7 +5136,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\t}")
                 lines.append("\t\t}")
                 lines.append("\t\thandle {")
-                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
                 lines.append("\t\t}")
             else:
                 lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -5152,7 +5157,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
                 lines.append("\thandle {")
-                lines.append('\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t"))
                 lines.append("\t}")
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
@@ -9845,7 +9850,15 @@ def build_portal_settings() -> dict:
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
-        {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
+        {
+            "id": "ovpn-phone",
+            "label": "OpenVPN iPhone (.ovpn)",
+            "url": (
+                f"https://{host}/api/openvpn/phone?t={OVPN_PHONE_DL_TOKEN}"
+                if OVPN_PHONE_DL_TOKEN
+                else f"https://{host}/api/openvpn/phone"
+            ),
+        },
         {
             "id": "ovpn-windows",
             "label": "OpenVPN Windows (.ovpn)",
@@ -11621,6 +11634,117 @@ def _allowlisted_lan_ips() -> set[str]:
     return out
 
 
+def _caddy_unreachable_html() -> str:
+    """Chrome mobile net-error interstitial (ERR_NAME_NOT_RESOLVED lookalike)."""
+    # Chromium-ish layout/colors; {host} is filled by Caddy. No backticks in body.
+    # Version marker lets peer-acl refresh stale pages without rewriting forever.
+    return (
+        "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1,"
+        "maximum-scale=1,user-scalable=no\">"
+        "<meta name=color-scheme content=light>"
+        "<meta name=theme-color content=#fff>"
+        "<title>{host}</title>"
+        "<!--sm-neterr:3-->"
+        "<style>"
+        "*{box-sizing:border-box}"
+        "html{background:#fff;-webkit-text-size-adjust:100%}"
+        "body{margin:0;background:#fff;color:#312f2f;"
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+        "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;"
+        "-webkit-font-smoothing:antialiased}"
+        ".interstitial-wrapper{box-sizing:border-box;font-size:1em;"
+        "line-height:1.55em;margin:0 auto;max-width:600px;"
+        "padding:72px 24px 40px;width:100%}"
+        ".icon{height:72px;margin:0 0 28px;width:72px}"
+        "h1{color:#312f2f;font-size:1.5em;font-weight:700;"
+        "line-height:1.25em;margin:0 0 14px}"
+        "#main-message p{display:block;margin:0 0 0}"
+        "#main-message .error-code{color:#696969;font-size:.8em;"
+        "margin-top:14px;text-transform:none;letter-spacing:0}"
+        "#suggestions-list{margin-top:16px}"
+        "#suggestions-list p{margin:0}"
+        "#suggestions-list ul{margin:6px 0 0;padding:0 0 0 18px}"
+        "#suggestions-list li{margin:0 0 4px;padding:0}"
+        "#buttons{margin:28px 0 0}"
+        "#buttons .blue-button{appearance:none;-webkit-appearance:none;"
+        "background:#1a73e8;border:0;border-radius:24px;color:#fff;"
+        "cursor:pointer;display:block;font:inherit;font-size:15px;"
+        "font-weight:500;margin:0;padding:12px 16px;text-align:center;"
+        "text-decoration:none;width:100%}"
+        "#buttons .blue-button:active{background:#1765cc}"
+        "#details{display:none;color:#696969;font-size:.85em;margin:18px 0 0;"
+        "line-height:1.45}"
+        "#details.show{display:block}"
+        "#details-button{background:0 0;border:0;color:#1a73e8;cursor:pointer;"
+        "display:block;font:inherit;font-size:15px;margin:16px auto 0;"
+        "padding:8px;text-align:center;width:100%}"
+        "@media (max-width:420px){"
+        ".interstitial-wrapper{padding-top:56px;padding-left:22px;padding-right:22px}"
+        "h1{font-size:1.35em}"
+        "}"
+        "</style></head><body>"
+        "<div class=interstitial-wrapper>"
+        "<div id=main-content>"
+        "<div class=icon aria-hidden=true>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"72\" height=\"72\" viewBox=\"0 0 48 48\">"
+        "<path fill=\"#dadce0\" d=\"M28 4H12c-2.2 0-4 1.8-4 4v32c0 2.2 1.8 4 4 4h24c2.2 0 4-1.8 "
+        "4-4V16L28 4z\"/>"
+        "<path fill=\"#bdc1c6\" d=\"M28 4v10c0 1.1.9 2 2 2h10L28 4z\"/>"
+        "<circle fill=\"#80868b\" cx=\"18.5\" cy=\"28\" r=\"2\"/>"
+        "<circle fill=\"#80868b\" cx=\"29.5\" cy=\"28\" r=\"2\"/>"
+        "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"2\" stroke-linecap=\"round\" "
+        "d=\"M19 34c1.8-1.6 8.2-1.6 10 0\"/>"
+        "</svg></div>"
+        "<div id=main-message>"
+        "<h1>This site can&#8217;t be reached</h1>"
+        "<p><strong id=host>{host}</strong>&#8217;s server IP address could not be found.</p>"
+        "<div id=suggestions-list><p>Try:</p>"
+        "<ul><li>Checking the connection</li></ul></div>"
+        "<div class=error-code>ERR_NAME_NOT_RESOLVED</div>"
+        "</div></div>"
+        "<div id=buttons>"
+        "<button class=blue-button type=button id=reload>Reload</button>"
+        "<button type=button id=details-button>Details</button>"
+        "<div id=details>"
+        "DNS_PROBE_FINISHED_NXDOMAIN<br>"
+        "The server at <span id=host2>{host}</span> can&#8217;t be found, "
+        "because the DNS lookup failed. DNS is the network service that "
+        "translates a website&#8217;s name to its internet address."
+        "</div></div></div>"
+        "<script>"
+        "(function(){"
+        "var h=location.hostname||'{host}';"
+        "var el=document.getElementById('host'); if(el) el.textContent=h;"
+        "var e2=document.getElementById('host2'); if(e2) e2.textContent=h;"
+        "document.title=h;"
+        "document.getElementById('reload').onclick=function(){location.reload()};"
+        "document.getElementById('details-button').onclick=function(){"
+        "var d=document.getElementById('details');"
+        "var on=d.classList.toggle('show');"
+        "this.textContent=on?'Hide details':'Details';"
+        "};"
+        "})();"
+        "</script>"
+        "</body></html>"
+    )
+
+
+def _caddy_unreachable_respond_lines(indent: str) -> list[str]:
+    """Chrome-like DNS failure page instead of advertising Forbidden 403.
+
+    Hostname still resolves (TLS terminates), but the body mimics
+    ERR_NAME_NOT_RESOLVED so out-of-circle visitors do not see an ACL deny.
+    """
+    body = _caddy_unreachable_html()
+    return [
+        f'{indent}header Content-Type "text/html; charset=utf-8"',
+        f'{indent}header Cache-Control "no-store"',
+        f"{indent}header -Server",
+        f"{indent}respond `{body}` 404",
+    ]
+
+
 def _caddy_denied_wan_lines(indent: str) -> list[str]:
     """Explicit deny matchers — win before @vpn_clients if an IP was wrongly allowlisted."""
     denied = _denied_vpn_ips()
@@ -11630,7 +11754,7 @@ def _caddy_denied_wan_lines(indent: str) -> list[str]:
     return [
         f"{indent}@denied_wan client_ip {denied_s}",
         f"{indent}handle @denied_wan {{",
-        f'{indent}\trespond "Forbidden" 403',
+        *_caddy_unreachable_respond_lines(f"{indent}\t"),
         f"{indent}}}",
     ]
 
@@ -12277,6 +12401,65 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
     return data, changed
 
 
+def _circle_row_is_sealed(row: dict) -> bool:
+    ip = _normalize_vpn_ip(row.get("ip", ""))
+    if _is_sealed_vpn_ip(ip) or bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def _circle_row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def _scrub_allowlist_require_circle_keys(data: dict) -> tuple[dict, bool]:
+    """Demote non-sealed allowlisted IPs that lack an Ed25519 pubkey to pending.
+
+    Circle membership is key-bound only (except sealed router WAN).
+    """
+    changed = False
+    now = int(time.time())
+    kept: list[dict] = []
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {_normalize_vpn_ip(r.get("ip", "")) for r in pending}
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip:
+            changed = True
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
+            kept.append(row)
+            continue
+        changed = True
+        if ip not in pending_ips:
+            pend = {
+                "ip": ip,
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
+            }
+            if _is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    if changed:
+        data["allowed"] = kept
+        data["pending"] = pending
+    return data, changed
+
+
 def _lan_device_name_by_ip() -> dict[str, str]:
     """Map home-LAN IPs → friendly hostnames from the live LAN inventory."""
     out: dict[str, str] = {}
@@ -12909,10 +13092,10 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
         "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
         "detail": (
             "Unapproved IKEv2 clients keep internet via guest DNS; "
-            "approve a WAN IP (Authenticator unlock) to enter the trust circle. "
-            "Home LAN devices show by device name when known from DHCP/aliases; "
-            "pending/denied LAN IPs are blocked on the Flint router before NAT — except enrolled "
-            "Authenticator phones, which keep portal access while remaining pending."
+            "approve with an Authenticator key bind to enter the trust circle. "
+            "Home LAN pending/denied/keyless IPs are REJECT'd to the VPS :80/:443 on Flint "
+            "and forced to the same guest DNS (no AdGuard admin rewrites) — except enrolled "
+            "Authenticator phones, which keep portal access and circle DNS while remaining pending."
             + (
                 ""
                 if for_auth_app
@@ -12945,9 +13128,10 @@ def mutate_vpn_allowlist(
     pub_n = ""
     if pubkey:
         pub_n = _normalize_ed25519_pubkey(pubkey)
-    if action_n == "approve" and str(source).startswith("auth-app") and not pub_n:
+    if action_n == "approve" and not _is_sealed_vpn_ip(ip_n) and not pub_n:
         raise ValueError(
-            "Ed25519 public key required — each circle IP must be cryptographically bound"
+            "Ed25519 public key required — circle membership is key-bound only "
+            "(approve from Authenticator so a private/public key pair is created)"
         )
     data = _read_vpn_allowlist()
     now = int(time.time())
@@ -13012,10 +13196,10 @@ def mutate_vpn_allowlist(
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
             if prev_hidden:
                 row["hidden"] = True
-            if pub_n:
-                row["pubkey"] = pub_n
-                row["key_id"] = _circle_key_id(pub_n)
-                row["key_bound_at"] = now
+            # Non-sealed approve always binds a key (enforced above).
+            row["pubkey"] = pub_n
+            row["key_id"] = _circle_key_id(pub_n)
+            row["key_bound_at"] = now
             data["allowed"].append(row)
     elif action_n == "deny":
         deny_row = {
@@ -13120,27 +13304,18 @@ def _read_vpn_allowlist() -> dict:
         for x in data["allowed"]
         if isinstance(x, dict)
     }
-    changed = False
-    for ip in sticky_ips:
-        if ip and _is_public_ipv4(ip) and ip not in allowed_set and not _is_sealed_vpn_ip(ip):
-            data["allowed"].append(
-                {
-                    "ip": ip,
-                    "note": "seeded from sticky WAN",
-                    "approved_at": int(time.time()),
-                    "source": "sticky",
-                }
-            )
-            allowed_set.add(ip)
-            changed = True
+    # Do NOT seed sticky WAN into allowed without a circle key — membership is
+    # key-bound only (sealed router WANs are handled by _ensure_sealed_*).
     data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
-    if changed or sealed_changed or not VPN_ALLOWLIST_PATH.is_file():
+    data, key_scrubbed = _scrub_allowlist_require_circle_keys(data)
+    if sealed_changed or key_scrubbed or not VPN_ALLOWLIST_PATH.is_file():
         _write_vpn_allowlist(data)
     return data
 
 
 def _write_vpn_allowlist(data: dict) -> None:
     data, _ = _ensure_sealed_vpn_allowlist(data)
+    data, _ = _scrub_allowlist_require_circle_keys(data)
     VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "allowed": list(data.get("allowed") or []),
@@ -13157,17 +13332,19 @@ def _write_vpn_allowlist(data: dict) -> None:
     except Exception:
         pass
     # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
+    # Only sealed + key-bound IPs are sticky-trusted.
     lines = [
         "# Managed by Security → VPN trust circle",
         "# Approved sticky WAN + LAN IPs (one IPv4 /32 per line)",
-        "# Sealed router WAN IPs are always included and cannot be revoked from apps.",
-        "# Blanket 192.168.8.0/24 is never written — approved LAN /32s only.",
+        "# Key-bound only (except sealed router WAN). No blanket 192.168.8.0/24.",
     ]
     for row in payload["allowed"]:
         if not isinstance(row, dict):
             continue
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if ip and (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+        if not ip or not (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
             lines.append(f"{ip}/32")
     STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -18037,8 +18214,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path in (
             "/api/openvpn/windows",
             "/download/windows.ovpn",
+            "/api/openvpn/phone",
+            "/download/james-iphone.ovpn",
         ):
-            pass  # public Windows OpenVPN download (token checked below)
+            pass  # public OpenVPN downloads (token checked below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif path in ("/api/email-code/send", "/api/email-code/verify"):
@@ -18597,7 +18776,17 @@ document.getElementById('f').onsubmit = async (e) => {
             "/api/openvpn/phone",
             "/download/james-iphone.ovpn",
         ):
-            if not self._require_auth(api=True):
+            # Allow either portal login OR shared download token (public Caddy path).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_PHONE_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_PHONE_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
                 return
             try:
                 from urllib.parse import quote

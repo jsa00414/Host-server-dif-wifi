@@ -90,6 +90,143 @@ def denied_ips() -> set[str]:
 
 DENIED_IPS = denied_ips()
 
+# Chrome mobile net-error interstitial. Caddy fills {host}. Version in HTML.
+_NETERR_VER = "3"
+_UNREACHABLE_HTML = (
+    "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
+    "<meta name=viewport content=\"width=device-width,initial-scale=1,"
+    "maximum-scale=1,user-scalable=no\">"
+    "<meta name=color-scheme content=light>"
+    "<meta name=theme-color content=#fff>"
+    "<title>{host}</title>"
+    f"<!--sm-neterr:{_NETERR_VER}-->"
+    "<style>"
+    "*{box-sizing:border-box}"
+    "html{background:#fff;-webkit-text-size-adjust:100%}"
+    "body{margin:0;background:#fff;color:#312f2f;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+    "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;"
+    "-webkit-font-smoothing:antialiased}"
+    ".interstitial-wrapper{box-sizing:border-box;font-size:1em;"
+    "line-height:1.55em;margin:0 auto;max-width:600px;"
+    "padding:72px 24px 40px;width:100%}"
+    ".icon{height:72px;margin:0 0 28px;width:72px}"
+    "h1{color:#312f2f;font-size:1.5em;font-weight:700;"
+    "line-height:1.25em;margin:0 0 14px}"
+    "#main-message p{display:block;margin:0 0 0}"
+    "#main-message .error-code{color:#696969;font-size:.8em;"
+    "margin-top:14px;text-transform:none;letter-spacing:0}"
+    "#suggestions-list{margin-top:16px}"
+    "#suggestions-list p{margin:0}"
+    "#suggestions-list ul{margin:6px 0 0;padding:0 0 0 18px}"
+    "#suggestions-list li{margin:0 0 4px;padding:0}"
+    "#buttons{margin:28px 0 0}"
+    "#buttons .blue-button{appearance:none;-webkit-appearance:none;"
+    "background:#1a73e8;border:0;border-radius:24px;color:#fff;"
+    "cursor:pointer;display:block;font:inherit;font-size:15px;"
+    "font-weight:500;margin:0;padding:12px 16px;text-align:center;"
+    "text-decoration:none;width:100%}"
+    "#buttons .blue-button:active{background:#1765cc}"
+    "#details{display:none;color:#696969;font-size:.85em;margin:18px 0 0;"
+    "line-height:1.45}"
+    "#details.show{display:block}"
+    "#details-button{background:0 0;border:0;color:#1a73e8;cursor:pointer;"
+    "display:block;font:inherit;font-size:15px;margin:16px auto 0;"
+    "padding:8px;text-align:center;width:100%}"
+    "@media (max-width:420px){"
+    ".interstitial-wrapper{padding-top:56px;padding-left:22px;padding-right:22px}"
+    "h1{font-size:1.35em}"
+    "}"
+    "</style></head><body>"
+    "<div class=interstitial-wrapper>"
+    "<div id=main-content>"
+    "<div class=icon aria-hidden=true>"
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"72\" height=\"72\" viewBox=\"0 0 48 48\">"
+    "<path fill=\"#dadce0\" d=\"M28 4H12c-2.2 0-4 1.8-4 4v32c0 2.2 1.8 4 4 4h24c2.2 0 4-1.8 "
+    "4-4V16L28 4z\"/>"
+    "<path fill=\"#bdc1c6\" d=\"M28 4v10c0 1.1.9 2 2 2h10L28 4z\"/>"
+    "<circle fill=\"#80868b\" cx=\"18.5\" cy=\"28\" r=\"2\"/>"
+    "<circle fill=\"#80868b\" cx=\"29.5\" cy=\"28\" r=\"2\"/>"
+    "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"2\" stroke-linecap=\"round\" "
+    "d=\"M19 34c1.8-1.6 8.2-1.6 10 0\"/>"
+    "</svg></div>"
+    "<div id=main-message>"
+    "<h1>This site can&#8217;t be reached</h1>"
+    "<p><strong id=host>{host}</strong>&#8217;s server IP address could not be found.</p>"
+    "<div id=suggestions-list><p>Try:</p>"
+    "<ul><li>Checking the connection</li></ul></div>"
+    "<div class=error-code>ERR_NAME_NOT_RESOLVED</div>"
+    "</div></div>"
+    "<div id=buttons>"
+    "<button class=blue-button type=button id=reload>Reload</button>"
+    "<button type=button id=details-button>Details</button>"
+    "<div id=details>"
+    "DNS_PROBE_FINISHED_NXDOMAIN<br>"
+    "The server at <span id=host2>{host}</span> can&#8217;t be found, "
+    "because the DNS lookup failed. DNS is the network service that "
+    "translates a website&#8217;s name to its internet address."
+    "</div></div></div>"
+    "<script>"
+    "(function(){"
+    "var h=location.hostname||'{host}';"
+    "var el=document.getElementById('host'); if(el) el.textContent=h;"
+    "var e2=document.getElementById('host2'); if(e2) e2.textContent=h;"
+    "document.title=h;"
+    "document.getElementById('reload').onclick=function(){location.reload()};"
+    "document.getElementById('details-button').onclick=function(){"
+    "var d=document.getElementById('details');"
+    "var on=d.classList.toggle('show');"
+    "this.textContent=on?'Hide details':'Details';"
+    "};"
+    "})();"
+    "</script>"
+    "</body></html>"
+)
+
+
+def unreachable_respond_block(indent: str) -> str:
+    return (
+        f'{indent}header Content-Type "text/html; charset=utf-8"\n'
+        f'{indent}header Cache-Control "no-store"\n'
+        f"{indent}header -Server\n"
+        f"{indent}respond `{_UNREACHABLE_HTML}` 404\n"
+    )
+
+
+def scrub_forbidden_responds(text: str) -> tuple[str, bool]:
+    """Replace Forbidden 403 and refresh outdated stealth net-error pages."""
+
+    def repl_indent(m: re.Match) -> str:
+        return unreachable_respond_block(m.group(1)).rstrip("\n")
+
+    changed = False
+    new, n = re.subn(
+        r'^([ \t]*)respond "Forbidden" 403\s*$',
+        repl_indent,
+        text,
+        flags=re.M,
+    )
+    if n:
+        text = new
+        changed = True
+
+    # Refresh any prior stealth page that is not the current version.
+    ver_tag = f"sm-neterr:{_NETERR_VER}"
+    if "ERR_NAME_NOT_RESOLVED" in text and ver_tag not in text:
+        new, n = re.subn(
+            r'^([ \t]*)header Content-Type "text/html; charset=utf-8"\n'
+            r'(?:\1header Cache-Control "no-store"\n)?'
+            r'\1header -Server\n'
+            r'\1respond `[^`]*ERR_NAME_NOT_RESOLVED[^`]*` 404\s*$',
+            repl_indent,
+            text,
+            flags=re.M,
+        )
+        if n:
+            text = new
+            changed = True
+    return text, changed
+
 
 def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
     """Keep site-level @denied_wan handles on portal + router (incl. auth-app)."""
@@ -114,7 +251,7 @@ def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
             f"\n\t# Hard-deny shared campus/ISP egress (never trust; includes auth-app).\n"
             f"\t@denied_wan client_ip {denied_s}\n"
             f"\thandle @denied_wan {{\n"
-            f'\t\trespond "Forbidden" 403\n'
+            f"{unreachable_respond_block(chr(9)+chr(9))}"
             f"\t}}\n"
         )
         text = text[: brace + 1] + insert + text[brace + 1 :]
@@ -157,32 +294,25 @@ def load_sticky_cidrs() -> list[str]:
     return out
 
 
+def row_is_sealed(row: dict) -> bool:
+    if bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def row_is_circle_trusted(row: dict) -> bool:
+    """Circle membership is key-bound only (except sealed router WAN)."""
+    return row_is_sealed(row) or row_has_key(row)
+
+
 def load_allowlist_ips() -> set[str]:
-    """Public sticky/sealed WAN IPs that belong in @vpn_clients."""
-    ips: set[str] = set()
-    if not allow_file.is_file():
-        return ips
-    try:
-        data = json.loads(allow_file.read_text(encoding="utf-8"))
-    except Exception:
-        return ips
-    for row in data.get("allowed") or []:
-        if isinstance(row, dict):
-            ip = normalize_ip(row.get("ip", ""))
-            if ip and is_public_ipv4(ip):
-                ips.add(ip)
-    # Always keep sealed router WANs (env override) even if JSON was wiped.
-    # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
-    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
-    for part in re.split(r"[\s,;]+", sealed_raw):
-        ip = normalize_ip(part)
-        if ip and is_public_ipv4(ip):
-            ips.add(ip)
-    return ips
-
-
-def load_allowlist_lan_ips() -> set[str]:
-    """Approved home-LAN client /32s (not the whole /24)."""
+    """Public sealed / key-bound WAN IPs that belong in @vpn_clients."""
     ips: set[str] = set()
     if not allow_file.is_file():
         return ips
@@ -194,13 +324,41 @@ def load_allowlist_lan_ips() -> set[str]:
         if not isinstance(row, dict):
             continue
         ip = normalize_ip(row.get("ip", ""))
-        if ip and is_home_lan_ipv4(ip):
+        if ip and is_public_ipv4(ip) and row_is_circle_trusted(row):
+            ips.add(ip)
+    # Always keep sealed router WANs (env override) even if JSON was wiped.
+    # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
+    for part in re.split(r"[\s,;]+", sealed_raw):
+        ip = normalize_ip(part)
+        if ip and is_public_ipv4(ip):
+            ips.add(ip)
+    return ips
+
+
+def load_allowlist_lan_ips() -> set[str]:
+    """Key-bound home-LAN client /32s (not the whole /24)."""
+    ips: set[str] = set()
+    if not allow_file.is_file():
+        return ips
+    try:
+        data = json.loads(allow_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ips
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = normalize_ip(row.get("ip", ""))
+        if ip and is_home_lan_ipv4(ip) and row_has_key(row):
             ips.add(ip)
     return ips
 
 
 def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
-    """Ensure sticky + sealed WANs exist as allowed entries; return allowed IP set."""
+    """Ensure sealed WANs exist; scrub keyless; return trusted allowed IP set.
+
+    Sticky file alone must NOT re-admit IPs without an Ed25519 pubkey.
+    """
     allowed = load_allowlist_ips()
     data = {"allowed": [], "denied": [], "attempts": [], "pending": []}
     if allow_file.is_file():
@@ -271,24 +429,46 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             changed = True
         allowed.add(ip)
 
-    for cidr in sticky:
-        ip = normalize_ip(cidr)
-        if ip and is_public_ipv4(ip) and ip not in allowed:
-            by_ip[ip] = {
+    # Demote non-sealed keyless rows to pending (do not sticky-seed them back).
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {normalize_ip(r.get("ip", "")) for r in pending}
+    for ip, row in list(by_ip.items()):
+        if ip in sealed_ips or row_is_circle_trusted(row):
+            continue
+        del by_ip[ip]
+        changed = True
+        allowed.discard(ip)
+        if ip and ip not in pending_ips:
+            pend = {
                 "ip": ip,
-                "note": "seeded from sticky WAN",
-                "approved_at": now,
-                "source": "sticky",
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
             }
-            allowed.add(ip)
-            changed = True
+            if is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    data["pending"] = pending
+
+    # sticky arg is ignored for seeding — kept for call-site compatibility.
+    _ = sticky
 
     if changed or not allow_file.is_file():
         rebuilt = []
         seen = set()
         for ip in sealed_ips:
-            rebuilt.append(by_ip[ip])
-            seen.add(ip)
+            if ip in by_ip:
+                rebuilt.append(by_ip[ip])
+                seen.add(ip)
         for ip, row in by_ip.items():
             if ip in seen:
                 continue
@@ -301,18 +481,21 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             os.chmod(allow_file, 0o600)
         except Exception:
             pass
-        # Keep sticky file aligned so later runs don't drop sealed / LAN.
+        # Keep sticky file aligned: sealed + key-bound only.
         sticky_file.parent.mkdir(parents=True, exist_ok=True)
         lines = [
-            "# Managed by vpn allowlist — approved sticky WAN + LAN IPs",
+            "# Managed by vpn allowlist — key-bound sticky WAN + LAN IPs",
+            "# Key-bound only (except sealed router WAN).",
             "# one IPv4 /32 per line",
         ]
         for row in rebuilt:
             ip = normalize_ip(row.get("ip", ""))
-            if ip and (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+            if not ip or not (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+                continue
+            if row_is_circle_trusted(row):
                 lines.append(f"{ip}/32")
         sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return allowed
+    return {ip for ip in allowed if ip and is_public_ipv4(ip)}
 
 
 def vpn_clients_cidrs_in_caddy(text: str) -> set[str]:
@@ -424,15 +607,19 @@ if prev == cur and caddyfile.is_file():
     blanket_lan_gone = "192.168.8.0/24" not in live
     denied_gone = all(f"{ip}/32" not in live for ip in DENIED_IPS)
     text2, deny_changed = ensure_denied_wan_blocks(text)
-    if deny_changed:
+    text2, forbid_changed = scrub_forbidden_responds(text2)
+    if deny_changed or forbid_changed:
         caddyfile.write_text(text2)
         text = text2
+        if forbid_changed:
+            print("scrubbed Forbidden responds → unreachable page")
     if (
         trusted_needed
         and all(f"{ip}/32" in live for ip in trusted_needed)
         and blanket_lan_gone
         and denied_gone
         and not deny_changed
+        and not forbid_changed
     ):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
         if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
@@ -441,6 +628,24 @@ if prev == cur and caddyfile.is_file():
                 f"{len(allowed_ips)} allowlisted, {len(lan_ips)} lan)"
             )
             raise SystemExit(0)
+
+    # Forbidden scrub alone: reload Caddy and stop (CIDRs already current).
+    if forbid_changed and not deny_changed:
+        reload = subprocess.run(
+            [
+                "docker",
+                "exec",
+                "truemail-caddy-1",
+                "caddy",
+                "reload",
+                "--config",
+                "/etc/caddy/Caddyfile",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        print("caddy reload:", "ok" if reload.returncode == 0 else reload.stderr[-400:])
+        raise SystemExit(0 if reload.returncode == 0 else 1)
 
 state_file.write_text(cur + ("\n" if cur else ""))
 
@@ -475,6 +680,9 @@ if not caddyfile.is_file():
 
 text = caddyfile.read_text()
 text, _ = ensure_denied_wan_blocks(text)
+text, forbid_n = scrub_forbidden_responds(text)
+if forbid_n:
+    print("scrubbed Forbidden responds → unreachable page")
 
 
 def _repl(m):

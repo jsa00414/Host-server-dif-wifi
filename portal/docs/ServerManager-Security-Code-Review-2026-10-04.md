@@ -1,21 +1,4 @@
-#!/usr/bin/env python3
-"""Build the downloadable ServerManager security code review PDF + Markdown."""
-from __future__ import annotations
-
-from pathlib import Path
-
-from fpdf import FPDF
-
-ROOT = Path(__file__).resolve().parent
-OUT_MD = ROOT / "ServerManager-Security-Code-Review-2026-10-04.md"
-OUT_PDF = ROOT / "ServerManager-Security-Code-Review-2026-10-04.pdf"
-ARTIFACT = Path("/opt/cursor/artifacts/ServerManager-Security-Code-Review-2026-10-04.pdf")
-
-# Keep prior date filenames as thin redirects for older links.
-LEGACY_MD = ROOT / "ServerManager-Security-Code-Review-2026-10-03.md"
-LEGACY_PDF = ROOT / "ServerManager-Security-Code-Review-2026-10-03.pdf"
-
-MD = r"""# ServerManager Security Code Review
+# ServerManager Security Code Review
 **Date:** 4 October 2026 (updated)
 **Scope:** VPS edge, portal auth, Ed25519 key-bound VPN trust circle, Flint LAN gate, USB key vault
 **Primary branch:** cursor/keys-home-wifi-enroll-a9a6 (stacked on authenticator / media / harden work)
@@ -134,7 +117,7 @@ keyless_allowed = { ip for row in allowed if is_home_lan(ip) and not row.pubkey 
 # unless enrolled / enroll-unlocked (those keep portal + AdGuard/circle DNS)
 ```
 
-**Live verification (4 Oct):** injected keyless 192.168.8.199; peer-acl scrubbed it to pending and Flint REJECT'd it within one timer tick. Injected pending 192.168.8.198 also received SM-LAN-GUEST-DNS DNAT to 1.1.1.1. Six production LAN members (.137/.163/.164/.214/.243/.250) remain - each key-bound.
+**Live verification (4 Oct):** injected keyless 192.168.8.199; peer-acl scrubbed it to pending and Flint REJECT'd it within one timer tick. Six production LAN members (.137/.163/.164/.214/.243/.250) remain - each key-bound.
 
 ---
 
@@ -251,7 +234,7 @@ UFW limit + connlimit + MaxAuthTries 3. Residual: slow distributed scans.
 Pending login + Authenticator TOTP + Secure cookie. Residual: stolen live session until expiry.
 
 ### D.3 Unapproved friend on home Wi-Fi
-Flint SM-LAN-CIRCLE REJECT pending/keyless to VPS :80/:443 and SM-LAN-GUEST-DNS forces the same set to 1.1.1.1 (no AdGuard admin rewrites). Authenticator must approve with key. Residual: other LAN services need host firewalls; guest DNS is bypassable if the client hardcodes a resolver and Flint does not redirect it.
+Flint SM-LAN-CIRCLE REJECT pending/keyless to VPS :80/:443; Authenticator must approve with key. Residual: other LAN services need host firewalls.
 
 ### D.4 VPN client not in circle
 Guest DNS; no sticky ACL; no key bind. Residual: raw-IP if routing is broad.
@@ -374,7 +357,7 @@ allowed_ips = {
     and normalize_ip(x.get("ip", ""))
     and row_is_circle_trusted(x)
 }
-# trusted VIP/LAN => AdGuard DNS + host INPUT; else guest DNS (IKEv2 VIP + home LAN)
+# trusted VIP => AdGuard DNS + host INPUT; else guest DNS
 ```
 
 ### C.3 Peer ACL: no sticky seed
@@ -438,135 +421,3 @@ Also cross-checked: campus @denied_wan on public host blocks; keys/auth-app host
 Document control: Generated 2026-10-04 via portal/docs/build_security_review_pdf.py; supersedes 2026-10-03 review.
 
 End of review.
-"""
-
-
-
-def ensure_latin1(s: str) -> str:
-    repl = {
-        "\u2014": "-",
-        "\u2013": "-",
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u2026": "...",
-        "\u2192": "->",
-        "\u2248": "~",
-        "\u2260": "!=",
-        "\u2011": "-",
-        "\u00a0": " ",
-        "\u2190": "<-",
-    }
-    for a, b in repl.items():
-        s = s.replace(a, b)
-    return s.encode("latin-1", "replace").decode("latin-1")
-
-
-class ReviewPDF(FPDF):
-    def header(self):
-        if self.page_no() == 1:
-            return
-        self.set_font("Helvetica", "I", 9)
-        self.set_text_color(90, 90, 90)
-        self.cell(0, 8, "ServerManager Security Code Review - 2026-10-04", align="L")
-        self.ln(4)
-        self.set_draw_color(180, 180, 180)
-        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
-        self.ln(4)
-        self.set_text_color(0, 0, 0)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Helvetica", "I", 9)
-        self.set_text_color(100, 100, 100)
-        self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
-
-
-def write_md_like(pdf: ReviewPDF, text: str) -> None:
-    pdf._in_code = False  # type: ignore[attr-defined]
-    usable = pdf.w - pdf.l_margin - pdf.r_margin
-
-    def block(font: str, style: str, size: float, content: str, h: float, fill: bool = False) -> None:
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font(font, style, size)
-        if font == "Courier" and len(content) > 110:
-            content = content[:107] + "..."
-        pdf.multi_cell(usable, h, content, fill=fill)
-
-    for raw_line in text.splitlines():
-        line = ensure_latin1(raw_line.rstrip())
-        if not line.strip():
-            pdf.ln(3)
-            continue
-        if line.startswith("# "):
-            block("Helvetica", "B", 18, line[2:].strip(), 9)
-            pdf.ln(2)
-        elif line.startswith("## "):
-            pdf.ln(3)
-            block("Helvetica", "B", 14, line[3:].strip(), 8)
-            pdf.ln(1)
-        elif line.startswith("### "):
-            pdf.ln(2)
-            block("Helvetica", "B", 12, line[4:].strip(), 7)
-            pdf.ln(1)
-        elif line.startswith("```"):
-            if getattr(pdf, "_in_code", False):
-                pdf._in_code = False  # type: ignore[attr-defined]
-                pdf.ln(2)
-            else:
-                pdf._in_code = True  # type: ignore[attr-defined]
-                pdf.ln(1)
-        elif getattr(pdf, "_in_code", False):
-            pdf.set_fill_color(245, 245, 245)
-            block("Courier", "", 8, line if line else " ", 4.5, fill=True)
-        elif line.startswith("|") and line.endswith("|"):
-            if set(line.replace("|", "").strip()) <= set("-: "):
-                continue
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            block("Courier", "", 7.5, " | ".join(cells), 4.2)
-        elif line.startswith("---"):
-            pdf.ln(1)
-            y = pdf.get_y()
-            pdf.set_draw_color(160, 160, 160)
-            pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
-            pdf.set_y(y + 3)
-            pdf.set_x(pdf.l_margin)
-        elif line.startswith("- ") or line.startswith("* "):
-            block("Helvetica", "", 10, "- " + line[2:], 5.5)
-        else:
-            block("Helvetica", "", 10, line.replace("**", ""), 5.5)
-
-
-def main() -> int:
-    OUT_MD.write_text(MD, encoding="utf-8")
-    # Keep legacy filenames pointing at the new review for old artifact links.
-    LEGACY_MD.write_text(
-        "# Superseded\n\nSee ServerManager-Security-Code-Review-2026-10-04.md\n\n" + MD,
-        encoding="utf-8",
-    )
-    pdf = ReviewPDF(format="Letter")
-    pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.set_margins(18, 18, 18)
-    pdf.add_page()
-    write_md_like(pdf, MD)
-    pdf.output(str(OUT_PDF))
-    ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
-    ARTIFACT.write_bytes(OUT_PDF.read_bytes())
-    LEGACY_PDF.write_bytes(OUT_PDF.read_bytes())
-    Path("/opt/cursor/artifacts/ServerManager-Security-Code-Review-2026-10-03.pdf").write_bytes(
-        OUT_PDF.read_bytes()
-    )
-    print(f"pages={pdf.page_no()}")
-    print(f"pdf={OUT_PDF} ({OUT_PDF.stat().st_size} bytes)")
-    print(f"artifact={ARTIFACT}")
-    print(f"md={OUT_MD} ({OUT_MD.stat().st_size} bytes)")
-    pages = pdf.page_no()
-    if pages < 8 or pages > 14:
-        raise SystemExit(f"expected ~10 pages, got {pages}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
