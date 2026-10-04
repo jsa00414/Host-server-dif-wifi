@@ -1336,6 +1336,7 @@
       toast(circleLoading ? "Loading…" : "Refreshed");
       bumpIdle();
     }));
+    els.circleAuthorizeBtn?.addEventListener("click", () => withBusy(() => authorizeNetwork()));
     els.circleApproveBtn?.addEventListener("click", () => withBusy(async () => {
       const ip = String(els.circleIpInput?.value || "").trim();
       await mutateCircle("approve", ip, "manual from iPhone auth app");
