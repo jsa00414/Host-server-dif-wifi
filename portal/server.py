@@ -10074,6 +10074,8 @@ def destroy_session(token: str | None) -> None:
         return
     with _sessions_lock:
         _sessions.pop(token, None)
+    with _ssh_panel_unlocks_lock:
+        _ssh_panel_unlocks.pop(token, None)
 
 
 def session_valid(token: str | None) -> bool:
@@ -14934,8 +14936,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/", "/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
-            pass  # public (root serves login when signed out)
+        if path in (
+            "/",
+            "/login.html",
+            "/auth-app.html",
+            "/auth-app-iphone.html",
+            "/api/branding",
+            "/api/health",
+        ) or path.startswith("/static/"):
+            pass  # public (root serves login when signed out; auth-app is phone TOTP PWA)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
         elif not self._is_authed():
@@ -15089,15 +15098,33 @@ document.getElementById('f').onsubmit = async (e) => {
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        if path == "/auth-app.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app.html", "text/html; charset=utf-8"
+            )
+        if path == "/auth-app-iphone.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
+            )
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
             if not str(target).startswith(str(STATIC_DIR.resolve())):
                 self._json(404, {"error": "not found"})
                 return
-            ctype = "text/css" if target.suffix == ".css" else "application/javascript"
-            if target.suffix == ".html":
+            ctype = "application/octet-stream"
+            if target.suffix == ".css":
+                ctype = "text/css; charset=utf-8"
+            elif target.suffix == ".js":
+                ctype = "application/javascript; charset=utf-8"
+            elif target.suffix == ".html":
                 ctype = "text/html; charset=utf-8"
+            elif target.suffix == ".webmanifest" or target.name.endswith(".webmanifest"):
+                ctype = "application/manifest+json; charset=utf-8"
+            elif target.suffix == ".png":
+                ctype = "image/png"
+            elif target.suffix == ".svg":
+                ctype = "image/svg+xml"
             return self._serve_file(target, ctype)
         if path == "/api/vps-status":
             if not self._require_auth(api=True):
@@ -15611,7 +15638,14 @@ document.getElementById('f').onsubmit = async (e) => {
     def do_HEAD(self) -> None:  # noqa: N802
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
-        if path in ("/", "/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+        if path in (
+            "/",
+            "/login.html",
+            "/auth-app.html",
+            "/auth-app-iphone.html",
+            "/api/branding",
+            "/api/health",
+        ) or path.startswith("/static/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             return self.do_GET()
