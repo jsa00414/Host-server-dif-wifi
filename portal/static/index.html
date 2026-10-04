@@ -811,6 +811,7 @@
     }
     .meta-box label { display: block; color: var(--muted); font-size: .72rem; margin-bottom: 6px; }
 
+
     .sec-score { font-family: "IBM Plex Mono", monospace; font-size: 1.8rem; font-weight: 600; line-height: 1; }
     .sec-score small { display: block; font-size: .72rem; color: var(--muted); font-weight: 500; margin-top: 4px; text-transform: capitalize; }
     .sec-counts { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -1023,7 +1024,6 @@
       padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); color: var(--muted); font-size: .8rem; line-height: 1.45;
     }
-
 
     .drawer {
       border-top: 1px solid var(--line);
@@ -1481,6 +1481,7 @@
       input, select { font-size: 16px; min-height: 44px; }
       button { min-height: 40px; }
     }
+  
     .sec-callout {
       padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px;
       background: rgba(61,222,160,.06); display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
@@ -1488,7 +1489,6 @@
     }
     .sec-callout.at-risk { background: rgba(255,107,107,.08); border-color: rgba(255,107,107,.35); }
     .sec-callout.needs-attention { background: rgba(226,180,90,.08); border-color: rgba(226,180,90,.35); }
-
   </style>
 </head>
 <body>
@@ -1658,13 +1658,12 @@
             <div class="v">DNS</div>
             <div class="s">full control</div>
           </button>
-      <button type="button" class="stat" data-go="security">
+<button type="button" class="stat" data-go="security">
             <div class="k">Security</div>
             <div class="v" id="ovSec">—</div>
             <div class="s" id="ovSecNote">fail2ban · exposures</div>
           </button>
-
-    <button type="button" class="stat" data-go="backup">
+          <button type="button" class="stat" data-go="backup">
             <div class="k">Backup</div>
             <div class="v">VPS</div>
             <div class="s">ServerManager</div>
@@ -1932,6 +1931,14 @@
         </div>
 
         <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Portal IP jail (3 fails → 10 min; 5 rounds/day → permanent)</h3></div>
+          <div class="panel-body">
+            <div class="meta-grid" id="secIpJailMeta"></div>
+            <div id="secIpJail"></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
           <div class="panel-head"><h3>Top attackers (7 days)</h3></div>
           <div class="panel-body" id="secTopAttackers"><div class="sec-empty">Loading…</div></div>
         </div>
@@ -1979,8 +1986,22 @@
             <div class="toolbar" style="margin-top:14px;justify-content:flex-start;gap:8px;flex-wrap:wrap">
               <button type="button" class="primary" id="backupRunBtn">Back up now</button>
               <button type="button" id="backupOpenRepoBtn">Open GitHub repo</button>
+              <label class="rule-check" style="margin-left:4px" title="Daily push at ~03:15 UTC">
+                <input type="checkbox" id="backupTimerChk" /> Daily timer
+              </label>
             </div>
-            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only. Output goes to the Activity log.</p>
+            <div class="form-grid" style="margin-top:16px;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+              <label>Owner<input id="backupOwner" type="text" autocomplete="off" spellcheck="false" placeholder="jsa00414" /></label>
+              <label>Repo<input id="backupRepo" type="text" autocomplete="off" spellcheck="false" placeholder="ServerManagerBackup" /></label>
+              <label>Branch<input id="backupBranch" type="text" autocomplete="off" spellcheck="false" placeholder="main" /></label>
+              <label style="grid-column:1/-1">GitHub token (PAT with repo access)
+                <input id="backupToken" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste new classic PAT (ghp_…) — leave blank to keep current" />
+              </label>
+            </div>
+            <div class="toolbar" style="margin-top:10px;justify-content:flex-start;gap:8px;flex-wrap:wrap">
+              <button type="button" class="primary" id="backupSaveBtn">Save backup settings</button>
+            </div>
+            <p class="hint" style="margin-top:12px">Pushes VPS config (portal, DNS, Caddy, systemd, WireGuard) to your private GitHub repo. The token stays on the VPS only. If the token is revoked, paste a new classic PAT with the <code>repo</code> scope, save, then Back up now.</p>
           </div>
         </div>
       </section>
@@ -2755,6 +2776,24 @@
         showLog(String(e.message || e), true);
       }
     }
+    async function loadGrafanaFrame(force) {
+      const frame = document.getElementById("frameGrafana");
+      if (!frame) return;
+      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      const fallback = frame.dataset.src || "https://grafana.vpstruelord.com/";
+      try {
+        frame.dataset.authed = "0";
+        if (force) frame.src = "about:blank";
+        const data = await api("/api/grafana-sso");
+        const url = (data && data.url) || fallback;
+        frame.src = url + (String(url).includes("?") ? "&" : "?") + "_sm=" + Date.now();
+        frame.dataset.authed = "1";
+      } catch (e) {
+        frame.src = fallback;
+        frame.dataset.authed = "0";
+        showLog(String(e.message || e), true);
+      }
+    }
     async function loadNasFilesFrame(force) {
       const frame = document.getElementById("frameFiles");
       if (!frame) return;
@@ -2921,10 +2960,7 @@
         }
       }
       if (name === "grafana") {
-        const f = document.getElementById("frameGrafana");
-        if (f && (f.getAttribute("src") === "about:blank" || !f.getAttribute("src"))) {
-          f.src = (f.dataset.src || "https://grafana.vpstruelord.com/") + "?_sm=" + Date.now();
-        }
+        loadGrafanaFrame(false);
       }
       if (name === "files") {
         loadNasFilesFrame(true);
@@ -3726,96 +3762,6 @@
       document.getElementById("ssExitWrap").classList.toggle("show", e.target.checked);
     });
 
-    let backupState = null;
-    function renderBackupStatus(data, opts = {}) {
-      backupState = data || {};
-      const callout = document.getElementById("backupCallout");
-      if (!data || data.error) {
-        if (callout) callout.textContent = (data && data.error) || "Could not load backup status.";
-        return;
-      }
-      const configured = !!data.configured;
-      const running = !!data.running;
-      let msg = "";
-      if (!data.installed) msg = "Backup agent is not installed on this VPS.";
-      else if (!configured) msg = "Backup is not configured yet (missing GitHub repo or token).";
-      else if (running) msg = "Backup is running now…";
-      else if (data.last_ok === true) msg = `Last backup succeeded. Repo ${data.owner}/${data.repo} @ ${data.branch}.`;
-      else if (data.last_ok === false) msg = "Last backup failed. See Activity log.";
-      else msg = `Ready. Daily backups go to ${data.owner}/${data.repo}.`;
-      if (callout) callout.textContent = msg;
-
-      const st = document.getElementById("bkStatus");
-      const stSub = document.getElementById("bkStatusSub");
-      if (st) st.textContent = running ? "Running" : configured ? (data.last_ok === false ? "Error" : "Ready") : "Setup needed";
-      if (stSub) stSub.textContent = data.timer_enabled ? "timer on" : "timer off";
-
-      const last = document.getElementById("bkLast");
-      const lastSub = document.getElementById("bkLastSub");
-      if (last) last.textContent = data.last_at || (data.last_ok == null ? "Never" : "—");
-      if (lastSub) lastSub.textContent = data.last_ok === true ? "ok" : data.last_ok === false ? "failed" : "no runs yet";
-
-      const next = document.getElementById("bkNext");
-      const nextSub = document.getElementById("bkNextSub");
-      if (next) next.textContent = data.next_run ? String(data.next_run).replace(/\s+UTC$/, "") : (data.timer_enabled ? "scheduled" : "—");
-      if (nextSub) nextSub.textContent = data.timer_active ? "active" : (data.timer_enabled ? "enabled" : "disabled");
-
-      const repo = document.getElementById("bkRepo");
-      const repoSub = document.getElementById("bkRepoSub");
-      if (repo) repo.textContent = data.repo || "—";
-      if (repoSub) repoSub.textContent = data.owner ? `${data.owner} · ${data.branch || "main"}` : "—";
-
-      if (opts.showLog) {
-        showLog("=== Backup ===\n" + (data.log_tail || "(empty log)"), !!opts.openLog);
-      }
-
-      const runBtn = document.getElementById("backupRunBtn");
-      if (runBtn) runBtn.disabled = running || !configured;
-    }
-    async function refreshBackupStatus(quiet) {
-      try {
-        const data = await api("/api/backup");
-        renderBackupStatus(data, { showLog: !quiet, openLog: !quiet });
-      } catch (e) {
-        if (!quiet) {
-          setStatus(String(e.message || e), "err");
-          showLog(String(e.message || e), true);
-        }
-        renderBackupStatus({ error: String(e.message || e) });
-      }
-    }
-    async function runBackupNow() {
-      const btn = document.getElementById("backupRunBtn");
-      if (btn) btn.disabled = true;
-      setStatus("Backing up to GitHub…");
-      const callout = document.getElementById("backupCallout");
-      if (callout) callout.textContent = "Running backup…";
-      showLog("Running backup…", true);
-      try {
-        const data = await api("/api/backup/run", { method: "POST", body: "{}", timeoutMs: 320000 });
-        if (data.status) renderBackupStatus(data.status);
-        else await refreshBackupStatus(true);
-        const bits = [data.stdout, data.stderr, data.error].filter(Boolean).join("\n");
-        showLog(bits || (data.ok ? "Backup pushed." : "Backup failed."), true);
-        setStatus(data.ok ? "Backup pushed" : (data.error || "Backup failed"), data.ok ? "ok" : "err");
-      } catch (e) {
-        setStatus(String(e.message || e), "err");
-        showLog(String(e.message || e), true);
-        await refreshBackupStatus(true);
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    }
-
-    document.getElementById("backupRefreshBtn")?.addEventListener("click", () => refreshBackupStatus());
-    document.getElementById("backupRunBtn")?.addEventListener("click", () => runBackupNow());
-    document.getElementById("backupOpenRepoBtn")?.addEventListener("click", () => {
-      const url = backupState?.repo_url;
-      if (url) window.open(url, "_blank", "noopener");
-      else setStatus("No backup repo configured", "err");
-    });
-
-
     function escHtml(s) {
       return String(s ?? "")
         .replace(/&/g, "&amp;")
@@ -3823,7 +3769,6 @@
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
     }
-
     function secSev(sev) {
       const s = String(sev || "ok").toLowerCase();
       return `<span class="sec-sev ${escHtml(s)}">${escHtml(s)}</span>`;
@@ -3911,6 +3856,44 @@
         }
       }
 
+      const ipJail = data.ip_jail || {};
+      const ipJailMeta = document.getElementById("secIpJailMeta");
+      if (ipJailMeta) {
+        const rounds = ipJail.rounds_for_permanent ?? 5;
+        ipJailMeta.innerHTML = `
+          <div class="meta-box"><label>UTC day</label><div>${escHtml(ipJail.day || "—")}</div></div>
+          <div class="meta-box"><label>Threshold</label><div>${escHtml(ipJail.max_fails ?? 3)} fails → ${escHtml(ipJail.lockout_seconds ?? 600)}s</div></div>
+          <div class="meta-box"><label>Permanent after</label><div>${escHtml(rounds)} rounds/day</div></div>
+          <div class="meta-box"><label>Locked / permanent</label><div>${escHtml(ipJail.currently_locked ?? 0)} / ${escHtml(ipJail.currently_permanent ?? 0)}</div></div>`;
+      }
+      const ipJailEl = document.getElementById("secIpJail");
+      if (ipJailEl) {
+        const locked = ipJail.locked || [];
+        const permanent = ipJail.permanent || [];
+        const watching = ipJail.watching || [];
+        const rounds = ipJail.rounds_for_permanent ?? 5;
+        if (!locked.length && !watching.length && !permanent.length) {
+          ipJailEl.innerHTML = `<div class="sec-empty">No portal login / TOTP failures recorded today.</div>`;
+        } else {
+          const rows = [
+            ...permanent.map((r) => ({ ...r, state: "permanent" })),
+            ...locked.map((r) => ({ ...r, state: `locked ${escHtml(r.retry_after || 0)}s` })),
+            ...watching.map((r) => ({
+              ...r,
+              state: `${escHtml(r.fail_count || 0)}/${escHtml(ipJail.max_fails ?? 3)} fails · round ${escHtml(r.lock_count_today || 0)}/${escHtml(rounds)}`,
+            })),
+          ];
+          ipJailEl.innerHTML = `<table class="sec-table"><thead><tr><th>IP</th><th>State</th><th>Rounds today</th><th>Last reason</th></tr></thead><tbody>${
+            rows.map((r) => `<tr>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td>${r.state}</td>
+              <td>${escHtml(r.lock_count_today || 0)}</td>
+              <td class="sec-users">${escHtml(r.last_reason || "—")}</td>
+            </tr>`).join("")
+          }</tbody></table>`;
+        }
+      }
+
       const top = (data.attackers && data.attackers.top_attackers) || [];
       const topEl = document.getElementById("secTopAttackers");
       if (topEl) {
@@ -3926,6 +3909,8 @@
           }</tbody></table>`;
         }
       }
+
+      const circle = data.vpn_allowlist || {};
 
       const expEl = document.getElementById("secExposures");
       if (expEl) {
@@ -4004,7 +3989,10 @@
         const expiresIn = panelLock.expires_in || 0;
         const twoFactor = !!panelLock.two_factor_enabled;
         const twoFactorMethod = panelLock.two_factor_method || (twoFactor ? "email" : "app");
-        const authAppPath = panelLock.auth_app_path || "/auth-app-iphone.html";
+        const deviceEnrollUnlocked = !!panelLock.device_enroll_unlocked;
+        const authAppPath = panelLock.auth_app_path || "https://keys.vpstruelord.com/auth-app-iphone.html";
+        const authAppAndroidPath = panelLock.auth_app_android_path || "https://keys.vpstruelord.com/auth-app.html";
+        const authAppWindowsPath = panelLock.auth_app_windows_path || "https://keys.vpstruelord.com/download/ServerManagerAuthenticator.exe";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
         if (!unlocked) {
           sshEl.innerHTML = `
@@ -4044,10 +4032,53 @@
             <div>
               <div class="method-label">Two-factor · ${escHtml(methodLabel2fa)}</div>
               <div class="method-sub">${escHtml(methodSub2fa)}</div>
-              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a></div>` : ""}
+              ${twoFactor && twoFactorMethod === "app" ? `<div class="sec-login-actions" style="margin-top:8px"><a class="ghost" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a><a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a><a class="ghost" href="${escHtml(authAppWindowsPath)}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a></div>` : ""}
             </div>
             <label class="sec-toggle" title="Toggle two-factor">
               <input type="checkbox" id="sec2faToggle" ${twoFactor ? "checked" : ""} />
+              <span></span>
+            </label>
+          </div>
+          <div class="sec-2fa-row">
+            <div>
+              <div class="method-label">New authenticator devices · ${deviceEnrollUnlocked ? "Unlocked" : "Locked"}</div>
+              <div class="method-sub">${
+                deviceEnrollUnlocked
+                  ? `Unlocked for ${escHtml(panelLock.device_enroll_for_ip || "one LAN IP")} only — fresh secret generated; previous enrolled secrets kept encrypted${panelLock.enroll_expires_in ? ` · auto-locks in ~${Math.max(1, Math.ceil(panelLock.enroll_expires_in / 60))} min` : ""}.`
+                  : "Locked — Enter secret is hidden. Unlock only for the registering phone’s LAN IP."
+              }</div>
+              ${!deviceEnrollUnlocked ? `<div style="margin-top:8px"><label class="method-sub">Registering device LAN IP
+                <input id="secDeviceEnrollIp" placeholder="192.168.8.x" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg0);color:inherit;font:inherit" />
+              </label></div>` : ""}
+              ${deviceEnrollUnlocked ? `<div class="sec-enroll-box" id="secDeviceEnrollBox" style="margin-top:10px;text-align:left">
+                <div class="method-sub" style="margin:0 0 8px">Enrollment open for <code>${escHtml(panelLock.device_enroll_for_ip || "")}</code> — use Enter secret in the app, or open a setup link:</div>
+                <div class="sec-login-actions">
+                  <a class="primary-link" href="${escHtml(authAppPath)}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+                  <a class="ghost" href="${escHtml(authAppAndroidPath)}" target="_blank" rel="noopener">Open Android Authenticator</a>
+                  <a class="ghost" href="${escHtml(authAppWindowsPath)}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
+                </div>
+                <div class="method-sub" style="margin-top:8px">Secret and QR load below after unlock so you can type or scan on the new device.</div>
+                <canvas id="secDeviceEnrollQr" width="180" height="180" hidden></canvas>
+                <div class="secret" id="secDeviceEnrollSecret" hidden></div>
+              </div>` : ""}
+              ${(() => {
+                const devices = Array.isArray(panelLock.auth_app_devices) ? panelLock.auth_app_devices : [];
+                if (!devices.length) {
+                  return `<div class="sec-empty" style="margin-top:10px">No enrolled Authenticator LAN devices yet.</div>`;
+                }
+                return `<table class="sec-table" style="margin-top:10px"><thead><tr><th>Device</th><th>LAN IP</th><th>Platform</th><th></th></tr></thead><tbody>${
+                  devices.map((d) => `<tr>
+                    <td>${escHtml(d.name || d.hostname || d.note || "—")}</td>
+                    <td><code>${escHtml(d.ip || "")}</code></td>
+                    <td>${escHtml(d.platform || "—")}</td>
+                    <td><button type="button" class="ghost danger sec-auth-device-remove" data-ip="${escHtml(d.ip || "")}">Remove</button></td>
+                  </tr>`).join("")
+                }</tbody></table>
+                <div class="method-sub" style="margin-top:6px">Removing drops the Flint pending exemption for that phone LAN IP.</div>`;
+              })()}
+            </div>
+            <label class="sec-toggle" title="Unlock new authenticator devices">
+              <input type="checkbox" id="secDeviceEnrollToggle" ${deviceEnrollUnlocked ? "checked" : ""} ${twoFactor && twoFactorMethod === "app" ? "" : "disabled"} />
               <span></span>
             </label>
           </div>
@@ -4119,11 +4150,50 @@
             <table class="sec-table"><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>${
               rows.map(([k, v]) => `<tr><td>${escHtml(k)}</td><td><code>${escHtml(v ?? "—")}</code></td></tr>`).join("")
             }</tbody></table>
+          </div>
+
+          <div class="sec-ssh-section" id="secVpnCircleBlock">
+            <h4>VPN trust circle</h4>
+            <p class="sec-users" id="secVpnCircleHint" style="margin:0 0 10px">
+              Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle.
+              Key confirmed shows Ed25519 binding from Authenticator for each allowlisted IP.
+            </p>
+            <div class="meta-grid" id="secVpnCircleMeta"></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Allowed list</h4>
+            <div id="secVpnAllowed"><div class="sec-empty">Loading…</div></div>
+            <h4 style="margin:14px 0 6px;font-size:13px">Pending / recent attempts</h4>
+            <div id="secVpnPending"><div class="sec-empty">Loading…</div></div>
+            <div class="toolbar" style="margin-top:12px;gap:8px;flex-wrap:wrap;justify-content:flex-start">
+              <input type="text" id="secVpnApproveIp" placeholder="Public WAN IP" style="min-width:160px" autocomplete="off" spellcheck="false" />
+              <input type="text" id="secVpnApproveNote" placeholder="Note (optional)" style="min-width:140px" autocomplete="off" />
+              <button type="button" class="primary" id="secVpnApproveBtn">Approve into circle</button>
+            </div>
           </div>`;
+        fillVpnTrustCircle(circle);
         document.getElementById("secSshLockBtn")?.addEventListener("click", () => lockSshPanel());
+        document.getElementById("secVpnApproveBtn")?.addEventListener("click", () => {
+          const ip = document.getElementById("secVpnApproveIp")?.value || "";
+          const note = document.getElementById("secVpnApproveNote")?.value || "";
+          mutateVpnAllowlist("approve", ip.trim(), note.trim());
+        });
         document.getElementById("sec2faToggle")?.addEventListener("change", (ev) => {
           setSshPanel2fa(!!ev.target.checked);
         });
+        document.getElementById("secDeviceEnrollToggle")?.addEventListener("change", (ev) => {
+          setAuthDeviceEnroll(!!ev.target.checked);
+        });
+        document.querySelectorAll(".sec-auth-device-remove").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const ip = btn.getAttribute("data-ip") || "";
+            if (!ip) return;
+            if (!confirm(`Remove enrolled Authenticator device ${ip}?`)) return;
+            removeAuthAppDevice(ip);
+          });
+        });
+        if (deviceEnrollUnlocked) {
+          // Re-fetch enroll material so QR/secret appear after unlock.
+          setAuthDeviceEnroll(true, { silent: true });
+        }
         document.getElementById("secSshKeysOnlyBtn")?.addEventListener("click", () => applySshLoginMethod("keys_only"));
         document.getElementById("secSshPasswordBtn")?.addEventListener("click", () => applySshLoginMethod("password_and_keys"));
         document.getElementById("secRootKeysBtn")?.addEventListener("click", () => applySshRootLogin("prohibit-password"));
@@ -4167,6 +4237,154 @@
           </tr>`).join("")
         }</tbody></table>`;
       }
+      bindVpnAllowlistButtons();
+    }
+    async function mutateVpnAllowlist(action, ip, note) {
+      const unlocked = !!(window.__lastSecurityData?.ssh?.panel_lock?.unlocked);
+      if (!unlocked) {
+        setStatus("Unlock VPS login panel with Authenticator first", "err");
+        try { await unlockSshPanel(); } catch (_) {}
+        return;
+      }
+      try {
+        setStatus(`${action} ${ip}…`);
+        const result = await api("/api/security/vpn-allowlist", {
+          method: "POST",
+          body: { action, ip, note: note || "" },
+        });
+        if (result.vpn_allowlist && window.__lastSecurityData) {
+          window.__lastSecurityData.vpn_allowlist = result.vpn_allowlist;
+          renderSecurity(window.__lastSecurityData);
+        } else {
+          await refreshSecurity(true);
+        }
+        const labels = {
+          approve: "Approved",
+          deny: "Denied",
+          revoke: "Removed",
+          pending: "Moved to pending",
+        };
+        setStatus(
+          result.ok ? `${labels[action] || action} ${ip}` : (result.error || "failed"),
+          result.ok ? "ok" : "err"
+        );
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        await refreshSecurity(true);
+      }
+    }
+    function fillVpnTrustCircle(circle) {
+      const circleMeta = document.getElementById("secVpnCircleMeta");
+      if (!circleMeta) return;
+      circle = circle || {};
+      const nameMap = circle.device_names && typeof circle.device_names === "object" ? circle.device_names : {};
+      const deviceLabel = (row) => {
+        const ip = String(row?.ip || "").trim();
+        return String(row?.name || row?.hostname || nameMap[ip] || "").trim();
+      };
+      const allowedRows = circle.allowed || [];
+      const needKey = allowedRows.filter((r) => r && !r.sealed && r.source !== "router");
+      const keyBound = needKey.filter((r) => !!r.key_bound).length;
+      const keyTotal = needKey.length;
+      circleMeta.innerHTML = `
+        <div class="meta-box"><label>Allowlisted</label><div>${escHtml(allowedRows.length)}</div></div>
+        <div class="meta-box"><label>Pending</label><div>${escHtml((circle.pending || []).length)}</div></div>
+        <div class="meta-box"><label>Key confirmed</label><div>${escHtml(keyBound)} / ${escHtml(keyTotal)}</div></div>
+        <div class="meta-box"><label>Guest DNS</label><div><code>${escHtml(circle.guest_dns || "1.1.1.1")}</code></div></div>
+        <div class="meta-box"><label>Circle DNS</label><div><code>${escHtml(circle.circle_dns || "10.42.42.44")}</code></div></div>`;
+      const hint = document.getElementById("secVpnCircleHint");
+      if (hint) {
+        const base = circle.detail || "Unapproved IKEv2 clients keep internet on guest DNS. Approve a WAN IP to enter sticky / admin circle.";
+        hint.textContent = `${base} Key confirmed = Ed25519 bound on Authenticator for that IP.`;
+      }
+      const allowedEl = document.getElementById("secVpnAllowed");
+      if (allowedEl) {
+        const rows = allowedRows;
+        if (!rows.length) {
+          allowedEl.innerHTML = `<div class="sec-empty">No sticky WAN IPs in the trust circle yet.</div>`;
+        } else {
+          allowedEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>Key</th><th>Note</th><th></th></tr></thead><tbody>${
+            rows.map((r) => {
+              const sealed = !!(r.sealed || r.source === "router");
+              const hiddenFromApps = !!(!sealed && r.hidden);
+              const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
+              const name = deviceLabel(r);
+              const note = sealed
+                ? (r.note || "Flint router WAN (sealed)")
+                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
+              const kid = String(r.key_id || "").trim();
+              const keyCell = sealed
+                ? `<span class="sec-users">n/a</span>`
+                : (r.key_bound
+                  ? `${secSev("ok")} <span class="sec-users">confirmed</span>${kid ? ` <code title="key id">${escHtml(kid.slice(0, 8))}</code>` : ""}`
+                  : `${secSev("warn")} <span class="sec-users">missing</span>`);
+              const action = sealed
+                ? `<span class="sec-users">sealed</span>`
+                : `<button type="button" class="ghost sec-vpn-pending" data-ip="${escHtml(r.ip)}">Move to pending</button>
+                   <button type="button" class="ghost danger sec-vpn-revoke" data-ip="${escHtml(r.ip)}">Remove</button>`;
+              return `<tr>
+              <td><strong>${escHtml(name || "—")}</strong></td>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td style="white-space:nowrap">${keyCell}</td>
+              <td class="sec-users">${escHtml(note)}</td>
+              <td style="white-space:nowrap">${action}</td>
+            </tr>`;
+            }).join("")
+          }</tbody></table>`;
+        }
+      }
+      const pendingEl = document.getElementById("secVpnPending");
+      if (pendingEl) {
+        const pending = circle.pending || [];
+        const attempts = circle.attempts || [];
+        const pendingRows = pending.length
+          ? pending.map((r) => {
+              const isLan = r.kind === "lan" || r.source === "lan-offline" || String(r.ip || "").startsWith("192.168.8.");
+              const authApp = !!(r.auth_app || r.auth_app_enrolled);
+              const name = deviceLabel(r);
+              return `<tr>
+              <td><strong>${escHtml(name || (isLan ? (r.note || "LAN device") : "—"))}</strong></td>
+              <td><code>${escHtml(r.ip)}</code></td>
+              <td class="sec-users">${escHtml(isLan ? "—" : (r.vip || "—"))}</td>
+              <td>${escHtml(isLan ? "—" : (r.count || 1))}</td>
+              <td class="sec-users">${escHtml(isLan ? `${r.status || "pending"} · LAN${authApp ? " · Authenticator" : ""}` : (r.status || "pending"))}</td>
+              <td>
+                <button type="button" class="primary sec-vpn-approve" data-ip="${escHtml(r.ip)}">Approve</button>
+                <button type="button" class="ghost danger sec-vpn-deny" data-ip="${escHtml(r.ip)}">Deny</button>
+              </td>
+            </tr>`;
+            }).join("")
+          : "";
+        const attemptRows = attempts.slice(0, 12).map((a) => `<tr>
+            <td><strong>${escHtml(deviceLabel(a) || "—")}</strong></td>
+            <td><code>${escHtml(a.ip)}</code></td>
+            <td class="sec-users">${escHtml(a.vip || "—")}</td>
+            <td colspan="2" class="sec-users">${escHtml(a.ts ? new Date(a.ts * 1000).toLocaleString() : "—")}</td>
+            <td class="sec-users">${a.trusted ? "trusted" : "guest DNS"}</td>
+          </tr>`).join("");
+        if (!pendingRows && !attemptRows) {
+          pendingEl.innerHTML = `<div class="sec-empty">No pending WAN or offline LAN devices.</div>`;
+        } else {
+          pendingEl.innerHTML = `<table class="sec-table"><thead><tr><th>Device</th><th>IP</th><th>VIP</th><th>Hits</th><th>Status</th><th></th></tr></thead><tbody>
+            ${pendingRows || `<tr><td colspan="6" class="sec-users">No pending — recent attempts below.</td></tr>`}
+            ${attemptRows ? `<tr><td colspan="6" class="sec-users" style="padding-top:10px">Recent attempts</td></tr>${attemptRows}` : ""}
+          </tbody></table>`;
+        }
+      }
+    }
+    function bindVpnAllowlistButtons() {
+      document.querySelectorAll(".sec-vpn-approve").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("approve", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-deny").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("deny", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-revoke").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("revoke", btn.dataset.ip || "");
+      });
+      document.querySelectorAll(".sec-vpn-pending").forEach((btn) => {
+        btn.onclick = () => mutateVpnAllowlist("pending", btn.dataset.ip || "", "moved to pending");
+      });
     }
     async function refreshSecurity(quiet) {
       const btn = document.getElementById("secRefreshBtn");
@@ -4206,8 +4424,9 @@
       backdrop.className = "sec-code-modal-backdrop";
       const enrollHtml = enroll
         ? `<div class="sec-enroll-box">
-            <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows.</div>
-            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+            <div class="method-sub" style="margin:0 0 6px">Open this on your phone to install the Authenticator app, then enter the code it shows. On Windows, download the .exe.</div>
+            <a class="primary-link" id="secOpenAuthApp" href="${escHtml(enroll.auth_app_path || "https://keys.vpstruelord.com/auth-app-iphone.html")}" target="_blank" rel="noopener">Open iPhone Authenticator</a>
+            <a class="ghost" href="${escHtml(enroll.auth_app_windows_path || "https://keys.vpstruelord.com/download/ServerManagerAuthenticator.exe")}" download="ServerManagerAuthenticator.exe">Download Windows Authenticator</a>
             <canvas id="secEnrollQr" width="180" height="180" aria-label="Authenticator QR"></canvas>
             <div class="secret">${escHtml(enroll.secret || "")}</div>
           </div>`
@@ -4359,6 +4578,66 @@
         window.__sshUnlockPassCache = "";
         closeEmailCodePopup();
         setStatus(result.message || "Panel unlocked", "ok");
+        await refreshSecurity(true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+      }
+    }
+    async function setAuthDeviceEnroll(unlocked, opts) {
+      const toggle = document.getElementById("secDeviceEnrollToggle");
+      const silent = !!(opts && opts.silent);
+      if (toggle) toggle.disabled = true;
+      if (!silent) setStatus(unlocked ? "Unlocking new-device enrollment…" : "Locking new-device enrollment…");
+      try {
+        let deviceIp = (opts && opts.device_ip) || "";
+        if (unlocked && !deviceIp) {
+          const input = document.getElementById("secDeviceEnrollIp");
+          deviceIp = (input && input.value.trim()) || prompt("Registering device LAN IP (192.168.8.x)") || "";
+        }
+        const body = { action: "device_enroll", unlocked: !!unlocked };
+        if (unlocked) body.device_ip = deviceIp;
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify(body),
+          timeoutMs: 20000,
+        });
+        if (!silent) setStatus(result.message || (unlocked ? "Enrollment unlocked" : "Enrollment locked"), "ok");
+        const enroll = result.enroll || null;
+        const secretEl = document.getElementById("secDeviceEnrollSecret");
+        const qrEl = document.getElementById("secDeviceEnrollQr");
+        if (unlocked && enroll) {
+          if (secretEl) {
+            secretEl.hidden = false;
+            secretEl.textContent = enroll.secret || "";
+          }
+          if (enroll.otpauth_url) {
+            drawTotpQr("secDeviceEnrollQr", enroll.otpauth_url);
+            if (qrEl) qrEl.hidden = false;
+          }
+          if (enroll.auth_app_path) {
+            const box = document.getElementById("secDeviceEnrollBox");
+            const link = box?.querySelector('a.primary-link');
+            if (link) link.href = enroll.auth_app_path;
+          }
+        }
+        if (!silent) await refreshSecurity(true);
+        else if (toggle) toggle.checked = !!result.device_enroll_unlocked;
+      } catch (e) {
+        if (toggle) toggle.checked = !unlocked;
+        if (!silent) setStatus(String(e.message || e), "err");
+      } finally {
+        if (toggle) toggle.disabled = false;
+      }
+    }
+    async function removeAuthAppDevice(ip) {
+      setStatus(`Removing Authenticator device ${ip}…`);
+      try {
+        const result = await api("/api/security/ssh-unlock", {
+          method: "POST",
+          body: JSON.stringify({ action: "remove_device", ip }),
+          timeoutMs: 20000,
+        });
+        setStatus(result.message || `Removed ${ip}`, "ok");
         await refreshSecurity(true);
       } catch (e) {
         setStatus(String(e.message || e), "err");
@@ -4639,6 +4918,148 @@
     }
     document.getElementById("secRefreshBtn")?.addEventListener("click", () => refreshSecurity());
 
+    let backupState = null;
+    function fillBackupForm(data) {
+      if (!data) return;
+      const owner = document.getElementById("backupOwner");
+      const repo = document.getElementById("backupRepo");
+      const branch = document.getElementById("backupBranch");
+      const timer = document.getElementById("backupTimerChk");
+      if (owner && document.activeElement !== owner) owner.value = data.owner || "";
+      if (repo && document.activeElement !== repo) repo.value = data.repo || "";
+      if (branch && document.activeElement !== branch) branch.value = data.branch || "main";
+      if (timer && document.activeElement !== timer) timer.checked = !!data.timer_enabled;
+    }
+    function renderBackupStatus(data, opts = {}) {
+      backupState = data || {};
+      const callout = document.getElementById("backupCallout");
+      if (!data || (data.error && !data.installed && data.configured == null)) {
+        if (callout) callout.textContent = (data && data.error) || "Could not load backup status.";
+        return;
+      }
+      const configured = !!data.configured;
+      const running = !!data.running;
+      const tokenBad = data.token_ok === false;
+      let msg = "";
+      if (!data.installed) msg = "Backup agent is not installed on this VPS.";
+      else if (!configured) msg = "Backup is not configured yet (missing GitHub repo or token).";
+      else if (tokenBad) msg = data.token_error || "GitHub token is invalid. Paste a new PAT below and Save.";
+      else if (running) msg = "Backup is running now…";
+      else if (data.last_ok === true) msg = `Last backup succeeded. Repo ${data.owner}/${data.repo} @ ${data.branch}.`;
+      else if (data.last_ok === false) msg = "Last backup failed. See Activity log — often a bad/expired GitHub token.";
+      else msg = `Ready. Daily backups go to ${data.owner}/${data.repo}.`;
+      if (callout) callout.textContent = msg;
+
+      const st = document.getElementById("bkStatus");
+      const stSub = document.getElementById("bkStatusSub");
+      if (st) {
+        if (running) st.textContent = "Running";
+        else if (!configured) st.textContent = "Setup needed";
+        else if (tokenBad) st.textContent = "Token bad";
+        else if (data.last_ok === false) st.textContent = "Error";
+        else st.textContent = "Ready";
+      }
+      if (stSub) {
+        if (tokenBad) stSub.textContent = "fix PAT";
+        else stSub.textContent = data.timer_enabled ? "timer on" : "timer off";
+      }
+
+      const last = document.getElementById("bkLast");
+      const lastSub = document.getElementById("bkLastSub");
+      if (last) last.textContent = data.last_at || (data.last_ok == null ? "Never" : "—");
+      if (lastSub) lastSub.textContent = data.last_ok === true ? "ok" : data.last_ok === false ? "failed" : "no runs yet";
+
+      const next = document.getElementById("bkNext");
+      const nextSub = document.getElementById("bkNextSub");
+      if (next) next.textContent = data.next_run ? String(data.next_run).replace(/\s+UTC$/, "") : (data.timer_enabled ? "scheduled" : "—");
+      if (nextSub) nextSub.textContent = data.timer_active ? "active" : (data.timer_enabled ? "enabled" : "disabled");
+
+      const repo = document.getElementById("bkRepo");
+      const repoSub = document.getElementById("bkRepoSub");
+      if (repo) repo.textContent = data.repo || "—";
+      if (repoSub) repoSub.textContent = data.owner ? `${data.owner} · ${data.branch || "main"}` : "—";
+
+      fillBackupForm(data);
+
+      if (opts.showLog) {
+        showLog("=== Backup ===\n" + (data.log_tail || "(empty log)"), !!opts.openLog);
+      }
+
+      const runBtn = document.getElementById("backupRunBtn");
+      if (runBtn) runBtn.disabled = running || !configured || tokenBad;
+    }
+    async function refreshBackupStatus(quiet) {
+      try {
+        const data = await api("/api/backup");
+        renderBackupStatus(data, { showLog: !quiet, openLog: !quiet });
+      } catch (e) {
+        if (!quiet) {
+          setStatus(String(e.message || e), "err");
+          showLog(String(e.message || e), true);
+        }
+        renderBackupStatus({ error: String(e.message || e) });
+      }
+    }
+    async function runBackupNow() {
+      const btn = document.getElementById("backupRunBtn");
+      if (btn) btn.disabled = true;
+      setStatus("Backing up to GitHub…");
+      const callout = document.getElementById("backupCallout");
+      if (callout) callout.textContent = "Running backup…";
+      showLog("Running backup…", true);
+      try {
+        const data = await api("/api/backup/run", { method: "POST", body: "{}", timeoutMs: 320000 });
+        if (data.status) renderBackupStatus(data.status);
+        else await refreshBackupStatus(true);
+        const bits = [data.error, data.stderr, data.stdout].filter(Boolean).join("\n");
+        showLog(bits || (data.ok ? "Backup pushed." : "Backup failed."), true);
+        setStatus(data.ok ? "Backup pushed" : (data.error || "Backup failed"), data.ok ? "ok" : "err");
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+        await refreshBackupStatus(true);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function saveBackupSettings() {
+      const btn = document.getElementById("backupSaveBtn");
+      if (btn) btn.disabled = true;
+      setStatus("Saving backup settings…");
+      try {
+        const payload = {
+          owner: document.getElementById("backupOwner")?.value.trim() || "",
+          repo: document.getElementById("backupRepo")?.value.trim() || "",
+          branch: document.getElementById("backupBranch")?.value.trim() || "main",
+          timer_enabled: !!document.getElementById("backupTimerChk")?.checked,
+        };
+        const token = document.getElementById("backupToken")?.value.trim() || "";
+        if (token) payload.token = token;
+        const data = await api("/api/backup", { method: "POST", body: JSON.stringify(payload) });
+        const tok = document.getElementById("backupToken");
+        if (tok) tok.value = "";
+        if (data.status) renderBackupStatus(data.status, { showLog: true, openLog: true });
+        else await refreshBackupStatus();
+        setStatus(data.ok ? "Backup settings saved" : (data.error || "Save failed"), data.ok ? "ok" : "err");
+        if (data.error) showLog(String(data.error), true);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        showLog(String(e.message || e), true);
+        await refreshBackupStatus(true);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    document.getElementById("backupRefreshBtn")?.addEventListener("click", () => refreshBackupStatus());
+    document.getElementById("backupRunBtn")?.addEventListener("click", () => runBackupNow());
+    document.getElementById("backupSaveBtn")?.addEventListener("click", () => saveBackupSettings());
+    document.getElementById("backupTimerChk")?.addEventListener("change", () => saveBackupSettings());
+    document.getElementById("backupOpenRepoBtn")?.addEventListener("click", () => {
+      const url = backupState?.repo_url;
+      if (url) window.open(url, "_blank", "noopener");
+      else setStatus("No backup repo configured", "err");
+    });
 
     const SETTINGS_VIEWS = new Set([
       "overview", "security", "backup", "vps", "router", "buffalo", "proxmox", "files",
@@ -6272,5 +6693,6 @@
       }
     })();
   </script>
+  <script src="/static/sm-circle-crypto.js"></script>
 </body>
 </html>
