@@ -3119,15 +3119,35 @@
       document.getElementById("ovFwNote").textContent = "";
     }
     async function api(path, options = {}) {
-      const { timeoutMs = 120000, ...rest } = options;
+      const { timeoutMs = 120000, retries = 0, ...rest } = options;
+      const method = String(rest.method || "GET").toUpperCase();
+      const hasBody = rest.body != null && rest.body !== "";
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      let signal = ctrl.signal;
+      if (rest.signal) {
+        if (typeof AbortSignal !== "undefined" && typeof AbortSignal.any === "function") {
+          signal = AbortSignal.any([ctrl.signal, rest.signal]);
+        } else {
+          rest.signal.addEventListener("abort", () => {
+            try { ctrl.abort(); } catch (_) {}
+          }, { once: true });
+        }
+      }
+      const headers = { ...(rest.headers || {}) };
+      // Avoid non-simple Content-Type on bodyless GETs (some proxies mishandle it).
+      if (hasBody || (method !== "GET" && method !== "HEAD")) {
+        if (!headers["Content-Type"] && !headers["content-type"]) {
+          headers["Content-Type"] = "application/json";
+        }
+      }
       try {
         const res = await fetch(path, {
           ...rest,
-          signal: ctrl.signal,
+          method,
+          signal,
           credentials: "same-origin",
-          headers: { "Content-Type": "application/json", ...(rest.headers || {}) },
+          headers,
         });
         if (res.status === 401) {
           location.href = "/";
@@ -3137,10 +3157,25 @@
         if (!res.ok) throw new Error(data.error || data.stderr || `HTTP ${res.status}`);
         return data;
       } catch (err) {
-        if (err && err.name === "AbortError") throw new Error("Timed out. Stay on Wi‑Fi and try Save again.");
+        if (err && err.name === "AbortError") {
+          if (rest.signal && rest.signal.aborted) throw err; // caller cancelled
+          throw new Error("Timed out. Stay on Wi‑Fi/VPN and try again.");
+        }
         const msg = String(err && err.message ? err.message : err);
-        if (msg === "Failed to fetch" || msg.includes("NetworkError")) {
-          throw new Error("Could not reach the panel.");
+        const networkFail =
+          msg === "Failed to fetch" ||
+          msg === "Load failed" ||
+          msg === "NetworkError when attempting to fetch resource." ||
+          msg.includes("NetworkError") ||
+          msg.includes("network error");
+        if (networkFail && retries > 0 && method === "GET") {
+          await new Promise((r) => setTimeout(r, 350));
+          return api(path, { ...options, retries: retries - 1 });
+        }
+        if (networkFail) {
+          throw new Error(
+            "Could not reach the panel. Reconnect VPN (or home Wi‑Fi), then hard-refresh."
+          );
         }
         throw err;
       } finally {
@@ -5970,12 +6005,12 @@
       },
     };
     const tvFormState = {
-      tvshows: { seasons: [], episodes: [], searchTimer: null },
-      "kids-tvshows": { seasons: [], episodes: [], searchTimer: null },
+      tvshows: { seasons: [], episodes: [], searchTimer: null, searchAbort: null },
+      "kids-tvshows": { seasons: [], episodes: [], searchTimer: null, searchAbort: null },
     };
     const movieFormState = {
-      movies: { searchTimer: null },
-      "kids-movies": { searchTimer: null },
+      movies: { searchTimer: null, searchAbort: null },
+      "kids-movies": { searchTimer: null, searchAbort: null },
     };
 
     function tvFormEls(library) {
@@ -6163,10 +6198,23 @@
       const q = String(query || "").trim();
       if (q.length < 2) {
         els.results.innerHTML = "";
+        if (tvFormState[library].searchAbort) {
+          try { tvFormState[library].searchAbort.abort(); } catch (_) {}
+          tvFormState[library].searchAbort = null;
+        }
         return;
       }
+      if (tvFormState[library].searchAbort) {
+        try { tvFormState[library].searchAbort.abort(); } catch (_) {}
+      }
+      const ac = new AbortController();
+      tvFormState[library].searchAbort = ac;
       try {
-        const data = await api("/api/media/tmdb/search?q=" + encodeURIComponent(q));
+        const data = await api(
+          "/api/media/tmdb/search?q=" + encodeURIComponent(q),
+          { signal: ac.signal, timeoutMs: 20000, retries: 1 }
+        );
+        if (tvFormState[library].searchAbort !== ac) return;
         const rows = data.results || [];
         els.results.innerHTML = "";
         if (!rows.length) {
@@ -6190,6 +6238,8 @@
           els.results.appendChild(li);
         });
       } catch (e) {
+        if (e && e.name === "AbortError") return;
+        if (tvFormState[library].searchAbort !== ac) return;
         els.results.innerHTML = "";
         const li = document.createElement("li");
         li.textContent = String(e.message || e);
@@ -6368,10 +6418,23 @@
       const q = String(query || "").trim();
       if (q.length < 2) {
         els.results.innerHTML = "";
+        if (movieFormState[library].searchAbort) {
+          try { movieFormState[library].searchAbort.abort(); } catch (_) {}
+          movieFormState[library].searchAbort = null;
+        }
         return;
       }
+      if (movieFormState[library].searchAbort) {
+        try { movieFormState[library].searchAbort.abort(); } catch (_) {}
+      }
+      const ac = new AbortController();
+      movieFormState[library].searchAbort = ac;
       try {
-        const data = await api("/api/media/tmdb/search?type=movie&q=" + encodeURIComponent(q));
+        const data = await api(
+          "/api/media/tmdb/search?type=movie&q=" + encodeURIComponent(q),
+          { signal: ac.signal, timeoutMs: 20000, retries: 1 }
+        );
+        if (movieFormState[library].searchAbort !== ac) return;
         const rows = data.results || [];
         els.results.innerHTML = "";
         if (!rows.length) {
@@ -6395,6 +6458,8 @@
           els.results.appendChild(li);
         });
       } catch (e) {
+        if (e && e.name === "AbortError") return;
+        if (movieFormState[library].searchAbort !== ac) return;
         els.results.innerHTML = "";
         const li = document.createElement("li");
         li.textContent = String(e.message || e);
