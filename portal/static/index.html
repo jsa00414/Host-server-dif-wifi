@@ -951,6 +951,24 @@
       grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
+    .media-tv-form .tv-show-folder-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .media-tv-form .tv-form-upload-btn {
+      white-space: nowrap;
+      height: fit-content;
+      min-height: 38px;
+      align-self: end;
+    }
+    @media (max-width: 640px) {
+      .media-tv-form .tv-show-folder-row {
+        grid-template-columns: 1fr;
+      }
+      .media-tv-form .tv-form-upload-btn { width: 100%; }
+    }
     .media-tv-form .tv-search-results {
       list-style: none;
       margin: 0;
@@ -1540,9 +1558,12 @@
                 <input type="search" id="mediaTvSearch" placeholder="Show name…" autocomplete="off" />
               </label>
               <ul class="tv-search-results" id="mediaTvResults"></ul>
-              <label>Show folder
-                <input type="text" id="mediaTvShowName" placeholder="Show Name (2020)" />
-              </label>
+              <div class="tv-show-folder-row">
+                <label>Show folder
+                  <input type="text" id="mediaTvShowName" placeholder="Show Name (2020)" />
+                </label>
+                <button type="button" class="primary tv-form-upload-btn" id="mediaTvFormUploadBtn">Upload to show folder</button>
+              </div>
               <div class="tv-form-row">
                 <label>Year <input type="text" id="mediaTvYear" maxlength="4" placeholder="2020" /></label>
                 <label>TMDB id <input type="text" id="mediaTvTmdbId" placeholder="optional" /></label>
@@ -1577,9 +1598,12 @@
                 <input type="search" id="mediaKidsTvSearch" placeholder="Show name…" autocomplete="off" />
               </label>
               <ul class="tv-search-results" id="mediaKidsTvResults"></ul>
-              <label>Show folder
-                <input type="text" id="mediaKidsTvShowName" placeholder="Show Name (2020)" />
-              </label>
+              <div class="tv-show-folder-row">
+                <label>Show folder
+                  <input type="text" id="mediaKidsTvShowName" placeholder="Show Name (2020)" />
+                </label>
+                <button type="button" class="primary tv-form-upload-btn" id="mediaKidsTvFormUploadBtn">Upload to show folder</button>
+              </div>
               <div class="tv-form-row">
                 <label>Year <input type="text" id="mediaKidsTvYear" maxlength="4" placeholder="2020" /></label>
                 <label>TMDB id <input type="text" id="mediaKidsTvTmdbId" placeholder="optional" /></label>
@@ -4325,6 +4349,8 @@
         episode: "mediaTvEpisode",
         epTitle: "mediaTvEpTitle",
         preview: "mediaTvPreview",
+        uploadBtn: "mediaTvFormUploadBtn",
+        fileInput: "mediaTvInput",
       },
       "kids-tvshows": {
         toggle: "mediaKidsTvFormToggle",
@@ -4338,6 +4364,8 @@
         episode: "mediaKidsTvEpisode",
         epTitle: "mediaKidsTvEpTitle",
         preview: "mediaKidsTvPreview",
+        uploadBtn: "mediaKidsTvFormUploadBtn",
+        fileInput: "mediaKidsTvInput",
       },
     };
     const tvFormState = {
@@ -4483,6 +4511,7 @@
         fillSeasonSelect(library, details.seasons || []);
         await loadTvSeasonEpisodes(library);
         updateTvPreview(library);
+        syncTvFormUploadBtn(library);
       } catch (e) {
         setStatus(String(e.message || e), "err");
       }
@@ -4529,15 +4558,59 @@
       }
     }
 
+    function syncTvFormUploadBtn(library) {
+      const els = tvFormEls(library);
+      if (!els || !els.uploadBtn) return;
+      const show = (els.show?.value || "").trim();
+      const year = (els.year?.value || "").trim();
+      const folder = year && /^\d{4}$/.test(year) && show && !show.includes("(" + year + ")")
+        ? `${show} (${year})`
+        : show;
+      if (folder) {
+        els.uploadBtn.textContent = `Upload to ${folder}`;
+        els.uploadBtn.title = `Upload episode(s) into ${folder}/Season XX/…`;
+        els.uploadBtn.disabled = false;
+      } else {
+        els.uploadBtn.textContent = "Upload to show folder";
+        els.uploadBtn.title = "Enter or pick a show folder first";
+        els.uploadBtn.disabled = true;
+      }
+    }
+
+    function startTvFormUpload(library) {
+      const els = tvFormEls(library);
+      if (!els) return;
+      if (els.toggle && !els.toggle.checked) {
+        els.toggle.checked = true;
+        els.form?.classList.add("is-open");
+      }
+      try {
+        collectTvFormMeta(library);
+      } catch (e) {
+        setStatus(String(e.message || e), "err");
+        els.show?.focus();
+        return;
+      }
+      if (elementsBusy) {
+        setStatus("Upload already in progress", "err");
+        return;
+      }
+      els.fileInput?.click();
+    }
+
     function wireTvForm(library) {
       const els = tvFormEls(library);
       if (!els || !els.toggle || !els.form) return;
       const syncOpen = () => {
         els.form.classList.toggle("is-open", !!els.toggle.checked);
-        if (els.toggle.checked) updateTvPreview(library);
+        if (els.toggle.checked) {
+          updateTvPreview(library);
+          syncTvFormUploadBtn(library);
+        }
       };
       els.toggle.addEventListener("change", syncOpen);
       syncOpen();
+      syncTvFormUploadBtn(library);
       els.search?.addEventListener("input", () => {
         clearTimeout(tvFormState[library].searchTimer);
         tvFormState[library].searchTimer = setTimeout(() => {
@@ -4552,7 +4625,10 @@
         }
       });
       ["show", "year", "epTitle"].forEach((k) => {
-        els[k]?.addEventListener("input", () => updateTvPreview(library));
+        els[k]?.addEventListener("input", () => {
+          updateTvPreview(library);
+          syncTvFormUploadBtn(library);
+        });
       });
       els.season?.addEventListener("change", async () => {
         updateTvPreview(library);
@@ -4573,9 +4649,15 @@
           fillSeasonSelect(library, details.seasons || []);
           await loadTvSeasonEpisodes(library);
           updateTvPreview(library);
+          syncTvFormUploadBtn(library);
         } catch (e) {
           setStatus(String(e.message || e), "err");
         }
+      });
+      els.uploadBtn?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        startTvFormUpload(library);
       });
     }
 
