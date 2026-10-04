@@ -1,0 +1,71 @@
+# Guest / out-of-circle DNS: NXDOMAIN for admin hostnames so browsers show a
+# real "This site can't be reached" / DNS_PROBE_FINISHED_NXDOMAIN page.
+# Everything else forwards to public resolvers.
+# keys.* stays resolvable so Authenticator enroll still works off-circle.
+
+portal.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+router.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+vpn.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+proxmox.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+grafana.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+dns.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+pihole.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+files.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+buffalo.vpstruelord.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+remote.truemailor.com:53 {
+    template IN ANY {
+        rcode NXDOMAIN
+    }
+}
+
+.:53 {
+    forward . 1.1.1.1 1.0.0.1
+    cache 30
+    log
+    errors
+}

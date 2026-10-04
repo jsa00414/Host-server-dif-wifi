@@ -5094,7 +5094,8 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
             # NAS media streams skip gzip, but must still honor vpn_only —
             # otherwise a stolen session cookie can cat/download off-VPN while
-            # /login (portal root) remains VPN-gated (stealth unreachable page).
+            # /login (portal root) remains VPN-gated (connection abort; guest DNS
+            # NXDOMAIN is the primary “site can’t be reached” path).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
             if r.get("vpn_only"):
@@ -11634,115 +11635,15 @@ def _allowlisted_lan_ips() -> set[str]:
     return out
 
 
-def _caddy_unreachable_html() -> str:
-    """Chrome mobile net-error interstitial (ERR_NAME_NOT_RESOLVED lookalike)."""
-    # Chromium-ish layout/colors; {host} is filled by Caddy. No backticks in body.
-    # Version marker lets peer-acl refresh stale pages without rewriting forever.
-    return (
-        "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
-        "<meta name=viewport content=\"width=device-width,initial-scale=1,"
-        "maximum-scale=1,user-scalable=no\">"
-        "<meta name=color-scheme content=light>"
-        "<meta name=theme-color content=#fff>"
-        "<title>{host}</title>"
-        "<!--sm-neterr:3-->"
-        "<style>"
-        "*{box-sizing:border-box}"
-        "html{background:#fff;-webkit-text-size-adjust:100%}"
-        "body{margin:0;background:#fff;color:#312f2f;"
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
-        "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;"
-        "-webkit-font-smoothing:antialiased}"
-        ".interstitial-wrapper{box-sizing:border-box;font-size:1em;"
-        "line-height:1.55em;margin:0 auto;max-width:600px;"
-        "padding:72px 24px 40px;width:100%}"
-        ".icon{height:72px;margin:0 0 28px;width:72px}"
-        "h1{color:#312f2f;font-size:1.5em;font-weight:700;"
-        "line-height:1.25em;margin:0 0 14px}"
-        "#main-message p{display:block;margin:0 0 0}"
-        "#main-message .error-code{color:#696969;font-size:.8em;"
-        "margin-top:14px;text-transform:none;letter-spacing:0}"
-        "#suggestions-list{margin-top:16px}"
-        "#suggestions-list p{margin:0}"
-        "#suggestions-list ul{margin:6px 0 0;padding:0 0 0 18px}"
-        "#suggestions-list li{margin:0 0 4px;padding:0}"
-        "#buttons{margin:28px 0 0}"
-        "#buttons .blue-button{appearance:none;-webkit-appearance:none;"
-        "background:#1a73e8;border:0;border-radius:24px;color:#fff;"
-        "cursor:pointer;display:block;font:inherit;font-size:15px;"
-        "font-weight:500;margin:0;padding:12px 16px;text-align:center;"
-        "text-decoration:none;width:100%}"
-        "#buttons .blue-button:active{background:#1765cc}"
-        "#details{display:none;color:#696969;font-size:.85em;margin:18px 0 0;"
-        "line-height:1.45}"
-        "#details.show{display:block}"
-        "#details-button{background:0 0;border:0;color:#1a73e8;cursor:pointer;"
-        "display:block;font:inherit;font-size:15px;margin:16px auto 0;"
-        "padding:8px;text-align:center;width:100%}"
-        "@media (max-width:420px){"
-        ".interstitial-wrapper{padding-top:56px;padding-left:22px;padding-right:22px}"
-        "h1{font-size:1.35em}"
-        "}"
-        "</style></head><body>"
-        "<div class=interstitial-wrapper>"
-        "<div id=main-content>"
-        "<div class=icon aria-hidden=true>"
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"72\" height=\"72\" viewBox=\"0 0 48 48\">"
-        "<path fill=\"#dadce0\" d=\"M28 4H12c-2.2 0-4 1.8-4 4v32c0 2.2 1.8 4 4 4h24c2.2 0 4-1.8 "
-        "4-4V16L28 4z\"/>"
-        "<path fill=\"#bdc1c6\" d=\"M28 4v10c0 1.1.9 2 2 2h10L28 4z\"/>"
-        "<circle fill=\"#80868b\" cx=\"18.5\" cy=\"28\" r=\"2\"/>"
-        "<circle fill=\"#80868b\" cx=\"29.5\" cy=\"28\" r=\"2\"/>"
-        "<path fill=\"none\" stroke=\"#80868b\" stroke-width=\"2\" stroke-linecap=\"round\" "
-        "d=\"M19 34c1.8-1.6 8.2-1.6 10 0\"/>"
-        "</svg></div>"
-        "<div id=main-message>"
-        "<h1>This site can&#8217;t be reached</h1>"
-        "<p><strong id=host>{host}</strong>&#8217;s server IP address could not be found.</p>"
-        "<div id=suggestions-list><p>Try:</p>"
-        "<ul><li>Checking the connection</li></ul></div>"
-        "<div class=error-code>ERR_NAME_NOT_RESOLVED</div>"
-        "</div></div>"
-        "<div id=buttons>"
-        "<button class=blue-button type=button id=reload>Reload</button>"
-        "<button type=button id=details-button>Details</button>"
-        "<div id=details>"
-        "DNS_PROBE_FINISHED_NXDOMAIN<br>"
-        "The server at <span id=host2>{host}</span> can&#8217;t be found, "
-        "because the DNS lookup failed. DNS is the network service that "
-        "translates a website&#8217;s name to its internet address."
-        "</div></div></div>"
-        "<script>"
-        "(function(){"
-        "var h=location.hostname||'{host}';"
-        "var el=document.getElementById('host'); if(el) el.textContent=h;"
-        "var e2=document.getElementById('host2'); if(e2) e2.textContent=h;"
-        "document.title=h;"
-        "document.getElementById('reload').onclick=function(){location.reload()};"
-        "document.getElementById('details-button').onclick=function(){"
-        "var d=document.getElementById('details');"
-        "var on=d.classList.toggle('show');"
-        "this.textContent=on?'Hide details':'Details';"
-        "};"
-        "})();"
-        "</script>"
-        "</body></html>"
-    )
-
-
 def _caddy_unreachable_respond_lines(indent: str) -> list[str]:
-    """Chrome-like DNS failure page instead of advertising Forbidden 403.
+    """Close the connection for ACL denies — no fake HTML interstitial.
 
-    Hostname still resolves (TLS terminates), but the body mimics
-    ERR_NAME_NOT_RESOLVED so out-of-circle visitors do not see an ACL deny.
+    Out-of-circle clients are steered to guest DNS (VPN_GUEST_DNS), which
+    returns real NXDOMAIN for portal/router/admin names so the browser shows
+    its native \"This site can't be reached\" / DNS_PROBE_FINISHED_NXDOMAIN.
+    ``abort`` is only the residual path when an IP is already known/cached.
     """
-    body = _caddy_unreachable_html()
-    return [
-        f'{indent}header Content-Type "text/html; charset=utf-8"',
-        f'{indent}header Cache-Control "no-store"',
-        f"{indent}header -Server",
-        f"{indent}respond `{body}` 404",
-    ]
+    return [f"{indent}abort"]
 
 
 def _caddy_denied_wan_lines(indent: str) -> list[str]:
