@@ -7,10 +7,14 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 IKEV2_DIR="${IKEV2_DIR:-/opt/ikev2}"
 IKEV2_HOST="${IKEV2_HOST:-portal.vpstruelord.com}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
-IKEV2_DNS="${IKEV2_DNS:-10.42.42.44}"
 IKEV2_USER="${IKEV2_USER:-windows}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
 GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+# Push guest DNS to Windows (INTERNAL_IP4_DNS). Pool DNAT also sends guests
+# here; trusted VIPs are upgraded to AdGuard by ensure-vpn-client-gate.sh.
+# Do NOT push 10.42.42.44 by default — that disagrees with guest DNAT and can
+# leave Windows hung on "Assigning IPv4" / broken DNS until trust rules exist.
+IKEV2_DNS="${IKEV2_DNS:-$GUEST_DNS}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 LE_LIVE="${IKEV2_LE_LIVE:-/etc/letsencrypt/live/ikev2-portal-rsa}"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/acme}"
@@ -296,9 +300,10 @@ echo "  Server:   ${IKEV2_HOST}"
 echo "  User:     ${IKEV2_USER}"
 echo "  Password: ${IKEV2_PASS}"
 echo "  Pool:     ${IKEV2_POOL}"
-echo "  DNS:      ${IKEV2_DNS} → AdGuard ${ADGUARD_DNS}"
+echo "  DNS push: ${IKEV2_DNS} (guest default)"
+echo "  Circle:   AdGuard ${ADGUARD_DNS} via trust VIP DNAT"
 echo "  Cert:     ${LE_LIVE}"
-echo "  SplitDNS: portal/admin → ${IKEV2_DNS} (AdGuard rewrite)"
+echo "  SplitDNS: vpn/admin hosts → ${ADGUARD_DNS} rewrite → 10.11.0.1"
 echo "  PeerACL:  active IKEv2 WAN IPs synced into Caddy @vpn_clients"
 if [[ "${IKEV2_VIA_OPENVPN:-0}" = "1" ]]; then
   echo "  Mode:     IKEv2 via OpenVPN only (tun0)"

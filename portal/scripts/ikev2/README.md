@@ -26,7 +26,8 @@ No private CA install is required.
 | Protocol | IKEv2 + EAP-MSCHAPv2 |
 | Ports | UDP 500, 4500 |
 | Pool | `10.10.0.0/24` |
-| DNS | AdGuard `10.42.42.44` (portal VIP `10.11.0.1`) |
+| DNS push | Guest `1.1.1.1` (`INTERNAL_IP4_DNS` / `rightdns`) |
+| Circle DNS | AdGuard `10.42.42.44` via per-VIP trust DNAT |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 | VIP source | in-memory `rightsourceip` pool (DHCP plugin **must stay load=no**) |
 
@@ -96,10 +97,13 @@ bash /opt/ikev2/ensure-vpn-split-dns.sh
 AdGuard rewrites VPN-gated hostnames to `10.11.0.1` (lo VIP) so traffic stays on-tunnel
 with a private source IP that matches Caddy `@vpn_clients`.
 
-**Guest vs trust DNS:** unapproved IKEv2 peers are DNAT'd pool-wide to
-`VPN_GUEST_DNS` (default `1.1.1.1`) so they never see those admin rewrites.
-Allowlisted / sticky WAN peers get a per-VIP DNAT upgrade to AdGuard
-(`ensure-vpn-client-gate.sh`).
+**Guest vs trust DNS:** Windows is pushed `IKEV2_DNS` / `VPN_GUEST_DNS`
+(default `1.1.1.1`) as `rightdns`. Unapproved peers stay on that guest resolver
+(pool-wide DNAT). Allowlisted / sticky WAN peers get a per-VIP DNAT upgrade to
+AdGuard (`ensure-vpn-client-gate.sh`) so they see admin rewrites → `10.11.0.1`.
+
+Do **not** push `10.42.42.44` as the pool default: that disagrees with guest DNAT
+and can strand Windows on “Assigning IPv4” / broken DNS before trust rules exist.
 
 After applying: **disconnect/reconnect VPN** (or flush DNS), then open the portal.
 
