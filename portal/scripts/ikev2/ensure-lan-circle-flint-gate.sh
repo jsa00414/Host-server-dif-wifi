@@ -131,10 +131,21 @@ if ssh_2fa.is_file():
     except Exception:
         enroll_unlocked = False
 
+# Circle membership is key-bound only — keyless "allowed" rows are not trusted.
 allowed = {
     norm(r.get("ip", ""))
     for r in (data.get("allowed") or [])
-    if isinstance(r, dict) and is_home_lan(norm(r.get("ip", "")))
+    if isinstance(r, dict)
+    and is_home_lan(norm(r.get("ip", "")))
+    and str(r.get("pubkey") or "").strip()
+}
+# Keyless allowlist rows must still be blocked until demoted to pending.
+keyless_allowed = {
+    norm(r.get("ip", ""))
+    for r in (data.get("allowed") or [])
+    if isinstance(r, dict)
+    and is_home_lan(norm(r.get("ip", "")))
+    and not str(r.get("pubkey") or "").strip()
 }
 blocked: list[str] = []
 seen = set()
@@ -149,8 +160,16 @@ for row in data.get("denied") or []:
     seen.add(ip)
     blocked.append(ip)
 
-# Pending LAN IPs are blocked unless an enrolled Authenticator owns that IP,
-# or new-device enrollment is currently unlocked.
+# Keyless circle rows + pending LAN IPs are blocked unless an enrolled
+# Authenticator owns that IP, or new-device enrollment is currently unlocked.
+for ip in sorted(keyless_allowed):
+    if ip in allowed or ip in seen:
+        continue
+    if ip in enrolled or enroll_unlocked:
+        continue
+    seen.add(ip)
+    blocked.append(ip)
+
 for row in data.get("pending") or []:
     if not isinstance(row, dict):
         continue

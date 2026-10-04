@@ -62,6 +62,62 @@ def normalize_ip(raw: str) -> str:
     return raw
 
 
+def row_is_sealed(row: dict) -> bool:
+    ip = normalize_ip(row.get("ip", ""))
+    if bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def row_is_circle_trusted(row: dict) -> bool:
+    """Circle membership is key-bound only (except sealed router WAN)."""
+    return row_is_sealed(row) or row_has_key(row)
+
+
+def scrub_require_keys(data: dict) -> dict:
+    """Demote non-sealed allowlisted IPs that lack an Ed25519 pubkey to pending."""
+    kept = []
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {normalize_ip(r.get("ip", "")) for r in pending}
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        ip = normalize_ip(row.get("ip", ""))
+        if not ip:
+            continue
+        if row_is_circle_trusted(row):
+            kept.append(row)
+            continue
+        if ip not in pending_ips:
+            pend = {
+                "ip": ip,
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
+            }
+            if is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    data["allowed"] = kept
+    data["pending"] = pending
+    return data
+
+
 def load_allowlist() -> dict:
     data = {
         "allowed": [],
@@ -78,26 +134,9 @@ def load_allowlist() -> dict:
                         data[key] = loaded[key]
         except Exception:
             pass
-    # Seed from sticky file so existing home WAN stays trusted.
-    sticky_ips = []
-    if sticky_path.is_file():
-        for line in sticky_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            raw = line.strip()
-            if not raw or raw.startswith("#"):
-                continue
-            sticky_ips.append(normalize_ip(raw))
+    # Do NOT seed sticky WAN into allowed without a circle key — membership is
+    # key-bound only. Sealed router WANs are resealed below from env.
     allowed_set = {normalize_ip(x.get("ip", "")) for x in data["allowed"] if isinstance(x, dict)}
-    for ip in sticky_ips:
-        if ip and ip not in allowed_set and is_public_ipv4(ip):
-            data["allowed"].append(
-                {
-                    "ip": ip,
-                    "note": "seeded from sticky WAN",
-                    "approved_at": now,
-                    "source": "sticky",
-                }
-            )
-            allowed_set.add(ip)
     # Always reseal configured WANs only (VPN_CIRCLE_SEALED_IPS; empty = none).
     sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
     sealed_set = set()
@@ -150,11 +189,12 @@ def load_allowlist() -> dict:
             and normalize_ip(r.get("ip", "")) not in sealed_set
         )
     ]
-    allowed_set = {normalize_ip(x.get("ip", "")) for x in data["allowed"] if isinstance(x, dict)}
+    data = scrub_require_keys(data)
     return data
 
 
 def save_allowlist(data: dict) -> None:
+    data = scrub_require_keys(data)
     allow_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = allow_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -168,15 +208,17 @@ def save_allowlist(data: dict) -> None:
 def sync_sticky(allowed: list[dict]) -> None:
     sticky_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# Managed by vpn allowlist — approved sticky WAN + LAN IPs",
-        "# Hidden-from-Authenticator rows stay sticky-allowlisted.",
+        "# Managed by vpn allowlist — key-bound sticky WAN + LAN IPs",
+        "# Key-bound only (except sealed router WAN). No blanket 192.168.8.0/24.",
         "# one IPv4 /32 per line",
     ]
     for row in allowed:
         if not isinstance(row, dict):
             continue
         ip = normalize_ip(row.get("ip", ""))
-        if ip and (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+        if not ip or not (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+            continue
+        if row_is_circle_trusted(row):
             lines.append(f"{ip}/32")
     sticky_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -388,10 +430,13 @@ def ufw_set_trusted(vip: str, enable: bool) -> None:
 
 
 data = load_allowlist()
+# Trust circle: sealed router WAN or Ed25519 key-bound only.
 allowed_ips = {
     normalize_ip(x.get("ip", ""))
     for x in data["allowed"]
-    if isinstance(x, dict) and normalize_ip(x.get("ip", ""))
+    if isinstance(x, dict)
+    and normalize_ip(x.get("ip", ""))
+    and row_is_circle_trusted(x)
 }
 denied_ips = {
     normalize_ip(x.get("ip", ""))

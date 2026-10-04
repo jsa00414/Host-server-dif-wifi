@@ -157,32 +157,25 @@ def load_sticky_cidrs() -> list[str]:
     return out
 
 
+def row_is_sealed(row: dict) -> bool:
+    if bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def row_is_circle_trusted(row: dict) -> bool:
+    """Circle membership is key-bound only (except sealed router WAN)."""
+    return row_is_sealed(row) or row_has_key(row)
+
+
 def load_allowlist_ips() -> set[str]:
-    """Public sticky/sealed WAN IPs that belong in @vpn_clients."""
-    ips: set[str] = set()
-    if not allow_file.is_file():
-        return ips
-    try:
-        data = json.loads(allow_file.read_text(encoding="utf-8"))
-    except Exception:
-        return ips
-    for row in data.get("allowed") or []:
-        if isinstance(row, dict):
-            ip = normalize_ip(row.get("ip", ""))
-            if ip and is_public_ipv4(ip):
-                ips.add(ip)
-    # Always keep sealed router WANs (env override) even if JSON was wiped.
-    # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
-    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
-    for part in re.split(r"[\s,;]+", sealed_raw):
-        ip = normalize_ip(part)
-        if ip and is_public_ipv4(ip):
-            ips.add(ip)
-    return ips
-
-
-def load_allowlist_lan_ips() -> set[str]:
-    """Approved home-LAN client /32s (not the whole /24)."""
+    """Public sealed / key-bound WAN IPs that belong in @vpn_clients."""
     ips: set[str] = set()
     if not allow_file.is_file():
         return ips
@@ -194,13 +187,41 @@ def load_allowlist_lan_ips() -> set[str]:
         if not isinstance(row, dict):
             continue
         ip = normalize_ip(row.get("ip", ""))
-        if ip and is_home_lan_ipv4(ip):
+        if ip and is_public_ipv4(ip) and row_is_circle_trusted(row):
+            ips.add(ip)
+    # Always keep sealed router WANs (env override) even if JSON was wiped.
+    # Home Wi-Fi NATs here; per-device pending is enforced on Flint pre-NAT.
+    sealed_raw = os.environ.get("VPN_CIRCLE_SEALED_IPS", "")
+    for part in re.split(r"[\s,;]+", sealed_raw):
+        ip = normalize_ip(part)
+        if ip and is_public_ipv4(ip):
+            ips.add(ip)
+    return ips
+
+
+def load_allowlist_lan_ips() -> set[str]:
+    """Key-bound home-LAN client /32s (not the whole /24)."""
+    ips: set[str] = set()
+    if not allow_file.is_file():
+        return ips
+    try:
+        data = json.loads(allow_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ips
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = normalize_ip(row.get("ip", ""))
+        if ip and is_home_lan_ipv4(ip) and row_has_key(row):
             ips.add(ip)
     return ips
 
 
 def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
-    """Ensure sticky + sealed WANs exist as allowed entries; return allowed IP set."""
+    """Ensure sealed WANs exist; scrub keyless; return trusted allowed IP set.
+
+    Sticky file alone must NOT re-admit IPs without an Ed25519 pubkey.
+    """
     allowed = load_allowlist_ips()
     data = {"allowed": [], "denied": [], "attempts": [], "pending": []}
     if allow_file.is_file():
@@ -271,24 +292,46 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             changed = True
         allowed.add(ip)
 
-    for cidr in sticky:
-        ip = normalize_ip(cidr)
-        if ip and is_public_ipv4(ip) and ip not in allowed:
-            by_ip[ip] = {
+    # Demote non-sealed keyless rows to pending (do not sticky-seed them back).
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {normalize_ip(r.get("ip", "")) for r in pending}
+    for ip, row in list(by_ip.items()):
+        if ip in sealed_ips or row_is_circle_trusted(row):
+            continue
+        del by_ip[ip]
+        changed = True
+        allowed.discard(ip)
+        if ip and ip not in pending_ips:
+            pend = {
                 "ip": ip,
-                "note": "seeded from sticky WAN",
-                "approved_at": now,
-                "source": "sticky",
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
             }
-            allowed.add(ip)
-            changed = True
+            if is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    data["pending"] = pending
+
+    # sticky arg is ignored for seeding — kept for call-site compatibility.
+    _ = sticky
 
     if changed or not allow_file.is_file():
         rebuilt = []
         seen = set()
         for ip in sealed_ips:
-            rebuilt.append(by_ip[ip])
-            seen.add(ip)
+            if ip in by_ip:
+                rebuilt.append(by_ip[ip])
+                seen.add(ip)
         for ip, row in by_ip.items():
             if ip in seen:
                 continue
@@ -301,18 +344,21 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
             os.chmod(allow_file, 0o600)
         except Exception:
             pass
-        # Keep sticky file aligned so later runs don't drop sealed / LAN.
+        # Keep sticky file aligned: sealed + key-bound only.
         sticky_file.parent.mkdir(parents=True, exist_ok=True)
         lines = [
-            "# Managed by vpn allowlist — approved sticky WAN + LAN IPs",
+            "# Managed by vpn allowlist — key-bound sticky WAN + LAN IPs",
+            "# Key-bound only (except sealed router WAN).",
             "# one IPv4 /32 per line",
         ]
         for row in rebuilt:
             ip = normalize_ip(row.get("ip", ""))
-            if ip and (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+            if not ip or not (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+                continue
+            if row_is_circle_trusted(row):
                 lines.append(f"{ip}/32")
         sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return allowed
+    return {ip for ip in allowed if ip and is_public_ipv4(ip)}
 
 
 def vpn_clients_cidrs_in_caddy(text: str) -> set[str]:

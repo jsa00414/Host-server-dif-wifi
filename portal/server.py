@@ -12278,6 +12278,65 @@ def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
     return data, changed
 
 
+def _circle_row_is_sealed(row: dict) -> bool:
+    ip = _normalize_vpn_ip(row.get("ip", ""))
+    if _is_sealed_vpn_ip(ip) or bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def _circle_row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def _scrub_allowlist_require_circle_keys(data: dict) -> tuple[dict, bool]:
+    """Demote non-sealed allowlisted IPs that lack an Ed25519 pubkey to pending.
+
+    Circle membership is key-bound only (except sealed router WAN).
+    """
+    changed = False
+    now = int(time.time())
+    kept: list[dict] = []
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {_normalize_vpn_ip(r.get("ip", "")) for r in pending}
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip:
+            changed = True
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
+            kept.append(row)
+            continue
+        changed = True
+        if ip not in pending_ips:
+            pend = {
+                "ip": ip,
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
+            }
+            if _is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    if changed:
+        data["allowed"] = kept
+        data["pending"] = pending
+    return data, changed
+
+
 def _lan_device_name_by_ip() -> dict[str, str]:
     """Map home-LAN IPs → friendly hostnames from the live LAN inventory."""
     out: dict[str, str] = {}
@@ -12946,9 +13005,10 @@ def mutate_vpn_allowlist(
     pub_n = ""
     if pubkey:
         pub_n = _normalize_ed25519_pubkey(pubkey)
-    if action_n == "approve" and str(source).startswith("auth-app") and not pub_n:
+    if action_n == "approve" and not _is_sealed_vpn_ip(ip_n) and not pub_n:
         raise ValueError(
-            "Ed25519 public key required — each circle IP must be cryptographically bound"
+            "Ed25519 public key required — circle membership is key-bound only "
+            "(approve from Authenticator so a private/public key pair is created)"
         )
     data = _read_vpn_allowlist()
     now = int(time.time())
@@ -13013,10 +13073,10 @@ def mutate_vpn_allowlist(
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
             if prev_hidden:
                 row["hidden"] = True
-            if pub_n:
-                row["pubkey"] = pub_n
-                row["key_id"] = _circle_key_id(pub_n)
-                row["key_bound_at"] = now
+            # Non-sealed approve always binds a key (enforced above).
+            row["pubkey"] = pub_n
+            row["key_id"] = _circle_key_id(pub_n)
+            row["key_bound_at"] = now
             data["allowed"].append(row)
     elif action_n == "deny":
         deny_row = {
@@ -13121,27 +13181,18 @@ def _read_vpn_allowlist() -> dict:
         for x in data["allowed"]
         if isinstance(x, dict)
     }
-    changed = False
-    for ip in sticky_ips:
-        if ip and _is_public_ipv4(ip) and ip not in allowed_set and not _is_sealed_vpn_ip(ip):
-            data["allowed"].append(
-                {
-                    "ip": ip,
-                    "note": "seeded from sticky WAN",
-                    "approved_at": int(time.time()),
-                    "source": "sticky",
-                }
-            )
-            allowed_set.add(ip)
-            changed = True
+    # Do NOT seed sticky WAN into allowed without a circle key — membership is
+    # key-bound only (sealed router WANs are handled by _ensure_sealed_*).
     data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
-    if changed or sealed_changed or not VPN_ALLOWLIST_PATH.is_file():
+    data, key_scrubbed = _scrub_allowlist_require_circle_keys(data)
+    if sealed_changed or key_scrubbed or not VPN_ALLOWLIST_PATH.is_file():
         _write_vpn_allowlist(data)
     return data
 
 
 def _write_vpn_allowlist(data: dict) -> None:
     data, _ = _ensure_sealed_vpn_allowlist(data)
+    data, _ = _scrub_allowlist_require_circle_keys(data)
     VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "allowed": list(data.get("allowed") or []),
@@ -13158,17 +13209,19 @@ def _write_vpn_allowlist(data: dict) -> None:
     except Exception:
         pass
     # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
+    # Only sealed + key-bound IPs are sticky-trusted.
     lines = [
         "# Managed by Security → VPN trust circle",
         "# Approved sticky WAN + LAN IPs (one IPv4 /32 per line)",
-        "# Sealed router WAN IPs are always included and cannot be revoked from apps.",
-        "# Blanket 192.168.8.0/24 is never written — approved LAN /32s only.",
+        "# Key-bound only (except sealed router WAN). No blanket 192.168.8.0/24.",
     ]
     for row in payload["allowed"]:
         if not isinstance(row, dict):
             continue
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if ip and (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+        if not ip or not (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
             lines.append(f"{ip}/32")
     STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
