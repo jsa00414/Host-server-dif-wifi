@@ -101,13 +101,13 @@ while ip rule del from 192.168.8.0/24 to "$VPS" lookup "$TABLE" 2>/dev/null; do 
 ip rule add iif br-lan to "$VPS"/32 lookup "$TABLE" priority 35 2>/dev/null || true
 ip rule add from 192.168.8.0/24 to "$VPS"/32 lookup "$TABLE" priority 36 2>/dev/null || true
 
-# Clear prior SM-PORTAL rules then re-add per key-bound LAN /32 only
-while iptables -t nat -S PREROUTING 2>/dev/null | grep -q SM-PORTAL-VIA-OVPN; do
-  line="$(iptables -t nat -S PREROUTING | grep SM-PORTAL-VIA-OVPN | head -1)"
+# Clear prior SM-PORTAL / SM-PORTAL-RELAY rules then re-add per key-bound LAN /32 only
+while iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'SM-PORTAL-VIA-OVPN|SM-PORTAL-RELAY|SM-SURFACE-RELAY'; do
+  line="$(iptables -t nat -S PREROUTING | grep -E 'SM-PORTAL-VIA-OVPN|SM-PORTAL-RELAY|SM-SURFACE-RELAY' | head -1)"
   eval "iptables -t nat ${{line/-A/-D}}" 2>/dev/null || break
 done
-while iptables -t filter -S 2>/dev/null | grep -q SM-PORTAL-VIA-OVPN; do
-  line="$(iptables -t filter -S | grep SM-PORTAL-VIA-OVPN | head -1)"
+while iptables -t filter -S 2>/dev/null | grep -qE 'SM-PORTAL-VIA-OVPN|SM-PORTAL-RELAY|SM-SURFACE'; do
+  line="$(iptables -t filter -S | grep -E 'SM-PORTAL-VIA-OVPN|SM-PORTAL-RELAY|SM-SURFACE' | head -1)"
   eval "iptables -t filter ${{line/-A/-D}}" 2>/dev/null || break
 done
 while iptables -t nat -S POSTROUTING 2>/dev/null | grep -q SM-PORTAL-VIA-OVPN; do
@@ -130,11 +130,52 @@ iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
   iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 
+# Local TCP relay: key-bound LAN → VIP/public:443 REDIRECT to socat → VIP.
+# DNAT+FORWARD over OVPN stalls TLS (MSS/MTU → ERR_CONNECTION_TIMED_OUT on Windows).
+# Relay keeps LAN↔Flint at 1500 MTU; Flint↔VIP uses the path curl already proves works.
+RELAY_PORT=9443
+if command -v socat >/dev/null 2>&1; then
+  if ! netstat -lntp 2>/dev/null | grep -q ":${{RELAY_PORT}} "; then
+    pkill -f "TCP-LISTEN:${{RELAY_PORT}}" 2>/dev/null || true
+    socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,reuseaddr TCP:${{VIP}}:443 >/tmp/sm-portal-relay.log 2>&1 &
+    echo $! >/tmp/sm-portal-relay.pid
+  fi
+  iptables -t filter -C INPUT -i br-lan -p tcp --dport ${{RELAY_PORT}} -m comment --comment SM-PORTAL-RELAY -j ACCEPT 2>/dev/null || \
+    iptables -t filter -I INPUT 1 -i br-lan -p tcp --dport ${{RELAY_PORT}} -m comment --comment SM-PORTAL-RELAY -j ACCEPT
+  # Persist keep-alive (values baked in; cron restarts socat if it dies)
+  mkdir -p /etc/firewall.user.d
+  printf '%s\n' \
+    '#!/bin/sh' \
+    "# baked by ensure-flint-portal-via-ovpn.sh" \
+    "RELAY=${{RELAY_PORT}}" \
+    "VIP=${{VIP}}" \
+    'if command -v socat >/dev/null 2>&1; then' \
+    '  if ! netstat -lntp 2>/dev/null | grep -q ":$RELAY "; then' \
+    '    socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,reuseaddr TCP:$VIP:443 >/tmp/sm-portal-relay.log 2>&1 &' \
+    '    echo $! >/tmp/sm-portal-relay.pid' \
+    '  fi' \
+    'fi' \
+    'iptables -w -C INPUT -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT' \
+    >/etc/firewall.user.d/sm-portal-relay.sh
+  chmod +x /etc/firewall.user.d/sm-portal-relay.sh
+  grep -q sm-portal-relay /etc/firewall.user 2>/dev/null || \
+    echo '[ -f /etc/firewall.user.d/sm-portal-relay.sh ] && . /etc/firewall.user.d/sm-portal-relay.sh' >> /etc/firewall.user
+  grep -q sm-portal-relay /etc/crontabs/root 2>/dev/null || \
+    echo '* * * * * sh /etc/firewall.user.d/sm-portal-relay.sh' >> /etc/crontabs/root
+  /etc/init.d/cron reload 2>/dev/null || true
+fi
+
 count=0
 for ip in $LAN_IPS; do
   [ -n "$ip" ] || continue
   count=$((count+1))
-  iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":443
+  # HTTPS via local relay (not DNAT+FORWARD) — fixes Surface/Windows TLS timeout
+  if command -v socat >/dev/null 2>&1; then
+    iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VIP"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-RELAY -j REDIRECT --to-ports ${{RELAY_PORT}}
+    iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-RELAY -j REDIRECT --to-ports ${{RELAY_PORT}}
+  else
+    iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":443
+  fi
   iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 80 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":80
   iptables -t nat -I POSTROUTING 1 -s "$ip"/32 -d "$VIP"/32 -o ovpnclient1 -m comment --comment SM-PORTAL-VIA-OVPN -j MASQUERADE
   # ACCEPT must NOT require -o ovpnclient1 — that footgun REJECT'd approved LAN when
@@ -201,7 +242,7 @@ done
 conntrack -D -d "$VPS" >/dev/null 2>&1 || true
 conntrack -D -d "$VIP" >/dev/null 2>&1 || true
 
-echo "flint-portal-via-ovpn: $count key-bound LAN /32s → VIP $VIP via ovpn; others REJECT"
+echo "flint-portal-via-ovpn: $count key-bound LAN /32s → VIP $VIP via relay/ovpn; others REJECT"
 curl -sk -o /dev/null -w "ovpn_portal=%{{http_code}}\\n" --interface ovpnclient1 --connect-timeout 8 https://portal.vpstruelord.com/ || echo ovpn_portal=fail
 curl -sk -o /dev/null -w "vip_portal=%{{http_code}}\\n" --connect-timeout 8 --resolve portal.vpstruelord.com:443:$VIP https://portal.vpstruelord.com/ || echo vip_portal=fail
 nslookup portal.vpstruelord.com 127.0.0.1 2>/dev/null | head -6 || true
