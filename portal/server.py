@@ -5063,8 +5063,9 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
 
     Do not apply campus @denied_wan here. Home LAN phones egress via the shared
     campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll look
-    unreachable. Portal/router stay campus-denied; keys is gated by enroll unlock
-    + TOTP secret instead.
+    unreachable. Portal also skips campus deny (Surface Secure DNS / WAN path);
+    router and other vpn_only sites stay campus-denied. Keys is gated by enroll
+    unlock + TOTP secret instead.
 
     Proxy all paths to the panel (it enforces public vs session routes). A tight
     path allowlist previously 404'd legitimate assets/APIs and looked like a
@@ -5136,9 +5137,14 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         # there so Caddy never buffers an entire movie to compress it.
         is_portal = domain == PORTAL_HOST or domain.startswith("portal.")
         if is_portal:
-            # Site-level deny first so shared campus egress cannot use public
-            # auth-app paths either (phones on cellular still work from other IPs).
-            lines.extend(_caddy_denied_wan_lines("\t"))
+            # Do NOT apply campus @denied_wan on portal. Flint LAN (esp. Surface)
+            # often egresses via shared campus WAN 192.81.235.246 when Secure DNS
+            # bypasses the Flint nginx/VIP relay; abort → ERR_EMPTY_RESPONSE.
+            # Auth + @vpn_clients still gate the app; other sites keep campus deny.
+            lines.append('\theader Alt-Svc "clear"')
+            lines.append("\ttls {")
+            lines.append("\t\talpn http/1.1")
+            lines.append("\t}")
             # Legacy Authenticator URLs on portal → keys host.
             lines.append(
                 "\t@auth_app_legacy path /auth-app.html /auth-app-iphone.html "
@@ -5236,18 +5242,17 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t"))
-        lines.extend(
-            [
-                "\theader {",
-                '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-                "\t\tX-Content-Type-Options nosniff",
-                "\t\tReferrer-Policy strict-origin-when-cross-origin",
-                '\t\tContent-Security-Policy "frame-ancestors *"',
-                "\t}",
-                "}",
-                "",
-            ]
-        )
+        header_lines = [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+        ]
+        if is_portal:
+            header_lines.append('\t\tAlt-Svc "clear"')
+        header_lines.extend(["\t}", "}", ""])
+        lines.extend(header_lines)
     lines.append(HOOKUPS_END)
     return "\n".join(lines).rstrip() + "\n"
 

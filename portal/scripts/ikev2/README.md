@@ -29,16 +29,20 @@ No private CA install is required.
 | DNS | `10.9.0.1` → AdGuard → Pi-hole |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 
-## Flint LAN → portal (HTTP/2 abort fix)
+## Flint LAN → portal (HTTP/2 abort + Windows TLS timeout)
 
-Home LAN egress shares campus WAN `192.81.235.246`, which Caddy hard-denies with
-`abort` (Chrome shows `ERR_HTTP2_PROTOCOL_ERROR`). GL.iNet also forces the VPS
-public IP via WAN so OpenVPN does not loop.
+Home LAN egress shares campus WAN `192.81.235.246`. Caddy still campus-denies
+**router** (and other vpn_only sites). **Portal** skips `@denied_wan` so a
+Secure-DNS miss does not become `ERR_EMPTY_RESPONSE`; auth + `@vpn_clients`
+still gate the app.
 
-`ensure-flint-portal-via-ovpn.sh` (timer `sm-flint-portal-via-ovpn.timer`) rewrites
-Flint DNS for `portal`/`router` to VIP `10.11.0.1` and routes that VIP over
-`ovpnclient1`, so LAN browsers hit Caddy as `10.9.0.2`.
+Preferred path (timer `sm-flint-portal-via-ovpn.timer`):
+
+1. Flint DNS: `portal` → `192.168.8.1` (DoH canaries sinkholed)
+2. Flint **nginx** terminates TLS (LE cert) → reverse-proxy to VIP `10.11.0.1` over OVPN
+3. Fallback: key-bound LAN `/32` REDIRECT `:443` → `socat :9443` → VIP
+4. Caddy sees source `10.9.0.2` (in `@vpn_clients`)
 
 ```bash
-bash /opt/ikev2/ensure-flint-portal-via-ovpn.sh
+bash /opt/ikev2/ensure-flint-portal-via-ovpn.sh   # also runs ensure-flint-portal-nginx.sh
 ```

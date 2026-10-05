@@ -130,27 +130,49 @@ def scrub_forbidden_responds(text: str) -> tuple[str, bool]:
 
 
 def ensure_denied_wan_blocks(text: str) -> tuple[str, bool]:
-    """Keep site-level @denied_wan handles on portal + router (incl. auth-app)."""
+    """Keep site-level @denied_wan on router; strip it from portal.
+
+    Portal must NOT hard-deny campus WAN 192.81.235.246: Flint LAN (esp. Surface)
+    often hits that shared egress when Secure DNS bypasses the nginx/VIP relay.
+    Abort there became ERR_EMPTY_RESPONSE under HTTP/1.1 (ERR_HTTP2 before).
+    Auth + @vpn_clients still gate the app; preferred path remains Flint→OVPN.
+    """
     if not DENIED_IPS:
         return text, False
     denied_s = " ".join(f"{ip}/32" for ip in sorted(DENIED_IPS))
     changed = False
-    for site in ("portal.vpstruelord.com", "router.vpstruelord.com"):
+
+    # Strip portal site-level Hard-deny / @denied_wan (timer previously re-inserted).
+    portal_pat = re.compile(
+        r"(portal\.vpstruelord\.com \{\n)"
+        r"(?:\t# Hard-deny shared campus[^\n]*\n)?"
+        r"\t@denied_wan client_ip [^\n]+\n"
+        r"\thandle @denied_wan \{\n"
+        r"(?:\t\t[^\n]*\n)*"
+        r"\t\}\n"
+        r"(?:\n)?",
+        re.M,
+    )
+    text2, n = portal_pat.subn(r"\1", text, count=1)
+    if n:
+        text = text2
+        changed = True
+
+    # Keep deny on router only.
+    for site in ("router.vpstruelord.com",):
         marker = f"{site} {{"
         start = text.find(marker)
         if start < 0:
             continue
         brace = text.find("{", start)
-        # end of this site block (naive: next top-level site or EOF) — only need head
         window = text[brace + 1 : brace + 280]
         if f"@denied_wan client_ip {denied_s}" in window or (
             "@denied_wan client_ip" in window
             and all(f"{ip}/32" in window for ip in DENIED_IPS)
         ):
-            # Refresh deny body from HTML → abort if needed
             continue
         insert = (
-            f"\n\t# Hard-deny shared campus/ISP egress (never trust; includes auth-app).\n"
+            f"\n\t# Hard-deny shared campus/ISP egress (never trust).\n"
             f"\t@denied_wan client_ip {denied_s}\n"
             f"\thandle @denied_wan {{\n"
             f"{unreachable_respond_block(chr(9)+chr(9))}"

@@ -280,4 +280,11 @@ if [[ "$rc" -eq 124 ]]; then
   echo "flint-portal-via-ovpn: ssh timed out after 45s"
   exit 1
 fi
+
+# DNS points portal at 192.168.8.1 — TLS must terminate on Flint nginx (LAN MTU),
+# then reverse-proxy to VIP over OVPN. Without this, browsers hit GL's :443 and stall.
+NGINX_ENSURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-flint-portal-nginx.sh"
+if [[ "$rc" -eq 0 && -x "$NGINX_ENSURE" ]]; then
+  timeout 60 bash "$NGINX_ENSURE" || echo "flint-portal-via-ovpn: nginx ensure failed (non-fatal)"
+fi
 exit "$rc"
