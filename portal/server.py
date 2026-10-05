@@ -2399,10 +2399,13 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
     "on",
 }
 # Source IPs allowed when a domain/port is marked VPN-only
+# OpenVPN: only flint VIP 10.9.0.2/32 is infra-trusted (MASQ + router upstream).
+# Other CCD clients (windows 10.9.0.10, phones) must be sticky/allowlisted /32s —
+# never blanket 10.9.0.0/24 (that let campus windows.ovpn bypass the circle).
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
     # No blanket 192.168.8.0/24 — approved LAN /32s are appended by peer-acl sync.
-    "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
+    "10.8.0.0/24 10.42.42.0/24 10.9.0.2/32 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
 # Shared campus/ISP egress that must NEVER enter @vpn_clients — even if sticky,
 # sealed, allowlisted, or left over in a stale VPN_CLIENT_CIDRS process env.
@@ -11905,7 +11908,8 @@ def effective_vpn_client_cidrs() -> str:
 
     def _add(tok: str) -> None:
         tok = (tok or "").strip()
-        if not tok or tok in seen or tok == "192.168.8.0/24":
+        # Never blanket home LAN or the OpenVPN client pool — only /32s.
+        if not tok or tok in seen or tok in {"192.168.8.0/24", "10.9.0.0/24"}:
             return
         host = _cidr_host(tok)
         if host in denied:
@@ -11916,6 +11920,19 @@ def effective_vpn_client_cidrs() -> str:
                 return
         if tok.endswith("/32") and _is_home_lan_ipv4(host):
             if host not in _allowlisted_lan_ips():
+                return
+        # OpenVPN CCD clients (windows/phone) — only flint VIP is infra-trusted;
+        # other 10.9.0.x /32s need an explicit allowlist row (Authenticator/API).
+        if tok.endswith("/32") and host.startswith("10.9.0.") and host != "10.9.0.2":
+            allowed_ovpn: set[str] = set()
+            try:
+                data = _read_vpn_allowlist()
+                for row in data.get("allowed") or []:
+                    if isinstance(row, dict):
+                        allowed_ovpn.add(_normalize_vpn_ip(row.get("ip", "")))
+            except Exception:
+                pass
+            if host not in allowed_ovpn:
                 return
         seen.add(tok)
         base_toks.append(tok)
@@ -11942,7 +11959,7 @@ def effective_vpn_client_cidrs() -> str:
     for req in (
         "10.8.0.0/24",
         "10.42.42.0/24",
-        "10.9.0.0/24",
+        "10.9.0.2/32",  # flint only — not 10.9.0.0/24 (windows/phone CCD bypass)
         "10.10.0.0/24",
         "100.64.0.0/10",
         "127.0.0.1/32",
@@ -11950,7 +11967,21 @@ def effective_vpn_client_cidrs() -> str:
         "10.11.0.1/32",
     ):
         _add(req)
-    return " ".join(base_toks) if base_toks else VPN_CLIENT_CIDRS
+    # Never re-admit the whole OpenVPN pool; normalize any stale env/sticky token.
+    base_toks = ["10.9.0.2/32" if t == "10.9.0.0/24" else t for t in base_toks]
+    if "10.9.0.0/24" in seen:
+        seen.discard("10.9.0.0/24")
+    if "10.9.0.2/32" not in base_toks:
+        base_toks.append("10.9.0.2/32")
+    # De-dupe while preserving order after normalize.
+    deduped: list[str] = []
+    saw2: set[str] = set()
+    for t in base_toks:
+        if t in saw2:
+            continue
+        saw2.add(t)
+        deduped.append(t)
+    return " ".join(deduped) if deduped else VPN_CLIENT_CIDRS
 
 
 def _allowlisted_public_ips() -> set[str]:
