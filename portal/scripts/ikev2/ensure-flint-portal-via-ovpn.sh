@@ -141,6 +141,12 @@ cat >/tmp/dnsmasq.d/sm-portal-via-ovpn.conf <<EOF
 # Managed by ensure-flint-portal-via-ovpn.sh
 address=/portal.vpstruelord.com/$VIP
 address=/router.vpstruelord.com/$VIP
+# keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
+address=/keys.vpstruelord.com/$VPS
+# Chrome/Edge Secure DNS canary — NXDOMAIN disables DoH so Windows uses
+# router DNS (portal→VIP). Do not REDIRECT :53 (breaks some Windows DNS probes).
+server=/use-application-dns.net/
+local=/use-application-dns.net/
 EOF
 
 if command -v uci >/dev/null 2>&1; then
@@ -152,10 +158,24 @@ if command -v uci >/dev/null 2>&1; then
   uci set dhcp.sm_router=domain
   uci set dhcp.sm_router.name="router.vpstruelord.com"
   uci set dhcp.sm_router.ip="$VIP"
+  uci -q delete dhcp.sm_keys
+  uci set dhcp.sm_keys=domain
+  uci set dhcp.sm_keys.name="keys.vpstruelord.com"
+  uci set dhcp.sm_keys.ip="$VPS"
+  # Pin LAN DHCP DNS to the router so Windows does not keep a stale resolver.
+  if ! uci -q get dhcp.lan.dhcp_option 2>/dev/null | grep -qE '(^|,| )6,'; then
+    uci add_list dhcp.lan.dhcp_option='6,192.168.8.1'
+  fi
   uci commit dhcp
 fi
 
 killall -HUP dnsmasq 2>/dev/null || true
+
+# Drop any prior DNS REDIRECT experiments (they caused Windows DNS_PROBE failures).
+while iptables -t nat -S PREROUTING 2>/dev/null | grep -q SM-DNS-FORCE; do
+  line="$(iptables -t nat -S PREROUTING | grep SM-DNS-FORCE | head -1)"
+  eval "iptables -t nat ${{line/-A/-D}}" 2>/dev/null || break
+done
 
 conntrack -D -d "$VPS" >/dev/null 2>&1 || true
 conntrack -D -d "$VIP" >/dev/null 2>&1 || true
@@ -164,11 +184,20 @@ echo "flint-portal-via-ovpn: $count key-bound LAN /32s → VIP $VIP via ovpn; ot
 curl -sk -o /dev/null -w "ovpn_portal=%{{http_code}}\\n" --interface ovpnclient1 --connect-timeout 8 https://portal.vpstruelord.com/ || echo ovpn_portal=fail
 curl -sk -o /dev/null -w "vip_portal=%{{http_code}}\\n" --connect-timeout 8 --resolve portal.vpstruelord.com:443:$VIP https://portal.vpstruelord.com/ || echo vip_portal=fail
 nslookup portal.vpstruelord.com 127.0.0.1 2>/dev/null | head -6 || true
+nslookup use-application-dns.net 127.0.0.1 2>&1 | head -6 || true
 """
 print(base64.b64encode(remote.encode()).decode())
 PY
 )"
 
-echo "$REMOTE_B64" | base64 -d | sshpass -e ssh -o StrictHostKeyChecking=no \
+# Dropbear can hang mid-session; never block the systemd timer for tens of minutes.
+echo "$REMOTE_B64" | base64 -d | timeout 45 sshpass -e ssh -o StrictHostKeyChecking=no \
   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-  -o ConnectTimeout=12 "root@${FLINT_HOST}" sh -s
+  -o ConnectTimeout=12 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
+  "root@${FLINT_HOST}" sh -s
+rc=$?
+if [[ "$rc" -eq 124 ]]; then
+  echo "flint-portal-via-ovpn: ssh timed out after 45s"
+  exit 1
+fi
+exit "$rc"

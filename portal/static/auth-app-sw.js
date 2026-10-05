@@ -1,5 +1,5 @@
 /* ServerManager Authenticator — offline cache for the phone app. */
-const CACHE = "sm-auth-app-v23";
+const CACHE = "sm-auth-app-v25";
 const ASSETS = [
   "/auth-app.html",
   "/static/auth-app.webmanifest",
@@ -7,6 +7,7 @@ const ASSETS = [
   "/static/auth-app-icon-192.png",
   "/static/auth-app-icon-512.png",
   "/static/auth-app-sw.js",
+  "/static/sm-circle-crypto.js",
 ];
 
 self.addEventListener("install", (event) => {

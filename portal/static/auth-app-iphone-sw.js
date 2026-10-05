@@ -1,5 +1,5 @@
 /* ServerManager iPhone Authenticator — offline cache */
-const CACHE = "sm-auth-iphone-v23";
+const CACHE = "sm-auth-iphone-v25";
 const ASSETS = [
   "/auth-app-iphone.html",
   "/static/auth-app-iphone.webmanifest",
@@ -7,6 +7,7 @@ const ASSETS = [
   "/static/auth-app-icon-192.png",
   "/static/auth-app-icon-512.png",
   "/static/auth-app-iphone-sw.js",
+  "/static/sm-circle-crypto.js",
 ];
 
 self.addEventListener("install", (event) => {
