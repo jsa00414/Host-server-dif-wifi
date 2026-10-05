@@ -29,15 +29,21 @@ No private CA install is required.
 | DNS | `10.9.0.1` → AdGuard → Pi-hole |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
 
-## Flint LAN → portal (HTTP/2 abort fix)
+## Flint LAN → portal (HTTP/2 abort + timeout fix)
 
 Home LAN egress shares campus WAN `192.81.235.246`, which Caddy hard-denies with
 `abort` (Chrome shows `ERR_HTTP2_PROTOCOL_ERROR`). GL.iNet also forces the VPS
-public IP via WAN so OpenVPN does not loop.
+public IP via WAN so OpenVPN does not loop. Direct DNAT+FORWARD over OVPN also
+stalls Windows TLS (`ERR_CONNECTION_TIMED_OUT`) due to MSS/MTU.
 
-`ensure-flint-portal-via-ovpn.sh` (timer `sm-flint-portal-via-ovpn.timer`) rewrites
-Flint DNS for `portal`/`router` to VIP `10.11.0.1` and routes that VIP over
-`ovpnclient1`, so LAN browsers hit Caddy as `10.9.0.2`.
+`ensure-flint-portal-via-ovpn.sh` (timer `sm-flint-portal-via-ovpn.timer`):
+
+- Rewrites Flint DNS for `portal`/`router` → VIP `10.11.0.1`
+- For key-bound LAN `/32`s only, REDIRECTs `:443` to a single `socat` relay on
+  Flint (`:9443` → VIP), avoiding OVPN MSS breakage and duplicate-listener races
+- Blocks HTTP/3 (UDP/443) and DNS-over-QUIC (UDP/7844) so Secure DNS cannot
+  bypass router DNS and hit the denied campus WAN path
+- Rejects non-circle LAN → VIP so DNAT cannot skip the trust circle
 
 ```bash
 bash /opt/ikev2/ensure-flint-portal-via-ovpn.sh
