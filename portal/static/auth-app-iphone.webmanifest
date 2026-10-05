@@ -1,0 +1,25 @@
+{
+  "name": "SM Auth iPhone",
+  "short_name": "SM Auth",
+  "description": "iPhone Authenticator for ServerManager",
+  "start_url": "/auth-app-iphone.html",
+  "scope": "/auth-app-iphone.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050807",
+  "theme_color": "#050807",
+  "icons": [
+    {
+      "src": "/static/auth-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/auth-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -31,6 +31,11 @@ from urllib.parse import parse_qs, urlparse, urljoin
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+# Extracted modules (auth / VPN circle / NAS) — keep handlers in this file.
+from sm import auth as sm_auth
+from sm import nas as sm_nas
+from sm import vpn_circle as sm_vpn_circle
+
 CONF_PATH = Path(os.environ.get("FORWARDS_CONF", "/opt/servermanager/scripts/forwards.conf"))
 APPLY_SCRIPT = Path(
     os.environ.get("APPLY_SCRIPT", "/opt/servermanager/scripts/apply-lan-forwards.sh")
@@ -48,6 +53,7 @@ AUTH_USER = os.environ.get("PF_USER", "admin")
 AUTH_PASS = os.environ.get("PF_PASS", "")
 PANEL_TITLE = os.environ.get("PANEL_TITLE", "ServerManager")
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "portal.vpstruelord.com").strip()
+KEYS_HOST = os.environ.get("KEYS_HOST", "keys.vpstruelord.com").strip() or "keys.vpstruelord.com"
 BUFFALO_UPSTREAM = os.environ.get("BUFFALO_UPSTREAM", "http://192.168.8.159").rstrip("/")
 BUFFALO_PREFIX = "/buffalo-frame"
 # Buffalo WebAccess file manager (LinkStation :9000)
@@ -127,6 +133,11 @@ if not WG_EASY_SSO_USER or not WG_EASY_SSO_PASS:
 OVPN_CLIENT_DIR = Path(os.environ.get("OVPN_CLIENT_DIR", "/opt/openvpn/clients"))
 OVPN_FLINT_NAME = os.environ.get("OVPN_FLINT_NAME", "flint.ovpn")
 OVPN_PHONE_NAME = os.environ.get("OVPN_PHONE_NAME", "james-iphone.ovpn")
+OVPN_WINDOWS_NAME = os.environ.get("OVPN_WINDOWS_NAME", "windows.ovpn")
+# Optional shared-secret download link (works without portal login / for Caddy
+# public path allow). Empty = token downloads disabled.
+OVPN_WINDOWS_DL_TOKEN = os.environ.get("OVPN_WINDOWS_DL_TOKEN", "").strip()
+OVPN_PHONE_DL_TOKEN = os.environ.get("OVPN_PHONE_DL_TOKEN", "").strip()
 OVPN_SCRIPTS_DIR = Path(os.environ.get("OVPN_SCRIPTS_DIR", "/opt/openvpn/scripts"))
 OVPN_ALLOW_SSH_SCRIPT = os.environ.get(
     "OVPN_ALLOW_SSH_SCRIPT", "flint-allow-vpn-ssh.sh"
@@ -1704,6 +1715,63 @@ ALLOW_BASIC_AUTH = os.environ.get("ALLOW_BASIC_AUTH", "0").strip().lower() in (
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
+SESSIONS_PATH = Path(
+    os.environ.get(
+        "SESSIONS_PATH",
+        "/opt/servermanager/panel/sessions.json",
+    )
+)
+
+
+def _persist_sessions_unlocked() -> None:
+    """Write session tokens to disk so panel restarts keep users signed in."""
+    try:
+        now = time.time()
+        payload = {
+            "sessions": {
+                str(k): float(v)
+                for k, v in _sessions.items()
+                if float(v) > now
+            }
+        }
+        SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SESSIONS_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(SESSIONS_PATH)
+        try:
+            os.chmod(SESSIONS_PATH, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _load_sessions() -> None:
+    if not SESSIONS_PATH.is_file():
+        return
+    try:
+        data = json.loads(SESSIONS_PATH.read_text(encoding="utf-8"))
+        rows = data.get("sessions") if isinstance(data, dict) else None
+        if not isinstance(rows, dict):
+            return
+        now = time.time()
+        with _sessions_lock:
+            for token, exp in rows.items():
+                try:
+                    exp_f = float(exp)
+                except Exception:
+                    continue
+                if token and exp_f > now:
+                    _sessions[str(token)] = exp_f
+    except Exception:
+        pass
+
+
+_load_sessions()
+# Timed unlock for Security → VPS login method & SSH keys mutations.
+SSH_PANEL_UNLOCK_SECONDS = int(os.environ.get("SSH_PANEL_UNLOCK_SECONDS", "300"))
+_ssh_panel_unlocks: dict[str, float] = {}
+_ssh_panel_unlocks_lock = threading.RLock()
 NAS_DL_TOKEN_TTL = float(os.environ.get("NAS_DL_TOKEN_TTL", "600"))
 _nas_dl_tokens: dict[str, float] = {}
 _nas_dl_tokens_lock = threading.Lock()
@@ -1756,6 +1824,10 @@ def log_failed_login(ip: str, user: str, reason: str = "bad password") -> None:
 
 
 ROUTER_PUBLIC_HOST = os.environ.get("ROUTER_PUBLIC_HOST", "router.vpstruelord.com").strip() or "router.vpstruelord.com"
+# Authenticator (keys) public host — intentionally not VPN-gated.
+KEYS_PUBLIC_HOST = (
+    os.environ.get("KEYS_PUBLIC_HOST", KEYS_HOST).strip() or KEYS_HOST
+)
 # LAN IP the Flint admin UI expects (Host header + redirects). SSH may use ROUTER_HOST (VPN IP).
 ROUTER_ADMIN_HOST = os.environ.get("ROUTER_ADMIN_HOST", "192.168.8.1").strip() or "192.168.8.1"
 ROUTER_HOST = os.environ.get("ROUTER_HOST", ROUTER_ADMIN_HOST)
@@ -1775,9 +1847,47 @@ GRAFANA_PUBLIC_HOST = (
     os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
     or "grafana.vpstruelord.com"
 )
-GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
-GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
+# Caddy (truemail network) reaches the container by name — not a public host port.
+GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "sm-grafana").strip() or "sm-grafana"
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000") or "3000")
+# Host-local upstream for portal SSO (compose publishes 127.0.0.1:3016 only).
+GRAFANA_UPSTREAM = os.environ.get(
+    "GRAFANA_UPSTREAM", "http://127.0.0.1:3016"
+).rstrip("/") or "http://127.0.0.1:3016"
+GRAFANA_ENV_FILE = Path(
+    os.environ.get("GRAFANA_ENV_FILE", "/opt/grafana/.env")
+)
+GRAFANA_COOKIE = "grafana_session"
+GRAFANA_COOKIE_EXPIRY = "grafana_session_expiry"
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
+
+
+def _load_grafana_admin() -> tuple[str, str]:
+    """Read Grafana admin user/password from env or /opt/grafana/.env."""
+    user = (os.environ.get("GRAFANA_ADMIN_USER") or os.environ.get("GF_ADMIN_USER") or "").strip()
+    password = (
+        os.environ.get("GRAFANA_ADMIN_PASSWORD")
+        or os.environ.get("GF_ADMIN_PASSWORD")
+        or ""
+    ).strip()
+    if GRAFANA_ENV_FILE.is_file():
+        parsed: dict[str, str] = {}
+        try:
+            raw_text = GRAFANA_ENV_FILE.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            raw_text = ""
+        for raw in raw_text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            parsed[key.strip()] = val.strip().strip("'\"")
+        user = user or (parsed.get("GF_ADMIN_USER") or "admin").strip() or "admin"
+        password = password or (parsed.get("GF_ADMIN_PASSWORD") or "").strip()
+    return (user or "admin"), password
+
+
+GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
 PROXMOX_SSH_USER = os.environ.get("PROXMOX_SSH_USER", "root").strip() or "root"
@@ -1909,6 +2019,24 @@ def load_ikev2_ca_pem() -> str:
             except Exception:
                 continue
     return ""
+
+
+AUTH_APP_WINDOWS_EXE_NAME = "ServerManagerAuthenticator.exe"
+AUTH_APP_WINDOWS_EXE_PATHS = (
+    Path(__file__).resolve().parent / "scripts" / "auth-app-windows" / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/wireguard/port-forward-ui/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+    Path("/opt/servermanager/panel/scripts/auth-app-windows") / AUTH_APP_WINDOWS_EXE_NAME,
+)
+
+
+def load_auth_app_windows_exe() -> bytes:
+    """Windows Authenticator .exe (WebView2 shell around keys.*/auth-app.html)."""
+    for path in AUTH_APP_WINDOWS_EXE_PATHS:
+        if path.is_file():
+            return path.read_bytes()
+    raise FileNotFoundError(
+        f"{AUTH_APP_WINDOWS_EXE_NAME} missing — build portal/scripts/auth-app-windows/"
+    )
 
 
 def load_ikev2_windows_ps1() -> bytes:
@@ -2273,9 +2401,22 @@ CF_PROXIED = os.environ.get("CF_PROXIED", "false").strip().lower() in {
 # Source IPs allowed when a domain/port is marked VPN-only
 VPN_CLIENT_CIDRS = os.environ.get(
     "VPN_CLIENT_CIDRS",
-    "10.8.0.0/24 10.42.42.0/24 192.168.8.0/24 10.9.0.0/24 100.64.0.0/10 172.18.0.1/32 127.0.0.1/32",
+    # No blanket 192.168.8.0/24 — approved LAN /32s are appended by peer-acl sync.
+    "10.8.0.0/24 10.42.42.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32",
 )
-VPN_UFW_FROM = os.environ.get("VPN_UFW_FROM", "10.8.0.0/24")
+# Shared campus/ISP egress that must NEVER enter @vpn_clients — even if sticky,
+# sealed, allowlisted, or left over in a stale VPN_CLIENT_CIDRS process env.
+# Neumann University shared NAT (~2000 students) is the known offender.
+VPN_CIRCLE_DENIED_IPS = os.environ.get(
+    "VPN_CIRCLE_DENIED_IPS",
+    "192.81.235.246",
+)
+# Space/comma-separated CIDRs allowed when a UFW rule is marked VPN-only.
+# Defaults cover WireGuard, OpenVPN, Tailscale CGNAT, and home LAN via Flint.
+VPN_UFW_FROM = os.environ.get(
+    "VPN_UFW_FROM",
+    "10.8.0.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 192.168.8.0/24",
+).strip() or "10.8.0.0/24 10.9.0.0/24 10.10.0.0/24 100.64.0.0/10 192.168.8.0/24"
 PIHOLE_SSO_SECRET = os.environ.get("PIHOLE_SSO_SECRET", "").strip()
 PIHOLE_SSO_URL = os.environ.get(
     "PIHOLE_SSO_URL", "https://pihole.vpstruelord.com/sm-autologin"
@@ -2337,6 +2478,10 @@ NAS_FTP_PASV_START = int(os.environ.get("NAS_FTP_PASV_START", "50100"))
 NAS_FTP_PASV_END = int(os.environ.get("NAS_FTP_PASV_END", "50200"))
 NAS_FTP_PUBLIC_USER = (
     os.environ.get("NAS_FTP_PUBLIC_USER", "admin").strip() or "admin"
+)
+NAS_SFTP_PUBLIC_PORT = int(os.environ.get("NAS_SFTP_PUBLIC_PORT", "2123"))
+NAS_SFTP_PUBLIC_USER = (
+    os.environ.get("NAS_SFTP_PUBLIC_USER", NAS_FTP_PUBLIC_USER).strip() or NAS_FTP_PUBLIC_USER
 )
 
 
@@ -2411,6 +2556,7 @@ def build_nas_windows_status() -> dict:
         unc = f"\\\\{NAS_SMB_PUBLIC_HOST}@{NAS_SMB_PUBLIC_PORT}\\{NAS_SMB_SHARE}"
     else:
         unc = f"\\\\{NAS_SMB_PUBLIC_HOST}\\{NAS_SMB_SHARE}"
+    ui = sm_nas.nas_ui_copy()
     return {
         "ok": bool(st.get("ok")),
         "host": NAS_SMB_PUBLIC_HOST,
@@ -2432,6 +2578,12 @@ def build_nas_windows_status() -> dict:
         "ftp_ip": NAS_SMB_PUBLIC_IP,
         "ftp_port": NAS_FTP_PUBLIC_PORT,
         "ftp_pasv": f"{NAS_FTP_PASV_START}-{NAS_FTP_PASV_END}",
+        "ftp_retired": ui["ftp_retired"],
+        "ftp_message": ui["ftp_message"],
+        "preferred_protocols": ui["preferred"],
+        "sftp_host": NAS_SMB_PUBLIC_HOST,
+        "sftp_port": NAS_SFTP_PUBLIC_PORT,
+        "sftp_username": NAS_SFTP_PUBLIC_USER,
         "port": FTP_PORT,
         "ps1": "/api/nas/windows-ps1",
         "detail": st.get("error") or st.get("welcome") or "",
@@ -2986,8 +3138,9 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
         raise ValueError("vps rules must be a list")
     cleaned: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, NAS_FTP_PUBLIC_PORT}
-    protected_pubs = {8080, 8443, NAS_SMB_FORWARD_PUB}
+    # 8443/tcp is OpenVPN (sslh multiplex / direct) — never DNAT it to Flint HTTPS.
+    reserved = {22, 25, 80, 443, 465, 587, 993, 5000, 5001, 5002, 8443, NAS_FTP_PUBLIC_PORT}
+    protected_pubs = {8080, NAS_SMB_FORWARD_PUB}
     for i, rule in enumerate(rules):
         try:
             pub = int(rule["pub"])
@@ -3008,11 +3161,10 @@ def validate_vps_rules(rules: list[dict]) -> list[dict]:
             raise ValueError(f"VPS rule {i + 1}: invalid dest_ip")
         if not NAME_RE.match(name):
             raise ValueError(f"VPS rule {i + 1}: invalid name")
-        # Keep protected admin HTTP/HTTPS public ports immutable
+        # Keep protected admin HTTP / NAS SMB public ports immutable
         if pub in protected_pubs and not external:
             expected = {
                 8080: ("tcp", "192.168.8.1", 80, "flint-http"),
-                8443: ("tcp", "192.168.8.1", 443, "flint-https"),
                 NAS_SMB_FORWARD_PUB: ("tcp", NAS_SMB_HOST, 445, "nas-smb"),
             }[pub]
             proto, dest_ip, dest_port, name = expected
@@ -3712,7 +3864,17 @@ def _parse_gl_clients_json(text: str) -> dict[str, dict]:
             continue
         name = str(info.get("name") or "").strip()
         mac_s = str(info.get("mac") or mac or "").strip().lower()
-        by_ip[ip] = {"hostname": name, "mac": mac_s}
+        online = info.get("online")
+        if online is None:
+            online = info.get("is_online")
+        if online is None:
+            # Some firmwares use class/status strings.
+            status = str(info.get("status") or info.get("class") or "").lower()
+            if status in ("online", "up", "active", "connected"):
+                online = True
+            elif status in ("offline", "down", "inactive", "disconnected"):
+                online = False
+        by_ip[ip] = {"hostname": name, "mac": mac_s, "online": online}
     return by_ip
 
 
@@ -3786,6 +3948,7 @@ def read_lan_devices() -> dict:
         cur = by_ip.get(ip)
         name = str(info.get("hostname") or "").strip()
         mac = str(info.get("mac") or "").strip().lower()
+        online_gl = info.get("online")
         if not cur:
             by_ip[ip] = {
                 "ip": ip,
@@ -3793,6 +3956,7 @@ def read_lan_devices() -> dict:
                 "hostname": name,
                 "source": "gl",
                 "named_by": "gl" if name else "",
+                "online": bool(online_gl) if online_gl is not None else False,
             }
             continue
         if mac and not cur.get("mac"):
@@ -3803,6 +3967,16 @@ def read_lan_devices() -> dict:
         src = str(cur.get("source") or "")
         if "gl" not in src:
             cur["source"] = f"{src}+gl" if src else "gl"
+        if online_gl is not None:
+            cur["online"] = bool(online_gl) or bool(cur.get("online"))
+    # ARP/neigh presence means currently plugged in / reachable on LAN.
+    for d in by_ip.values():
+        src_parts = {p for p in str(d.get("source") or "").split("+") if p}
+        arp_live = "arp" in src_parts
+        if d.get("online") is None:
+            d["online"] = arp_live
+        elif arp_live:
+            d["online"] = True
     devices = _apply_lan_names(list(by_ip.values()))
     return {
         "ok": True,
@@ -3946,14 +4120,8 @@ def write_vps_state(rules: list[dict], comments: list[str] | None = None) -> dic
         "name": "flint-http",
         "external": False,
     }
-    by_pub[8443] = {
-        "pub": 8443,
-        "proto": "tcp",
-        "dest_ip": "192.168.8.1",
-        "dest_port": 443,
-        "name": "flint-https",
-        "external": False,
-    }
+    # Never publish 8443→Flint HTTPS: OpenVPN owns TCP 8443 (and sslh→8443).
+    by_pub.pop(8443, None)
     by_pub[NAS_SMB_FORWARD_PUB] = {
         "pub": NAS_SMB_FORWARD_PUB,
         "proto": "tcp",
@@ -4099,20 +4267,25 @@ def _normalize_hookup_rule(rule: dict) -> dict:
     out = dict(rule)
     domain = str(out.get("domain") or "").strip().lower()
     if domain == "router.vpstruelord.com":
-        out["target_host"] = ROUTER_ADMIN_HOST
+        out["target_host"] = OVPN_FLINT_VPN_IP or ROUTER_ADMIN_HOST
         out["target_port"] = int(out.get("target_port") or 80)
-        out["target_hosts"] = [ROUTER_ADMIN_HOST]
+        out["target_hosts"] = _router_hookup_targets()
+        out["vpn_only"] = True if out.get("vpn_only") is None else out.get("vpn_only")
     elif domain == PROXMOX_PUBLIC_HOST.lower():
         out["target_host"] = PROXMOX_HOST
         out["target_port"] = int(out.get("target_port") or PROXMOX_PORT)
         out["target_hosts"] = [PROXMOX_HOST]
         out["upstream_https"] = True
         out["name"] = str(out.get("name") or "proxmox").strip() or "proxmox"
+        # Hypervisor UI must never be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == PLEX_PUBLIC_HOST.lower():
         out["target_host"] = PLEX_HOST
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
+        # Media server must not be public — force VPN-only.
+        out["vpn_only"] = True
     elif domain == GRAFANA_PUBLIC_HOST.lower():
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
@@ -4121,12 +4294,14 @@ def _normalize_hookup_rule(rule: dict) -> dict:
 
 
 def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee proxmox.vpstruelord.com is present in managed hookups."""
+    """Guarantee proxmox.vpstruelord.com is present in managed hookups (VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PROXMOX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4137,7 +4312,7 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PROXMOX_PORT,
                 "name": "proxmox",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4145,12 +4320,14 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox)."""
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox, VPN-only)."""
     out = [dict(r) for r in (rules or [])]
     domain = PLEX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule({**rule, "enabled": rule.get("enabled", True), "external": False})
+            out[i] = _normalize_hookup_rule(
+                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+            )
             return out
     out.append(
         _normalize_hookup_rule(
@@ -4161,7 +4338,7 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
                 "target_port": PLEX_PORT,
                 "name": "plex-server",
                 "external": False,
-                "vpn_only": False,
+                "vpn_only": True,
             }
         )
     )
@@ -4201,6 +4378,77 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def keys_public_base() -> str:
+    host = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip().rstrip("/")
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"https://{host}"
+
+
+def keys_auth_urls(*, secret_hash: str = "", issuer: str = "", account: str = "") -> dict:
+    """Absolute Authenticator URLs on keys.* (not the VPN-gated portal host)."""
+    base = keys_public_base()
+    frag = ""
+    if secret_hash:
+        from urllib.parse import quote
+
+        frag = (
+            f"#secret={secret_hash}"
+            f"&issuer={quote(issuer or 'ServerManager')}"
+            f"&account={quote(account or AUTH_USER)}"
+        )
+    return {
+        "auth_app_path": f"{base}/auth-app-iphone.html{frag}",
+        "auth_app_android_path": f"{base}/auth-app.html{frag}",
+        "auth_app_windows_path": f"{base}/download/ServerManagerAuthenticator.exe",
+        "keys_host": KEYS_PUBLIC_HOST,
+    }
+
+
+def _cookie_parent_domain() -> str:
+    """e.g. portal.vpstruelord.com → .vpstruelord.com for cross-subdomain leases."""
+    host = (PORTAL_HOST or "portal.vpstruelord.com").split(":")[0].strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        return "." + ".".join(parts[-2:])
+    return ""
+
+
+def ensure_keys_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee keys.vpstruelord.com is present (Authenticator, public)."""
+    domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    out = list(rules or [])
+    for i, r in enumerate(out):
+        if str(r.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **r,
+                    "enabled": True,
+                    "domain": domain,
+                    "target_host": r.get("target_host") or DOCKER_HOST_GW,
+                    "target_port": int(r.get("target_port") or 5002),
+                    "name": "keys-authenticator",
+                    "external": False,
+                    "vpn_only": False,
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": DOCKER_HOST_GW,
+                "target_port": 5002,
+                "name": "keys-authenticator",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4210,7 +4458,9 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    return ensure_keys_hookup(
+        ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    )
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
@@ -4230,30 +4480,69 @@ def _hookup_proxy_upstream(rule: dict) -> str:
 
 
 def _router_hookup_site_lines(rule: dict) -> list[str]:
-    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects."""
-    host = ROUTER_ADMIN_HOST
+    """Caddy site block for Flint admin — must spoof LAN Host and rewrite redirects.
+
+    Prefer the OpenVPN VIP (10.9.0.2) as upstream. That VIP is reserved for the
+    flint CCD client — other profiles (e.g. windows) must not steal 10.9.0.2 or
+    Caddy returns 502 while dialing the wrong peer. LAN 192.168.8.1 is a
+    fallback only when OVPN iroute + metric prefer tun0 over WireGuard.
+    """
+    lan_host = ROUTER_ADMIN_HOST
+    proxy_host = OVPN_FLINT_VPN_IP or lan_host
     port = int(rule.get("target_port") or 80)
     public = ROUTER_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     lines = [
         f"{public} {{",
-        f"\treverse_proxy {host}:{port} {{",
-        f"\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto https",
-        f"\t\theader_down Location http://{host} https://{public}",
-        f"\t\theader_down Location http://{host}/ https://{public}/",
-        "\t\theader_down -X-Frame-Options",
-        "\t\theader_down -Content-Security-Policy",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
+        "\tencode gzip",
     ]
+    if vpn_only:
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        lines.append("\thandle @vpn_clients {")
+        indent = "\t\t"
+    else:
+        indent = "\t"
+    lines.extend(
+        [
+            f"{indent}reverse_proxy {proxy_host}:{port} {{",
+            f"{indent}\theader_up Host {lan_host}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto https",
+            f"{indent}\theader_down Location http://{lan_host} https://{public}",
+            f"{indent}\theader_down Location http://{lan_host}/ https://{public}/",
+            f"{indent}\theader_down Location http://{proxy_host} https://{public}",
+            f"{indent}\theader_down Location http://{proxy_host}/ https://{public}/",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                *_caddy_unreachable_respond_lines("\t\t"),
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -4262,30 +4551,59 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     host = PROXMOX_HOST
     port = int(rule.get("target_port") or PROXMOX_PORT)
     public = PROXMOX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     lines = [
         f"{public} {{",
-        f"\treverse_proxy https://{host}:{port} {{",
-        "\t\ttransport http {",
-        "\t\t\ttls_insecure_skip_verify",
-        "\t\t}",
-        "\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto https",
-        "\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\theader_down Location https://{host}:{port}/ https://{public}/",
-        "\t\theader_down -X-Frame-Options",
-        "\t\theader_down -Content-Security-Policy",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
     ]
+    if vpn_only:
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        lines.append("\thandle @vpn_clients {")
+        indent = "\t\t"
+    else:
+        indent = "\t"
+    lines.extend(
+        [
+            f"{indent}reverse_proxy https://{host}:{port} {{",
+            f"{indent}\ttransport http {{",
+            f"{indent}\t\ttls_insecure_skip_verify",
+            f"{indent}\t}}",
+            f"{indent}\theader_up Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Host {{host}}",
+            f"{indent}\theader_up X-Forwarded-Proto https",
+            f"{indent}\theader_up X-Forwarded-For {{remote_host}}",
+            f"{indent}\theader_down Location https://{host}:{port} https://{public}",
+            f"{indent}\theader_down Location https://{host}:{port}/ https://{public}/",
+            f"{indent}\theader_down -X-Frame-Options",
+            f"{indent}\theader_down -Content-Security-Policy",
+            f"{indent}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                *_caddy_unreachable_respond_lines("\t\t"),
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -4330,6 +4648,11 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
+    vpn_only = rule.get("vpn_only", True)
+    if isinstance(vpn_only, str):
+        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        vpn_only = bool(vpn_only)
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
     claimed = _plex_is_claimed()
@@ -4349,57 +4672,79 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
         setup_path = "/web/index.html"
     # After claim, PMS often requires TLS on :32400 ("secure connections required").
     upstream = f"https://{host}:{port}"
+    # Indent: site → optional vpn handle → path handle → reverse_proxy options
+    base = "\t\t" if vpn_only else "\t"
+    opt = base + "\t\t"  # options inside reverse_proxy inside path handle
     # Pass through client headers (especially X-Plex-*). Do NOT rewrite
     # X-Plex-Client-Identifier to empty — that breaks PlayQueue ("loading items").
     proxy_common = [
-        "\t\t\ttransport http {",
-        "\t\t\t\ttls_insecure_skip_verify",
-        "\t\t\t}",
+        f"{opt}transport http {{",
+        f"{opt}\ttls_insecure_skip_verify",
+        f"{opt}}}",
         # Keep public Host so PMS/web client stay aligned with plex.vpstruelord.com
-        "\t\t\theader_up Host {host}",
-        f"\t\t\theader_up X-Forwarded-Host {public}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Real-IP {remote_host}",
-        "\t\t\theader_up X-Forwarded-For {remote_host}",
-        f"\t\t\theader_down Location http://{public} https://{public}",
-        f"\t\t\theader_down Location https://{public} https://{public}",
-        f"\t\t\theader_down Location http://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location https://{host}:{port} https://{public}",
-        f"\t\t\theader_down Location http://{host} https://{public}",
-        "\t\t\theader_down -X-Frame-Options",
-        "\t\t\theader_down -Content-Security-Policy",
+        f"{opt}header_up Host {{host}}",
+        f"{opt}header_up X-Forwarded-Host {public}",
+        f"{opt}header_up X-Forwarded-Proto {{scheme}}",
+        f"{opt}header_up X-Real-IP {{remote_host}}",
+        f"{opt}header_up X-Forwarded-For {{remote_host}}",
+        f"{opt}header_down Location http://{public} https://{public}",
+        f"{opt}header_down Location https://{public} https://{public}",
+        f"{opt}header_down Location http://{host}:{port} https://{public}",
+        f"{opt}header_down Location https://{host}:{port} https://{public}",
+        f"{opt}header_down Location http://{host} https://{public}",
+        f"{opt}header_down -X-Frame-Options",
+        f"{opt}header_down -Content-Security-Policy",
     ]
-    lines = [
-        f"{public} {{",
-        # Claim helper (plex.tv claim code) — portal serves the form + API.
-        "\thandle /claim* {",
-        f"\t\treverse_proxy {DOCKER_HOST_GW}:5002",
-        "\t}",
-        # Land on web UI (setup only while unclaimed).
-        "\t@plexroot path / /web /web/",
-        f"\tredir @plexroot {setup_path} 302",
-        # Media streams should not be gzip-buffered.
-        "\t@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
-        "\thandle @plexmedia {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t\tflush_interval -1",
-        "\t\t}",
-        "\t}",
-        "\thandle {",
-        f"\t\treverse_proxy {upstream} {{",
-        *proxy_common,
-        "\t\t}",
-        "\t}",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors *"',
-        "\t}",
-        "}",
-        "",
-    ]
+    lines = [f"{public} {{"]
+    if vpn_only:
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        lines.append("\thandle @vpn_clients {")
+    lines.extend(
+        [
+            # Claim helper (plex.tv claim code) — portal serves the form + API.
+            f"{base}handle /claim* {{",
+            f"{base}\treverse_proxy {DOCKER_HOST_GW}:5002",
+            f"{base}}}",
+            # Land on web UI (setup only while unclaimed).
+            f"{base}@plexroot path / /web /web/",
+            f"{base}redir @plexroot {setup_path} 302",
+            # Media streams should not be gzip-buffered.
+            f"{base}@plexmedia path *.mkv *.mp4 *.ts *.m3u8 *.m4s /video/* /library/parts/* /library/streams/*",
+            f"{base}handle @plexmedia {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{opt}flush_interval -1",
+            f"{base}\t}}",
+            f"{base}}}",
+            f"{base}handle {{",
+            f"{base}\treverse_proxy {upstream} {{",
+            *proxy_common,
+            f"{base}\t}}",
+            f"{base}}}",
+        ]
+    )
+    if vpn_only:
+        lines.extend(
+            [
+                "\t}",
+                "\thandle {",
+                *_caddy_unreachable_respond_lines("\t\t"),
+                "\t}",
+            ]
+        )
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            '\t\tContent-Security-Policy "frame-ancestors *"',
+            "\t}",
+            "}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -4710,18 +5055,69 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
+def _keys_hookup_site_lines(rule: dict) -> list[str]:
+    """Public Authenticator host (keys.*) — reachable from home WiFi too.
+
+    Do not apply campus @denied_wan here. Home LAN phones egress via the shared
+    campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll look
+    unreachable. Portal/router stay campus-denied; keys is gated by enroll unlock
+    + TOTP secret instead.
+    """
+    public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
+    lines = [
+        f"{public} {{",
+        "\tencode gzip",
+        "\t@root path /",
+        "\tredir @root /auth-app.html 302",
+        "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
+        "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+        "/static/auth-app.html /static/auth-app-iphone.html "
+        "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+        "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+        "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+        "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
+        "\thandle @auth {",
+        f"\t\treverse_proxy {upstream} {{",
+        "\t\t\theader_up Host {host}",
+        "\t\t\theader_up X-Forwarded-Host {host}",
+        "\t\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\t\theader_up X-Forwarded-For {remote_host}",
+        "\t\t\theader_up X-Real-IP {remote_host}",
+        "\t\t}",
+        "\t}",
+        "\thandle {",
+        '\t\trespond "Not Found" 404',
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        "\t}",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def serialize_hookups_caddy(rules: list[dict]) -> str:
+    vpn_cidrs = effective_vpn_client_cidrs()
     lines = [
         HOOKUPS_BEGIN,
         "# managed by ServerManager — do not edit by hand",
-        f"# vpn_only allows: {VPN_CLIENT_CIDRS}",
+        f"# vpn_only allows: {vpn_cidrs}",
     ]
     # Never rewrite external/pre-existing Caddy sites into this block
     active = [r for r in rules if r.get("enabled", True) and not r.get("external")]
     if not active:
         lines.append("# (no managed domain hookups enabled)")
+    keys_domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     for r in active:
         domain = r["domain"]
+        if domain == keys_domain:
+            lines.extend(_keys_hookup_site_lines(r))
+            continue
         if domain == ROUTER_PUBLIC_HOST.lower():
             lines.extend(_router_hookup_site_lines(r))
             continue
@@ -4736,21 +5132,70 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
         # there so Caddy never buffers an entire movie to compress it.
         is_portal = domain == PORTAL_HOST or domain.startswith("portal.")
         if is_portal:
-            lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
-            lines.append("\thandle @nasmedia {")
+            # Site-level deny first so shared campus egress cannot use public
+            # auth-app paths either (phones on cellular still work from other IPs).
+            lines.extend(_caddy_denied_wan_lines("\t"))
+            # Legacy Authenticator URLs on portal → keys host.
+            lines.append(
+                "\t@auth_app_legacy path /auth-app.html /auth-app-iphone.html "
+                "/static/auth-app.html /static/auth-app-iphone.html "
+                "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
+                "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
+                "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
+                "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
+                "/download/ServerManagerAuthenticator.exe /api/auth-app/* "
+                "/api/auth-app/windows-exe"
+            )
+            lines.append("\thandle @auth_app_legacy {")
+            lines.append(f"\t\tredir https://{keys_domain}{{uri}} 302")
+            lines.append("\t}")
+            # Public OpenVPN profile downloads (token enforced in portal app)
+            lines.append(
+                "\t@ovpn_public_dl path /api/openvpn/windows /download/windows.ovpn "
+                "/api/openvpn/phone /download/james-iphone.ovpn"
+            )
+            lines.append("\thandle @ovpn_public_dl {")
             lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append("\t\t\theader_down -X-Frame-Options")
-            lines.append("\t\t\theader_down -Content-Security-Policy")
-            lines.append("\t\t\tflush_interval -1")
             lines.append("\t\t}")
+            lines.append("\t}")
+            # NAS media streams skip gzip, but must still honor vpn_only —
+            # otherwise a stolen session cookie can cat/download off-VPN while
+            # /login (portal root) remains VPN-gated (connection abort; guest DNS
+            # NXDOMAIN is the primary “site can’t be reached” path).
+            lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
+            lines.append("\thandle @nasmedia {")
+            if r.get("vpn_only"):
+                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
+                lines.append("\t\thandle @vpn_clients {")
+                lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\t\theader_up Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\t\tflush_interval -1")
+                lines.append("\t\t\t}")
+                lines.append("\t\t}")
+                lines.append("\t\thandle {")
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
+                lines.append("\t\t}")
+            else:
+                lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+                lines.append("\t\t\theader_up Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+                lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+                lines.append("\t\t\theader_down -X-Frame-Options")
+                lines.append("\t\t\theader_down -Content-Security-Policy")
+                lines.append("\t\t\tflush_interval -1")
+                lines.append("\t\t}")
             lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
             if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -4761,7 +5206,7 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\t}")
                 lines.append("\t\t}")
                 lines.append("\t\thandle {")
-                lines.append('\t\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t\t"))
                 lines.append("\t\t}")
             else:
                 lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
@@ -4776,12 +5221,13 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\tencode gzip")
             if r.get("vpn_only"):
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
-                lines.append(f"\t@vpn_clients remote_ip {VPN_CLIENT_CIDRS}")
+                lines.extend(_caddy_denied_wan_lines("\t"))
+                lines.append(f"\t@vpn_clients client_ip {vpn_cidrs}")
                 lines.append("\thandle @vpn_clients {")
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
                 lines.append("\thandle {")
-                lines.append('\t\trespond "Forbidden" 403')
+                lines.extend(_caddy_unreachable_respond_lines("\t\t"))
                 lines.append("\t}")
             else:
                 # Public: plain reverse_proxy only — no client_ip matcher residue.
@@ -4850,7 +5296,8 @@ def read_hookups_state() -> dict:
         "path": str(HOOKUPS_JSON),
         "caddyfile": str(CADDYFILE_PATH),
         "dns_hint": "",
-        "vpn_cidrs": VPN_CLIENT_CIDRS,
+        "vpn_cidrs": effective_vpn_client_cidrs(),
+        "denied_ips": list(_denied_vpn_ips()),
         "rules": rules,
     }
 
@@ -5529,16 +5976,28 @@ def write_and_apply(payload: dict) -> dict:
     }
 
 
+# Always-public ports the Firewall tab must never delete or VPN-restrict.
 UFW_PROTECTED = {
     (22, "tcp"),  # SSH
-    (5002, "tcp"),  # this admin UI
     (5000, "udp"),  # WireGuard tunnel
+}
+# Ports that must keep a UFW allow (never mass-deleted) but MAY be vpn_only.
+UFW_REQUIRED = {
+    (5002, "tcp"),  # portal cleartext HTTP — VPN/LAN only by default
+    (2121, "tcp"),  # NAS FTP gateway
+    (1445, "tcp"),  # NAS SMB gateway forward
+    (5001, "tcp"),  # WireGuard Easy UI (not the :5000/udp tunnel)
 }
 
 UFW_ROW_RE = re.compile(
-    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN)\s{2,}"
+    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s{2,}(?P<action>ALLOW IN|DENY IN|REJECT IN|LIMIT IN)\s{2,}"
     r"(?P<frm>.+?)(?:\s+#\s*(?P<comment>.*))?$"
 )
+
+# Protected ports that stay public but use UFW "limit" (rate-cap) instead of bare allow.
+UFW_RATE_LIMITED = {
+    (22, "tcp"),  # SSH — complements fail2ban + MaxAuthTries 3
+}
 
 
 def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
@@ -5555,11 +6014,24 @@ def _parse_ufw_to(to_field: str) -> tuple[int | None, str, str]:
     return None, "tcp", cleaned
 
 
+def _vpn_ufw_sources() -> list[str]:
+    """CIDRs used for vpn_only UFW allow-from rules."""
+    parts = [
+        p.strip()
+        for p in VPN_UFW_FROM.replace(",", " ").split()
+        if p.strip()
+    ]
+    return parts or ["10.8.0.0/24"]
+
+
 def _is_vpn_ufw_from(frm: str) -> bool:
     f = (frm or "").lower().replace(" ", "")
-    if f.startswith("anywhere"):
+    if not f or f.startswith("anywhere"):
         return False
-    return VPN_UFW_FROM.replace(" ", "") in f or f.startswith("10.8.0.")
+    for src in _vpn_ufw_sources():
+        if src.lower().replace(" ", "") in f:
+            return True
+    return f.startswith("10.8.0.") or f.startswith("10.9.0.") or f.startswith("100.64.")
 
 
 def _run_ufw(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
@@ -5632,7 +6104,8 @@ def read_firewall_state() -> dict:
         to_raw = m.group("to")
         if "(v6)" in to_raw or "(v6)" in frm.lower():
             continue  # manage IPv4 rules; ufw allow adds v6 twin
-        if "ALLOW" not in m.group("action"):
+        action = m.group("action")
+        if "ALLOW" not in action and "LIMIT" not in action:
             continue
         port, proto, to_disp = _parse_ufw_to(to_raw)
         if port is None:
@@ -5644,17 +6117,19 @@ def read_firewall_state() -> dict:
         comment = (m.group("comment") or "").strip() or f"port-{port}"
         locked = key in UFW_PROTECTED
         vpn_only = (not locked) and _is_vpn_ufw_from(frm)
+        rate_limited = "LIMIT" in action or key in UFW_RATE_LIMITED
         rules.append(
             {
                 "id": int(m.group("num")),
                 "port": port,
                 "proto": proto,
-                "action": "allow",
+                "action": "limit" if rate_limited else "allow",
                 "from": "Anywhere" if frm.lower().startswith("anywhere") else frm,
                 "comment": comment,
                 "to": to_disp,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     return {
@@ -5683,8 +6158,8 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
             raise ValueError(f"Firewall rule {i + 1}: invalid fields") from exc
         if proto not in ("tcp", "udp"):
             raise ValueError(f"Firewall rule {i + 1}: proto must be tcp or udp")
-        if action not in ("allow",):
-            raise ValueError(f"Firewall rule {i + 1}: only allow rules are supported")
+        if action not in ("allow", "limit"):
+            raise ValueError(f"Firewall rule {i + 1}: only allow/limit rules are supported")
         if not (1 <= port <= 65535):
             raise ValueError(f"Firewall rule {i + 1}: invalid port")
         if not re.match(r"^[A-Za-z0-9 _.:/-]{1,60}$", comment):
@@ -5695,58 +6170,97 @@ def validate_firewall_rules(rules: list[dict]) -> list[dict]:
         seen.add(key)
         locked = key in UFW_PROTECTED
         if locked:
-            vpn_only = False  # never VPN-restrict SSH / UI / WG listen
+            vpn_only = False  # never VPN-restrict SSH / WG listen
+        rate_limited = key in UFW_RATE_LIMITED or str(rule.get("action", "")).lower() == "limit"
+        if rate_limited:
+            action = "limit"
         cleaned.append(
             {
                 "port": port,
                 "proto": proto,
                 "action": action,
-                "comment": comment,
+                "comment": "SSH-ratecap" if key == (22, "tcp") else comment,
                 "locked": locked,
                 "vpn_only": vpn_only,
+                "rate_limited": rate_limited,
             }
         )
     # Ensure protected rules always remain (public)
     for port, proto in UFW_PROTECTED:
         if (port, proto) not in seen:
             labels = {
-                (22, "tcp"): "SSH",
-                (5002, "tcp"): "Port forward UI",
+                (22, "tcp"): "SSH-ratecap",
                 (5000, "udp"): "WireGuard VPN tunnel",
             }
             cleaned.append(
                 {
                     "port": port,
                     "proto": proto,
-                    "action": "allow",
+                    "action": "limit" if (port, proto) in UFW_RATE_LIMITED else "allow",
                     "comment": labels.get((port, proto), f"protected-{port}"),
                     "locked": True,
                     "vpn_only": False,
+                    "rate_limited": (port, proto) in UFW_RATE_LIMITED,
+                }
+            )
+    # Ensure required admin ports remain (VPN-only by default)
+    for port, proto in UFW_REQUIRED:
+        if (port, proto) not in seen:
+            labels = {
+                (5002, "tcp"): "portal-http-vpn",
+                (2121, "tcp"): "nas-ftp-vpn",
+                (1445, "tcp"): "nas-smb-vpn",
+                (5001, "tcp"): "wg-easy-ui-vpn",
+            }
+            cleaned.append(
+                {
+                    "port": port,
+                    "proto": proto,
+                    "action": "allow",
+                    "comment": labels.get((port, proto), f"required-{port}"),
+                    "locked": False,
+                    "vpn_only": True,
                 }
             )
     return cleaned
 
 
-def _ufw_allow_cmd(rule: dict) -> list[str]:
+def _ufw_allow_cmds(rule: dict) -> list[list[str]]:
+    """One or more `ufw allow|limit …` argv lists (without the leading binary)."""
     port = rule["port"]
     proto = rule["proto"]
     comment = rule["comment"]
     if rule.get("vpn_only") and (port, proto) not in UFW_PROTECTED:
-        return [
-            "ufw",
-            "allow",
-            "from",
-            VPN_UFW_FROM,
-            "to",
-            "any",
-            "port",
-            str(port),
-            "proto",
-            proto,
-            "comment",
-            comment,
-        ]
-    return ["ufw", "allow", f"{port}/{proto}", "comment", comment]
+        cmds: list[list[str]] = []
+        for src in _vpn_ufw_sources():
+            cmds.append(
+                [
+                    "allow",
+                    "from",
+                    src,
+                    "to",
+                    "any",
+                    "port",
+                    str(port),
+                    "proto",
+                    proto,
+                    "comment",
+                    comment,
+                ]
+            )
+        return cmds
+    verb = "limit" if (
+        rule.get("rate_limited")
+        or str(rule.get("action", "")).lower() == "limit"
+        or (port, proto) in UFW_RATE_LIMITED
+    ) else "allow"
+    return [[verb, f"{port}/{proto}", "comment", comment]]
+
+
+def _ufw_allow_cmd(rule: dict) -> list[str]:
+    """Back-compat single command (first VPN source only)."""
+    cmds = _ufw_allow_cmds(rule)
+    return ["ufw", *cmds[0]] if cmds else ["ufw", "allow", "22/tcp"]
 
 
 def write_firewall_state(rules: list[dict]) -> dict:
@@ -5784,14 +6298,40 @@ def write_firewall_state(rules: list[dict]) -> dict:
         vpn_only = _is_vpn_ufw_from(frm)
         rows.append((int(m.group("num")), port, proto, ipv6, vpn_only))
 
-    # Candidates to delete (unmanaged / vpn_only flip). Skip protected.
+    # Candidates to delete (unmanaged / vpn_only flip). Skip protected/required
+    # ports unless we are intentionally recreating them from desired state.
+    # Exception: SSH ALLOW → LIMIT upgrade (UFW_RATE_LIMITED).
     delete_nums: list[tuple[int, int, str]] = []
     for num, port, proto, _ipv6, cur_vpn in rows:
-        if (port, proto) in UFW_PROTECTED:
+        key = (port, proto)
+        if key in UFW_PROTECTED:
+            if key in UFW_RATE_LIMITED:
+                # Recreate bare ALLOW as LIMIT when rate-cap is required.
+                # Detect via raw numbered status line action.
+                continue  # handled below via rate-limit upgrade pass
             continue
-        want = desired_keys.get((port, proto))
+        want = desired_keys.get(key)
+        if want is None and key in UFW_REQUIRED:
+            continue  # never wipe portal HTTP allow during partial saves
         if want is None or bool(want.get("vpn_only")) != bool(cur_vpn):
             delete_nums.append((num, port, proto))
+
+    # Upgrade SSH (and other UFW_RATE_LIMITED) from unlimited ALLOW → LIMIT.
+    numbered_raw = numbered.stdout or ""
+    for line in numbered_raw.splitlines():
+        line_s = line.strip()
+        if not line_s.startswith("["):
+            continue
+        m = UFW_ROW_RE.match(line_s)
+        if not m:
+            continue
+        port, proto, _ = _parse_ufw_to(m.group("to"))
+        if port is None:
+            continue
+        if (port, proto) not in UFW_RATE_LIMITED:
+            continue
+        if "ALLOW" in m.group("action") and "LIMIT" not in m.group("action"):
+            delete_nums.append((int(m.group("num")), port, proto))
 
     # Guard: never mass-delete when the portal only knows a tiny rule set
     # (e.g. after a partial load). That previously wiped HTTP/HTTPS/forwards.
@@ -5814,17 +6354,35 @@ def write_firewall_state(rules: list[dict]) -> dict:
     # Refresh and add missing / recreated
     after = read_firewall_state()
     have = {
-        (r["port"], r["proto"]): bool(r.get("vpn_only")) for r in after["rules"]
+        (r["port"], r["proto"]): (
+            bool(r.get("vpn_only")),
+            str(r.get("action") or "allow").lower(),
+        )
+        for r in after["rules"]
     }
     for key, rule in desired_keys.items():
-        if key in have and have[key] == bool(rule.get("vpn_only")):
-            continue
-        cmd = _ufw_allow_cmd(rule)
-        proc = _run_ufw(cmd[1:] if cmd and cmd[0] == "ufw" else cmd)
-        scope = "vpn" if rule.get("vpn_only") else "public"
-        logs.append(
-            f"allow {rule['port']}/{rule['proto']} ({scope}): rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
-        )
+        want_action = "limit" if (
+            rule.get("rate_limited")
+            or str(rule.get("action", "")).lower() == "limit"
+            or key in UFW_RATE_LIMITED
+        ) else "allow"
+        if key in have:
+            cur_vpn, cur_action = have[key]
+            if cur_vpn == bool(rule.get("vpn_only")) and cur_action == want_action:
+                continue
+        scope = "vpn" if rule.get("vpn_only") else ("limit" if want_action == "limit" else "public")
+        for cmd in _ufw_allow_cmds(rule):
+            proc = _run_ufw(cmd)
+            src = ""
+            if "from" in cmd:
+                try:
+                    src = " from " + cmd[cmd.index("from") + 1]
+                except Exception:
+                    src = ""
+            logs.append(
+                f"{cmd[0]} {rule['port']}/{rule['proto']} ({scope}{src}): "
+                f"rc={proc.returncode} {(proc.stdout or proc.stderr or '').strip()}"
+            )
 
     # Ensure ufw enabled with deny incoming
     _run_ufw(["--force", "enable"])
@@ -5839,14 +6397,14 @@ def write_firewall_state(rules: list[dict]) -> dict:
 
 def _cookie_clear_header() -> str:
     return (
-        f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; "
+        f"{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; "
         "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
     )
 
 
 def _cookie_set_header(token: str) -> str:
     return (
-        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; "
+        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; "
         f"Max-Age={int(SESSION_HOURS * 3600)}"
     )
 
@@ -6463,8 +7021,9 @@ ROUTER_SSO_CACHE_TTL = int(os.environ.get("ROUTER_SSO_CACHE_TTL", "1800"))
 
 
 def _router_rpc(method: str, params: dict) -> dict:
-    """Call GL.iNet /rpc on the Flint LAN IP (Host must be the router itself)."""
-    url = f"http://{ROUTER_ADMIN_HOST}/rpc"
+    """Call GL.iNet /rpc via OpenVPN VIP (LAN Host header required by oui-access)."""
+    proxy_host = (OVPN_FLINT_VPN_IP or ROUTER_ADMIN_HOST).strip() or ROUTER_ADMIN_HOST
+    url = f"http://{proxy_host}/rpc"
     body = {
         "jsonrpc": "2.0",
         "id": int(time.time() * 1000),
@@ -6488,20 +7047,38 @@ def _router_rpc(method: str, params: dict) -> dict:
     return parsed
 
 
-def _router_login_hash(username: str, password: str, alg: int, salt: str, nonce: str) -> str:
-    """GL.iNet SDK 4.x: unix crypt(password, salt) then md5(user:cipher:nonce)."""
+def _router_login_hash(
+    username: str,
+    password: str,
+    alg: int,
+    salt: str,
+    nonce: str,
+    hash_method: str = "sha256",
+) -> str:
+    """GL.iNet SDK 4.x login digest.
+
+    Firmware 4.11+ returns hash-method=sha256 (older builds used md5):
+    unix crypt(password, $<alg>$<salt>$) then H(user:cipher:nonce).
+    """
     alg = int(alg)
     if alg == 1:
         cipher = crypt.crypt(password, f"$1${salt}$")
     elif alg == 5:
-        cipher = crypt.crypt(password, f"$5$rounds=5000${salt}$")
+        # Match /etc/shadow ($5$salt$...); do not force rounds=5000 prefix.
+        cipher = crypt.crypt(password, f"$5${salt}$")
     elif alg == 6:
-        cipher = crypt.crypt(password, f"$6$rounds=5000${salt}$")
+        cipher = crypt.crypt(password, f"$6${salt}$")
     else:
         raise RuntimeError(f"Unsupported router login alg: {alg}")
     if not cipher:
         raise RuntimeError("Router login hash generation failed (crypt unavailable)")
-    return hashlib.md5(f"{username}:{cipher}:{nonce}".encode()).hexdigest()
+    material = f"{username}:{cipher}:{nonce}".encode()
+    method = (hash_method or "sha256").strip().lower()
+    if method == "md5":
+        return hashlib.md5(material).hexdigest()
+    if method in {"sha256", "sha-256"}:
+        return hashlib.sha256(material).hexdigest()
+    raise RuntimeError(f"Unsupported router hash-method: {hash_method}")
 
 
 def router_sso_login() -> dict:
@@ -6535,7 +7112,14 @@ def router_sso_login() -> dict:
     if not nonce:
         raise RuntimeError(f"Router challenge failed: {ch}")
 
-    digest = _router_login_hash("root", ROUTER_PASS, alg, salt, nonce)
+    digest = _router_login_hash(
+        "root",
+        ROUTER_PASS,
+        alg,
+        salt,
+        nonce,
+        str(result.get("hash-method") or "sha256"),
+    )
     login = _router_rpc(
         "login",
         {"username": "root", "hash": digest, "alg": alg, "salt": salt},
@@ -6660,6 +7244,113 @@ def _wg_easy_sso_cookie_headers(data: dict) -> list[str]:
     ]
 
 
+def _grafana_cookie_domain() -> str:
+    """Parent domain for sharing Grafana session with grafana.<domain> iframe."""
+    host = (GRAFANA_PUBLIC_HOST or "").strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        return "." + ".".join(parts[-2:])
+    return ""
+
+
+def grafana_sso_login() -> dict:
+    """Log into Grafana and return session cookies for the portal iframe SSO."""
+    global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
+    # Reload in case install-grafana.sh rotated the password after panel start.
+    GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
+    user = (GRAFANA_SSO_USER or "admin").strip() or "admin"
+    password = (GRAFANA_SSO_PASS or "").strip()
+    if not password:
+        raise RuntimeError("Grafana admin password missing (/opt/grafana/.env)")
+
+    url = f"{GRAFANA_UPSTREAM}/login"
+    payload = {"user": user, "password": password}
+    headers = {
+        "User-Agent": "ServerManager-GrafanaSso/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+            set_cookies: list[str] = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        raw = exc.read() if hasattr(exc, "read") else b""
+        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+        raise RuntimeError(
+            f"Grafana login failed ({getattr(exc, 'code', '?')}): {text[:300]}"
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Grafana login failed: {exc}") from exc
+
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    try:
+        body = json.loads(text) if text else {}
+    except Exception:
+        body = {}
+    if status >= 400:
+        raise RuntimeError(f"Grafana login failed ({status}): {text[:300]}")
+    if isinstance(body, dict) and body.get("message") and "Logged in" not in str(body.get("message")):
+        # Some versions return messageId on failure with 200 — treat unknown as error if no cookie.
+        pass
+
+    session = ""
+    expiry = ""
+    max_age = "2592000"
+    for raw_c in set_cookies:
+        if not raw_c:
+            continue
+        first = raw_c.split(";", 1)[0].strip()
+        name, _, val = first.partition("=")
+        lname = name.strip().lower()
+        if lname == GRAFANA_COOKIE.lower():
+            session = val
+            for part in raw_c.split(";")[1:]:
+                low = part.strip().lower()
+                if low.startswith("max-age="):
+                    max_age = part.strip().split("=", 1)[1].strip() or max_age
+        elif lname == GRAFANA_COOKIE_EXPIRY.lower():
+            expiry = val
+    if not session:
+        raise RuntimeError("Grafana login succeeded but no grafana_session cookie returned")
+
+    return {
+        "ok": True,
+        "user": user,
+        "cookie": session,
+        "expiry": expiry,
+        "max_age": max_age,
+        "url": f"https://{GRAFANA_PUBLIC_HOST}/",
+    }
+
+
+def _grafana_sso_cookie_headers(data: dict) -> list[str]:
+    """Set Grafana session cookies on .vpstruelord.com for the iframe embed."""
+    val = str(data.get("cookie") or "").strip()
+    if not val:
+        return []
+    max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
+    expiry = str(data.get("expiry") or "").strip()
+    domain = _grafana_cookie_domain()
+    dom = f"; Domain={domain}" if domain else ""
+    # SameSite=None; Secure required for cross-subdomain iframe embeds.
+    out = [
+        f"{GRAFANA_COOKIE}={val}; Path=/{dom}; Max-Age={max_age}; HttpOnly; Secure; SameSite=None",
+    ]
+    if expiry:
+        out.append(
+            f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path=/{dom}; Max-Age={max_age}; Secure; SameSite=None"
+        )
+    return out
+
+
 def _read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -6686,6 +7377,1443 @@ def _docker_running(name: str) -> bool:
         timeout=6,
     )
     return out.strip().lower() == "true"
+
+
+def _security_run(cmd: list[str], timeout: float = 8) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr=str(exc)
+        )
+
+
+SSH_LOGIN_DROPIN = Path("/etc/ssh/sshd_config.d/00-servermanager-login.conf")
+SSH_LOGIN_DROPIN_LEGACY = Path("/etc/ssh/sshd_config.d/99-servermanager-login.conf")
+SSH_ROOT_AUTHORIZED_KEYS = Path("/root/.ssh/authorized_keys")
+SSH_LOGIN_METHODS = ("password_and_keys", "keys_only")
+SSH_ROOT_LOGIN_MODES = ("yes", "prohibit-password", "no")
+_SSH_PUBKEY_TYPES = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ssh-dss",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+)
+
+
+def _security_is_authorized_key_line(line: str) -> bool:
+    s = (line or "").strip()
+    if not s or s.startswith("#"):
+        return False
+    return any(
+        s.startswith(t + " ") or f" {t} " in f" {s} " for t in _SSH_PUBKEY_TYPES
+    )
+
+
+def _security_list_authorized_keys(path: Path = SSH_ROOT_AUTHORIZED_KEYS) -> list[dict]:
+    """Parse root authorized_keys into fingerprint rows for the Security panel."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return []
+    rows: list[dict] = []
+    idx = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not _security_is_authorized_key_line(line):
+            continue
+        idx += 1
+        fp = ""
+        bits = ""
+        key_type = ""
+        comment = ""
+        # ssh-keygen -lf reads a file; use a temp line file for accurate fingerprint.
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", prefix="sm-sshkey-", suffix=".pub", delete=False
+            ) as tmp:
+                tmp.write(line + "\n")
+                tmp_path = tmp.name
+            try:
+                proc = _security_run(["ssh-keygen", "-lf", tmp_path], timeout=6)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                # format: "256 SHA256:... comment (ED25519)"
+                parts = (proc.stdout or "").strip().split()
+                if len(parts) >= 2:
+                    bits = parts[0]
+                    fp = parts[1]
+                if parts:
+                    maybe_type = parts[-1].strip("()")
+                    if maybe_type and maybe_type.upper() == maybe_type:
+                        key_type = maybe_type
+                if len(parts) >= 4:
+                    comment = " ".join(parts[2:-1]).strip()
+        except Exception:
+            pass
+        if not key_type:
+            for t in _SSH_PUBKEY_TYPES:
+                if line.startswith(t + " ") or f" {t} " in f" {line} ":
+                    key_type = t
+                    break
+        if not comment:
+            toks = line.split()
+            if len(toks) >= 3 and not toks[0].startswith("ssh-") and "ssh-" not in toks[0]:
+                # options prefix — comment usually last token
+                comment = toks[-1] if not toks[-1].startswith("AAAA") else ""
+            elif len(toks) >= 3:
+                comment = toks[-1]
+        rows.append(
+            {
+                "index": idx,
+                "type": key_type or "unknown",
+                "fingerprint": fp or "—",
+                "bits": bits or "",
+                "comment": comment or "",
+                "line_preview": (line[:48] + "…") if len(line) > 48 else line,
+            }
+        )
+    return rows
+
+
+def _security_authorized_key_count(path: Path = SSH_ROOT_AUTHORIZED_KEYS) -> int:
+    return len(_security_list_authorized_keys(path))
+
+
+def _security_login_method_from_sshd(ssh: dict) -> str:
+    pw = str(ssh.get("password_authentication") or "").lower()
+    pub = str(ssh.get("pubkey_authentication") or "").lower()
+    pw_on = pw in ("yes", "true")
+    pub_on = pub in ("yes", "true")
+    if pw_on and pub_on:
+        return "password_and_keys"
+    if (not pw_on) and pub_on:
+        return "keys_only"
+    if pw_on and not pub_on:
+        return "password_only"
+    return "unknown"
+
+
+def _security_root_login_meta(permit: str | None) -> dict:
+    val = str(permit or "").strip().lower()
+    if val == "yes":
+        return {
+            "root_login_mode": "yes",
+            "root_login_label": "Root password + keys",
+            "root_login_risk": "high",
+            "root_login_detail": "permitrootlogin=yes — root can use a password.",
+        }
+    if val in ("prohibit-password", "without-password"):
+        return {
+            "root_login_mode": "prohibit-password",
+            "root_login_label": "Root SSH keys only",
+            "root_login_risk": "medium",
+            "root_login_detail": (
+                f"permitrootlogin={val} — root login allowed with SSH keys "
+                "(medium finding)."
+            ),
+        }
+    if val in ("no", "off", "false"):
+        return {
+            "root_login_mode": "no",
+            "root_login_label": "Root SSH disabled",
+            "root_login_risk": "ok",
+            "root_login_detail": "permitrootlogin=no — root cannot SSH in.",
+        }
+    return {
+        "root_login_mode": val or "unknown",
+        "root_login_label": f"Root login: {val or 'unknown'}",
+        "root_login_risk": "medium",
+        "root_login_detail": f"permitrootlogin={val or 'unknown'}",
+    }
+
+
+def _normalize_root_login_mode(value: str) -> str:
+    chosen = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "password": "yes",
+        "password-and-keys": "yes",
+        "allow": "yes",
+        "keys": "prohibit-password",
+        "keys-only": "prohibit-password",
+        "keysonly": "prohibit-password",
+        "pubkey": "prohibit-password",
+        "without-password": "prohibit-password",
+        "withoutpassword": "prohibit-password",
+        "prohibitpassword": "prohibit-password",
+        "deny": "no",
+        "disabled": "no",
+        "disable": "no",
+        "off": "no",
+        "false": "no",
+    }
+    chosen = aliases.get(chosen, chosen)
+    if chosen not in SSH_ROOT_LOGIN_MODES:
+        raise ValueError(
+            "permit_root_login must be yes, prohibit-password, or no"
+        )
+    return chosen
+
+
+def _security_sshd_config() -> dict:
+    proc = _security_run(["sshd", "-T"], timeout=6)
+    keys = _security_list_authorized_keys()
+    login_users = _security_list_login_users()
+    out = {
+        "ok": proc.returncode == 0,
+        "permit_root_login": None,
+        "password_authentication": None,
+        "pubkey_authentication": None,
+        "kbd_interactive_authentication": None,
+        "permit_empty_passwords": None,
+        "login_method": "unknown",
+        "login_method_label": "Unknown",
+        "root_authorized_keys": len(keys),
+        "authorized_keys": keys,
+        "login_users": login_users,
+        "keys_only_ready": len(keys) > 0,
+        "dropin_path": str(SSH_LOGIN_DROPIN),
+        "dropin_present": SSH_LOGIN_DROPIN.is_file(),
+    }
+    out.update(_security_root_login_meta(None))
+    if proc.returncode != 0:
+        out["error"] = (proc.stderr or proc.stdout or "sshd -T failed")[:240]
+        return out
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        key, val = parts[0].lower(), parts[1].strip().lower()
+        if key == "permitrootlogin":
+            out["permit_root_login"] = val
+        elif key == "passwordauthentication":
+            out["password_authentication"] = val
+        elif key == "pubkeyauthentication":
+            out["pubkey_authentication"] = val
+        elif key in ("kbdinteractiveauthentication", "challengeresponseauthentication"):
+            out["kbd_interactive_authentication"] = val
+        elif key == "permitemptypasswords":
+            out["permit_empty_passwords"] = val
+    method = _security_login_method_from_sshd(out)
+    out["login_method"] = method
+    out["login_method_label"] = {
+        "password_and_keys": "Password + SSH keys",
+        "keys_only": "SSH keys only",
+        "password_only": "Password only",
+        "unknown": "Unknown / custom",
+    }.get(method, "Unknown / custom")
+    out.update(_security_root_login_meta(out.get("permit_root_login")))
+    # Default locked until the request handler attaches session unlock status.
+    two_factor = ssh_panel_2fa_enabled()
+    method = ssh_panel_2fa_method() if two_factor else "email"
+    required = ["portal_password"]
+    if two_factor:
+        required.append("app_code" if method == "app" else "email_code")
+    out["panel_lock"] = {
+        "unlocked": False,
+        "expires_at": None,
+        "expires_in": 0,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "two_factor_enabled": two_factor,
+        "two_factor_method": method,
+        **keys_auth_urls(),
+        "email_to": EMAIL_CODE_TO,
+        "required": required,
+    }
+    return out
+
+
+def _ssh_login_dropin_body(*, password_auth: bool, permit_root: str) -> str:
+    root = _normalize_root_login_mode(permit_root)
+    if password_auth:
+        return (
+            "# Managed by ServerManager Security tab — VPS login method\n"
+            "# Do not edit by hand; change via the portal Security tab.\n"
+            "PasswordAuthentication yes\n"
+            "KbdInteractiveAuthentication yes\n"
+            "PubkeyAuthentication yes\n"
+            f"PermitRootLogin {root}\n"
+            "PermitEmptyPasswords no\n"
+        )
+    return (
+        "# Managed by ServerManager Security tab — VPS login method\n"
+        "# Do not edit by hand; change via the portal Security tab.\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PubkeyAuthentication yes\n"
+        f"PermitRootLogin {root}\n"
+        "PermitEmptyPasswords no\n"
+    )
+
+
+def _apply_ssh_login_dropin(*, password_auth: bool, permit_root: str) -> dict:
+    """Write 00-servermanager-login.conf, validate, reload, verify password flag."""
+    root = _normalize_root_login_mode(permit_root)
+    body = _ssh_login_dropin_body(password_auth=password_auth, permit_root=root)
+    SSH_LOGIN_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    previous = ""
+    if SSH_LOGIN_DROPIN.is_file():
+        try:
+            previous = SSH_LOGIN_DROPIN.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            previous = ""
+    SSH_LOGIN_DROPIN.write_text(body, encoding="utf-8")
+    try:
+        os.chmod(SSH_LOGIN_DROPIN, 0o644)
+    except OSError:
+        pass
+    try:
+        if SSH_LOGIN_DROPIN_LEGACY.is_file():
+            SSH_LOGIN_DROPIN_LEGACY.unlink()
+    except OSError:
+        pass
+
+    test = _security_run(["sshd", "-t"], timeout=8)
+    if test.returncode != 0:
+        try:
+            if previous:
+                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
+            else:
+                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
+        except OSError:
+            pass
+        err = (test.stderr or test.stdout or "sshd -t failed")[:400]
+        raise ValueError(f"sshd config invalid; not applied: {err}")
+
+    reload_proc = _security_run(["systemctl", "reload", "ssh"], timeout=15)
+    if reload_proc.returncode != 0:
+        reload_proc = _security_run(["systemctl", "reload", "sshd"], timeout=15)
+    if reload_proc.returncode != 0:
+        err = (reload_proc.stderr or reload_proc.stdout or "reload failed")[:400]
+        raise ValueError(f"sshd config written but reload failed: {err}")
+
+    after = _security_sshd_config()
+    expected_pw = "yes" if password_auth else "no"
+    actual_pw = str(after.get("password_authentication") or "").lower()
+    if actual_pw != expected_pw:
+        try:
+            if previous:
+                SSH_LOGIN_DROPIN.write_text(previous, encoding="utf-8")
+            else:
+                SSH_LOGIN_DROPIN.unlink(missing_ok=True)
+            _security_run(["systemctl", "reload", "ssh"], timeout=15)
+        except OSError:
+            pass
+        raise ValueError(
+            "sshd reload succeeded but PasswordAuthentication is still "
+            f"{actual_pw!r} (expected {expected_pw!r}). "
+            "Another sshd_config drop-in may be overriding ServerManager; "
+            "change was rolled back."
+        )
+    return after
+
+
+def apply_ssh_login_method(method: str, permit_root_login: str | None = None) -> dict:
+    """Apply VPS SSH login method via sshd drop-in and reload sshd."""
+    chosen = str(method or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "password": "password_and_keys",
+        "password_keys": "password_and_keys",
+        "passwordandkeys": "password_and_keys",
+        "keys": "keys_only",
+        "keysonly": "keys_only",
+        "pubkey": "keys_only",
+        "pubkey_only": "keys_only",
+    }
+    chosen = aliases.get(chosen, chosen)
+    if chosen not in SSH_LOGIN_METHODS:
+        raise ValueError("method must be password_and_keys or keys_only")
+
+    before = _security_sshd_config()
+    key_count = int(before.get("root_authorized_keys") or 0)
+    if chosen == "keys_only" and key_count < 1:
+        raise ValueError(
+            "Cannot switch to keys only: /root/.ssh/authorized_keys has no keys. "
+            "Add an SSH public key first to avoid lockout."
+        )
+
+    if permit_root_login:
+        root = _normalize_root_login_mode(permit_root_login)
+    elif chosen == "keys_only":
+        # Keep existing keys-only root mode if already prohibit-password/no.
+        cur = str(before.get("root_login_mode") or "")
+        root = cur if cur in ("prohibit-password", "no") else "prohibit-password"
+    else:
+        root = "yes"
+
+    if chosen == "keys_only" and root == "yes":
+        # Password auth is off; root "yes" still allows keys — normalize to keys-only root.
+        root = "prohibit-password"
+
+    after = _apply_ssh_login_dropin(
+        password_auth=(chosen == "password_and_keys"),
+        permit_root=root,
+    )
+    return {
+        "ok": True,
+        "applied": chosen,
+        "dropin_path": str(SSH_LOGIN_DROPIN),
+        "before": {
+            "login_method": before.get("login_method"),
+            "password_authentication": before.get("password_authentication"),
+            "permit_root_login": before.get("permit_root_login"),
+        },
+        "ssh": after,
+        "message": (
+            "SSH keys only — password login disabled."
+            if chosen == "keys_only"
+            else "Password + SSH keys enabled for VPS login."
+        ),
+    }
+
+
+def apply_ssh_root_login(permit_root_login: str) -> dict:
+    """Change PermitRootLogin while preserving current password-auth mode."""
+    root = _normalize_root_login_mode(permit_root_login)
+    before = _security_sshd_config()
+    method = before.get("login_method") or "unknown"
+    password_auth = method == "password_and_keys" or (
+        str(before.get("password_authentication") or "").lower() in ("yes", "true")
+    )
+    if root == "yes" and not password_auth:
+        # With password auth off, "yes" is equivalent to keys-only root.
+        root = "prohibit-password"
+    if root in ("prohibit-password", "yes") and int(before.get("root_authorized_keys") or 0) < 1:
+        raise ValueError(
+            "Cannot allow root SSH: /root/.ssh/authorized_keys has no keys."
+        )
+    after = _apply_ssh_login_dropin(password_auth=password_auth, permit_root=root)
+    labels = {
+        "yes": "Root password + keys enabled.",
+        "prohibit-password": "Root SSH limited to keys only (permitrootlogin=prohibit-password).",
+        "no": "Root SSH login disabled (permitrootlogin=no).",
+    }
+    return {
+        "ok": True,
+        "applied": root,
+        "ssh": after,
+        "message": labels.get(root, f"PermitRootLogin set to {root}."),
+    }
+
+
+def add_ssh_authorized_key(public_key: str) -> dict:
+    """Append a public key to root authorized_keys."""
+    raw = str(public_key or "").strip()
+    if not raw:
+        raise ValueError("public_key is required")
+    # Allow pasting multi-line; keep first key-looking line.
+    line = ""
+    for candidate in raw.splitlines():
+        s = candidate.strip()
+        if _security_is_authorized_key_line(s):
+            line = s
+            break
+    if not line:
+        raise ValueError("Not a valid SSH public key line")
+    if len(line) > 8192:
+        raise ValueError("public key too long")
+
+    SSH_ROOT_AUTHORIZED_KEYS.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if SSH_ROOT_AUTHORIZED_KEYS.is_file():
+        existing = SSH_ROOT_AUTHORIZED_KEYS.read_text(encoding="utf-8", errors="replace")
+    for raw_line in existing.splitlines():
+        if raw_line.strip() == line:
+            return {
+                "ok": True,
+                "added": False,
+                "message": "Key already present.",
+                "ssh": _security_sshd_config(),
+            }
+    with SSH_ROOT_AUTHORIZED_KEYS.open("a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write(line + "\n")
+    try:
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS, 0o600)
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS.parent, 0o700)
+    except OSError:
+        pass
+    return {
+        "ok": True,
+        "added": True,
+        "message": "SSH public key added for root.",
+        "ssh": _security_sshd_config(),
+    }
+
+
+def remove_ssh_authorized_key(*, index: int | None = None, fingerprint: str | None = None) -> dict:
+    """Remove one root authorized key by 1-based index or fingerprint."""
+    keys = _security_list_authorized_keys()
+    if not keys:
+        raise ValueError("No authorized keys to remove")
+    target_idx = None
+    if index is not None:
+        try:
+            target_idx = int(index)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("index must be an integer") from exc
+    elif fingerprint:
+        fp = str(fingerprint).strip()
+        for row in keys:
+            if row.get("fingerprint") == fp or fp in str(row.get("fingerprint") or ""):
+                target_idx = int(row["index"])
+                break
+        if target_idx is None:
+            raise ValueError("fingerprint not found")
+    else:
+        raise ValueError("index or fingerprint is required")
+
+    if target_idx < 1 or target_idx > len(keys):
+        raise ValueError(f"index out of range (1..{len(keys)})")
+
+    ssh = _security_sshd_config()
+    if (
+        ssh.get("login_method") == "keys_only"
+        and str(ssh.get("root_login_mode") or "") != "no"
+        and len(keys) <= 1
+    ):
+        raise ValueError(
+            "Refusing to remove the last root key while keys-only root login is enabled."
+        )
+
+    try:
+        text = SSH_ROOT_AUTHORIZED_KEYS.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"cannot read authorized_keys: {exc}") from exc
+    out_lines: list[str] = []
+    seen = 0
+    removed_line = ""
+    for raw in text.splitlines():
+        if _security_is_authorized_key_line(raw):
+            seen += 1
+            if seen == target_idx:
+                removed_line = raw.strip()
+                continue
+        out_lines.append(raw.rstrip("\n"))
+    if not removed_line:
+        raise ValueError("key not found")
+    new_text = "\n".join(out_lines)
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    SSH_ROOT_AUTHORIZED_KEYS.write_text(new_text, encoding="utf-8")
+    try:
+        os.chmod(SSH_ROOT_AUTHORIZED_KEYS, 0o600)
+    except OSError:
+        pass
+    return {
+        "ok": True,
+        "removed": True,
+        "index": target_idx,
+        "message": f"Removed key #{target_idx}.",
+        "ssh": _security_sshd_config(),
+    }
+
+
+def _security_list_login_users() -> list[dict]:
+    """Human login-capable local users (uid >= 1000) for the Security panel."""
+    out: list[dict] = []
+    try:
+        text = Path("/etc/passwd").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    skip_shells = {
+        "/usr/sbin/nologin",
+        "/sbin/nologin",
+        "/bin/false",
+        "/usr/bin/false",
+        "/bin/sync",
+    }
+    for raw in text.splitlines():
+        parts = raw.split(":")
+        if len(parts) < 7:
+            continue
+        name, _pw, uid_s, _gid, gecos, home, shell = parts[:7]
+        try:
+            uid = int(uid_s)
+        except ValueError:
+            continue
+        if uid < 1000 or uid >= 65534:
+            continue
+        shell_n = (shell or "").strip() or "/bin/sh"
+        login_ok = shell_n not in skip_shells
+        groups: list[str] = []
+        gproc = _security_run(["id", "-nG", name], timeout=4)
+        if gproc.returncode == 0:
+            groups = [g for g in (gproc.stdout or "").split() if g]
+        key_path = Path(home) / ".ssh" / "authorized_keys"
+        key_count = _security_authorized_key_count(key_path) if key_path.is_file() else 0
+        out.append(
+            {
+                "username": name,
+                "uid": uid,
+                "home": home,
+                "shell": shell_n,
+                "login_enabled": login_ok,
+                # Only real privilege groups — not a primary group that happens to be named admin.
+                "sudo": any(g in {"sudo", "wheel"} for g in groups),
+                "groups": groups[:12],
+                "authorized_keys": key_count,
+            }
+        )
+    out.sort(key=lambda r: (0 if r.get("login_enabled") else 1, r.get("username") or ""))
+    return out
+
+
+def _validate_linux_username(username: str) -> str:
+    name = str(username or "").strip().lower()
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name):
+        raise ValueError(
+            "username must be 1–32 chars: start with a-z/_, then a-z 0-9 _ -"
+        )
+    reserved = {
+        "root",
+        "daemon",
+        "bin",
+        "sys",
+        "sync",
+        "games",
+        "man",
+        "mail",
+        "news",
+        "www-data",
+        "nobody",
+        "systemd-network",
+        "messagebus",
+        "sshd",
+        "ubuntu",
+    }
+    if name in reserved:
+        raise ValueError(f"username {name!r} is reserved")
+    # Reject if already in passwd
+    try:
+        for raw in Path("/etc/passwd").read_text(encoding="utf-8", errors="replace").splitlines():
+            if raw.split(":", 1)[0] == name:
+                raise ValueError(f"user {name!r} already exists")
+    except ValueError:
+        raise
+    except OSError:
+        pass
+    return name
+
+
+def _authorized_keys_path_for_user(username: str) -> Path:
+    if username == "root":
+        return SSH_ROOT_AUTHORIZED_KEYS
+    try:
+        import pwd
+
+        home = pwd.getpwnam(username).pw_dir
+    except (KeyError, ImportError) as exc:
+        raise ValueError(f"user {username!r} not found") from exc
+    return Path(home) / ".ssh" / "authorized_keys"
+
+
+def _install_authorized_key_line(path: Path, line: str, *, owner: str | None = None) -> bool:
+    """Append pubkey line; return True if newly added."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if path.is_file():
+        existing = path.read_text(encoding="utf-8", errors="replace")
+        for raw in existing.splitlines():
+            if raw.strip() == line:
+                return False
+    with path.open("a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write(line + "\n")
+    try:
+        os.chmod(path.parent, 0o700)
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if owner and owner != "root":
+        _security_run(["chown", "-R", f"{owner}:{owner}", str(path.parent)], timeout=8)
+    return True
+
+
+def _generate_ed25519_keypair(comment: str) -> dict:
+    """Create a temporary ed25519 keypair; private key is returned and temp files removed."""
+    import tempfile
+
+    comment = (comment or "servermanager").strip()[:80] or "servermanager"
+    tmp_dir = tempfile.mkdtemp(prefix="sm-sshkey-")
+    priv_path = Path(tmp_dir) / "id_ed25519"
+    pub_path = Path(str(priv_path) + ".pub")
+    try:
+        proc = _security_run(
+            [
+                "ssh-keygen",
+                "-t",
+                "ed25519",
+                "-f",
+                str(priv_path),
+                "-N",
+                "",
+                "-C",
+                comment,
+                "-q",
+            ],
+            timeout=15,
+        )
+        if proc.returncode != 0 or not priv_path.is_file() or not pub_path.is_file():
+            err = (proc.stderr or proc.stdout or "ssh-keygen failed")[:300]
+            raise ValueError(err)
+        private_key = priv_path.read_text(encoding="utf-8")
+        public_key = pub_path.read_text(encoding="utf-8").strip()
+        fp_proc = _security_run(["ssh-keygen", "-lf", str(pub_path)], timeout=6)
+        fingerprint = ""
+        if fp_proc.returncode == 0 and (fp_proc.stdout or "").strip():
+            parts = (fp_proc.stdout or "").split()
+            if len(parts) >= 2:
+                fingerprint = parts[1]
+        return {
+            "private_key": private_key,
+            "public_key": public_key,
+            "fingerprint": fingerprint,
+            "comment": comment,
+            "type": "ed25519",
+            "filename": "id_ed25519",
+        }
+    finally:
+        for p in (priv_path, pub_path):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+
+
+def generate_ssh_authorized_key(
+    *,
+    comment: str = "",
+    username: str = "root",
+    also_root: bool = False,
+) -> dict:
+    """Auto-create an SSH keypair, install the public key, return private key once."""
+    user = str(username or "root").strip() or "root"
+    if user != "root":
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
+            raise ValueError("invalid username")
+        try:
+            import pwd
+
+            pwd.getpwnam(user)
+        except KeyError as exc:
+            raise ValueError(f"user {user!r} not found") from exc
+    cmt = (comment or f"servermanager-{user}-{int(time.time())}").strip()
+    keypair = _generate_ed25519_keypair(cmt)
+    path = _authorized_keys_path_for_user(user)
+    added = _install_authorized_key_line(
+        path, keypair["public_key"], owner=None if user == "root" else user
+    )
+    if also_root and user != "root":
+        _install_authorized_key_line(SSH_ROOT_AUTHORIZED_KEYS, keypair["public_key"])
+    return {
+        "ok": True,
+        "generated": True,
+        "added": added,
+        "username": user,
+        "private_key": keypair["private_key"],
+        "public_key": keypair["public_key"],
+        "fingerprint": keypair["fingerprint"],
+        "comment": keypair["comment"],
+        "filename": f"id_ed25519_{user}",
+        "message": (
+            f"Created ed25519 key for {user}. Download the private key now — "
+            "it is not stored on the VPS."
+        ),
+        "ssh": _security_sshd_config(),
+    }
+
+
+def create_ssh_login_user(
+    username: str,
+    *,
+    sudo: bool = True,
+    generate_key: bool = True,
+    public_key: str = "",
+    comment: str = "",
+    also_root: bool = False,
+) -> dict:
+    """Create a login-capable Linux user, optionally with sudo and an SSH key."""
+    name = _validate_linux_username(username)
+    # Prefer adduser on Debian/Ubuntu when available.
+    if Path("/usr/sbin/adduser").is_file():
+        proc = _security_run(
+            [
+                "adduser",
+                "--disabled-password",
+                "--gecos",
+                name,
+                "--shell",
+                "/bin/bash",
+                name,
+            ],
+            timeout=60,
+        )
+    else:
+        proc = _security_run(
+            ["useradd", "-m", "-s", "/bin/bash", name],
+            timeout=60,
+        )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "user create failed")[:400]
+        raise ValueError(err)
+
+    if sudo:
+        for grp in ("sudo", "admin"):
+            g = _security_run(["getent", "group", grp], timeout=4)
+            if g.returncode == 0:
+                _security_run(["usermod", "-aG", grp, name], timeout=10)
+                break
+
+    key_info = None
+    pub = str(public_key or "").strip()
+    if generate_key:
+        key_info = generate_ssh_authorized_key(
+            comment=comment or f"{name}@vps",
+            username=name,
+            also_root=also_root,
+        )
+    elif pub:
+        line = ""
+        for candidate in pub.splitlines():
+            s = candidate.strip()
+            if _security_is_authorized_key_line(s):
+                line = s
+                break
+        if not line:
+            raise ValueError("Not a valid SSH public key line")
+        path = _authorized_keys_path_for_user(name)
+        _install_authorized_key_line(path, line, owner=name)
+        if also_root:
+            _install_authorized_key_line(SSH_ROOT_AUTHORIZED_KEYS, line)
+
+    users = _security_list_login_users()
+    created = next((u for u in users if u.get("username") == name), None)
+    result = {
+        "ok": True,
+        "created": True,
+        "username": name,
+        "sudo": bool(sudo),
+        "user": created,
+        "login_users": users,
+        "ssh": _security_sshd_config(),
+        "message": f"Created user {name}"
+        + (" with sudo" if sudo else "")
+        + (" and SSH key" if key_info else "")
+        + ".",
+    }
+    if key_info:
+        result.update(
+            {
+                "private_key": key_info.get("private_key"),
+                "public_key": key_info.get("public_key"),
+                "fingerprint": key_info.get("fingerprint"),
+                "filename": key_info.get("filename") or f"id_ed25519_{name}",
+                "key_message": key_info.get("message"),
+            }
+        )
+    return result
+
+
+def _security_fail2ban() -> dict:
+    status = _security_run(["fail2ban-client", "status"], timeout=6)
+    sshd = _security_run(["fail2ban-client", "status", "sshd"], timeout=6)
+    banip = _security_run(["fail2ban-client", "get", "sshd", "banip"], timeout=6)
+    active = status.returncode == 0
+    jails: list[str] = []
+    if active:
+        for line in (status.stdout or "").splitlines():
+            if "Jail list:" in line:
+                jails = [j.strip() for j in line.split(":", 1)[-1].split(",") if j.strip()]
+    banned: list[str] = []
+    if banip.returncode == 0 and (banip.stdout or "").strip():
+        banned = [x.strip() for x in (banip.stdout or "").split() if x.strip()]
+    currently_banned = 0
+    total_banned = 0
+    total_failed = 0
+    currently_failed = 0
+    if sshd.returncode == 0:
+        for line in (sshd.stdout or "").splitlines():
+            s = line.strip()
+            if s.startswith("Currently banned:"):
+                try:
+                    currently_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total banned:"):
+                try:
+                    total_banned = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Currently failed:"):
+                try:
+                    currently_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif s.startswith("Total failed:"):
+                try:
+                    total_failed = int(s.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif "Banned IP list:" in s and not banned:
+                banned = [x.strip() for x in s.split(":", 1)[-1].split() if x.strip()]
+    return {
+        "ok": active,
+        "active": active,
+        "jails": jails,
+        "sshd": {
+            "currently_banned": currently_banned or len(banned),
+            "total_banned": total_banned,
+            "currently_failed": currently_failed,
+            "total_failed": total_failed,
+            "banned_ips": banned,
+        },
+        "error": None
+        if active
+        else ((status.stderr or status.stdout or "fail2ban inactive")[:240]),
+    }
+
+
+def _security_attacker_stats(banned_ips: list[str]) -> dict:
+    """One journal pass: top attackers + per-banned-IP attempt breakdown."""
+    banned_set = {ip.strip() for ip in banned_ips if ip.strip()}
+    proc = _security_run(
+        [
+            "journalctl",
+            "-u",
+            "ssh",
+            "--since",
+            "7 days ago",
+            "--no-pager",
+            "-o",
+            "cat",
+        ],
+        timeout=25,
+    )
+    top: dict[str, int] = {}
+    by_banned: dict[str, dict] = {
+        ip: {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        for ip in banned_set
+    }
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": (proc.stderr or "journalctl failed")[:240],
+            "top_attackers": [],
+            "banned_details": list(by_banned.values()),
+            "window": "7d",
+        }
+
+    failed_re = re.compile(
+        r"Failed password for (?:invalid user )?(\S+) from (\d+\.\d+\.\d+\.\d+)"
+    )
+    invalid_re = re.compile(r"Invalid user (\S+) from (\d+\.\d+\.\d+\.\d+)")
+    for line in (proc.stdout or "").splitlines():
+        m = failed_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["failed_password"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+            continue
+        m = invalid_re.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            top[ip] = top.get(ip, 0) + 1
+            if ip in by_banned:
+                row = by_banned[ip]
+                row["invalid_user"] += 1
+                row["users"][user] = row["users"].get(user, 0) + 1
+                row["last_seen"] = line[:80]
+
+    top_list = [
+        {"ip": ip, "attempts": n}
+        for ip, n in sorted(top.items(), key=lambda kv: kv[1], reverse=True)
+        if ip not in banned_set
+    ][:20]
+    banned_details = []
+    for ip in banned_ips:
+        row = by_banned.get(ip) or {
+            "ip": ip,
+            "failed_password": 0,
+            "invalid_user": 0,
+            "users": {},
+            "last_seen": "",
+        }
+        users_sorted = sorted(
+            [{"user": u, "count": c} for u, c in row["users"].items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:15]
+        banned_details.append(
+            {
+                "ip": ip,
+                "failed_password": row["failed_password"],
+                "invalid_user": row["invalid_user"],
+                "attempts": int(row["failed_password"]) + int(row["invalid_user"]),
+                "users": users_sorted,
+                "last_seen": row.get("last_seen") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "window": "7d",
+        "top_attackers": top_list,
+        "banned_details": banned_details,
+    }
+
+
+def _security_listeners_and_ufw() -> tuple[list[dict], dict]:
+    """Return public listeners of interest + UFW risk rules."""
+    watch = {
+        22,
+        80,
+        443,
+        445,
+        139,
+        2121,
+        1445,
+        3016,
+        5000,
+        5001,
+        5002,
+        3389,
+        4000,
+        8080,
+        2222,
+        8443,
+        25,
+        465,
+        587,
+        993,
+    }
+    ss = _security_run(["ss", "-lntH"], timeout=6)
+    listeners: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for line in (ss.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[3]
+        if local.count(":") < 1:
+            continue
+        host, _, port_s = local.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            continue
+        if port not in watch:
+            continue
+        public = host in ("0.0.0.0", "*", "[::]", "::")
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        listeners.append(
+            {
+                "addr": host,
+                "port": port,
+                "public_bind": public,
+            }
+        )
+
+    fw = read_firewall_state()
+    risky_allows: list[dict] = []
+    vpn_only_ports: set[int] = set()
+    for r in fw.get("rules") or []:
+        try:
+            port_i = int(r.get("port") or 0)
+        except (TypeError, ValueError):
+            port_i = 0
+        if r.get("vpn_only") and port_i:
+            vpn_only_ports.add(port_i)
+        if r.get("locked"):
+            continue
+        if r.get("vpn_only"):
+            continue
+        if str(r.get("from") or "").lower().startswith("anywhere"):
+            risky_allows.append(
+                {
+                    "port": r.get("port"),
+                    "proto": r.get("proto"),
+                    "comment": r.get("comment") or "",
+                    "id": r.get("id"),
+                }
+            )
+    return listeners, {
+        "active": bool(fw.get("active")),
+        "default_incoming": fw.get("default_incoming"),
+        "risky_public_allows": risky_allows,
+        "vpn_only_ports": sorted(vpn_only_ports),
+        "rule_count": len(fw.get("rules") or []),
+        "error": fw.get("error"),
+    }
+
+
+def _security_probe_ports(ports: list[int]) -> list[dict]:
+    """Best-effort connect to VPS public IP (external reachability approx)."""
+    import socket
+
+    host = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "127.0.0.1"
+    out: list[dict] = []
+    for port in ports:
+        open_ = False
+        err = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.2)
+            open_ = s.connect_ex((host, int(port))) == 0
+            s.close()
+        except Exception as exc:
+            err = str(exc)[:120]
+        out.append({"host": host, "port": int(port), "open": open_, "error": err})
+    return out
+
+
+def _security_file_checks() -> list[dict]:
+    checks: list[dict] = []
+    targets = [
+        ("/opt/wireguard/port-forward-ui.env", 0o600, True),
+        ("/opt/grafana/.env", 0o600, False),
+        ("/opt/wireguard/.env", 0o600, False),
+        ("/opt/truemail/config/ssl/key.pem", 0o600, False),
+        ("/opt/truemail/.env", 0o600, False),
+        ("/opt/wireguard/nas-smb-gateway/credentials", 0o600, False),
+        ("/opt/servermanager/panel/ssh-panel-2fa.json", 0o600, False),
+        ("/opt/servermanager/panel/auth-app-devices.json", 0o600, False),
+        ("/opt/servermanager/panel/vpn-allowlist.json", 0o600, False),
+        ("/opt/servermanager/panel/ip-jail.json", 0o600, False),
+        ("/opt/servermanager/panel/caddy-sticky-vpn-ips.txt", 0o600, False),
+    ]
+    for path, want_mode, required in targets:
+        p = Path(path)
+        if not p.exists():
+            if required:
+                checks.append(
+                    {
+                        "path": path,
+                        "ok": False,
+                        "severity": "medium",
+                        "detail": "missing",
+                    }
+                )
+            continue
+        try:
+            mode = p.stat().st_mode & 0o777
+        except OSError as exc:
+            checks.append(
+                {
+                    "path": path,
+                    "ok": False,
+                    "severity": "medium",
+                    "detail": str(exc)[:120],
+                }
+            )
+            continue
+        world_w = bool(mode & 0o002)
+        world_r = bool(mode & 0o004)
+        group_r = bool(mode & 0o040)
+        ok = mode <= want_mode and not world_w and not world_r
+        sev = "ok"
+        detail = f"mode {mode:03o}"
+        if world_w:
+            sev = "high"
+            detail += " (world-writable)"
+        elif world_r or (group_r and want_mode <= 0o600):
+            sev = "medium"
+            detail += " (overly readable)"
+        elif not ok:
+            sev = "low"
+        checks.append(
+            {
+                "path": path,
+                "ok": ok and sev == "ok",
+                "severity": sev if not ok or sev != "ok" else "ok",
+                "mode": f"{mode:03o}",
+                "detail": detail,
+            }
+        )
+    return checks
+
+
+def _security_domain_exposure() -> list[dict]:
+    sensitive = {
+        "router.vpstruelord.com",
+        "buffalo.vpstruelord.com",
+        "files.vpstruelord.com",
+        "proxmox.vpstruelord.com",
+        "plex.vpstruelord.com",
+        "grafana.vpstruelord.com",
+        "pihole.vpstruelord.com",
+        "dns.vpstruelord.com",
+    }
+    try:
+        state = read_hookups_state()
+        rules = state.get("rules") or []
+    except Exception:
+        rules = []
+    out: list[dict] = []
+    for r in rules:
+        domain = str(r.get("domain") or "").strip().lower()
+        if not domain:
+            continue
+        if domain not in sensitive and not r.get("enabled", True):
+            continue
+        if domain not in sensitive:
+            continue
+        out.append(
+            {
+                "domain": domain,
+                "name": r.get("name") or "",
+                "enabled": bool(r.get("enabled", True)),
+                "vpn_only": bool(r.get("vpn_only")),
+                "target": f"{r.get('target_host')}:{r.get('target_port')}",
+                "risk": "ok" if r.get("vpn_only") else "high",
+            }
+        )
+    return out
+
+
+def build_security_status() -> dict:
+    """Live security dashboard for the portal Security tab."""
+    findings: list[dict] = []
+    f2b = _security_fail2ban()
+    ssh = _security_sshd_config()
+    listeners, ufw = _security_listeners_and_ufw()
+    files = _security_file_checks()
+    domains = _security_domain_exposure()
+    banned = list((f2b.get("sshd") or {}).get("banned_ips") or [])
+    attackers = _security_attacker_stats(banned)
+
+    # WAN probes for high-interest ports
+    probe_ports = [22, 2121, 3016, 5000, 5001, 5002, 1445, 445, 3389, 4000, 8080, 2222, 8084]
+    probes = _security_probe_ports(probe_ports)
+    open_map = {p["port"]: p["open"] for p in probes}
+
+    if not f2b.get("active"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "fail2ban not active",
+                "detail": f2b.get("error") or "sshd jail missing",
+            }
+        )
+    if ssh.get("password_authentication") in ("yes", "true"):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "SSH password login enabled",
+                "detail": "Switch VPS login method to SSH keys only in the Security tab.",
+            }
+        )
+    if ssh.get("permit_root_login") in ("yes", "prohibit-password", "without-password"):
+        if ssh.get("permit_root_login") == "yes":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": "SSH root login with password allowed",
+                    "detail": (
+                        f"permitrootlogin={ssh.get('permit_root_login')}. "
+                        "Use Security → VPS login method → SSH keys only."
+                    ),
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": "SSH root login allowed",
+                    "detail": (
+                        f"permitrootlogin={ssh.get('permit_root_login')}. "
+                        "Manage under Security → VPS login method "
+                        "(root keys only, or disable root SSH)."
+                    ),
+                }
+            )
+    if (
+        ssh.get("login_method") == "keys_only"
+        and int(ssh.get("root_authorized_keys") or 0) < 1
+    ):
+        findings.append(
+            {
+                "severity": "high",
+                "title": "Keys-only login with no root authorized_keys",
+                "detail": "Add a key to /root/.ssh/authorized_keys or re-enable password login.",
+            }
+        )
+
+    exposure_labels = {
+        2121: "NAS FTP gateway",
+        3016: "Grafana (should be 127.0.0.1 only)",
+        5000: "remote-desktop HTTP (TCP; WG tunnel is UDP)",
+        5001: "WireGuard Easy UI",
+        5002: "Portal cleartext HTTP",
+        1445: "NAS SMB gateway",
+        445: "Samba/SMB",
+        3389: "RDP forward",
+        4000: "Windows RDP forward",
+        8080: "Flint HTTP forward",
+        2222: "Flint SSH forward",
+        8084: "LAN HTTP forward",
+    }
+    vpn_only_ports: set[int] = set()
+    for p in ufw.get("vpn_only_ports") or []:
+        try:
+            vpn_only_ports.add(int(p))
+        except (TypeError, ValueError):
+            continue
+    exposures: list[dict] = []
+    for port, label in exposure_labels.items():
+        listening_public = any(
+            L.get("port") == port and L.get("public_bind") for L in listeners
+        )
+        ufw_open = any(int(r.get("port") or 0) == port for r in ufw.get("risky_public_allows") or [])
+        wan_open = bool(open_map.get(port))
+        vpn_scoped = port in vpn_only_ports and not ufw_open
+        # Prefer UFW+listener as authority; raw connect can false-positive via hairpin.
+        severity = "ok"
+        if vpn_scoped:
+            # Explicit LAN/VPN UFW allows — public Internet denied by default deny.
+            severity = "ok"
+        elif ufw_open and (listening_public or wan_open):
+            severity = "high"
+        elif listening_public and wan_open and port in (3016,):
+            # Exclude VPN-scoped admin ports: hairpin to public IP looks "open".
+            severity = "high"
+        elif listening_public and port in (3016,):
+            severity = "high"
+        elif listening_public or ufw_open or wan_open:
+            severity = "medium"
+        exposures.append(
+            {
+                "port": port,
+                "label": label,
+                "listening_public": listening_public,
+                "ufw_anywhere": ufw_open,
+                "wan_open": wan_open,
+                "vpn_only": vpn_scoped,
+                "severity": severity,
+            }
+        )
+        if severity == "high":
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": f"{label} exposed on :{port}",
+                    "detail": "Close UFW or bind localhost / VPN-only.",
+                }
+            )
+        elif severity == "medium":
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{label} partially exposed (:{port})",
+                    "detail": "Listener or UFW allow present; confirm WAN path.",
+                }
+            )
+
+    for d in domains:
+        if d.get("risk") == "high" and d.get("enabled"):
+            findings.append(
+                {
+                    "severity": "medium",
+                    "title": f"{d['domain']} is public (not VPN-only)",
+                    "detail": f"Upstream {d.get('target')}",
+                }
+            )
+
+    for f in files:
+        if f.get("severity") in ("high", "medium"):
+            findings.append(
+                {
+                    "severity": f["severity"],
+                    "title": f"Weak permissions: {f['path']}",
+                    "detail": f.get("detail") or "",
+                }
+            )
+
+    # Kernel reboot pending (needrestart), best-effort
+    kernel = {"ok": True, "detail": ""}
+    nr = _security_run(["needrestart", "-b"], timeout=8)
+    if nr.returncode == 0 and "NEEDRESTART-KSTA: 3" in (nr.stdout or ""):
+        kernel = {"ok": False, "detail": "Kernel update pending reboot"}
+        findings.append(
+            {
+                "severity": "low",
+                "title": "Kernel update pending reboot",
+                "detail": "needrestart reports a newer kernel is installed",
+            }
+        )
+
+    sev_rank = {"high": 0, "medium": 1, "low": 2, "ok": 3}
+    findings.sort(key=lambda x: sev_rank.get(str(x.get("severity")), 9))
+    counts = {"high": 0, "medium": 0, "low": 0}
+    for f in findings:
+        k = str(f.get("severity") or "")
+        if k in counts:
+            counts[k] += 1
+
+    score = 100
+    score -= counts["high"] * 18
+    score -= counts["medium"] * 8
+    score -= counts["low"] * 3
+    if score < 0:
+        score = 0
+    if counts["high"]:
+        grade = "at risk"
+    elif counts["medium"]:
+        grade = "needs attention"
+    else:
+        grade = "good"
+
+    return {
+        "ok": True,
+        "score": score,
+        "grade": grade,
+        "counts": counts,
+        "findings": findings[:40],
+        "fail2ban": f2b,
+        "ip_jail": build_ip_jail_status(),
+        "attackers": attackers,
+        "ssh": ssh,
+        "firewall": ufw,
+        "listeners": listeners,
+        "exposures": exposures,
+        "domains": domains,
+        "files": files,
+        "kernel": kernel,
+        "probes": probes,
+        "vpn_allowlist": build_vpn_allowlist_status(),
+        "generated_at": int(time.time()),
+    }
+
 
 
 BACKUP_ROOT = Path("/opt/servermanager-backup")
@@ -7655,7 +9783,18 @@ def _elements_sanitize_filename(name: str) -> str:
 
 
 def elements_upload_media(
-    library: str, filename: str, data: bytes, *, process: bool = False
+    library: str,
+    filename: str,
+    data: bytes,
+    *,
+    process: bool = False,
+    show_name: str = "",
+    year: str = "",
+    season: int | None = None,
+    episode: int | None = None,
+    episode_title: str = "",
+    tmdb_id: int | None = None,
+    full_form: bool = False,
 ) -> dict:
     """Upload a media file into one of the four Elements library inboxes."""
     lib = str(library or "").strip().lower().replace(" ", "-").replace("_", "-")
@@ -7704,6 +9843,92 @@ def elements_upload_media(
             f"file too large ({len(data)} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
         )
     name = _elements_sanitize_filename(filename)
+    rel_under_inbox = name
+    plex_meta: dict = {}
+    is_tv = kind in ("tvshows", "kids-tvshows")
+    is_movie = kind in ("movies", "kids-movies")
+    if is_movie and (full_form or show_name):
+        if not _media_tmdb:
+            raise RuntimeError("TMDB helper unavailable")
+        title = str(show_name or "").strip()
+        yr = str(year or "").strip()
+        if tmdb_id and (not title or not yr):
+            try:
+                info = _media_tmdb.movie_details(int(tmdb_id))
+                if not title:
+                    title = str(info.get("title") or info.get("name") or "").strip()
+                if not yr:
+                    yr = str(info.get("year") or "").strip()
+            except Exception:
+                pass
+        if not title:
+            raise ValueError("Movie title required for full movie form")
+        rel_under_inbox, name = _media_tmdb.build_movie_upload_name_from_form(
+            filename,
+            title=title,
+            year=yr,
+        )
+        name = _elements_sanitize_filename(name)
+        rel_under_inbox = name
+        plex_meta = {
+            "title": title,
+            "year": yr,
+            "tmdb_id": int(tmdb_id) if tmdb_id else 0,
+            "relpath": rel_under_inbox,
+            "media_type": "movie",
+        }
+    elif is_tv and (full_form or show_name):
+        if not _media_tmdb:
+            raise RuntimeError("TMDB helper unavailable")
+        show = str(show_name or "").strip()
+        if not show:
+            raise ValueError("Show name required for full TV form")
+        # Optionally fill episode title from TMDB when id+season+episode given.
+        ep_title = str(episode_title or "").strip()
+        yr = str(year or "").strip()
+        sn = season
+        en = episode
+        if sn is None or en is None:
+            gsn, gen = _media_tmdb.guess_season_episode(name)
+            sn = sn if sn is not None else gsn
+            en = en if en is not None else gen
+        if tmdb_id and sn and en and not ep_title:
+            try:
+                season_info = _media_tmdb.tv_season(int(tmdb_id), int(sn))
+                for ep in season_info.get("episodes") or []:
+                    if int(ep.get("episode_number") or 0) == int(en):
+                        ep_title = str(ep.get("name") or "").strip()
+                        break
+                if not yr:
+                    yr = str((season_info.get("show") or {}).get("year") or "")
+                if not show:
+                    show = str((season_info.get("show") or {}).get("name") or show)
+            except Exception:
+                pass
+        rel_under_inbox, name = _media_tmdb.build_upload_name_from_form(
+            filename,
+            show_name=show,
+            year=yr,
+            season=int(sn) if sn is not None else None,
+            episode=int(en) if en is not None else None,
+            episode_title=ep_title,
+        )
+        # sanitize each path segment
+        parts = []
+        for part in rel_under_inbox.replace("\\", "/").split("/"):
+            parts.append(_elements_sanitize_filename(part))
+        rel_under_inbox = "/".join(parts)
+        name = parts[-1]
+        plex_meta = {
+            "show_name": show,
+            "year": yr,
+            "season": int(sn) if sn is not None else 0,
+            "episode": int(en) if en is not None else 0,
+            "episode_title": ep_title,
+            "tmdb_id": int(tmdb_id) if tmdb_id else 0,
+            "relpath": rel_under_inbox,
+            "media_type": "tv",
+        }
     # Ensure drive is attached + inbox dirs exist
     prep = proxmox_ssh(
         f"{PROXMOX_ELEMENTS_CMD} status; "
@@ -7722,7 +9947,8 @@ def elements_upload_media(
             raise RuntimeError(
                 _elements_ssh_out(att) or "Elements not mounted; attach failed"
             )
-    dest = f"/mnt/plex-usb/{sub}/{name}"
+    dest = f"/mnt/plex-usb/{sub}/{rel_under_inbox}"
+    dest_dir = str(Path(dest).parent).replace("'", "")
     # Stream bytes over SSH stdin
     timeout = max(300, len(data) // (512 * 1024) + 120)
     cmd = [
@@ -7736,7 +9962,7 @@ def elements_upload_media(
         "-o",
         "ConnectTimeout=8",
         f"{PROXMOX_SSH_USER}@{PROXMOX_SSH_HOST}",
-        f"cat > {shlex.quote(dest)}",
+        f"mkdir -p {shlex.quote(dest_dir)} && cat > {shlex.quote(dest)}",
     ]
     proc = subprocess.run(
         cmd, input=data, capture_output=True, timeout=timeout
@@ -7753,6 +9979,8 @@ def elements_upload_media(
         "path": dest,
         "processed": False,
     }
+    if plex_meta:
+        result["plex"] = plex_meta
     if process:
         run = elements_set("pipeline")
         result["processed"] = True
@@ -7765,6 +9993,19 @@ def elements_upload_media(
             pass
     return result
 
+
+
+def tmdb_status() -> dict:
+    configured = bool(_media_tmdb and _media_tmdb.tmdb_configured())
+    return {
+        "ok": True,
+        "configured": configured,
+        "message": (
+            "TMDB ready"
+            if configured
+            else "Set TMDB_API_KEY in port-forward-ui.env"
+        ),
+    }
 
 def _active_session_count() -> int:
     with _sessions_lock:
@@ -7792,7 +10033,24 @@ def build_portal_settings() -> dict:
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
-        {"id": "ovpn-phone", "label": "OpenVPN iPhone (.ovpn)", "url": f"https://{host}/api/openvpn/phone"},
+        {
+            "id": "ovpn-phone",
+            "label": "OpenVPN iPhone (.ovpn)",
+            "url": (
+                f"https://{host}/api/openvpn/phone?t={OVPN_PHONE_DL_TOKEN}"
+                if OVPN_PHONE_DL_TOKEN
+                else f"https://{host}/api/openvpn/phone"
+            ),
+        },
+        {
+            "id": "ovpn-windows",
+            "label": "OpenVPN Windows (.ovpn)",
+            "url": (
+                f"https://{host}/api/openvpn/windows?t={OVPN_WINDOWS_DL_TOKEN}"
+                if OVPN_WINDOWS_DL_TOKEN
+                else f"https://{host}/api/openvpn/windows"
+            ),
+        },
         {"id": "wg-flint", "label": "WireGuard Flint (.conf)", "url": f"https://{host}/api/wireguard/config"},
         {"id": "files", "label": "Files (direct)", "url": "https://files.vpstruelord.com/"},
         {"id": "buffalo", "label": "Buffalo NAS", "url": "https://buffalo.vpstruelord.com/"},
@@ -7902,6 +10160,7 @@ def apply_portal_settings(payload: dict) -> dict:
         with _sessions_lock:
             sessions_cleared = len(_sessions)
             _sessions.clear()
+            _persist_sessions_unlocked()
         changed.append("sessions")
 
     return {
@@ -7912,7 +10171,192 @@ def apply_portal_settings(payload: dict) -> dict:
     }
 
 
-def build_backup_status() -> dict:
+def _github_api_json(
+    url: str,
+    token: str,
+    timeout: float = 8.0,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+) -> tuple[int, dict]:
+    """Call a GitHub API URL with a bearer token. Returns (status, json_or_empty)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    data_bytes = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ServerManager-Backup",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    method = (method or "GET").upper()
+    if body is not None:
+        data_bytes = _json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        if method == "GET":
+            method = "POST"
+    req = urllib.request.Request(
+        url,
+        data=data_bytes,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = _json.loads(raw) if raw else {}
+            except Exception:
+                data = {}
+            return int(resp.status), data if isinstance(data, dict) else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+            data = _json.loads(raw) if raw else {}
+        except Exception:
+            data = {}
+        return int(exc.code), data if isinstance(data, dict) else {}
+    except Exception as exc:
+        return 0, {"message": str(exc)}
+
+
+def check_github_backup_token(
+    owner: str, repo: str, token: str
+) -> dict:
+    """Validate a GitHub token can reach the backup repo (contents:write ideally)."""
+    owner = (owner or "").strip()
+    repo = (repo or "").strip()
+    token = (token or "").strip()
+    if not token:
+        return {"ok": False, "error": "GitHub token is missing"}
+    if not owner or not repo:
+        return {"ok": False, "error": "GitHub owner/repo not set"}
+
+    status, data = _github_api_json("https://api.github.com/user", token)
+    if status in (401, 403) and "Bad credentials" in str(data.get("message") or ""):
+        return {
+            "ok": False,
+            "error": "GitHub token is invalid or revoked. Create a new classic PAT (repo scope) and save it here.",
+            "http_status": status,
+        }
+    if status == 401:
+        return {
+            "ok": False,
+            "error": "GitHub token rejected (401). Paste a fresh PAT with repo access.",
+            "http_status": status,
+        }
+    if status == 0:
+        return {
+            "ok": False,
+            "error": f"Could not reach GitHub API: {data.get('message') or 'network error'}",
+            "http_status": 0,
+        }
+
+    status, data = _github_api_json(
+        f"https://api.github.com/repos/{owner}/{repo}", token
+    )
+    if status == 404:
+        return {
+            "ok": False,
+            "error": f"Repo {owner}/{repo} not found for this token (wrong name, or token lacks access).",
+            "http_status": status,
+        }
+    if status in (401, 403):
+        msg = str(data.get("message") or "forbidden")
+        return {
+            "ok": False,
+            "error": f"GitHub denied access to {owner}/{repo}: {msg}",
+            "http_status": status,
+        }
+    if status != 200:
+        return {
+            "ok": False,
+            "error": f"GitHub API returned HTTP {status} for {owner}/{repo}",
+            "http_status": status,
+        }
+
+    perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
+    can_push = bool(perms.get("push") or perms.get("admin"))
+    if perms and not can_push:
+        return {
+            "ok": False,
+            "error": f"Token can see {owner}/{repo} but cannot push. Need a PAT with Contents: Read and write.",
+            "http_status": status,
+            "private": bool(data.get("private")),
+        }
+
+    # Fine-grained PATs often report repo permissions.push=true (account role) while
+    # the token itself lacks Contents: Read and write — prove write with a blob create.
+    blob_status, blob_data = _github_api_json(
+        f"https://api.github.com/repos/{owner}/{repo}/git/blobs",
+        token,
+        method="POST",
+        body={"content": "c20=", "encoding": "base64"},  # "sm"
+    )
+    if blob_status in (401, 403):
+        msg = str((blob_data or {}).get("message") or "forbidden")
+        kind = "fine-grained" if token.startswith("github_pat_") else "PAT"
+        return {
+            "ok": False,
+            "error": (
+                f"Token authenticates but cannot write to {owner}/{repo} ({msg}). "
+                f"For a {kind} token: grant Contents: Read and write on that repo "
+                "(or use a classic PAT with repo scope), then save again."
+            ),
+            "http_status": blob_status,
+            "private": bool(data.get("private")),
+        }
+    if blob_status not in (200, 201) and blob_status != 0:
+        # Non-auth failures (422 etc.) still mean the token reached Contents write.
+        if blob_status >= 500 or blob_status == 404:
+            return {
+                "ok": False,
+                "error": f"GitHub Contents check failed (HTTP {blob_status}) for {owner}/{repo}",
+                "http_status": blob_status,
+                "private": bool(data.get("private")),
+            }
+
+    return {
+        "ok": True,
+        "error": "",
+        "http_status": status,
+        "private": bool(data.get("private")),
+        "full_name": str(data.get("full_name") or f"{owner}/{repo}"),
+    }
+
+
+def set_backup_timer(enabled: bool) -> tuple[bool, str]:
+    """Enable or disable the daily sm-backup.timer."""
+    unit = "sm-backup.timer"
+    if not Path(f"/etc/systemd/system/{unit}").is_file() and not Path(
+        f"/lib/systemd/system/{unit}"
+    ).is_file():
+        return False, "sm-backup.timer is not installed"
+    if enabled:
+        proc = subprocess.run(
+            ["systemctl", "enable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    else:
+        proc = subprocess.run(
+            ["systemctl", "disable", "--now", unit],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        return False, out or f"systemctl failed ({proc.returncode})"
+    state = _sh_out(["systemctl", "is-enabled", unit], timeout=4).strip()
+    active = _sh_out(["systemctl", "is-active", unit], timeout=4).strip()
+    return True, f"{unit} enabled={state} active={active}"
+
+
+def build_backup_status(*, check_token: bool = True) -> dict:
     """GitHub backup agent status for the Backup portal tab (never returns the token)."""
     installed = BACKUP_SCRIPT.is_file()
     secrets_ok = BACKUP_SECRETS.is_file()
@@ -7921,7 +10365,8 @@ def build_backup_status() -> dict:
     repo = (env.get("GITHUB_REPO") or "").strip()
     branch = (env.get("GITHUB_BRANCH") or "main").strip() or "main"
     backup_name = (env.get("BACKUP_NAME") or "vps").strip() or "vps"
-    has_token = bool((env.get("GITHUB_TOKEN") or "").strip())
+    token = (env.get("GITHUB_TOKEN") or "").strip()
+    has_token = bool(token)
     configured = installed and secrets_ok and bool(owner and repo and has_token)
 
     log_text = _read_text(str(BACKUP_LOG))
@@ -7931,7 +10376,9 @@ def build_backup_status() -> dict:
     last_message = ""
     last_at = ""
     for line in reversed(lines):
-        if "Pushed backup" in line:
+        # Prefer the most recent success OR error (do not ignore new failures
+        # just because an older "Pushed backup" line exists further up).
+        if "Pushed backup" in line or "No changes to commit" in line:
             last_ok = True
             last_message = line
             last_at = line.split(" ", 1)[0] if " " in line else ""
@@ -7965,11 +10412,32 @@ def build_backup_status() -> dict:
 
     repo_url = f"https://github.com/{owner}/{repo}" if owner and repo else ""
 
+    token_ok: bool | None = None
+    token_error = ""
+    if check_token and configured:
+        probe = check_github_backup_token(owner, repo, token)
+        token_ok = bool(probe.get("ok"))
+        token_error = str(probe.get("error") or "")
+    elif configured:
+        token_ok = None
+    else:
+        token_ok = False
+        if not installed:
+            token_error = "Backup agent is not installed on this VPS"
+        elif not has_token:
+            token_error = "GitHub token is missing"
+        elif not owner or not repo:
+            token_error = "GitHub owner/repo not set"
+
+    healthy = bool(configured and token_ok is not False and last_ok is not False)
+
     return {
-        "ok": configured and last_ok is not False,
+        "ok": healthy,
         "installed": installed,
         "configured": configured,
         "has_token": has_token,
+        "token_ok": token_ok,
+        "token_error": token_error,
         "owner": owner,
         "repo": repo,
         "branch": branch,
@@ -7987,6 +10455,102 @@ def build_backup_status() -> dict:
     }
 
 
+def apply_backup_settings(payload: dict) -> dict:
+    """Update backup secrets / daily timer from the Backup tab."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid payload")
+
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    env = _parse_env_file(BACKUP_SECRETS) if BACKUP_SECRETS.is_file() else {}
+    updates: dict[str, str] = {}
+    changed: list[str] = []
+
+    if "owner" in payload:
+        owner = str(payload.get("owner") or "").strip()
+        if owner and (not re.match(r"^[A-Za-z0-9_.-]+$", owner) or len(owner) > 64):
+            raise ValueError("invalid GitHub owner")
+        if owner and owner != (env.get("GITHUB_OWNER") or "").strip():
+            updates["GITHUB_OWNER"] = owner
+            changed.append("owner")
+    if "repo" in payload:
+        repo = str(payload.get("repo") or "").strip()
+        if repo and (not re.match(r"^[A-Za-z0-9_.-]+$", repo) or len(repo) > 100):
+            raise ValueError("invalid GitHub repo")
+        if repo and repo != (env.get("GITHUB_REPO") or "").strip():
+            updates["GITHUB_REPO"] = repo
+            changed.append("repo")
+    if "branch" in payload:
+        branch = str(payload.get("branch") or "").strip() or "main"
+        if not re.match(r"^[A-Za-z0-9_./-]+$", branch) or len(branch) > 128:
+            raise ValueError("invalid GitHub branch")
+        if branch != (env.get("GITHUB_BRANCH") or "main").strip():
+            updates["GITHUB_BRANCH"] = branch
+            changed.append("branch")
+    if "backup_name" in payload:
+        name = str(payload.get("backup_name") or "").strip() or "vps"
+        if not re.match(r"^[A-Za-z0-9_.-]+$", name) or len(name) > 64:
+            raise ValueError("invalid backup_name")
+        if name != (env.get("BACKUP_NAME") or "vps").strip():
+            updates["BACKUP_NAME"] = name
+            changed.append("backup_name")
+
+    token = str(payload.get("token") or payload.get("github_token") or "").strip()
+    if token:
+        if len(token) < 20 or len(token) > 256:
+            raise ValueError("token looks invalid (unexpected length)")
+        if any(ch.isspace() for ch in token):
+            raise ValueError("token must not contain whitespace")
+        updates["GITHUB_TOKEN"] = token
+        changed.append("token")
+
+    # Always keep GIT_NAME quoted-safe when rewriting secrets.
+    if "GIT_NAME" not in env or " " in (env.get("GIT_NAME") or ""):
+        updates.setdefault("GIT_NAME", (env.get("GIT_NAME") or "ServerManager Backup").strip() or "ServerManager Backup")
+    if "GIT_EMAIL" not in env:
+        updates.setdefault("GIT_EMAIL", "servermanager-backup@local")
+
+    if updates:
+        # Preserve existing keys we are not changing.
+        merged = dict(env)
+        merged.update(updates)
+        # Ensure required defaults exist for a working secrets file.
+        merged.setdefault("GITHUB_OWNER", "jsa00414")
+        merged.setdefault("GITHUB_REPO", "ServerManagerBackup")
+        merged.setdefault("GITHUB_BRANCH", "main")
+        merged.setdefault("BACKUP_NAME", "vps")
+        merged.setdefault("GIT_NAME", "ServerManager Backup")
+        merged.setdefault("GIT_EMAIL", "servermanager-backup@local")
+        _upsert_env_file(BACKUP_SECRETS, merged)
+        try:
+            os.chmod(BACKUP_SECRETS, 0o600)
+        except Exception:
+            pass
+
+    timer_out = ""
+    if "timer_enabled" in payload:
+        ok_t, timer_out = set_backup_timer(bool(payload.get("timer_enabled")))
+        if not ok_t:
+            raise ValueError(timer_out or "failed to update backup timer")
+        changed.append("timer")
+
+    status = build_backup_status(check_token=True)
+    # If a new token was saved but is still bad, surface that clearly.
+    if "token" in changed and status.get("token_ok") is False:
+        return {
+            "ok": False,
+            "error": status.get("token_error") or "GitHub token still invalid",
+            "changed": changed,
+            "timer": timer_out,
+            "status": status,
+        }
+    return {
+        "ok": True,
+        "changed": changed,
+        "timer": timer_out,
+        "status": status,
+    }
+
+
 def run_backup_now() -> dict:
     """Run sm-backup.sh once; returns status + command output."""
     if not BACKUP_SCRIPT.is_file():
@@ -7994,7 +10558,29 @@ def run_backup_now() -> dict:
     if not BACKUP_SECRETS.is_file():
         return {"ok": False, "error": "Missing /opt/servermanager-backup/secrets.env"}
     if _backup_running():
-        return {"ok": False, "error": "A backup is already running", "status": build_backup_status()}
+        return {"ok": False, "error": "A backup is already running", "status": build_backup_status(check_token=False)}
+
+    # Fail fast with a clear message when the PAT is dead.
+    env = _parse_env_file(BACKUP_SECRETS)
+    probe = check_github_backup_token(
+        (env.get("GITHUB_OWNER") or "").strip(),
+        (env.get("GITHUB_REPO") or "").strip(),
+        (env.get("GITHUB_TOKEN") or "").strip(),
+    )
+    if not probe.get("ok"):
+        try:
+            BACKUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {probe.get('error')}\n"
+                )
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "error": str(probe.get("error") or "GitHub token check failed"),
+            "status": build_backup_status(check_token=True),
+        }
 
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
     proc = None
@@ -8018,25 +10604,37 @@ def run_backup_now() -> dict:
             return {
                 "ok": False,
                 "error": "Backup timed out after 5 minutes",
-                "status": build_backup_status(),
+                "status": build_backup_status(check_token=False),
             }
         stdout = (stdout or "").strip()
         stderr = (stderr or "").strip()
-        env = _parse_env_file(BACKUP_SECRETS)
         tok = (env.get("GITHUB_TOKEN") or "").strip()
         if tok:
             stdout = stdout.replace(tok, "***")
             stderr = stderr.replace(tok, "***")
         ok = proc.returncode == 0
+        err_msg = ""
+        if not ok:
+            err_msg = stderr or stdout or f"backup exited {proc.returncode}"
+            # Keep a one-line ERROR in the log if the script's trap missed it.
+            if "ERROR" not in (stdout + stderr):
+                try:
+                    with BACKUP_LOG.open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} ERROR: {err_msg.splitlines()[-1][:300]}\n"
+                        )
+                except Exception:
+                    pass
         return {
             "ok": ok,
             "exit_code": proc.returncode,
+            "error": err_msg if not ok else "",
             "stdout": stdout[-8000:],
             "stderr": stderr[-4000:],
-            "status": build_backup_status(),
+            "status": build_backup_status(check_token=False),
         }
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "status": build_backup_status()}
+        return {"ok": False, "error": str(exc), "status": build_backup_status(check_token=False)}
     finally:
         try:
             BACKUP_LOCK.unlink(missing_ok=True)
@@ -8082,7 +10680,7 @@ def build_vps_status() -> dict:
         pass
 
     hostname = _sh_out(["hostname"], timeout=3).splitlines()[0] if _sh_out(["hostname"], timeout=3) else ""
-    public_ip = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "74.208.54.132"
+    public_ip = (os.environ.get("VPS_PUBLIC_IP") or "").strip() or "74.208.76.213"
 
     # Quick egress check (non-fatal)
     egress_ip = ""
@@ -8617,6 +11215,8 @@ def _purge_sessions(now: float | None = None) -> None:
     dead = [k for k, exp in _sessions.items() if exp <= now]
     for k in dead:
         _sessions.pop(k, None)
+    if dead:
+        _persist_sessions_unlocked()
 
 
 def create_session() -> str:
@@ -8624,6 +11224,7 @@ def create_session() -> str:
     with _sessions_lock:
         _purge_sessions()
         _sessions[token] = time.time() + SESSION_HOURS * 3600
+        _persist_sessions_unlocked()
     return token
 
 
@@ -8632,6 +11233,9 @@ def destroy_session(token: str | None) -> None:
         return
     with _sessions_lock:
         _sessions.pop(token, None)
+        _persist_sessions_unlocked()
+    with _ssh_panel_unlocks_lock:
+        _ssh_panel_unlocks.pop(token, None)
 
 
 def session_valid(token: str | None) -> bool:
@@ -8660,6 +11264,3149 @@ def check_credentials(username: str, password: str) -> bool:
     return hmac.compare_digest(username, AUTH_USER) and hmac.compare_digest(
         password, AUTH_PASS
     )
+
+
+_pending_logins: dict[str, dict] = {}
+_pending_logins_lock = threading.Lock()
+PENDING_LOGIN_TTL_SECONDS = int(os.environ.get("PENDING_LOGIN_TTL_SECONDS", "300"))
+
+
+def _purge_pending_logins(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    with _pending_logins_lock:
+        dead = [k for k, v in _pending_logins.items() if float(v.get("exp") or 0) <= ts]
+        for k in dead:
+            _pending_logins.pop(k, None)
+
+
+def portal_login_2fa_method() -> str:
+    """Prefer authenticator app when a TOTP secret exists; otherwise email codes."""
+    cfg = _read_ssh_panel_2fa()
+    if str(cfg.get("totp_secret") or "").strip():
+        return "app"
+    return "email"
+
+
+def begin_portal_login(
+    *,
+    username: str,
+    password: str,
+    client_ip: str = "",
+    circle_lease_ok: bool = False,
+) -> dict:
+    """Step 1: password OK → issue pending login and request 2FA code."""
+    ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        # Key-bound sticky WAN must present Authenticator circle lease cookie.
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
+    if not check_credentials(username, password):
+        st = ip_jail_record_failure(client_ip, reason="login_password")
+        if st.get("locked"):
+            raise PermissionError(
+                f"Too many failed sign-in attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            )
+        raise PermissionError("Invalid username or password")
+    method = portal_login_2fa_method()
+    login_token = secrets.token_urlsafe(24)
+    now = time.time()
+    passkeys = sm_auth.webauthn_status().get("credential_count", 0) > 0
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        _pending_logins[login_token] = {
+            "exp": now + max(60, PENDING_LOGIN_TTL_SECONDS),
+            "user": AUTH_USER,
+            "ip": client_ip or "",
+            "method": method,
+            "passkey_ok": passkeys,
+        }
+    if method == "app":
+        return {
+            "ok": True,
+            "need_code": True,
+            "two_factor_method": "app",
+            "login_token": login_token,
+            "passkey_available": passkeys,
+            "message": (
+                "Enter a fresh Authenticator code for portal sign-in, or use a passkey."
+                if passkeys
+                else "Enter a fresh Authenticator code for portal sign-in."
+            ),
+        }
+    sent = send_email_test_code(
+        client_ip or "login",
+        key=f"portal-login:{login_token}",
+        purpose="portal-login",
+    )
+    return {
+        "ok": True,
+        "need_code": True,
+        "two_factor_method": "email",
+        "login_token": login_token,
+        "passkey_available": passkeys,
+        "message": sent.get("message") or "Enter the portal sign-in email code.",
+    }
+
+
+def complete_portal_login(
+    *,
+    login_token: str,
+    code: str,
+    client_ip: str = "",
+    circle_lease_ok: bool = False,
+) -> dict:
+    """Step 2: verify 2FA code for a pending login, then create session."""
+    ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
+    token = str(login_token or "").strip()
+    if not token:
+        raise ValueError("Login session expired. Sign in again.")
+    now = time.time()
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        pending = _pending_logins.get(token)
+    if not pending or float(pending.get("exp") or 0) <= now:
+        raise ValueError("Login session expired. Sign in again.")
+    pending_ip = _normalize_vpn_ip(pending.get("ip") or "")
+    client_n = _normalize_vpn_ip(client_ip or "")
+    if pending_ip and client_n and pending_ip != client_n:
+        raise PermissionError(
+            "Login session is bound to a different network. Sign in again from the "
+            "same network."
+        )
+    method = str(pending.get("method") or "email")
+    if method == "app":
+        if not _verify_any_enroll_totp(code, purpose="portal-login"):
+            st = ip_jail_record_failure(client_ip, reason="login_totp")
+            time.sleep(0.25)
+            if st.get("locked"):
+                raise ValueError(
+                    f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                )
+            raise ValueError("Incorrect or already-used authenticator code")
+    else:
+        try:
+            verify_email_test_code(
+                client_ip or "login",
+                code,
+                key=f"portal-login:{token}",
+                purpose="portal-login",
+            )
+        except Exception:
+            st = ip_jail_record_failure(client_ip, reason="login_email_code")
+            if st.get("locked"):
+                raise ValueError(
+                    f"Too many failed email codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                ) from None
+            raise
+    with _pending_logins_lock:
+        _pending_logins.pop(token, None)
+    ip_jail_clear_success(client_ip)
+    session = create_session()
+    try:
+        sm_auth.send_portal_login_email(
+            client_ip=client_ip or "",
+            user=AUTH_USER,
+            method=method,
+            smtp_send=_smtp_send_email,
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "need_code": False,
+        "user": AUTH_USER,
+        "session": session,
+        "message": "Signed in.",
+    }
+
+
+def complete_portal_login_passkey(
+    *,
+    login_token: str,
+    credential: dict,
+    client_ip: str = "",
+    circle_lease_ok: bool = False,
+) -> dict:
+    """Step 2 alternate: WebAuthn passkey assertion after password OK."""
+    ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
+    token = str(login_token or "").strip()
+    if not token:
+        raise ValueError("Login session expired. Sign in again.")
+    now = time.time()
+    _purge_pending_logins(now)
+    with _pending_logins_lock:
+        pending = _pending_logins.get(token)
+    if not pending or float(pending.get("exp") or 0) <= now:
+        raise ValueError("Login session expired. Sign in again.")
+    pending_ip = _normalize_vpn_ip(pending.get("ip") or "")
+    client_n = _normalize_vpn_ip(client_ip or "")
+    if pending_ip and client_n and pending_ip != client_n:
+        raise PermissionError(
+            "Login session is bound to a different network. Sign in again from the "
+            "same network."
+        )
+    try:
+        sm_auth.finish_webauthn_authentication(credential=credential)
+    except Exception:
+        st = ip_jail_record_failure(client_ip, reason="login_passkey")
+        if st.get("locked"):
+            raise ValueError(
+                f"Too many failed passkey attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            ) from None
+        raise ValueError("Passkey verification failed") from None
+    with _pending_logins_lock:
+        _pending_logins.pop(token, None)
+    ip_jail_clear_success(client_ip)
+    session = create_session()
+    try:
+        sm_auth.send_portal_login_email(
+            client_ip=client_ip or "",
+            user=AUTH_USER,
+            method="passkey",
+            smtp_send=_smtp_send_email,
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "need_code": False,
+        "user": AUTH_USER,
+        "session": session,
+        "message": "Signed in with passkey.",
+    }
+
+
+def _verify_any_enroll_totp(code: str, *, purpose: str) -> bool:
+    """Accept any enrolled TOTP once for a single purpose (login ≠ Settings unlock)."""
+    purpose_n = str(purpose or "").strip().lower()
+    if not purpose_n:
+        return False
+    legacy = str(_read_ssh_panel_2fa().get("totp_secret") or "")
+    for secret in sm_auth.list_verifiable_totp_secrets(legacy):
+        if verify_and_consume_totp(secret, code, purpose=purpose_n, window=1):
+            return True
+    return False
+
+
+# --- Email verification code test (portalvpsserver@truemailor.com → Gmail) ---
+EMAIL_CODE_TO = os.environ.get(
+    "EMAIL_CODE_TO", "portalvpsserver@truemailor.com"
+).strip()
+EMAIL_CODE_FROM = os.environ.get(
+    "EMAIL_CODE_FROM", "portal@truemailor.com"
+).strip()
+PORTAL_SMTP_USER = os.environ.get("PORTAL_SMTP_USER", EMAIL_CODE_FROM).strip()
+EMAIL_CODE_TTL_SECONDS = int(os.environ.get("EMAIL_CODE_TTL_SECONDS", "600"))
+EMAIL_CODE_COOLDOWN_SECONDS = int(os.environ.get("EMAIL_CODE_COOLDOWN_SECONDS", "45"))
+_email_codes: dict[str, dict] = {}
+_email_codes_lock = threading.Lock()
+_email_code_last_send: dict[str, float] = {}
+
+
+def _portal_smtp_password() -> str:
+    """Password for the portal-only send mailbox (portal@…), not admin webmail."""
+    direct = (os.environ.get("PORTAL_SMTP_PASS") or "").strip()
+    if direct:
+        return direct
+    b64 = (os.environ.get("PORTAL_SMTP_PASS_B64") or "").strip()
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            pass
+    # Legacy fallback while migrating off admin@
+    for path in (
+        Path(os.environ.get("TRUEMAIL_ENV", "/opt/truemail/.env")),
+        Path(__file__).resolve().parent.parent / "truemail" / ".env",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("FIRST_MAIL_PASS="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            continue
+    return (os.environ.get("TRUEMAIL_ADMIN_PASS") or "").strip()
+
+
+def _smtp_send_email(
+    *,
+    to_addr: str,
+    subject: str,
+    body: str,
+    html: str | None = None,
+) -> None:
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import formatdate, make_msgid
+
+    user = PORTAL_SMTP_USER or EMAIL_CODE_FROM
+    pw = _portal_smtp_password()
+    if not pw:
+        raise RuntimeError("Portal SMTP password not configured (PORTAL_SMTP_PASS)")
+
+    msg = EmailMessage()
+    msg["From"] = f"ServerManager <{EMAIL_CODE_FROM}>"
+    msg["To"] = to_addr
+    msg["Reply-To"] = EMAIL_CODE_FROM
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=False)
+    msg["Message-ID"] = make_msgid(domain="truemailor.com")
+    msg["Auto-Submitted"] = "auto-generated"
+    msg["X-Auto-Response-Suppress"] = "All"
+    msg["List-Id"] = f"<portal-codes.{PORTAL_HOST}>"
+    msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
+
+    ctx = ssl._create_unverified_context()
+    host = os.environ.get("SMTP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    with smtplib.SMTP(host, port, timeout=30) as s:
+        s.ehlo()
+        s.starttls(context=ctx)
+        s.ehlo()
+        s.login(user, pw)
+        s.send_message(msg)
+
+
+def _email_code_html(code: str, *, minutes: int, purpose_label: str = "verification") -> str:
+    """Transactional HTML email for a one-time portal code (spam-filter friendly)."""
+    digits = "".join(ch for ch in str(code) if ch.isdigit())
+    mins = max(1, int(minutes))
+    label = str(purpose_label or "verification").strip() or "verification"
+    # Keep markup simple: tables + inline styles only. Avoid gradients/web fonts
+    # that Gmail often treats as promotional.
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light only" />
+  <title>Your {label} code</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f5;color:#14201b;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    Your ServerManager {label} code is {digits}. Valid for {mins} minutes. This code only works for {label}.
+  </div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f4f6f5;padding:28px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;background:#ffffff;border:1px solid #d7e0db;border-radius:12px;">
+          <tr>
+            <td align="center" style="padding:28px 28px 8px;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:18px;color:#3d7a5f;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
+              ServerManager
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:4px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:1.3;color:#14201b;font-weight:700;">
+              Your {label} code
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:12px 28px 0;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#4a5c54;">
+              Use this code only for {label}. It expires in {mins} minutes and will not work for other unlocks.
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:26px 28px 28px;">
+              <div style="display:inline-block;padding:16px 22px;border:1px solid #cfe0d7;border-radius:10px;background:#f7faf8;font-family:Consolas,'Courier New',monospace;font-size:32px;font-weight:700;letter-spacing:0.28em;color:#0f3d2c;">
+                {digits}
+              </div>
+            </td>
+          </tr>
+        </table>
+        <div style="padding:14px 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#8a9a92;">
+          Truemailor · mail.truemailor.com
+        </div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+_EMAIL_PURPOSE_LABELS = {
+    "portal-login": "portal sign-in",
+    "ssh-unlock": "Settings SSH unlock",
+    "ssh-2fa-enable": "enable Settings two-factor",
+    "email-test": "email delivery test",
+}
+
+
+def _email_purpose_label(purpose: str) -> str:
+    key = str(purpose or "").strip().lower()
+    return _EMAIL_PURPOSE_LABELS.get(key, key.replace("-", " ") or "verification")
+
+
+def send_email_test_code(
+    client_ip: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    """Generate + email a 6-digit code bound to one purpose (rate-limited per key)."""
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown email code purpose")
+    # Always purpose-prefix the store key so login / Settings / test never share OTPs.
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
+    now = time.time()
+    with _email_codes_lock:
+        last = float(_email_code_last_send.get(store_key) or 0)
+        wait = EMAIL_CODE_COOLDOWN_SECONDS - (now - last)
+        if wait > 0:
+            raise ValueError(f"Wait {int(wait) + 1}s before sending another code")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        _email_codes[store_key] = {
+            "hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "expires": now + max(60, EMAIL_CODE_TTL_SECONDS),
+            "attempts": 0,
+            "purpose": purpose_n,
+        }
+        _email_code_last_send[store_key] = now
+
+    minutes = max(1, EMAIL_CODE_TTL_SECONDS // 60)
+    label = _email_purpose_label(purpose_n)
+    # Keep digits out of the subject — OTP-in-subject is a common spam signal.
+    subject = f"Your ServerManager {label} code"
+    body = (
+        f"Your ServerManager {label} code is: {code}\n\n"
+        f"This code is only for {label}. It will not unlock other portal actions.\n"
+        f"This code expires in {minutes} minutes.\n"
+    )
+    html = _email_code_html(code, minutes=minutes, purpose_label=label)
+    try:
+        _smtp_send_email(
+            to_addr=EMAIL_CODE_TO, subject=subject, body=body, html=html
+        )
+    except Exception as exc:
+        with _email_codes_lock:
+            _email_codes.pop(store_key, None)
+        raise RuntimeError(f"Failed to send email: {exc}") from exc
+
+    return {
+        "ok": True,
+        "to": EMAIL_CODE_TO,
+        "purpose": purpose_n,
+        "expires_in": EMAIL_CODE_TTL_SECONDS,
+        "message": f"Code sent for {label}. Check your email.",
+    }
+
+
+def verify_email_test_code(
+    client_ip: str,
+    code: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown email code purpose")
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6:
+        raise ValueError("Enter the 6-digit code")
+    now = time.time()
+    with _email_codes_lock:
+        entry = _email_codes.get(store_key)
+        if not entry:
+            raise ValueError("No code pending — send a new one")
+        if str(entry.get("purpose") or "") != purpose_n:
+            raise ValueError("Code is for a different action — request a new one")
+        if float(entry.get("expires") or 0) <= now:
+            _email_codes.pop(store_key, None)
+            raise ValueError("Code expired — send a new one")
+        attempts = int(entry.get("attempts") or 0) + 1
+        entry["attempts"] = attempts
+        if attempts > 8:
+            _email_codes.pop(store_key, None)
+            raise ValueError("Too many attempts — send a new code")
+        expect = str(entry.get("hash") or "")
+        got = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(expect, got):
+            raise ValueError("Incorrect code")
+        _email_codes.pop(store_key, None)
+    return {
+        "ok": True,
+        "purpose": purpose_n,
+        "message": f"Code accepted for {_email_purpose_label(purpose_n)}.",
+    }
+
+
+# Persist 2FA toggle for Security → VPS login method & SSH keys panel.
+SSH_PANEL_2FA_PATH = Path(
+    os.environ.get(
+        "SSH_PANEL_2FA_PATH",
+        "/opt/servermanager/panel/ssh-panel-2fa.json",
+    )
+)
+VPN_ALLOWLIST_PATH = Path(
+    os.environ.get(
+        "VPN_ALLOWLIST_FILE",
+        "/opt/servermanager/panel/vpn-allowlist.json",
+    )
+)
+AUTH_APP_DEVICES_PATH = Path(
+    os.environ.get(
+        "AUTH_APP_DEVICES_FILE",
+        "/opt/servermanager/panel/auth-app-devices.json",
+    )
+)
+AUTH_APP_ENROLL_UNLOCK_SECONDS = int(
+    os.environ.get("AUTH_APP_ENROLL_UNLOCK_SECONDS", "900")
+)  # auto-relock new-device enrollment
+# Portal / auth-app IP jail:
+#   3 fails → 10 min lockout; 5 lockout rounds in 1 UTC day → permanent ban.
+IP_JAIL_MAX_FAILS = int(
+    os.environ.get(
+        "IP_JAIL_MAX_FAILS",
+        os.environ.get("AUTH_APP_TOTP_MAX_FAILS", "3"),
+    )
+)
+IP_JAIL_LOCKOUT_SECONDS = int(
+    os.environ.get(
+        "IP_JAIL_LOCKOUT_SECONDS",
+        os.environ.get("AUTH_APP_TOTP_LOCKOUT", "600"),
+    )
+)
+IP_JAIL_ROUNDS_FOR_PERMANENT = int(
+    os.environ.get("IP_JAIL_ROUNDS_FOR_PERMANENT", "5")
+)
+IP_JAIL_PATH = Path(
+    os.environ.get(
+        "IP_JAIL_FILE",
+        "/opt/servermanager/panel/ip-jail.json",
+    )
+)
+# Legacy aliases (same values) for older env docs / call sites.
+AUTH_APP_TOTP_MAX_FAILS = IP_JAIL_MAX_FAILS
+AUTH_APP_TOTP_FAIL_WINDOW = int(os.environ.get("AUTH_APP_TOTP_FAIL_WINDOW", "86400"))
+AUTH_APP_TOTP_LOCKOUT = IP_JAIL_LOCKOUT_SECONDS
+AUTH_APP_MAX_DEVICES = int(os.environ.get("AUTH_APP_MAX_DEVICES", "8"))
+CIRCLE_LEASE_COOKIE = "sm_circle_lease"
+CIRCLE_LEASE_HOURS = float(os.environ.get("CIRCLE_LEASE_HOURS", "12"))
+CIRCLE_PROOF_MAX_SKEW = int(os.environ.get("CIRCLE_PROOF_MAX_SKEW", "120"))
+_ip_jail_lock = threading.RLock()
+_auth_app_totp_lock = _ip_jail_lock  # backwards-compatible alias
+_circle_nonces_lock = threading.Lock()
+_circle_nonces: dict[str, float] = {}
+STICKY_VPN_IPS_PATH = Path(
+    os.environ.get(
+        "STICKY_VPN_IPS_FILE",
+        "/opt/servermanager/panel/caddy-sticky-vpn-ips.txt",
+    )
+)
+VPN_PEER_ACL_SCRIPT = Path(
+    os.environ.get("VPN_PEER_ACL_SCRIPT", "/opt/ikev2/ensure-ikev2-peer-acl.sh")
+)
+# Always-on trust-circle members (hidden from Authenticator). Empty by default:
+# do NOT seal shared campus/ISP egress IPs (e.g. university NATs). Home access
+# without personal VPN should use real VPN pools / approved device IPs only.
+VPN_CIRCLE_SEALED_IPS = os.environ.get(
+    "VPN_CIRCLE_SEALED_IPS",
+    "",
+)
+_ssh_panel_2fa_lock = threading.Lock()
+
+
+def _parse_ip_list(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[\s,;]+", str(raw or "")):
+        ip = _normalize_vpn_ip(part)
+        if not ip or ip in seen:
+            continue
+        if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+            continue
+        seen.add(ip)
+        out.append(ip)
+    return out
+
+
+def _sealed_vpn_ips() -> list[str]:
+    out: list[str] = []
+    for ip in _parse_ip_list(VPN_CIRCLE_SEALED_IPS):
+        if _is_public_ipv4(ip):
+            out.append(ip)
+    return out
+
+
+def _is_sealed_vpn_ip(ip: str) -> bool:
+    return _normalize_vpn_ip(ip) in set(_sealed_vpn_ips())
+
+
+def _denied_vpn_ips() -> list[str]:
+    """Public WANs that are permanently untrusted (shared campus egress, etc.)."""
+    denied: list[str] = []
+    seen: set[str] = set()
+    # Prefer live env so operators can extend without restart; fall back to boot value.
+    raw = os.environ.get("VPN_CIRCLE_DENIED_IPS", VPN_CIRCLE_DENIED_IPS)
+    for ip in _parse_ip_list(raw):
+        if not _is_public_ipv4(ip) or ip in seen:
+            continue
+        # Never deny the VPS itself.
+        if ip == "74.208.76.213":
+            continue
+        seen.add(ip)
+        denied.append(ip)
+    return denied
+
+
+def _is_denied_vpn_ip(ip: str) -> bool:
+    return _normalize_vpn_ip(ip) in set(_denied_vpn_ips())
+
+
+def _cidr_host(cidr: str) -> str:
+    raw = (cidr or "").strip()
+    if "/" in raw:
+        return raw.split("/", 1)[0].strip()
+    return raw
+
+
+def effective_vpn_client_cidrs() -> str:
+    """Live @vpn_clients CIDR list for Caddy serialization.
+
+    Never reuse a stale module-level snapshot alone: a hookups save that still
+    held a campus /32 in process memory previously re-admitted it after peer-acl
+    had already scrubbed Caddy. Rebuild from current env + sticky allowlist and
+    always strip VPN_CIRCLE_DENIED_IPS.
+    """
+    denied = set(_denied_vpn_ips())
+    sealed = set(_sealed_vpn_ips())
+    base_toks: list[str] = []
+    seen: set[str] = set()
+
+    def _add(tok: str) -> None:
+        tok = (tok or "").strip()
+        if not tok or tok in seen or tok == "192.168.8.0/24":
+            return
+        host = _cidr_host(tok)
+        if host in denied:
+            return
+        # Public /32s must be allowlisted/sealed (except the VPS itself).
+        if tok.endswith("/32") and _is_public_ipv4(host) and host != "74.208.76.213":
+            if host not in sealed and host not in _allowlisted_public_ips():
+                return
+        if tok.endswith("/32") and _is_home_lan_ipv4(host):
+            if host not in _allowlisted_lan_ips():
+                return
+        seen.add(tok)
+        base_toks.append(tok)
+
+    live_env = os.environ.get("VPN_CLIENT_CIDRS", "").strip().strip('"').strip("'")
+    for tok in (live_env or VPN_CLIENT_CIDRS or "").split():
+        _add(tok)
+    # Sticky file (peer-acl / allowlist sync).
+    try:
+        if STICKY_VPN_IPS_PATH.is_file():
+            for line in STICKY_VPN_IPS_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                tok = line if "/" in line else f"{line}/32"
+                _add(tok)
+    except Exception:
+        pass
+    for ip in sorted(_allowlisted_public_ips() | _allowlisted_lan_ips() | sealed):
+        if ip in denied:
+            continue
+        _add(f"{ip}/32")
+    # Hard requirements.
+    for req in (
+        "10.8.0.0/24",
+        "10.42.42.0/24",
+        "10.9.0.0/24",
+        "10.10.0.0/24",
+        "100.64.0.0/10",
+        "127.0.0.1/32",
+        "74.208.76.213/32",
+        "10.11.0.1/32",
+    ):
+        _add(req)
+    return " ".join(base_toks) if base_toks else VPN_CLIENT_CIDRS
+
+
+def _allowlisted_public_ips() -> set[str]:
+    out: set[str] = set()
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_public_ipv4(ip) and not _is_denied_vpn_ip(ip):
+            out.add(ip)
+    return out
+
+
+def _allowlisted_lan_ips() -> set[str]:
+    out: set[str] = set()
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_home_lan_ipv4(ip):
+            out.add(ip)
+    return out
+
+
+def _caddy_unreachable_respond_lines(indent: str) -> list[str]:
+    """Close the connection for ACL denies — no fake HTML interstitial.
+
+    Out-of-circle clients are steered to guest DNS (VPN_GUEST_DNS), which
+    returns real NXDOMAIN for portal/router/admin names so the browser shows
+    its native \"This site can't be reached\" / DNS_PROBE_FINISHED_NXDOMAIN.
+    ``abort`` is only the residual path when an IP is already known/cached.
+    """
+    return [f"{indent}abort"]
+
+
+def _caddy_denied_wan_lines(indent: str) -> list[str]:
+    """Explicit deny matchers — win before @vpn_clients if an IP was wrongly allowlisted."""
+    denied = _denied_vpn_ips()
+    if not denied:
+        return []
+    denied_s = " ".join(f"{ip}/32" for ip in denied)
+    return [
+        f"{indent}@denied_wan client_ip {denied_s}",
+        f"{indent}handle @denied_wan {{",
+        *_caddy_unreachable_respond_lines(f"{indent}\t"),
+        f"{indent}}}",
+    ]
+
+
+def _b64url_decode(raw: str) -> bytes:
+    s = str(raw or "").strip()
+    if not s:
+        return b""
+    pad = "=" * ((4 - len(s) % 4) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("ascii"))
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _normalize_ed25519_pubkey(raw: str) -> str:
+    """Return canonical urlsafe-b64 of a 32-byte Ed25519 public key."""
+    s = str(raw or "").strip()
+    if not s:
+        raise ValueError("public key required")
+    # Accept raw base64/base64url or SSH-style "ssh-ed25519 AAAA... comment"
+    if s.startswith("ssh-ed25519 "):
+        parts = s.split()
+        if len(parts) < 2:
+            raise ValueError("invalid ssh-ed25519 public key")
+        blob = base64.b64decode(parts[1])
+        # OpenSSH wire: string "ssh-ed25519" + string key(32)
+        if len(blob) < 4:
+            raise ValueError("invalid ssh-ed25519 public key")
+        # Find last 32 bytes as key material (common layout)
+        if len(blob) >= 51:
+            key = blob[-32:]
+        else:
+            raise ValueError("invalid ssh-ed25519 public key length")
+    else:
+        try:
+            key = _b64url_decode(s)
+        except Exception as exc:
+            raise ValueError("invalid public key encoding") from exc
+        if len(key) != 32:
+            # try standard base64
+            try:
+                key = base64.b64decode(s + "==")
+            except Exception as exc:
+                raise ValueError("public key must be 32-byte Ed25519") from exc
+        if len(key) != 32:
+            raise ValueError("public key must be 32-byte Ed25519")
+    return _b64url_encode(key)
+
+
+def _circle_key_id(pub_b64: str) -> str:
+    raw = _b64url_decode(_normalize_ed25519_pubkey(pub_b64))
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _circle_lease_secret() -> bytes:
+    # Derive from panel password material when present; else stable host secret file.
+    material = (AUTH_PASS or os.environ.get("CIRCLE_LEASE_SECRET") or "").encode()
+    if not material:
+        material = b"servermanager-circle-lease"
+    return hashlib.sha256(b"sm-circle-lease-v1:" + material).digest()
+
+
+def _verify_ed25519(*, pubkey_b64: str, message: str, signature_b64: str) -> bool:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(
+            _b64url_decode(_normalize_ed25519_pubkey(pubkey_b64))
+        )
+        pub.verify(_b64url_decode(signature_b64), message.encode("utf-8"))
+        return True
+    except (InvalidSignature, ValueError, TypeError, Exception):
+        return False
+
+
+def _circle_proof_message(
+    *,
+    ts: int,
+    nonce: str,
+    ip: str,
+    method: str,
+    path: str,
+    body_sha256: str,
+) -> str:
+    return "\n".join(
+        [
+            "SM-CIRCLE-V1",
+            str(int(ts)),
+            str(nonce),
+            str(ip or ""),
+            str(method or "GET").upper(),
+            str(path or "/"),
+            str(body_sha256 or ""),
+        ]
+    )
+
+
+def _purge_circle_nonces(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    with _circle_nonces_lock:
+        dead = [k for k, exp in _circle_nonces.items() if exp <= ts]
+        for k in dead:
+            _circle_nonces.pop(k, None)
+
+
+def _circle_pubkey_for_ip(ip: str) -> str:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n:
+        return ""
+    # Prefer allowlist binding.
+    try:
+        data = _read_vpn_allowlist()
+        for row in data.get("allowed") or []:
+            if isinstance(row, dict) and _normalize_vpn_ip(row.get("ip", "")) == ip_n:
+                pub = str(row.get("pubkey") or "").strip()
+                if pub:
+                    return _normalize_ed25519_pubkey(pub)
+    except Exception:
+        pass
+    # Auth-app enrolled LAN devices.
+    try:
+        for row in _read_auth_app_devices().get("devices") or []:
+            if not isinstance(row, dict):
+                continue
+            if _normalize_vpn_ip(row.get("ip", "")) != ip_n:
+                continue
+            pub = str(row.get("pubkey") or "").strip()
+            if pub:
+                return _normalize_ed25519_pubkey(pub)
+    except Exception:
+        pass
+    return ""
+
+
+def _is_vpn_pool_client_ip(ip: str) -> bool:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip_n):
+        return False
+    parts = [int(x) for x in ip_n.split(".")]
+    if parts[0] == 10 and parts[1] in (8, 9, 10, 11, 42):
+        return True
+    if parts[0] == 100 and 64 <= parts[1] <= 127:
+        return True
+    if parts[0] == 127:
+        return True
+    return False
+
+
+def client_needs_circle_lease(client_ip: str) -> bool:
+    """Public sticky WAN with a bound key must present a circle lease (anti-spoof)."""
+    ip_n = _normalize_vpn_ip(client_ip)
+    if not ip_n or _is_vpn_pool_client_ip(ip_n) or _is_home_lan_ipv4(ip_n):
+        return False
+    if not _is_public_ipv4(ip_n):
+        return False
+    if _is_denied_vpn_ip(ip_n):
+        return False
+    return bool(_circle_pubkey_for_ip(ip_n))
+
+
+def parse_circle_lease_cookie(header: str | None) -> dict | None:
+    if not header:
+        return None
+    jar = SimpleCookie()
+    try:
+        jar.load(header)
+    except Exception:
+        return None
+    morsel = jar.get(CIRCLE_LEASE_COOKIE)
+    if not morsel or not morsel.value:
+        return None
+    raw = str(morsel.value)
+    if "." not in raw:
+        return None
+    payload_b64, sig = raw.rsplit(".", 1)
+    expect = hmac.new(
+        _circle_lease_secret(), payload_b64.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expect, sig):
+        return None
+    try:
+        data = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if float(data.get("exp") or 0) <= time.time():
+        return None
+    return data
+
+
+def circle_lease_valid_for_request(handler: "Handler") -> bool:
+    client_ip = request_client_ip(handler)
+    if not client_needs_circle_lease(client_ip):
+        return True
+    lease = parse_circle_lease_cookie(handler.headers.get("Cookie"))
+    if not lease:
+        return False
+    return _normalize_vpn_ip(lease.get("ip", "")) == _normalize_vpn_ip(client_ip)
+
+
+def issue_circle_lease(*, ip: str, key_id: str) -> tuple[str, dict]:
+    ip_n = _normalize_vpn_ip(ip)
+    pub = _circle_pubkey_for_ip(ip_n)
+    if not pub:
+        raise ValueError("No circle key is bound to this IP yet — approve/enroll with a key first")
+    if key_id and key_id != _circle_key_id(pub):
+        raise ValueError("Circle key id does not match the key bound to this IP")
+    now = time.time()
+    payload = {
+        "ip": ip_n,
+        "kid": _circle_key_id(pub),
+        "iat": int(now),
+        "exp": int(now + max(300.0, CIRCLE_LEASE_HOURS * 3600)),
+    }
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(
+        _circle_lease_secret(), payload_b64.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    token = f"{payload_b64}.{sig}"
+    parent = _cookie_parent_domain()
+    domain_part = f"; Domain={parent}" if parent else ""
+    cookie = (
+        f"{CIRCLE_LEASE_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax"
+        f"{domain_part}; "
+        f"Max-Age={int(max(300.0, CIRCLE_LEASE_HOURS * 3600))}"
+    )
+    return cookie, payload
+
+
+def verify_circle_device_proof(
+    handler: "Handler",
+    *,
+    body_text: str = "",
+    claimed_ip: str = "",
+    require_existing_bind: bool = True,
+) -> dict:
+    """Verify Ed25519 proof headers; optionally require pubkey already bound to IP."""
+    pub_h = str(handler.headers.get("X-SM-Circle-Pub") or "").strip()
+    sig_h = str(handler.headers.get("X-SM-Circle-Sig") or "").strip()
+    ts_h = str(handler.headers.get("X-SM-Circle-Ts") or "").strip()
+    nonce_h = str(handler.headers.get("X-SM-Circle-Nonce") or "").strip()
+    ip_h = _normalize_vpn_ip(
+        claimed_ip
+        or handler.headers.get("X-SM-Circle-Ip")
+        or handler.headers.get("X-SM-Lan-Ip")
+        or ""
+    )
+    if not pub_h or not sig_h or not ts_h or not nonce_h or not ip_h:
+        raise ValueError(
+            "Circle crypto proof required (X-SM-Circle-Pub/Sig/Ts/Nonce/Ip)"
+        )
+    try:
+        ts = int(ts_h)
+    except ValueError as exc:
+        raise ValueError("invalid circle proof timestamp") from exc
+    now = int(time.time())
+    if abs(now - ts) > max(30, CIRCLE_PROOF_MAX_SKEW):
+        raise ValueError("circle proof timestamp skew too large")
+    pub = _normalize_ed25519_pubkey(pub_h)
+    if require_existing_bind:
+        bound = _circle_pubkey_for_ip(ip_h)
+        if not bound:
+            raise ValueError("No circle key bound to this IP")
+        if bound != pub:
+            raise ValueError("Circle public key does not match the key bound to this IP")
+    path = urlparse(handler.path).path
+    method = str(handler.command or "GET").upper()
+    body_sha = hashlib.sha256((body_text or "").encode("utf-8")).hexdigest()
+    msg = _circle_proof_message(
+        ts=ts,
+        nonce=nonce_h,
+        ip=ip_h,
+        method=method,
+        path=path,
+        body_sha256=body_sha,
+    )
+    if not _verify_ed25519(pubkey_b64=pub, message=msg, signature_b64=sig_h):
+        raise ValueError("Circle signature verification failed")
+    _purge_circle_nonces(now)
+    nonce_key = f"{pub}:{nonce_h}"
+    with _circle_nonces_lock:
+        if nonce_key in _circle_nonces:
+            raise ValueError("Circle proof nonce reused")
+        _circle_nonces[nonce_key] = float(now + max(30, CIRCLE_PROOF_MAX_SKEW) + 30)
+    return {
+        "ok": True,
+        "ip": ip_h,
+        "pubkey": pub,
+        "key_id": _circle_key_id(pub),
+    }
+
+
+def _read_auth_app_devices() -> dict:
+    data = {"devices": [], "updated_at": 0}
+    if AUTH_APP_DEVICES_PATH.is_file():
+        try:
+            loaded = json.loads(AUTH_APP_DEVICES_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+                data["devices"] = [x for x in loaded["devices"] if isinstance(x, dict)]
+                data["updated_at"] = int(loaded.get("updated_at") or 0)
+        except Exception:
+            pass
+    return data
+
+
+def _write_auth_app_devices(data: dict) -> None:
+    AUTH_APP_DEVICES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "devices": list(data.get("devices") or [])[-80:],
+        "updated_at": int(time.time()),
+    }
+    tmp = AUTH_APP_DEVICES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(AUTH_APP_DEVICES_PATH)
+    try:
+        os.chmod(AUTH_APP_DEVICES_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def auth_app_enrolled_lan_ips() -> set[str]:
+    """LAN IPs of phones that successfully registered an enrolled Authenticator."""
+    out: set[str] = set()
+    for row in _read_auth_app_devices().get("devices") or []:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if _is_home_lan_ipv4(ip) and row.get("enrolled", True):
+            out.add(ip)
+    return out
+
+
+def list_auth_app_devices() -> list[dict]:
+    """Public-safe enrolled Authenticator device rows for the Security panel."""
+    names = _lan_device_name_by_ip()
+    rows: list[dict] = []
+    for row in _read_auth_app_devices().get("devices") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not _is_home_lan_ipv4(ip) or not row.get("enrolled", True):
+            continue
+        name = str(row.get("name") or row.get("hostname") or names.get(ip) or "").strip()
+        rows.append(
+            {
+                "ip": ip,
+                "name": name[:64],
+                "hostname": name[:64],
+                "note": str(row.get("note") or name or "")[:120],
+                "platform": str(row.get("platform") or "")[:40],
+                "first_seen": int(row.get("first_seen") or 0),
+                "last_seen": int(row.get("last_seen") or 0),
+                "enrolled": True,
+                "key_bound": bool(str(row.get("pubkey") or "").strip()),
+                "key_id": str(row.get("key_id") or ""),
+            }
+        )
+    rows.sort(key=lambda x: int(x.get("last_seen") or 0), reverse=True)
+    return rows
+
+
+def remove_auth_app_device(token: str | None, *, ip: str) -> dict:
+    """Drop an enrolled Authenticator LAN exemption (requires unlocked Security panel)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before removing authenticator devices")
+    want = _normalize_vpn_ip(ip)
+    if not want or not _is_home_lan_ipv4(want):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    data = _read_auth_app_devices()
+    before = list(data.get("devices") or [])
+    kept = [
+        row
+        for row in before
+        if isinstance(row, dict) and _normalize_vpn_ip(row.get("ip", "")) != want
+    ]
+    if len(kept) == len(before):
+        raise ValueError(f"{want} is not an enrolled Authenticator device")
+    data["devices"] = kept
+    _write_auth_app_devices(data)
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    devices = list_auth_app_devices()
+    return {
+        "ok": True,
+        "removed": want,
+        "devices": devices,
+        "auth_app_devices": devices,
+        "message": f"Removed enrolled Authenticator device {want}. Flint gate refreshed.",
+    }
+
+
+def touch_auth_app_device(
+    *,
+    lan_ip: str = "",
+    note: str = "",
+    platform: str = "",
+    mode: str = "register",
+    pubkey: str = "",
+) -> dict:
+    """Record/refresh an enrolled Authenticator LAN IP for Flint pending exemption.
+
+    mode=refresh — only bump last_seen for already-enrolled IPs (never trust a
+    new client-supplied IP). mode=register — allow a new IP only while Security
+    has new-device enrollment unlocked (limits spoofed X-SM-Lan-Ip abuse).
+
+    New registrations require an Ed25519 pubkey so the LAN IP is cryptographically
+    bound to this Authenticator install (prevents header spoofing later).
+    """
+    ip = _normalize_vpn_ip(lan_ip)
+    if not ip or not _is_home_lan_ipv4(ip):
+        raise ValueError("A home LAN (192.168.8.x) IPv4 address is required")
+    mode_n = "refresh" if str(mode).lower() == "refresh" else "register"
+    now = int(time.time())
+    pub_n = ""
+    if pubkey:
+        pub_n = _normalize_ed25519_pubkey(pubkey)
+    data = _read_auth_app_devices()
+    devices = [dict(x) for x in (data.get("devices") or []) if isinstance(x, dict)]
+    by_ip = {
+        _normalize_vpn_ip(x.get("ip", "")): x
+        for x in devices
+        if _normalize_vpn_ip(x.get("ip", ""))
+    }
+    existing = by_ip.get(ip)
+    already = bool(existing and existing.get("enrolled", True))
+    newly_enrolled = False
+    if mode_n == "refresh":
+        if not already:
+            raise ValueError("LAN IP is not an enrolled Authenticator device")
+        # Refresh must prove possession of the bound key when one exists.
+        bound = str((existing or {}).get("pubkey") or "").strip()
+        if bound:
+            if not pub_n or _normalize_ed25519_pubkey(bound) != pub_n:
+                raise ValueError("Circle key required to refresh this enrolled LAN IP")
+    elif not already:
+        if not pub_n:
+            raise ValueError("Ed25519 public key required to enroll Authenticator device")
+        if not auth_app_device_enroll_unlocked():
+            raise ValueError(
+                "New Authenticator device enrollment is locked in Security"
+            )
+        enroll_cfg = _read_ssh_panel_2fa()
+        allowed_ip = _normalize_vpn_ip(str(enroll_cfg.get("device_enroll_for_ip") or ""))
+        if allowed_ip and ip != allowed_ip:
+            raise ValueError(
+                f"Enrollment is unlocked only for {allowed_ip} — this device is {ip}"
+            )
+        if not allowed_ip:
+            raise ValueError(
+                "Enrollment unlock is missing a registering device IP — unlock again from Security"
+            )
+        enrolled_count = sum(
+            1
+            for row in by_ip.values()
+            if _is_home_lan_ipv4(_normalize_vpn_ip(row.get("ip", "")))
+            and row.get("enrolled", True)
+        )
+        if enrolled_count >= max(1, AUTH_APP_MAX_DEVICES):
+            raise ValueError("Too many enrolled Authenticator devices")
+        newly_enrolled = True
+    elif pub_n and existing:
+        # Re-bind / rotate key on already-enrolled device when Security unlocks enrollment.
+        bound = str(existing.get("pubkey") or "").strip()
+        if bound and _normalize_ed25519_pubkey(bound) != pub_n:
+            if not auth_app_device_enroll_unlocked():
+                raise ValueError("Unlock new-device enrollment in Security to rotate circle keys")
+    row = existing or {"ip": ip, "first_seen": now}
+    row.update(
+        {
+            "ip": ip,
+            "last_seen": now,
+            "enrolled": True,
+            "note": (note or row.get("note") or "Authenticator app")[:120],
+            "platform": (platform or row.get("platform") or "")[:40],
+        }
+    )
+    if pub_n:
+        row["pubkey"] = pub_n
+        row["key_id"] = _circle_key_id(pub_n)
+        row["key_bound_at"] = now
+    by_ip[ip] = row
+    data["devices"] = sorted(
+        by_ip.values(),
+        key=lambda x: int(x.get("last_seen") or 0),
+        reverse=True,
+    )[:80]
+    _write_auth_app_devices(data)
+    # Auto-relock enrollment after a successful new-device registration so the
+    # Flint pending window does not stay open until the TTL expires.
+    if newly_enrolled:
+        try:
+            st = _read_ssh_panel_2fa()
+            pending_secret = ""
+            vault = sm_auth.read_enroll_vault()
+            sid = str(st.get("device_enroll_secret_id") or "")
+            for row in vault.get("secrets") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") == sid:
+                    pending_secret = str(row.get("secret") or "")
+                    break
+            sm_auth.mark_enroll_secret_enrolled(
+                secret=pending_secret,
+                for_ip=str(st.get("device_enroll_for_ip") or ip),
+                device_ip=ip,
+            )
+            if st.get("device_enroll_unlocked"):
+                _write_ssh_panel_2fa(
+                    enabled=bool(st.get("enabled")),
+                    method=str(st.get("method") or "app"),
+                    totp_secret=str(st.get("totp_secret") or ""),
+                    device_enroll_unlocked=False,
+                    device_enroll_for_ip="",
+                    device_enroll_secret_id="",
+                )
+        except Exception:
+            pass
+    # Refresh Flint gate so enrolled phones are not blocked while pending.
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "ip": ip,
+        "devices": data["devices"],
+        "mode": mode_n,
+        "newly_enrolled": newly_enrolled,
+        "key_id": str(row.get("key_id") or ""),
+        "key_bound": bool(row.get("pubkey")),
+    }
+
+
+def _sealed_vpn_row(ip: str) -> dict:
+    return {
+        "ip": _normalize_vpn_ip(ip),
+        "note": "Flint router WAN (sealed)",
+        "approved_at": 0,
+        "source": "router",
+        "sealed": True,
+        "hidden": True,
+    }
+
+
+def _ensure_sealed_vpn_allowlist(data: dict) -> tuple[dict, bool]:
+    """Keep configured sealed IPs permanently allowed; drop obsolete sealed rows."""
+    changed = False
+    sealed = _sealed_vpn_ips()
+    sealed_set = set(sealed)
+    denied_set = set(_denied_vpn_ips())
+    # Denied shared egress can never be sealed.
+    sealed = [ip for ip in sealed if ip not in denied_set]
+    sealed_set = set(sealed)
+    allowed_in = [x for x in (data.get("allowed") or []) if isinstance(x, dict)]
+    by_ip: dict[str, dict] = {}
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip:
+            by_ip[ip] = dict(row)
+
+    for ip in sealed:
+        row = by_ip.get(ip) or _sealed_vpn_row(ip)
+        before = dict(row)
+        row["ip"] = ip
+        row["sealed"] = True
+        row["hidden"] = True
+        row["source"] = "router"
+        if not str(row.get("note") or "").strip() or "seeded from sticky" in str(row.get("note") or ""):
+            row["note"] = "Flint router WAN (sealed)"
+        if not row.get("approved_at"):
+            row["approved_at"] = int(time.time())
+        by_ip[ip] = row
+        if before != row or ip not in {_normalize_vpn_ip(r.get("ip", "")) for r in allowed_in}:
+            changed = True
+
+    # Preserve non-sealed entries after sealed ones.
+    # Drop rows that were sealed for IPs no longer in VPN_CIRCLE_SEALED_IPS.
+    # Drop permanently denied shared-egress IPs (campus NAT, etc.).
+    rebuilt: list[dict] = []
+    seen: set[str] = set()
+    for ip in sealed:
+        rebuilt.append(by_ip[ip])
+        seen.add(ip)
+    for row in allowed_in:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip or ip in seen:
+            continue
+        if ip in sealed_set:
+            continue
+        if ip in denied_set:
+            changed = True
+            continue
+        # Obsolete sealed campus/WAN rows must not stay trusted.
+        if row.get("sealed") or (
+            str(row.get("source") or "") == "router"
+            and "sealed" in str(row.get("note") or "").lower()
+        ):
+            if ip not in sealed_set:
+                changed = True
+                continue
+        rebuilt.append(row)
+        seen.add(ip)
+
+    denied = [
+        r for r in (data.get("denied") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    pending = [
+        r for r in (data.get("pending") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    attempts = [
+        r for r in (data.get("attempts") or [])
+        if isinstance(r, dict) and _normalize_vpn_ip(r.get("ip", "")) not in sealed_set
+    ]
+    if len(denied) != len(list(data.get("denied") or [])) or len(pending) != len(list(data.get("pending") or [])) or len(attempts) != len(list(data.get("attempts") or [])):
+        changed = True
+    if rebuilt != allowed_in:
+        changed = True
+    data["allowed"] = rebuilt
+    data["denied"] = denied
+    data["pending"] = pending
+    data["attempts"] = attempts
+    return data, changed
+
+
+def _circle_row_is_sealed(row: dict) -> bool:
+    ip = _normalize_vpn_ip(row.get("ip", ""))
+    if _is_sealed_vpn_ip(ip) or bool(row.get("sealed")):
+        return True
+    return str(row.get("source") or "") == "router" and "sealed" in str(
+        row.get("note") or ""
+    ).lower()
+
+
+def _circle_row_has_key(row: dict) -> bool:
+    return bool(str(row.get("pubkey") or "").strip())
+
+
+def _scrub_allowlist_require_circle_keys(data: dict) -> tuple[dict, bool]:
+    """Demote non-sealed allowlisted IPs that lack an Ed25519 pubkey to pending.
+
+    Circle membership is key-bound only (except sealed router WAN).
+    """
+    changed = False
+    now = int(time.time())
+    kept: list[dict] = []
+    pending = [r for r in (data.get("pending") or []) if isinstance(r, dict)]
+    pending_ips = {_normalize_vpn_ip(r.get("ip", "")) for r in pending}
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip:
+            changed = True
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
+            kept.append(row)
+            continue
+        changed = True
+        if ip not in pending_ips:
+            pend = {
+                "ip": ip,
+                "status": "pending",
+                "first_seen": int(row.get("approved_at") or now),
+                "last_seen": now,
+                "count": 1,
+                "note": "needs key bind · removed from circle (key required)",
+                "source": "key-required",
+                "vip": "",
+            }
+            if _is_home_lan_ipv4(ip):
+                pend["kind"] = "lan"
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                pend["name"] = name[:64]
+                pend["hostname"] = name[:64]
+            pending.append(pend)
+            pending_ips.add(ip)
+    if changed:
+        data["allowed"] = kept
+        data["pending"] = pending
+    return data, changed
+
+
+def _lan_device_name_by_ip() -> dict[str, str]:
+    """Map home-LAN IPs → friendly hostnames from the live LAN inventory."""
+    out: dict[str, str] = {}
+    try:
+        lan = read_lan_devices()
+    except Exception:
+        return out
+    for d in list(lan.get("devices") or []) if lan.get("ok") else []:
+        if not isinstance(d, dict):
+            continue
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not _is_home_lan_ipv4(ip):
+            continue
+        name = str(d.get("hostname") or d.get("name") or "").strip()
+        if name:
+            out[ip] = name[:64]
+    return out
+
+
+def _attach_circle_device_names(rows: list, *, names: dict[str, str] | None = None) -> list:
+    """Ensure each circle row carries a display name when known."""
+    name_map = names if names is not None else _lan_device_name_by_ip()
+    out: list = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        existing = str(item.get("name") or item.get("hostname") or "").strip()
+        looked = name_map.get(ip, "") if ip else ""
+        name = existing or looked
+        if name:
+            item["name"] = name[:64]
+            item["hostname"] = name[:64]
+            # Keep a readable note for LAN rows that only say "from authenticator app".
+            note = str(item.get("note") or "").strip()
+            if item.get("kind") == "lan" or _is_home_lan_ipv4(ip):
+                if not note or note.lower().startswith("from authenticator") or note.lower().startswith("lan "):
+                    item["note"] = name[:120]
+        out.append(item)
+    return out
+
+
+def _public_vpn_allowlist_view(data: dict, *, for_auth_app: bool = False) -> dict:
+    """Hide sealed/hidden allowlist rows from Authenticator apps (still sticky-allowed)."""
+    def _vis(rows: list) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(row.get("ip", ""))
+            if for_auth_app and (
+                row.get("sealed")
+                or row.get("hidden")
+                or _is_sealed_vpn_ip(ip)
+            ):
+                continue
+            out.append(row)
+        return out
+
+    return {
+        "allowed": _vis(list(data.get("allowed") or [])),
+        "denied": _vis(list(data.get("denied") or [])),
+        "pending": _vis(list(data.get("pending") or [])),
+        "attempts": _vis(list(data.get("attempts") or [])),
+    }
+
+
+def hide_vpn_allowlist_ips_from_apps(ips: list[str] | None = None) -> dict:
+    """Keep IPs allowlisted/sticky, but permanently hide them from Authenticator Allowed list."""
+    data = _read_vpn_allowlist()
+    want: set[str] | None = None
+    if ips is not None:
+        want = {_normalize_vpn_ip(x) for x in ips if _normalize_vpn_ip(x)}
+    changed = False
+    rebuilt = []
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if not ip:
+            continue
+        if _is_sealed_vpn_ip(ip):
+            item["sealed"] = True
+            item["hidden"] = True
+        elif want is None or ip in want:
+            if not item.get("hidden"):
+                changed = True
+            item["hidden"] = True
+            if not str(item.get("note") or "").strip():
+                item["note"] = "hidden from Authenticator list"
+        rebuilt.append(item)
+    data["allowed"] = rebuilt
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    if changed or sealed_changed:
+        _write_vpn_allowlist(data)
+        _run_vpn_peer_acl_sync()
+    return build_vpn_allowlist_status(for_auth_app=True)
+
+
+def _b32_encode_secret(raw: bytes) -> str:
+    import base64 as _b64
+
+    return _b64.b32encode(raw).decode("ascii").rstrip("=")
+
+
+def _b32_decode_secret(secret: str) -> bytes:
+    import base64 as _b64
+
+    s = re.sub(r"\s+", "", str(secret or "")).upper()
+    pad = "=" * ((8 - len(s) % 8) % 8)
+    return _b64.b32decode(s + pad, casefold=True)
+
+
+def _totp_at(secret_b32: str, for_time: float | None = None, *, step: int = 30, digits: int = 6) -> str:
+    """RFC 6238 TOTP (HMAC-SHA1) without third-party deps."""
+    ts = int(time.time() if for_time is None else for_time)
+    counter = ts // max(1, step)
+    key = _b32_decode_secret(secret_b32)
+    msg = counter.to_bytes(8, "big")
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (
+        ((digest[offset] & 0x7F) << 24)
+        | ((digest[offset + 1] & 0xFF) << 16)
+        | ((digest[offset + 2] & 0xFF) << 8)
+        | (digest[offset + 3] & 0xFF)
+    )
+    mod = 10 ** digits
+    return f"{code_int % mod:0{digits}d}"
+
+
+def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6 or not secret_b32:
+        return False
+    now = time.time()
+    for skew in range(-window, window + 1):
+        expect = _totp_at(secret_b32, now + skew * 30)
+        if hmac.compare_digest(expect, raw):
+            return True
+    return False
+
+
+# Burned TOTP timesteps so the same 30s code cannot unlock portal login AND Settings.
+_totp_used: dict[str, dict] = {}
+_totp_used_lock = threading.Lock()
+TOTP_USED_TTL_SECONDS = 120
+TOTP_USED_PATH = Path(
+    os.environ.get(
+        "TOTP_USED_PATH",
+        "/opt/servermanager/panel/totp-used.json",
+    )
+)
+
+
+def _persist_totp_used_unlocked() -> None:
+    """Survive panel restarts so purpose-binding holds across the 30s window."""
+    try:
+        now = time.time()
+        payload = {
+            "used": {
+                str(k): {
+                    "purpose": str(v.get("purpose") or ""),
+                    "exp": float(v.get("exp") or 0),
+                }
+                for k, v in _totp_used.items()
+                if float(v.get("exp") or 0) > now
+            }
+        }
+        TOTP_USED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = TOTP_USED_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(TOTP_USED_PATH)
+        try:
+            os.chmod(TOTP_USED_PATH, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _load_totp_used() -> None:
+    if not TOTP_USED_PATH.is_file():
+        return
+    try:
+        data = json.loads(TOTP_USED_PATH.read_text(encoding="utf-8"))
+        rows = data.get("used") if isinstance(data, dict) else None
+        if not isinstance(rows, dict):
+            return
+        now = time.time()
+        with _totp_used_lock:
+            for key, meta in rows.items():
+                if not isinstance(meta, dict):
+                    continue
+                try:
+                    exp_f = float(meta.get("exp") or 0)
+                except Exception:
+                    continue
+                if key and exp_f > now:
+                    _totp_used[str(key)] = {
+                        "purpose": str(meta.get("purpose") or ""),
+                        "exp": exp_f,
+                    }
+    except Exception:
+        pass
+
+
+_load_totp_used()
+
+
+def _totp_secret_fingerprint(secret_b32: str) -> str:
+    norm = str(secret_b32 or "").strip().upper().replace(" ", "")
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:24]
+
+
+def _purge_totp_used(now: float | None = None) -> None:
+    ts = time.time() if now is None else now
+    dead = [k for k, v in _totp_used.items() if float(v.get("exp") or 0) <= ts]
+    for k in dead:
+        _totp_used.pop(k, None)
+
+
+def verify_and_consume_totp(
+    secret_b32: str,
+    code: str,
+    *,
+    purpose: str,
+    window: int = 1,
+) -> bool:
+    """Verify a TOTP and burn that timestep so it cannot be reused for another purpose.
+
+    Portal sign-in and Settings SSH unlock share the same authenticator secret; without
+    consumption, one 6-digit code would satisfy both within the same 30s window.
+    Burns persist to disk so a panel restart cannot revive a just-used code.
+    """
+    purpose_n = str(purpose or "").strip().lower()
+    if not purpose_n:
+        return False
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6 or not secret_b32:
+        return False
+    now = time.time()
+    matched_step: int | None = None
+    for skew in range(-window, window + 1):
+        t = now + skew * 30
+        expect = _totp_at(secret_b32, t)
+        if hmac.compare_digest(expect, raw):
+            matched_step = int(t // 30)
+            break
+    if matched_step is None:
+        return False
+    used_key = f"{_totp_secret_fingerprint(secret_b32)}:{matched_step}"
+    with _totp_used_lock:
+        _purge_totp_used(now)
+        prev = _totp_used.get(used_key)
+        if prev is not None:
+            # Already spent (same or different purpose) — require a fresh code.
+            return False
+        _totp_used[used_key] = {
+            "purpose": purpose_n,
+            "exp": now + max(60, TOTP_USED_TTL_SECONDS),
+        }
+        _persist_totp_used_unlocked()
+    return True
+
+
+def _read_ssh_panel_2fa() -> dict:
+    try:
+        if not SSH_PANEL_2FA_PATH.is_file():
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
+            }
+        data = json.loads(SSH_PANEL_2FA_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {
+                "enabled": False,
+                "method": "email",
+                "device_enroll_unlocked": False,
+                "device_enroll_unlocked_at": 0,
+            }
+        method = str(data.get("method") or "email").strip().lower()
+        if method not in ("email", "app"):
+            method = "email"
+        return {
+            "enabled": bool(data.get("enabled")),
+            "method": method,
+            "totp_secret": str(data.get("totp_secret") or ""),
+            "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
+            "updated_at": data.get("updated_at"),
+            "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
+            "device_enroll_unlocked_at": int(data.get("device_enroll_unlocked_at") or 0),
+            "device_enroll_for_ip": _normalize_vpn_ip(str(data.get("device_enroll_for_ip") or "")),
+            "device_enroll_secret_id": str(data.get("device_enroll_secret_id") or ""),
+        }
+    except Exception:
+        return {
+            "enabled": False,
+            "method": "email",
+            "device_enroll_unlocked": False,
+            "device_enroll_unlocked_at": 0,
+        }
+
+
+def ssh_panel_2fa_enabled() -> bool:
+    return bool(_read_ssh_panel_2fa().get("enabled"))
+
+
+def ssh_panel_2fa_method() -> str:
+    return str(_read_ssh_panel_2fa().get("method") or "email")
+
+
+def auth_app_device_enroll_unlocked() -> bool:
+    """Whether phones may add a new authenticator account via Enter secret."""
+    st = _read_ssh_panel_2fa()
+    if not bool(st.get("device_enroll_unlocked")):
+        return False
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    if unlocked_at <= 0:
+        # Legacy unlock without timestamp — treat as expired and relock.
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+        except Exception:
+            pass
+        return False
+    age = int(time.time()) - unlocked_at
+    if age > max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS):
+        try:
+            _write_ssh_panel_2fa(
+                enabled=bool(st.get("enabled")),
+                method=str(st.get("method") or "app"),
+                totp_secret=str(st.get("totp_secret") or ""),
+                device_enroll_unlocked=False,
+            )
+            # Pending QR secrets must not remain valid after unlock expires.
+            try:
+                sm_auth.revoke_all_pending_secrets()
+            except Exception:
+                pass
+            lan_gate = Path(
+                os.environ.get(
+                    "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+                    "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+                )
+            )
+            if lan_gate.is_file():
+                subprocess.run(
+                    ["bash", str(lan_gate)],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                )
+        except Exception:
+            pass
+        return False
+    return True
+
+
+def auth_app_enroll_status() -> dict:
+    """Public status for Authenticator PWAs (no secret material)."""
+    unlocked = auth_app_device_enroll_unlocked()
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    expires_in = 0
+    if unlocked and unlocked_at > 0:
+        expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
+    return {
+        "enroll_unlocked": unlocked,
+        "device_enroll_unlocked": unlocked,
+        "device_enroll_for_ip": str(st.get("device_enroll_for_ip") or ""),
+        "enroll_expires_in": expires_in,
+        "enroll_vault": sm_auth.vault_public_summary(),
+        **keys_auth_urls(),
+        "message": (
+            "Enrollment unlocked — Enter secret is available in the Authenticator app."
+            + (f" Auto-locks in ~{max(1, expires_in // 60)} min." if expires_in else "")
+            if unlocked
+            else "Enrollment locked — Enter secret is hidden until unlocked in Security."
+        ),
+    }
+
+
+def _write_ssh_panel_2fa(
+    *,
+    enabled: bool,
+    method: str = "email",
+    totp_secret: str = "",
+    device_enroll_unlocked: bool | None = None,
+    device_enroll_for_ip: str | None = None,
+    device_enroll_secret_id: str | None = None,
+) -> None:
+    SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    method_n = "app" if str(method).lower() == "app" else "email"
+    prev = _read_ssh_panel_2fa()
+    secret = totp_secret or str(prev.get("totp_secret") or "")
+    if method_n != "app":
+        secret = ""
+    enroll_flag = (
+        bool(device_enroll_unlocked)
+        if device_enroll_unlocked is not None
+        else bool(prev.get("device_enroll_unlocked"))
+    )
+    unlocked_at = int(prev.get("device_enroll_unlocked_at") or 0)
+    if device_enroll_unlocked is not None:
+        unlocked_at = int(time.time()) if enroll_flag else 0
+    elif not enroll_flag:
+        unlocked_at = 0
+    for_ip = (
+        _normalize_vpn_ip(device_enroll_for_ip)
+        if device_enroll_for_ip is not None
+        else str(prev.get("device_enroll_for_ip") or "")
+    )
+    secret_id = (
+        str(device_enroll_secret_id)
+        if device_enroll_secret_id is not None
+        else str(prev.get("device_enroll_secret_id") or "")
+    )
+    if not enroll_flag:
+        for_ip = ""
+        secret_id = ""
+    payload = {
+        "enabled": bool(enabled),
+        "method": method_n,
+        "totp_secret": secret if enabled and method_n == "app" else secret,
+        "updated_at": int(time.time()),
+        "email_to": EMAIL_CODE_TO,
+        "device_enroll_unlocked": enroll_flag,
+        "device_enroll_unlocked_at": unlocked_at if enroll_flag else 0,
+        "device_enroll_for_ip": for_ip,
+        "device_enroll_secret_id": secret_id,
+    }
+    if not enabled:
+        payload["totp_secret"] = ""
+        payload["method"] = method_n
+        payload["device_enroll_unlocked"] = False
+        payload["device_enroll_unlocked_at"] = 0
+        payload["device_enroll_for_ip"] = ""
+        payload["device_enroll_secret_id"] = ""
+    with _ssh_panel_2fa_lock:
+        SSH_PANEL_2FA_PATH.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+        try:
+            os.chmod(SSH_PANEL_2FA_PATH, 0o600)
+        except Exception:
+            pass
+
+
+def set_auth_app_device_enroll(
+    token: str | None,
+    *,
+    unlocked: bool,
+    device_ip: str = "",
+) -> dict:
+    """Lock/unlock Enter-secret enrollment for a single registering device IP."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before changing device enrollment")
+    cfg = _read_ssh_panel_2fa()
+    want = bool(unlocked)
+    if want and not (cfg.get("enabled") and cfg.get("method") == "app"):
+        raise ValueError(
+            "Enable Authenticator app two-factor before unlocking new-device enrollment"
+        )
+    secret = str(cfg.get("totp_secret") or "").strip()
+    if want and not secret:
+        raise ValueError("No authenticator secret is enrolled yet")
+    enroll_row = None
+    for_ip = ""
+    if want:
+        sm_auth.ensure_legacy_secret_in_vault(secret, label="primary")
+        for_ip = _normalize_vpn_ip(device_ip)
+        if not for_ip or not _is_home_lan_ipv4(for_ip):
+            raise ValueError(
+                "Unlock requires the registering device LAN IP (192.168.8.x) — "
+                "only that phone can enroll this secret"
+            )
+        enroll_row = sm_auth.generate_enroll_secret(
+            for_ip=for_ip,
+            label=f"enroll-{for_ip}",
+            ttl_seconds=max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS),
+        )
+        _write_ssh_panel_2fa(
+            enabled=bool(cfg.get("enabled")),
+            method=str(cfg.get("method") or "app"),
+            totp_secret=secret,
+            device_enroll_unlocked=True,
+            device_enroll_for_ip=for_ip,
+            device_enroll_secret_id=str(enroll_row.get("id") or ""),
+        )
+    else:
+        _write_ssh_panel_2fa(
+            enabled=bool(cfg.get("enabled")),
+            method=str(cfg.get("method") or "app"),
+            totp_secret=secret,
+            device_enroll_unlocked=False,
+            device_enroll_for_ip="",
+            device_enroll_secret_id="",
+        )
+        try:
+            sm_auth.revoke_all_pending_secrets()
+        except Exception:
+            pass
+    lan_gate = Path(
+        os.environ.get(
+            "LAN_CIRCLE_FLINT_GATE_SCRIPT",
+            "/opt/ikev2/ensure-lan-circle-flint-gate.sh",
+        )
+    )
+    if lan_gate.is_file():
+        try:
+            subprocess.run(
+                ["bash", str(lan_gate)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+    show_secret = str((enroll_row or {}).get("secret") or "") if want else ""
+    out: dict = {
+        "ok": True,
+        "device_enroll_unlocked": want,
+        "enroll_unlocked": want,
+        "device_enroll_for_ip": for_ip if want else "",
+        "two_factor_enabled": bool(cfg.get("enabled")),
+        "two_factor_method": str(cfg.get("method") or "app"),
+        "enroll_vault": sm_auth.vault_public_summary(),
+        **keys_auth_urls(),
+        "message": (
+            f"New-device enrollment unlocked for {for_ip} only. A fresh secret was "
+            f"generated (previous enrolled secrets kept, encrypted). Auto-locks in "
+            f"~{max(1, AUTH_APP_ENROLL_UNLOCK_SECONDS // 60)} min."
+            if want
+            else "New-device enrollment locked. Enter secret is hidden in the Authenticator app."
+        ),
+    }
+    if want and show_secret:
+        out["enroll"] = _totp_provisioning(show_secret)
+        out["enroll_expires_in"] = max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS)
+    return out
+
+
+def _normalize_vpn_ip(raw: str) -> str:
+    ip = str(raw or "").strip()
+    if "/" in ip:
+        ip = ip.split("/", 1)[0].strip()
+    return ip
+
+
+def _is_loopback_or_link_local(ip: str) -> bool:
+    ip = _normalize_vpn_ip(ip)
+    if not ip:
+        return False
+    if ip.startswith("127.") or ip == "::1":
+        return True
+    # Docker / local bridge peers that forward via Caddy.
+    if ip.startswith("172.") and re.fullmatch(r"172\.\d{1,3}\.\d{1,3}\.\d{1,3}", ip):
+        parts = [int(x) for x in ip.split(".")]
+        if 16 <= parts[1] <= 31:
+            return True
+    return False
+
+
+def request_client_ip(handler: "Handler") -> str:
+    """Best-effort real client IP when Caddy proxies to the portal.
+
+    Prefer X-Real-IP / first X-Forwarded-For hop only when the TCP peer is a
+    local proxy (loopback/docker). Otherwise use the socket peer address so
+    spoofed forwarding headers from direct clients are ignored.
+    """
+    peer = ""
+    try:
+        peer = _normalize_vpn_ip(handler.client_address[0])
+    except Exception:
+        peer = ""
+    if _is_loopback_or_link_local(peer):
+        real = _normalize_vpn_ip(handler.headers.get("X-Real-IP") or "")
+        if real and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", real):
+            return real
+        xff = str(handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        xff_ip = _normalize_vpn_ip(xff)
+        if xff_ip and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", xff_ip):
+            return xff_ip
+    return peer or "unknown"
+
+
+def _is_public_ipv4(ip: str) -> bool:
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] == 10 or parts[0] == 127:
+        return False
+    if parts[0] == 192 and parts[1] == 168:
+        return False
+    if parts[0] == 172 and 16 <= parts[1] <= 31:
+        return False
+    if parts[0] == 100 and 64 <= parts[1] <= 127:
+        return False
+    return True
+
+
+def _is_home_lan_ipv4(ip: str) -> bool:
+    """True for Flint home LAN clients (192.168.8.0/24), excluding network/broadcast."""
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 192 or parts[1] != 168 or parts[2] != 8:
+        return False
+    if parts[3] in (0, 255, 1):  # network, broadcast, Flint router
+        return False
+    return True
+
+
+def _lan_circle_skip_ips() -> set[str]:
+    """Always-on LAN infra — never park these in pending."""
+    skip = {
+        ROUTER_ADMIN_HOST,
+        PROXMOX_HOST,
+        PLEX_HOST,
+        "192.168.8.1",
+    }
+    for raw in (
+        os.environ.get("BUFFALO_HOST", ""),
+        urlparse(BUFFALO_UPSTREAM).hostname or "",
+        urlparse(NAS_FILES_UPSTREAM).hostname or "",
+        FTP_HOST,
+        os.environ.get("NAS_SMB_HOST", ""),
+    ):
+        host = str(raw or "").strip()
+        if host and (
+            _is_home_lan_ipv4(host)
+            or (host.startswith("192.168.8.") and bool(IP_RE.match(host)))
+        ):
+            skip.add(host)
+    return {_normalize_vpn_ip(x) for x in skip if x}
+
+
+def _is_circle_candidate_ip(ip: str) -> bool:
+    """Public WAN or home LAN client IP may enter the trust-circle lists."""
+    ip_n = _normalize_vpn_ip(ip)
+    return bool(ip_n) and (_is_public_ipv4(ip_n) or _is_home_lan_ipv4(ip_n))
+
+
+def _empty_vpn_allowlist() -> dict:
+    return {"allowed": [], "denied": [], "pending": [], "attempts": []}
+
+
+def sync_offline_lan_into_pending(data: dict | None = None) -> dict:
+    """Park known LAN devices that are not allowed/denied into pending.
+
+    Both online and offline DHCP/ARP entries are offered for circle approval.
+    (Home Wi-Fi NATs to the sealed router WAN, so pending is also enforced on
+    Flint pre-NAT via ensure-lan-circle-flint-gate.sh.)
+    """
+    data = dict(data or _read_vpn_allowlist())
+    now = int(time.time())
+    try:
+        lan = read_lan_devices()
+    except Exception:
+        lan = {"ok": False, "devices": []}
+    devices = list(lan.get("devices") or []) if lan.get("ok") else []
+    if not devices:
+        return data
+
+    allowed = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in (data.get("allowed") or [])
+        if isinstance(x, dict)
+    }
+    denied = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in (data.get("denied") or [])
+        if isinstance(x, dict)
+    }
+    pending_rows = [x for x in (data.get("pending") or []) if isinstance(x, dict)]
+    skip = _lan_circle_skip_ips()
+    changed = False
+
+    candidates: list[dict] = []
+    for d in devices:
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not _is_home_lan_ipv4(ip) or ip in skip:
+            continue
+        candidates.append(d)
+
+    # Drop auto LAN-pending rows once approved/denied.
+    pending_by_ip: dict = {}
+    for row in pending_rows:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        is_lan_row = str(row.get("source") or "") in (
+            "lan-offline",
+            "lan",
+        ) or str(row.get("kind") or "") == "lan"
+        if is_lan_row and _is_home_lan_ipv4(ip) and (ip in allowed or ip in denied):
+            changed = True
+            continue
+        if ip:
+            pending_by_ip[ip] = dict(row)
+        else:
+            pending_by_ip[f"_row_{id(row)}"] = dict(row)
+
+    for d in candidates:
+        ip = _normalize_vpn_ip(d.get("ip", ""))
+        if not ip or ip in allowed or ip in denied:
+            continue
+        name = str(d.get("hostname") or "").strip()
+        mac = str(d.get("mac") or "").strip().lower()
+        online = bool(d.get("online"))
+        note = name or (f"LAN {mac}" if mac else "LAN device")
+        source = "lan" if online else "lan-offline"
+        existing = pending_by_ip.get(ip)
+        if existing:
+            before = dict(existing)
+            existing["last_seen"] = now
+            existing["source"] = source
+            existing["vip"] = existing.get("vip") or ""
+            existing["note"] = note[:120]
+            existing["name"] = name[:64]
+            existing["mac"] = mac
+            existing["kind"] = "lan"
+            existing["online"] = online
+            if str(existing.get("status") or "") != "denied":
+                existing["status"] = "pending"
+            if existing != before:
+                changed = True
+            continue
+        pending_by_ip[ip] = {
+            "ip": ip,
+            "vip": "",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "status": "pending",
+            "source": source,
+            "kind": "lan",
+            "note": note[:120],
+            "name": name[:64],
+            "mac": mac,
+            "online": online,
+        }
+        changed = True
+
+    data["pending"] = sorted(
+        [v for v in pending_by_ip.values() if isinstance(v, dict)],
+        key=lambda x: int(x.get("last_seen") or 0),
+        reverse=True,
+    )[:80]
+    if changed:
+        _write_vpn_allowlist(data)
+    return data
+
+
+def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
+    data = sync_offline_lan_into_pending(_read_vpn_allowlist())
+    view = _public_vpn_allowlist_view(data, for_auth_app=for_auth_app)
+    names = _lan_device_name_by_ip()
+    enrolled = auth_app_enrolled_lan_ips()
+    pending = []
+    for row in _attach_circle_device_names(view.get("pending") or [], names=names):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if ip in enrolled:
+            item["auth_app"] = True
+            item["auth_app_enrolled"] = True
+        pending.append(item)
+    allowed = _attach_circle_device_names(view.get("allowed") or [], names=names)
+    # Surface crypto binding status (fingerprint only — never raw material beyond kid).
+    enriched_allowed = []
+    for row in allowed:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        pub = str(item.pop("pubkey", "") or "").strip()
+        if pub:
+            try:
+                item["key_bound"] = True
+                item["key_id"] = str(item.get("key_id") or _circle_key_id(pub))
+            except Exception:
+                item["key_bound"] = True
+                item["key_id"] = str(item.get("key_id") or "")
+        else:
+            item["key_bound"] = False
+            item["key_id"] = ""
+        enriched_allowed.append(item)
+    allowed = enriched_allowed
+    denied = _attach_circle_device_names(view.get("denied") or [], names=names)
+    recent = _attach_circle_device_names(
+        list(reversed(list(view.get("attempts") or [])[-40:])),
+        names=names,
+    )
+    return {
+        "ok": True,
+        "allowed": allowed,
+        "denied": denied,
+        "pending": pending,
+        "attempts": recent,
+        "guest_dns": os.environ.get("VPN_GUEST_DNS", "10.42.42.45"),
+        "circle_dns": os.environ.get("OVPN_DNS_ADGUARD", "10.42.42.44"),
+        "sticky_file": str(STICKY_VPN_IPS_PATH),
+        "auth_app_devices": sorted(enrolled),
+        "device_names": names,
+        "sealed_ips": [] if for_auth_app else list(_sealed_vpn_ips()),
+        "detail": (
+            "Unapproved IKEv2 clients keep internet via guest DNS; "
+            "approve with an Authenticator key bind to enter the trust circle. "
+            "Home LAN pending/denied/keyless IPs are REJECT'd to the VPS :80/:443 on Flint "
+            "and forced to the same guest DNS (no AdGuard admin rewrites) — except enrolled "
+            "Authenticator phones, which keep portal access and circle DNS while remaining pending."
+            + (
+                ""
+                if for_auth_app
+                else " Sealed router WAN stays in the circle and is hidden from Authenticator apps."
+            )
+        ),
+    }
+
+
+def mutate_vpn_allowlist(
+    *,
+    action: str,
+    ip: str,
+    note: str = "",
+    source: str = "security-ui",
+    pubkey: str = "",
+) -> dict:
+    ip_n = _normalize_vpn_ip(ip)
+    if not ip_n or not _is_circle_candidate_ip(ip_n):
+        raise ValueError("A public WAN or home LAN (192.168.8.x) IPv4 address is required")
+    action_n = str(action or "").strip().lower()
+    if action_n not in ("approve", "revoke", "deny", "pending"):
+        raise ValueError("action must be approve, revoke, deny, or pending")
+    if _is_denied_vpn_ip(ip_n) and action_n == "approve":
+        raise ValueError(
+            "This shared campus/ISP egress IP is permanently denied and cannot enter the trust circle"
+        )
+    if _is_sealed_vpn_ip(ip_n) and action_n in ("revoke", "deny", "pending"):
+        raise ValueError("Sealed router WAN cannot be revoked, denied, or moved to pending")
+    pub_n = ""
+    if pubkey:
+        pub_n = _normalize_ed25519_pubkey(pubkey)
+    if action_n == "approve" and not _is_sealed_vpn_ip(ip_n) and not pub_n:
+        raise ValueError(
+            "Ed25519 public key required — circle membership is key-bound only "
+            "(approve from Authenticator so a private/public key pair is created)"
+        )
+    data = _read_vpn_allowlist()
+    now = int(time.time())
+    src = (source or "security-ui").strip()[:40] or "security-ui"
+    is_lan = _is_home_lan_ipv4(ip_n)
+    prev_hidden = False
+    prev_name = ""
+    prev_note = ""
+    for bucket in ("allowed", "pending", "denied"):
+        for prev in list(data.get(bucket) or []):
+            if isinstance(prev, dict) and _normalize_vpn_ip(prev.get("ip", "")) == ip_n:
+                if bucket == "allowed":
+                    prev_hidden = bool(prev.get("hidden"))
+                prev_name = str(prev.get("name") or prev.get("hostname") or "").strip() or prev_name
+                prev_note = str(prev.get("note") or "").strip() or prev_note
+                break
+    if is_lan and not prev_name:
+        prev_name = _lan_device_name_by_ip().get(ip_n, "")
+    device_name = prev_name
+    note_n = (note or "").strip()[:120]
+    if not note_n and device_name:
+        note_n = device_name[:120]
+    elif not note_n and prev_note:
+        note_n = prev_note[:120]
+
+    def _without(rows: list, target: str) -> list:
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_ip = _normalize_vpn_ip(row.get("ip", ""))
+            if row_ip == target:
+                # Never strip sealed rows during approve rebuild either —
+                # approve path re-adds below; revoke/deny already blocked.
+                if row.get("sealed") or _is_sealed_vpn_ip(row_ip):
+                    out.append(row)
+                    continue
+                continue
+            out.append(row)
+        return out
+
+    data["allowed"] = _without(list(data.get("allowed") or []), ip_n)
+    data["denied"] = _without(list(data.get("denied") or []), ip_n)
+    data["pending"] = _without(list(data.get("pending") or []), ip_n)
+
+    if action_n == "approve":
+        if _is_sealed_vpn_ip(ip_n):
+            # Already permanent; just ensure sealed metadata.
+            data, _ = _ensure_sealed_vpn_allowlist(data)
+        else:
+            row = {
+                "ip": ip_n,
+                "note": note_n,
+                "approved_at": now,
+                "source": src,
+            }
+            if device_name:
+                row["name"] = device_name[:64]
+                row["hostname"] = device_name[:64]
+            if is_lan:
+                row["kind"] = "lan"
+                row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
+            if prev_hidden:
+                row["hidden"] = True
+            # Non-sealed approve always binds a key (enforced above).
+            row["pubkey"] = pub_n
+            row["key_id"] = _circle_key_id(pub_n)
+            row["key_bound_at"] = now
+            data["allowed"].append(row)
+    elif action_n == "deny":
+        deny_row = {
+            "ip": ip_n,
+            "note": note_n,
+            "denied_at": now,
+            "source": src,
+            **({"kind": "lan"} if is_lan else {}),
+        }
+        if device_name:
+            deny_row["name"] = device_name[:64]
+            deny_row["hostname"] = device_name[:64]
+        data["denied"].append(deny_row)
+        pend = {
+            "ip": ip_n,
+            "status": "denied",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": note_n,
+            **(
+                {
+                    "source": "lan-offline",
+                    "kind": "lan",
+                    "vip": "",
+                }
+                if is_lan
+                else {}
+            ),
+        }
+        if device_name:
+            pend["name"] = device_name[:64]
+            pend["hostname"] = device_name[:64]
+        data["pending"].append(pend)
+    elif action_n == "pending":
+        # Demote from allowlist back to pending (not denied).
+        pending_row = {
+            "ip": ip_n,
+            "status": "pending",
+            "first_seen": now,
+            "last_seen": now,
+            "count": 1,
+            "note": note_n or "moved from allowlist",
+            "source": src,
+        }
+        if device_name:
+            pending_row["name"] = device_name[:64]
+            pending_row["hostname"] = device_name[:64]
+        if is_lan:
+            pending_row.update(
+                {
+                    "kind": "lan",
+                    "vip": "",
+                    "source": "lan" if src.startswith("auth-app") or src == "security-ui" else src,
+                }
+            )
+        else:
+            pending_row["vip"] = ""
+        data["pending"].append(pending_row)
+    # revoke: already removed from allowed/denied/pending (sealed preserved)
+
+    data, _ = _ensure_sealed_vpn_allowlist(data)
+    _write_vpn_allowlist(data)
+    sync_msg = _run_vpn_peer_acl_sync()
+    for_auth = str(source or "").startswith("auth-app")
+    return {
+        "ok": True,
+        "action": action_n,
+        "ip": ip_n,
+        "name": device_name or "",
+        "sync": sync_msg,
+        "vpn_allowlist": build_vpn_allowlist_status(for_auth_app=for_auth),
+    }
+
+
+def _read_vpn_allowlist() -> dict:
+    data = _empty_vpn_allowlist()
+    if VPN_ALLOWLIST_PATH.is_file():
+        try:
+            loaded = json.loads(VPN_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for key in data:
+                    if isinstance(loaded.get(key), list):
+                        data[key] = loaded[key]
+        except Exception:
+            pass
+    # Seed sticky WAN entries so existing home IP stays trusted.
+    sticky_ips: list[str] = []
+    if STICKY_VPN_IPS_PATH.is_file():
+        try:
+            for line in STICKY_VPN_IPS_PATH.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                sticky_ips.append(_normalize_vpn_ip(raw))
+        except Exception:
+            sticky_ips = []
+    allowed_set = {
+        _normalize_vpn_ip(x.get("ip", ""))
+        for x in data["allowed"]
+        if isinstance(x, dict)
+    }
+    # Do NOT seed sticky WAN into allowed without a circle key — membership is
+    # key-bound only (sealed router WANs are handled by _ensure_sealed_*).
+    data, sealed_changed = _ensure_sealed_vpn_allowlist(data)
+    data, key_scrubbed = _scrub_allowlist_require_circle_keys(data)
+    if sealed_changed or key_scrubbed or not VPN_ALLOWLIST_PATH.is_file():
+        _write_vpn_allowlist(data)
+    return data
+
+
+def _write_vpn_allowlist(data: dict) -> None:
+    data, _ = _ensure_sealed_vpn_allowlist(data)
+    data, _ = _scrub_allowlist_require_circle_keys(data)
+    VPN_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "allowed": list(data.get("allowed") or []),
+        "denied": list(data.get("denied") or []),
+        "pending": list(data.get("pending") or []),
+        "attempts": list(data.get("attempts") or [])[-200:],
+        "updated_at": int(time.time()),
+    }
+    tmp = VPN_ALLOWLIST_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(VPN_ALLOWLIST_PATH)
+    try:
+        os.chmod(VPN_ALLOWLIST_PATH, 0o600)
+    except Exception:
+        pass
+    # Keep sticky file in sync with allowlist (Caddy peer ACL reads sticky).
+    # Only sealed + key-bound IPs are sticky-trusted.
+    lines = [
+        "# Managed by Security → VPN trust circle",
+        "# Approved sticky WAN + LAN IPs (one IPv4 /32 per line)",
+        "# Key-bound only (except sealed router WAN). No blanket 192.168.8.0/24.",
+    ]
+    for row in payload["allowed"]:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip or not (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+            continue
+        if _circle_row_is_sealed(row) or _circle_row_has_key(row):
+            lines.append(f"{ip}/32")
+    STICKY_VPN_IPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STICKY_VPN_IPS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_vpn_peer_acl_sync() -> str:
+    script = VPN_PEER_ACL_SCRIPT
+    if not script.is_file():
+        return "peer-acl script missing"
+    try:
+        proc = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return out[-500:] if out else ("ok" if proc.returncode == 0 else "failed")
+    except Exception as exc:
+        return str(exc)
+
+
+def verify_auth_app_totp(code: str, *, purpose: str = "auth-app") -> bool:
+    """Validate a TOTP from the phone authenticator PWA against enrolled secrets.
+
+    Pending enroll secrets are accepted only while Security enroll unlock is
+    active; portal login never sees them (list_verifiable_totp_secrets default).
+    """
+    st = _read_ssh_panel_2fa()
+    if not st.get("enabled") or str(st.get("method") or "") != "app":
+        return False
+    include_pending = auth_app_device_enroll_unlocked()
+    purpose_n = str(purpose or "auth-app").strip().lower() or "auth-app"
+    legacy = str(st.get("totp_secret") or "").strip()
+    for secret in sm_auth.list_verifiable_totp_secrets(
+        legacy, include_pending=include_pending
+    ):
+        if verify_and_consume_totp(secret, code, purpose=purpose_n, window=1):
+            return True
+    return False
+
+
+def _auth_app_totp_client_key(client_ip: str) -> str:
+    return (_normalize_vpn_ip(client_ip) or str(client_ip or "unknown").strip() or "unknown")[:64]
+
+
+def _ip_jail_today() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _ip_jail_empty() -> dict:
+    return {"day": _ip_jail_today(), "ips": {}}
+
+
+def _ip_jail_load() -> dict:
+    """Load jail state; roll to a fresh day when the UTC date changes."""
+    today = _ip_jail_today()
+    data = _ip_jail_empty()
+    if IP_JAIL_PATH.is_file():
+        try:
+            loaded = json.loads(IP_JAIL_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = _ip_jail_empty()
+    if str(data.get("day") or "") != today:
+        # Keep permanent bans + active timed lockouts; reset same-day fail/round counts.
+        now = time.time()
+        kept: dict[str, dict] = {}
+        for ip, row in (data.get("ips") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            permanent = bool(row.get("permanent"))
+            locked_until = float(row.get("locked_until") or 0)
+            if permanent:
+                kept[str(ip)] = {
+                    "fails": [],
+                    "fail_count": 0,
+                    "locked_until": 0,
+                    "lock_count": 0,
+                    "permanent": True,
+                    "permanent_at": float(row.get("permanent_at") or now),
+                    "reasons": list(row.get("reasons") or [])[-8:],
+                    "last_reason": str(row.get("last_reason") or "permanent"),
+                    "last_fail_at": float(row.get("last_fail_at") or 0),
+                }
+            elif locked_until > now:
+                kept[str(ip)] = {
+                    "fails": [],
+                    "fail_count": 0,
+                    "locked_until": locked_until,
+                    "lock_count": 0,
+                    "permanent": False,
+                    "reasons": list(row.get("reasons") or [])[-8:],
+                    "last_reason": str(row.get("last_reason") or ""),
+                    "last_fail_at": float(row.get("last_fail_at") or 0),
+                }
+        data = {"day": today, "ips": kept}
+    if not isinstance(data.get("ips"), dict):
+        data["ips"] = {}
+    return data
+
+
+def _ip_jail_save(data: dict) -> None:
+    IP_JAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = IP_JAIL_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(IP_JAIL_PATH)
+    try:
+        os.chmod(IP_JAIL_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def ip_jail_status_for(client_ip: str) -> dict:
+    """Return lock/fail status for one IP (same UTC day + permanent flag)."""
+    key = _auth_app_totp_client_key(client_ip)
+    now = time.time()
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        row = (data.get("ips") or {}).get(key) or {}
+        permanent = bool(row.get("permanent"))
+        locked_until = float(row.get("locked_until") or 0)
+        fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+        locked = permanent or locked_until > now
+        return {
+            "ip": key,
+            "day": data.get("day"),
+            "fail_count": len(fails),
+            "max_fails": max(1, IP_JAIL_MAX_FAILS),
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
+            "locked": locked,
+            "permanent": permanent,
+            "locked_until": 0 if permanent else (locked_until if locked_until > now else 0),
+            "retry_after": 0
+            if permanent
+            else (max(0, int(locked_until - now)) if locked_until > now else 0),
+            "lock_count_today": int(row.get("lock_count") or 0),
+            "last_reason": str(row.get("last_reason") or ""),
+        }
+
+
+def ip_jail_assert_allowed(client_ip: str) -> None:
+    """Raise ValueError if this IP is currently jailed."""
+    st = ip_jail_status_for(client_ip)
+    if st.get("permanent"):
+        raise ValueError("IP permanently banned after repeated lockouts today")
+    if st.get("locked"):
+        secs = int(st.get("retry_after") or 0) + 1
+        raise ValueError(
+            f"IP temporarily locked after too many failed attempts — try again in {secs}s"
+        )
+
+
+def ip_jail_record_failure(client_ip: str, *, reason: str = "auth") -> dict:
+    """Record a failed auth attempt.
+
+    3 fails → 10 min lockout; 5 lockout rounds in the same UTC day → permanent.
+    """
+    key = _auth_app_totp_client_key(client_ip)
+    now = time.time()
+    reason = str(reason or "auth").strip()[:64] or "auth"
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        ips = data.setdefault("ips", {})
+        row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            row["last_reason"] = reason
+            row["last_fail_at"] = now
+            ips[key] = row
+            _ip_jail_save(data)
+            return ip_jail_status_for(key)
+
+        locked_until = float(row.get("locked_until") or 0)
+        if locked_until > now:
+            # Still locked — do not grow fail list, just refresh reason.
+            row["last_reason"] = reason
+            row["last_fail_at"] = now
+            ips[key] = row
+            _ip_jail_save(data)
+            return ip_jail_status_for(key)
+
+        fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+        fails.append(now)
+        # Cap stored fail timestamps for the day.
+        fails = fails[-40:]
+        reasons = list(row.get("reasons") or [])
+        reasons.append(reason)
+        row.update(
+            {
+                "fails": fails,
+                "fail_count": len(fails),
+                "reasons": reasons[-16:],
+                "last_reason": reason,
+                "last_fail_at": now,
+                "permanent": False,
+            }
+        )
+        threshold = max(1, IP_JAIL_MAX_FAILS)
+        if len(fails) >= threshold:
+            lock_for = max(30, IP_JAIL_LOCKOUT_SECONDS)
+            row["locked_until"] = now + lock_for
+            row["lock_count"] = int(row.get("lock_count") or 0) + 1
+            row["fails"] = []  # reset streak after locking; day lock_count remains
+            row["fail_count"] = 0
+            if int(row["lock_count"]) >= max(1, IP_JAIL_ROUNDS_FOR_PERMANENT):
+                row["permanent"] = True
+                row["permanent_at"] = now
+                row["locked_until"] = 0
+                row["last_reason"] = "permanent"
+        ips[key] = row
+        data["ips"] = ips
+        _ip_jail_save(data)
+        return ip_jail_status_for(key)
+
+
+def ip_jail_clear_success(client_ip: str) -> None:
+    """Clear today's fail streak (and timed lock) after successful auth.
+
+    Permanent bans are never cleared by success.
+    """
+    key = _auth_app_totp_client_key(client_ip)
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        ips = data.get("ips") or {}
+        if key not in ips:
+            return
+        row = dict(ips.get(key) or {})
+        if bool(row.get("permanent")):
+            return
+        row["fails"] = []
+        row["fail_count"] = 0
+        row["locked_until"] = 0
+        # Keep lock_count_today for visibility / progression toward permanent.
+        ips[key] = row
+        data["ips"] = ips
+        _ip_jail_save(data)
+
+
+def build_ip_jail_status() -> dict:
+    """Security-tab summary of today's portal IP jail."""
+    now = time.time()
+    with _ip_jail_lock:
+        data = _ip_jail_load()
+        locked = []
+        watching = []
+        permanent_rows = []
+        for ip, row in sorted((data.get("ips") or {}).items()):
+            if not isinstance(row, dict):
+                continue
+            permanent = bool(row.get("permanent"))
+            locked_until = float(row.get("locked_until") or 0)
+            fails = [float(t) for t in (row.get("fails") or []) if float(t) > 0]
+            entry = {
+                "ip": ip,
+                "fail_count": len(fails),
+                "lock_count_today": int(row.get("lock_count") or 0),
+                "last_reason": str(row.get("last_reason") or ""),
+                "last_fail_at": int(float(row.get("last_fail_at") or 0) or 0),
+                "locked_until": int(locked_until) if locked_until > now else 0,
+                "retry_after": max(0, int(locked_until - now)) if locked_until > now else 0,
+                "permanent": permanent,
+            }
+            if permanent:
+                permanent_rows.append(entry)
+            elif locked_until > now:
+                locked.append(entry)
+            elif fails or entry["lock_count_today"]:
+                watching.append(entry)
+        return {
+            "ok": True,
+            "day": data.get("day"),
+            "max_fails": max(1, IP_JAIL_MAX_FAILS),
+            "lockout_seconds": max(30, IP_JAIL_LOCKOUT_SECONDS),
+            "rounds_for_permanent": max(1, IP_JAIL_ROUNDS_FOR_PERMANENT),
+            "currently_locked": len(locked),
+            "currently_permanent": len(permanent_rows),
+            "locked": locked[:50],
+            "permanent": permanent_rows[:50],
+            "watching": watching[:50],
+            "path": str(IP_JAIL_PATH),
+        }
+
+
+def require_auth_app_totp(
+    code: str, *, client_ip: str = "", purpose: str = "auth-app"
+) -> None:
+    """Validate auth-app TOTP with same-day IP jail (3 fails → 5 min)."""
+    ip_jail_assert_allowed(client_ip)
+    if verify_auth_app_totp(code, purpose=purpose):
+        ip_jail_clear_success(client_ip)
+        return
+    st = ip_jail_record_failure(client_ip, reason="auth_app_totp")
+    time.sleep(min(2.0, 0.35 + 0.15 * min(10, int(st.get("fail_count") or 1))))
+    if st.get("locked"):
+        raise ValueError(
+            f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+        )
+    raise ValueError("Incorrect, missing, or already-used authenticator code")
+
+
+def _auth_app_totp_from_request(handler: "Handler") -> str:
+    """TOTP must come from X-SM-Totp (or JSON body on POST) — never from query strings."""
+    hdr = str(handler.headers.get("X-SM-Totp") or "").strip()
+    if hdr:
+        return hdr
+    return ""
+
+
+def _totp_provisioning(secret_b32: str) -> dict:
+    from urllib.parse import quote
+
+    account = f"portal@{PORTAL_HOST}"
+    issuer = "ServerManager"
+    label = quote(f"{issuer}:{account}")
+    uri = (
+        f"otpauth://totp/{label}?secret={secret_b32}"
+        f"&issuer={quote(issuer)}&algorithm=SHA1&digits=6&period=30"
+    )
+    return {
+        "secret": secret_b32,
+        "otpauth_url": uri,
+        "account": account,
+        "issuer": issuer,
+        **keys_auth_urls(secret_hash=secret_b32, issuer=issuer, account=account),
+    }
+
+
+def _check_ssh_panel_password(password: str) -> None:
+    if not AUTH_PASS:
+        raise ValueError("Password is not configured")
+    expected = f"!!{AUTH_PASS}!!"
+    if not hmac.compare_digest(str(password or ""), expected):
+        time.sleep(0.35)
+        raise ValueError("Incorrect password")
+
+
+def set_ssh_panel_2fa(
+    token: str | None,
+    *,
+    enabled: bool,
+    password: str = "",
+    code: str = "",
+    client_ip: str = "",
+    method: str = "",
+    enroll_secret: str = "",
+) -> dict:
+    """Enable/disable 2FA for the VPS login panel (email or authenticator app)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    st = ssh_panel_unlock_status(token)
+    if not st.get("unlocked"):
+        raise ValueError("Unlock the panel before changing two-factor settings")
+    want = bool(enabled)
+    cfg = _read_ssh_panel_2fa()
+    method_n = str(method or cfg.get("method") or "app").strip().lower()
+    if method_n not in ("email", "app"):
+        method_n = "app"
+    if want and want == bool(cfg.get("enabled")) and method_n == cfg.get("method"):
+        return {
+            "ok": True,
+            "two_factor_enabled": True,
+            "two_factor_method": cfg.get("method"),
+            "email_to": EMAIL_CODE_TO,
+            "message": "Two-factor already enabled.",
+        }
+    if want:
+        _check_ssh_panel_password(password)
+        if method_n == "app":
+            secret = str(enroll_secret or "").strip()
+            if not secret:
+                secret = _b32_encode_secret(secrets.token_bytes(20))
+                prov = _totp_provisioning(secret)
+                return {
+                    "ok": True,
+                    "need_code": True,
+                    "two_factor_enabled": False,
+                    "two_factor_method": "app",
+                    "enroll": prov,
+                    "enroll_secret": secret,
+                    "email_to": EMAIL_CODE_TO,
+                    "message": "Scan the QR in the Authenticator app, then enter the 6-digit code.",
+                }
+            if not verify_and_consume_totp(secret, code, purpose="ssh-2fa-enroll"):
+                time.sleep(0.25)
+                raise ValueError("Incorrect or already-used authenticator code")
+            _write_ssh_panel_2fa(enabled=True, method="app", totp_secret=secret)
+            try:
+                sm_auth.ensure_legacy_secret_in_vault(secret, label="primary")
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "two_factor_enabled": True,
+                "two_factor_method": "app",
+                "email_to": EMAIL_CODE_TO,
+                "auth_app_path": keys_auth_urls()["auth_app_path"],
+                "message": "Authenticator app two-factor enabled.",
+            }
+        # Email method
+        key = f"ssh-2fa-enable:{token}"
+        if not str(code or "").strip():
+            sent = send_email_test_code(
+                client_ip or "panel", key=key, purpose="ssh-2fa-enable"
+            )
+            return {
+                "ok": True,
+                "need_code": True,
+                "two_factor_enabled": False,
+                "two_factor_method": "email",
+                "email_to": EMAIL_CODE_TO,
+                "message": sent.get("message")
+                or "Enter the email code to enable two-factor.",
+            }
+        verify_email_test_code(
+            client_ip or "panel", code, key=key, purpose="ssh-2fa-enable"
+        )
+        _write_ssh_panel_2fa(enabled=True, method="email", totp_secret="")
+        return {
+            "ok": True,
+            "two_factor_enabled": True,
+            "two_factor_method": "email",
+            "email_to": EMAIL_CODE_TO,
+            "message": "Two-factor enabled.",
+        }
+    _write_ssh_panel_2fa(enabled=False, method=method_n, totp_secret="")
+    return {
+        "ok": True,
+        "two_factor_enabled": False,
+        "two_factor_method": method_n,
+        "email_to": EMAIL_CODE_TO,
+        "message": "Two-factor disabled for VPS login panel.",
+    }
+
+
+def _purge_ssh_panel_unlocks(now: float | None = None) -> None:
+    ts = now if now is not None else time.time()
+    with _ssh_panel_unlocks_lock:
+        dead = [tok for tok, exp in _ssh_panel_unlocks.items() if exp <= ts]
+        for tok in dead:
+            _ssh_panel_unlocks.pop(tok, None)
+
+
+def ssh_panel_unlock_status(token: str | None) -> dict:
+    """Whether this portal session may mutate VPS login / SSH keys."""
+    now = time.time()
+    _purge_ssh_panel_unlocks(now)
+    two_factor = ssh_panel_2fa_enabled()
+    method = ssh_panel_2fa_method() if two_factor else "email"
+    enroll_unlocked = auth_app_device_enroll_unlocked()
+    required = ["portal_password"]
+    if two_factor:
+        required.append("app_code" if method == "app" else "email_code")
+    st = _read_ssh_panel_2fa()
+    unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
+    enroll_expires_in = 0
+    if enroll_unlocked and unlocked_at > 0:
+        enroll_expires_in = max(
+            0, unlocked_at + max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS) - int(time.time())
+        )
+    devices = list_auth_app_devices()
+    base = {
+        "two_factor_enabled": two_factor,
+        "two_factor_method": method,
+        "device_enroll_unlocked": enroll_unlocked,
+        "enroll_unlocked": enroll_unlocked,
+        "device_enroll_for_ip": str(st.get("device_enroll_for_ip") or ""),
+        "enroll_expires_in": enroll_expires_in,
+        "enroll_vault": sm_auth.vault_public_summary(),
+        "passkeys": sm_auth.webauthn_status(),
+        "auth_app_devices": devices,
+        **keys_auth_urls(),
+        "email_to": EMAIL_CODE_TO,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "required": required,
+    }
+    if not token or not session_valid(token):
+        return {
+            **base,
+            "unlocked": False,
+            "expires_at": None,
+            "expires_in": 0,
+        }
+    with _ssh_panel_unlocks_lock:
+        exp = _ssh_panel_unlocks.get(token)
+    if not exp or exp <= now:
+        return {
+            **base,
+            "unlocked": False,
+            "expires_at": None,
+            "expires_in": 0,
+        }
+    return {
+        **base,
+        "unlocked": True,
+        "expires_at": int(exp),
+        "expires_in": max(0, int(exp - now)),
+    }
+
+
+def unlock_ssh_panel(
+    token: str | None,
+    password: str,
+    *,
+    code: str = "",
+    client_ip: str = "",
+) -> dict:
+    """Unlock SSH panel with !!password!! (+ authenticator or email code when 2FA on)."""
+    if not token or not session_valid(token):
+        raise ValueError("Not signed in")
+    ip_jail_assert_allowed(client_ip)
+    try:
+        _check_ssh_panel_password(password)
+    except ValueError:
+        st = ip_jail_record_failure(client_ip, reason="ssh_panel_password")
+        if st.get("locked"):
+            raise ValueError(
+                f"Too many failed unlock attempts — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+            ) from None
+        raise
+    cfg = _read_ssh_panel_2fa()
+    two_factor = bool(cfg.get("enabled"))
+    method = str(cfg.get("method") or "email")
+    if two_factor:
+        if method == "app":
+            secret = str(cfg.get("totp_secret") or "")
+            if not str(code or "").strip():
+                return {
+                    "ok": True,
+                    "unlocked": False,
+                    "need_code": True,
+                    "two_factor_enabled": True,
+                    "two_factor_method": "app",
+                    "auth_app_path": keys_auth_urls()["auth_app_path"],
+                    "email_to": EMAIL_CODE_TO,
+                    "expires_at": None,
+                    "expires_in": 0,
+                    "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                    "message": "Enter a fresh Authenticator code for Settings unlock.",
+                }
+            if not verify_and_consume_totp(secret, code, purpose="ssh-unlock"):
+                st = ip_jail_record_failure(client_ip, reason="ssh_panel_totp")
+                time.sleep(0.25)
+                if st.get("locked"):
+                    raise ValueError(
+                        f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                    )
+                raise ValueError("Incorrect or already-used authenticator code")
+        else:
+            key = f"ssh-unlock:{token}"
+            if not str(code or "").strip():
+                sent = send_email_test_code(
+                    client_ip or "panel", key=key, purpose="ssh-unlock"
+                )
+                return {
+                    "ok": True,
+                    "unlocked": False,
+                    "need_code": True,
+                    "two_factor_enabled": True,
+                    "two_factor_method": "email",
+                    "email_to": EMAIL_CODE_TO,
+                    "expires_at": None,
+                    "expires_in": 0,
+                    "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                    "message": sent.get("message")
+                    or "Enter the Settings unlock email code.",
+                }
+            try:
+                verify_email_test_code(
+                    client_ip or "panel", code, key=key, purpose="ssh-unlock"
+                )
+            except Exception:
+                st = ip_jail_record_failure(client_ip, reason="ssh_panel_email_code")
+                if st.get("locked"):
+                    raise ValueError(
+                        f"Too many failed email codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                    ) from None
+                raise
+    ip_jail_clear_success(client_ip)
+    now = time.time()
+    exp = now + max(60, SSH_PANEL_UNLOCK_SECONDS)
+    _purge_ssh_panel_unlocks(now)
+    with _ssh_panel_unlocks_lock:
+        _ssh_panel_unlocks[token] = exp
+    return {
+        "ok": True,
+        "unlocked": True,
+        "need_code": False,
+        "two_factor_enabled": two_factor,
+        "two_factor_method": method if two_factor else "email",
+        "auth_app_path": keys_auth_urls()["auth_app_path"],
+        "email_to": EMAIL_CODE_TO,
+        "expires_at": int(exp),
+        "expires_in": int(exp - now),
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "message": f"VPS login panel unlocked for {SSH_PANEL_UNLOCK_SECONDS // 60} minutes.",
+    }
+
+
+def lock_ssh_panel(token: str | None) -> dict:
+    if token:
+        with _ssh_panel_unlocks_lock:
+            _ssh_panel_unlocks.pop(token, None)
+    method = ssh_panel_2fa_method() if ssh_panel_2fa_enabled() else "email"
+    return {
+        "ok": True,
+        "unlocked": False,
+        "need_code": False,
+        "two_factor_enabled": ssh_panel_2fa_enabled(),
+        "two_factor_method": method,
+        "auth_app_path": keys_auth_urls()["auth_app_path"],
+        "email_to": EMAIL_CODE_TO,
+        "expires_at": None,
+        "expires_in": 0,
+        "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+        "message": "VPS login panel locked.",
+    }
 
 
 # ServerManager Files theme (desktop + mobile) — injected into /nas-files HTML.
@@ -12812,6 +18559,11 @@ def proxy_wg_ui_request(handler: "Handler", method: str) -> None:
         handler.wfile.write(body)
 
 
+try:
+    import media_tmdb as _media_tmdb
+except Exception:
+    _media_tmdb = None  # type: ignore
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ServerManager/1.2"
 
@@ -12825,7 +18577,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
             return
         self.send_response(302)
-        self.send_header("Location", "/login.html")
+        self.send_header("Location", "/")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
@@ -12864,6 +18616,22 @@ class Handler(BaseHTTPRequestHandler):
         self._unauthorized(api=api)
         return False
 
+    def _require_ssh_panel_unlock(self) -> bool:
+        """Portal session must have recently re-entered the portal password."""
+        tok = parse_session_cookie(self.headers.get("Cookie"))
+        st = ssh_panel_unlock_status(tok)
+        if st.get("unlocked"):
+            return True
+        self._json(
+            403,
+            {
+                "ok": False,
+                "error": "VPS login panel is locked. Re-enter the password to unlock.",
+                "panel_lock": st,
+            },
+        )
+        return False
+
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
@@ -12876,10 +18644,10 @@ class Handler(BaseHTTPRequestHandler):
             body = (
                 b"<!DOCTYPE html><html><head>"
                 b'<meta charset="utf-8" />'
-                b'<meta http-equiv="refresh" content="0;url=/login.html" />'
+                b'<meta http-equiv="refresh" content="0;url=/" />'
                 b"<title>Signing out</title>"
-                b"<script>location.replace('/login.html');</script>"
-                b"</head><body>Signed out. <a href='/login.html'>Continue</a></body></html>"
+                b"<script>location.replace('/');</script>"
+                b"</head><body>Signed out. <a href='/'>Continue</a></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -12889,10 +18657,49 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
-            pass  # public
+        if path in (
+            "/",
+            "/login.html",
+            "/email-code-test.html",
+            "/auth-app.html",
+            "/auth-app-iphone.html",
+            "/api/branding",
+            "/api/health",
+            "/api/auth-app/vpn-allowlist",
+            "/api/auth-app/enroll-status",
+            "/api/auth-app/register-device",
+            "/api/auth-app/circle-lease",
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+            "/static/sm-circle-crypto.js",
+        ) or path.startswith("/static/auth-app"):
+            pass  # public (/, /login.html serve the sign-in page when logged out)
+        elif path.startswith("/static/"):
+            # Panel HTML under /static/ requires a session — only auth-app assets
+            # are public (matched above). Other static files (icons/css) stay open
+            # so login/branding can load; sensitive dashboards are gated below.
+            rel = path[len("/static/") :]
+            if rel in (
+                "index.html",
+                "files.html",
+                "nas-windows.html",
+                "windows-vpn.html",
+                "openvpn.html",
+            ) and not self._is_authed():
+                self._unauthorized(api=False)
+                return
+            pass
+        elif path in (
+            "/api/openvpn/windows",
+            "/download/windows.ovpn",
+            "/api/openvpn/phone",
+            "/download/james-iphone.ovpn",
+        ):
+            pass  # public OpenVPN downloads (token checked below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
+        elif path in ("/api/email-code/send", "/api/email-code/verify"):
+            pass  # public email-code test form APIs (rate-limited)
         elif not self._is_authed():
             if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
@@ -13027,7 +18834,10 @@ document.getElementById('f').onsubmit = async (e) => {
             self._json(200, {"ok": True})
             return
         if path in ("/", "/index.html"):
-            return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            if self._is_authed():
+                return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            # Signed-out root is the login page (canonical URL: /)
+            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
         if path == "/openvpn.html":
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
@@ -13035,23 +18845,65 @@ document.getElementById('f').onsubmit = async (e) => {
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
-            # Always clear any stale session display path; if still authed, go home
-            if self._is_authed():
-                self.send_response(302)
-                self.send_header("Location", "/")
+            # Canonical login URL is /
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        if path == "/email-code-test.html":
+            return self._serve_file(
+                STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
+            )
+        if path == "/auth-app.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app.html", "text/html; charset=utf-8"
+            )
+        if path == "/auth-app-iphone.html":
+            return self._serve_file(
+                STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
+            )
+        if path in (
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+        ):
+            try:
+                from urllib.parse import quote
+
+                body = load_auth_app_windows_exe()
+                name = AUTH_APP_WINDOWS_EXE_NAME
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.microsoft.portable-executable")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                return
-            return self._serve_file(STATIC_DIR / "login.html", "text/html; charset=utf-8")
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
             if not str(target).startswith(str(STATIC_DIR.resolve())):
                 self._json(404, {"error": "not found"})
                 return
-            ctype = "text/css" if target.suffix == ".css" else "application/javascript"
-            if target.suffix == ".html":
+            ctype = "application/octet-stream"
+            if target.suffix == ".css":
+                ctype = "text/css; charset=utf-8"
+            elif target.suffix == ".js":
+                ctype = "application/javascript; charset=utf-8"
+            elif target.suffix == ".html":
                 ctype = "text/html; charset=utf-8"
+            elif target.suffix == ".webmanifest" or target.name.endswith(".webmanifest"):
+                ctype = "application/manifest+json; charset=utf-8"
+            elif target.suffix == ".png":
+                ctype = "image/png"
+            elif target.suffix == ".svg":
+                ctype = "image/svg+xml"
             return self._serve_file(target, ctype)
         if path == "/api/vps-status":
             if not self._require_auth(api=True):
@@ -13396,13 +19248,58 @@ document.getElementById('f').onsubmit = async (e) => {
             "/api/openvpn/phone",
             "/download/james-iphone.ovpn",
         ):
-            if not self._require_auth(api=True):
+            # Allow either portal login OR shared download token (public Caddy path).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_PHONE_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_PHONE_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
                 return
             try:
                 from urllib.parse import quote
 
                 body = load_openvpn_client_conf(OVPN_PHONE_NAME)
                 name = "james-iphone.ovpn"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-openvpn-profile")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/openvpn/windows",
+            "/download/windows.ovpn",
+        ):
+            # Allow either portal login OR shared download token (public Caddy path).
+            import hmac
+
+            qs = parse_qs(urlparse(self.path).query)
+            token = (qs.get("t") or qs.get("token") or [""])[0].strip()
+            token_ok = bool(
+                OVPN_WINDOWS_DL_TOKEN
+                and token
+                and hmac.compare_digest(token, OVPN_WINDOWS_DL_TOKEN)
+            )
+            if not token_ok and not self._require_auth(api=True):
+                return
+            try:
+                from urllib.parse import quote
+
+                body = load_openvpn_client_conf(OVPN_WINDOWS_NAME)
+                name = "windows.ovpn"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-openvpn-profile")
                 self.send_header(
@@ -13488,6 +19385,20 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/grafana-sso":
+            if not self._require_auth(api=True):
+                return
+            try:
+                data = grafana_sso_login()
+                safe = {
+                    "ok": True,
+                    "user": data.get("user"),
+                    "url": data.get("url") or f"https://{GRAFANA_PUBLIC_HOST}/",
+                }
+                self._json(200, safe, extra_cookies=_grafana_sso_cookie_headers(data))
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/tailscale":
             if not self._require_auth(api=True):
                 return
@@ -13503,6 +19414,234 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(200, surfshark_status())
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/media/tmdb":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, tmdb_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/media/tmdb/search":
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                qs = parse_qs(urlparse(self.path).query)
+                q = (qs.get("q") or qs.get("query") or [""])[0]
+                page = int((qs.get("page") or ["1"])[0] or 1)
+                kind = (
+                    qs.get("type") or qs.get("media_type") or qs.get("kind") or ["tv"]
+                )[0].strip().lower()
+                if kind in ("movie", "movies", "film", "films"):
+                    self._json(200, _media_tmdb.search_movie(q, page=page))
+                else:
+                    self._json(200, _media_tmdb.search_tv(q, page=page))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path.startswith("/api/media/tmdb/movie/"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                rest = path[len("/api/media/tmdb/movie/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    raise ValueError("tmdb id required")
+                self._json(200, _media_tmdb.movie_details(int(parts[0])))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path.startswith("/api/media/tmdb/tv/"):
+            if not self._require_auth(api=True):
+                return
+            try:
+                if not _media_tmdb:
+                    raise RuntimeError("TMDB helper unavailable")
+                rest = path[len("/api/media/tmdb/tv/") :].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if not parts:
+                    raise ValueError("tmdb id required")
+                tv_id = int(parts[0])
+                qs = parse_qs(urlparse(self.path).query)
+                if len(parts) >= 3 and parts[1] == "season":
+                    season_n = int(parts[2])
+                    self._json(200, _media_tmdb.tv_season(tv_id, season_n))
+                elif qs.get("season"):
+                    self._json(
+                        200, _media_tmdb.tv_season(tv_id, int(qs["season"][0]))
+                    )
+                else:
+                    self._json(200, _media_tmdb.tv_details(tv_id))
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security":
+            if not self._require_auth(api=True):
+                return
+            try:
+                status = build_security_status()
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                lock = ssh_panel_unlock_status(tok)
+                if isinstance(status.get("ssh"), dict):
+                    if lock.get("unlocked"):
+                        status["ssh"]["panel_lock"] = lock
+                    else:
+                        # Hide SSH status details until the panel is unlocked.
+                        status["ssh"] = {"panel_lock": lock, "ok": True}
+                self._json(200, status)
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security/ssh-unlock":
+            if not self._require_auth(api=True):
+                return
+            try:
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                self._json(200, {"ok": True, **ssh_panel_unlock_status(tok)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, **build_vpn_allowlist_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/enroll-status":
+            try:
+                self._json(200, {"ok": True, **auth_app_enroll_status()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                # Header-only TOTP — never accept codes from query strings (logs/Referer).
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-vpn-allowlist",
+                )
+                # Refresh-only: never enroll a new LAN IP from a Circle GET.
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        # Prefer crypto-bound refresh when proof headers present.
+                        pub = str(self.headers.get("X-SM-Circle-Pub") or "").strip()
+                        if pub and self.headers.get("X-SM-Circle-Sig"):
+                            verify_circle_device_proof(
+                                self,
+                                body_text="",
+                                claimed_ip=lan_hint,
+                                require_existing_bind=True,
+                            )
+                            touch_auth_app_device(
+                                lan_ip=lan_hint,
+                                note="Authenticator Circle",
+                                mode="refresh",
+                                pubkey=pub,
+                            )
+                        else:
+                            touch_auth_app_device(
+                                lan_ip=lan_hint,
+                                note="Authenticator Circle",
+                                mode="refresh",
+                            )
+                    except Exception:
+                        pass
+                self._json(200, {"ok": True, **build_vpn_allowlist_status(for_auth_app=True)})
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-register-device",
+                )
+                lan_ip = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                platform = str(self.headers.get("X-SM-Platform") or "")
+                pub = str(self.headers.get("X-SM-Circle-Pub") or "").strip()
+                if pub and self.headers.get("X-SM-Circle-Sig"):
+                    verify_circle_device_proof(
+                        self,
+                        body_text="",
+                        claimed_ip=lan_ip,
+                        require_existing_bind=False,
+                    )
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note="Authenticator app",
+                    platform=platform,
+                    mode="register",
+                    pubkey=pub,
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/circle-lease":
+            try:
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-circle-lease",
+                )
+                client_ip = request_client_ip(self)
+                proof = verify_circle_device_proof(
+                    self,
+                    body_text="",
+                    claimed_ip=client_ip,
+                    require_existing_bind=True,
+                )
+                if proof["ip"] != _normalize_vpn_ip(client_ip):
+                    raise ValueError("Circle proof IP must match this connection")
+                cookie, payload = issue_circle_lease(ip=proof["ip"], key_id=proof["key_id"])
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "lease": payload,
+                        "message": "This network is authorized for portal access on this browser",
+                    },
+                    extra_cookies=[cookie],
+                )
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path in (
+            "/api/security/ssh-login",
+            "/api/security/ssh-keys",
+            "/api/security/ssh-users",
+        ):
+            if not self._require_auth(api=True):
+                return
+            try:
+                ssh = _security_sshd_config()
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                ssh["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, {"ok": True, "ssh": ssh})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/backup":
             if not self._require_auth(api=True):
@@ -13523,7 +19662,14 @@ document.getElementById('f').onsubmit = async (e) => {
     def do_HEAD(self) -> None:  # noqa: N802
         # WebAccess thumbnails probe with HEAD /rpc/thumbnail/...
         path = urlparse(self.path).path
-        if path in ("/login.html", "/api/branding", "/api/health") or path.startswith("/static/"):
+        if path in (
+            "/",
+            "/login.html",
+            "/auth-app.html",
+            "/auth-app-iphone.html",
+            "/api/branding",
+            "/api/health",
+        ) or path.startswith("/static/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             return self.do_GET()
@@ -13571,18 +19717,334 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/api/login":
             try:
                 payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
                 user = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
+                code = str(
+                    payload.get("code")
+                    or payload.get("email_code")
+                    or payload.get("app_code")
+                    or ""
+                ).strip()
+                login_token = str(
+                    payload.get("login_token") or payload.get("pending_token") or ""
+                ).strip()
+                passkey_cred = payload.get("passkey") or payload.get("credential")
             except Exception:
                 self._json(400, {"error": "invalid json"})
                 return
-            if not check_credentials(user, password):
-                log_failed_login(self.client_address[0], user or "?")
+            try:
+                if login_token and isinstance(passkey_cred, dict):
+                    result = complete_portal_login_passkey(
+                        login_token=login_token,
+                        credential=passkey_cred,
+                        client_ip=request_client_ip(self),
+                        circle_lease_ok=circle_lease_valid_for_request(self),
+                    )
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "user": result.get("user") or AUTH_USER,
+                            "message": result.get("message") or "Signed in.",
+                        },
+                        set_cookie=str(result.get("session") or ""),
+                    )
+                    return
+                if login_token and code:
+                    result = complete_portal_login(
+                        login_token=login_token,
+                        code=code,
+                        client_ip=request_client_ip(self),
+                        circle_lease_ok=circle_lease_valid_for_request(self),
+                    )
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "user": result.get("user") or AUTH_USER,
+                            "message": result.get("message") or "Signed in.",
+                        },
+                        set_cookie=str(result.get("session") or ""),
+                    )
+                    return
+                if not user or not password:
+                    self._json(400, {"error": "Username and password required"})
+                    return
+                result = begin_portal_login(
+                    username=user,
+                    password=password,
+                    client_ip=request_client_ip(self),
+                    circle_lease_ok=circle_lease_valid_for_request(self),
+                )
+                # Never create a session until 2FA succeeds.
+                self._json(200, result)
+            except PermissionError as exc:
+                log_failed_login(request_client_ip(self), user or "?")
                 time.sleep(0.35)
-                self._json(401, {"error": "Invalid username or password"})
+                self._json(401, {"error": str(exc) or "Invalid username or password"})
+            except ValueError as exc:
+                time.sleep(0.25)
+                self._json(403, {"error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/api/security/circle-drift":
+            if not self._require_auth(api=True):
                 return
-            token = create_session()
-            self._json(200, {"ok": True, "user": AUTH_USER}, set_cookie=token)
+            try:
+                report = sm_vpn_circle.run_circle_drift_check(
+                    smtp_send=_smtp_send_email,
+                    email_to=EMAIL_CODE_TO,
+                    email_on_drift=False,
+                )
+                self._json(200, {"ok": True, **report})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/passkey":
+            if not self._require_auth(api=True):
+                return
+            try:
+                payload = self._read_json() if self.command == "POST" else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                action = str(payload.get("action") or "status").strip().lower()
+                if self.command == "GET" or action == "status":
+                    self._json(200, {"ok": True, **sm_auth.webauthn_status()})
+                    return
+                if not self._require_ssh_panel_unlock():
+                    return
+                if action in ("register_begin", "begin_register"):
+                    opts = sm_auth.begin_webauthn_registration(
+                        user_id=AUTH_USER, user_name=AUTH_USER
+                    )
+                    self._json(200, {"ok": True, "options": opts})
+                    return
+                if action in ("register_finish", "finish_register"):
+                    result = sm_auth.finish_webauthn_registration(
+                        credential=payload.get("credential") or {},
+                        name=str(payload.get("name") or ""),
+                    )
+                    self._json(200, result)
+                    return
+                if action in ("remove", "delete"):
+                    result = sm_auth.remove_webauthn_credential(
+                        str(payload.get("id") or payload.get("credential_id") or "")
+                    )
+                    self._json(200, result)
+                    return
+                self._json(400, {"ok": False, "error": "Unknown passkey action"})
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/login/passkey-options":
+            # Public after password step: client already has login_token.
+            try:
+                payload = self._read_json()
+                token = str((payload or {}).get("login_token") or "").strip()
+                with _pending_logins_lock:
+                    pending = _pending_logins.get(token) if token else None
+                if not pending or float(pending.get("exp") or 0) <= time.time():
+                    raise ValueError("Login session expired")
+                opts = sm_auth.begin_webauthn_authentication()
+                self._json(200, {"ok": True, "options": opts})
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/email-code/send":
+            try:
+                ip = request_client_ip(self)
+                result = send_email_test_code(
+                    ip, key=f"email-test:{ip}", purpose="email-test"
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(429, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/email-code/verify":
+            try:
+                payload = self._read_json()
+                code = str((payload or {}).get("code") or "")
+                ip = request_client_ip(self)
+                result = verify_email_test_code(
+                    ip, code, key=f"email-test:{ip}", purpose="email-test"
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.25)
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/vpn-allowlist":
+            try:
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b"{}"
+                body_text = raw.decode("utf-8") if raw else "{}"
+                try:
+                    payload = json.loads(body_text or "{}")
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(
+                    code,
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-vpn-allowlist",
+                )
+                action = str(payload.get("action") or "").strip().lower()
+                target_ip = _normalize_vpn_ip(payload.get("ip") or "")
+                pub = str(
+                    payload.get("pubkey")
+                    or self.headers.get("X-SM-Circle-Pub")
+                    or ""
+                ).strip()
+                # Approve binds a unique Ed25519 key to the IP (anti-spoof).
+                if action == "approve":
+                    if not pub:
+                        raise ValueError("pubkey required to bind circle IP")
+                    # First bind: verify signature against provided pubkey (not yet stored).
+                    verify_circle_device_proof(
+                        self,
+                        body_text=body_text,
+                        claimed_ip=target_ip,
+                        require_existing_bind=False,
+                    )
+                elif self.headers.get("X-SM-Circle-Sig"):
+                    # Mutations with an existing bind must prove key possession.
+                    claim = target_ip or _normalize_vpn_ip(
+                        self.headers.get("X-SM-Lan-Ip") or ""
+                    )
+                    if claim and _circle_pubkey_for_ip(claim):
+                        verify_circle_device_proof(
+                            self,
+                            body_text=body_text,
+                            claimed_ip=claim,
+                            require_existing_bind=True,
+                        )
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                if lan_hint and _is_home_lan_ipv4(lan_hint):
+                    try:
+                        touch_auth_app_device(
+                            lan_ip=lan_hint,
+                            note="Authenticator Circle",
+                            platform=str(
+                                self.headers.get("X-SM-Platform")
+                                or payload.get("platform")
+                                or ""
+                            ),
+                            mode="refresh",
+                            pubkey=pub if _circle_pubkey_for_ip(lan_hint) else "",
+                        )
+                    except Exception:
+                        pass
+                result = mutate_vpn_allowlist(
+                    action=action,
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or "from authenticator app"),
+                    source="auth-app",
+                    pubkey=pub,
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/register-device":
+            try:
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b"{}"
+                body_text = raw.decode("utf-8") if raw else "{}"
+                try:
+                    payload = json.loads(body_text or "{}")
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                code = _auth_app_totp_from_request(self) or str(payload.get("code") or "")
+                require_auth_app_totp(
+                    code,
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-register-device",
+                )
+                # Prefer header LAN IP; body lan_ip is fallback for older clients.
+                lan_ip = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
+                )
+                pub = str(
+                    payload.get("pubkey")
+                    or self.headers.get("X-SM-Circle-Pub")
+                    or ""
+                ).strip()
+                if pub:
+                    verify_circle_device_proof(
+                        self,
+                        body_text=body_text,
+                        claimed_ip=lan_ip,
+                        require_existing_bind=bool(_circle_pubkey_for_ip(lan_ip)),
+                    )
+                result = touch_auth_app_device(
+                    lan_ip=lan_ip,
+                    note=str(payload.get("note") or "Authenticator app"),
+                    platform=str(
+                        self.headers.get("X-SM-Platform")
+                        or payload.get("platform")
+                        or ""
+                    ),
+                    mode="register",
+                    pubkey=pub,
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.2)
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/auth-app/circle-lease":
+            try:
+                raw_len = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(raw_len) if raw_len else b""
+                body_text = raw.decode("utf-8") if raw else ""
+                require_auth_app_totp(
+                    _auth_app_totp_from_request(self),
+                    client_ip=request_client_ip(self),
+                    purpose="auth-app-circle-lease",
+                )
+                client_ip = request_client_ip(self)
+                proof = verify_circle_device_proof(
+                    self,
+                    body_text=body_text,
+                    claimed_ip=client_ip,
+                    require_existing_bind=True,
+                )
+                if proof["ip"] != _normalize_vpn_ip(client_ip):
+                    raise ValueError("Circle proof IP must match this connection")
+                cookie, payload = issue_circle_lease(ip=proof["ip"], key_id=proof["key_id"])
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "lease": payload,
+                        "message": "This network is authorized for portal access on this browser",
+                    },
+                    extra_cookies=[cookie],
+                )
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/logout":
             destroy_session(parse_session_cookie(self.headers.get("Cookie")))
@@ -13677,6 +20139,29 @@ document.getElementById('f').onsubmit = async (e) => {
                     "yes",
                     "on",
                 )
+                full_form = (qs.get("full_form") or qs.get("tv_form") or ["0"])[0] in (
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                )
+                show_name = (
+                    qs.get("show")
+                    or qs.get("show_name")
+                    or qs.get("movie")
+                    or qs.get("title")
+                    or [""]
+                )[0]
+                year = (qs.get("year") or [""])[0]
+                episode_title = (
+                    qs.get("episode_title") or qs.get("ep_title") or [""]
+                )[0]
+                season_raw = (qs.get("season") or qs.get("s") or [""])[0]
+                episode_raw = (qs.get("episode") or qs.get("e") or [""])[0]
+                tmdb_raw = (qs.get("tmdb_id") or qs.get("tmdb") or [""])[0]
+                season = int(season_raw) if str(season_raw).isdigit() else None
+                episode = int(episode_raw) if str(episode_raw).isdigit() else None
+                tmdb_id = int(tmdb_raw) if str(tmdb_raw).isdigit() else None
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 if length <= 0:
                     raise ValueError("empty upload")
@@ -13690,7 +20175,17 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(
                     200,
                     elements_upload_media(
-                        library, filename, data, process=process
+                        library,
+                        filename,
+                        data,
+                        process=process,
+                        show_name=show_name,
+                        year=year,
+                        season=season,
+                        episode=episode,
+                        episode_title=episode_title,
+                        tmdb_id=tmdb_id,
+                        full_form=full_form,
                     ),
                 )
             except ValueError as exc:
@@ -13784,12 +20279,280 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/security/ssh-unlock":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                action = str(payload.get("action") or "unlock").strip().lower()
+                if action in ("lock", "relock"):
+                    result = lock_ssh_panel(tok)
+                elif action in ("2fa", "two_factor", "set_2fa"):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    enabled_raw = payload.get("enabled", payload.get("two_factor_enabled"))
+                    if isinstance(enabled_raw, str):
+                        enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
+                    else:
+                        enabled = bool(enabled_raw)
+                    result = set_ssh_panel_2fa(
+                        tok,
+                        enabled=enabled,
+                        password=str(
+                            payload.get("password") or payload.get("portal_password") or ""
+                        ),
+                        code=str(
+                            payload.get("code")
+                            or payload.get("email_code")
+                            or payload.get("app_code")
+                            or ""
+                        ),
+                        client_ip=self.client_address[0],
+                        method=str(
+                            payload.get("method")
+                            or payload.get("two_factor_method")
+                            or ""
+                        ),
+                        enroll_secret=str(
+                            payload.get("enroll_secret")
+                            or payload.get("totp_secret")
+                            or ""
+                        ),
+                    )
+                elif action in (
+                    "device_enroll",
+                    "auth_enroll",
+                    "enroll_devices",
+                    "new_devices",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    unlocked_raw = payload.get(
+                        "unlocked",
+                        payload.get(
+                            "device_enroll_unlocked",
+                            payload.get("enroll_unlocked", payload.get("enabled")),
+                        ),
+                    )
+                    if isinstance(unlocked_raw, str):
+                        unlocked = unlocked_raw.strip().lower() in (
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                            "unlock",
+                        )
+                    else:
+                        unlocked = bool(unlocked_raw)
+                    result = set_auth_app_device_enroll(
+                        tok,
+                        unlocked=unlocked,
+                        device_ip=str(
+                            payload.get("device_ip")
+                            or payload.get("lan_ip")
+                            or payload.get("ip")
+                            or ""
+                        ),
+                    )
+                elif action in (
+                    "remove_device",
+                    "device_remove",
+                    "revoke_device",
+                    "auth_app_remove",
+                ):
+                    if not self._require_ssh_panel_unlock():
+                        return
+                    result = remove_auth_app_device(
+                        tok, ip=str(payload.get("ip") or payload.get("lan_ip") or "")
+                    )
+                else:
+                    result = unlock_ssh_panel(
+                        tok,
+                        str(payload.get("password") or payload.get("portal_password") or ""),
+                        code=str(
+                            payload.get("code")
+                            or payload.get("email_code")
+                            or payload.get("app_code")
+                            or ""
+                        ),
+                        client_ip=request_client_ip(self),
+                    )
+                # Attach fresh ssh snapshot for UI refresh (read-only).
+                ssh = _security_sshd_config()
+                lock = ssh_panel_unlock_status(tok)
+                if result.get("unlocked") or lock.get("unlocked"):
+                    ssh["panel_lock"] = lock
+                    result["ssh"] = ssh
+                else:
+                    # Keep details hidden while locked; still surface 2FA flags.
+                    result["ssh"] = {"panel_lock": {**lock, **{
+                        k: result[k]
+                        for k in (
+                            "need_code",
+                            "two_factor_enabled",
+                            "two_factor_method",
+                            "auth_app_path",
+                            "email_to",
+                        )
+                        if k in result
+                    }}, "ok": True}
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(403, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/vpn-allowlist":
+            if not self._require_auth(api=True):
+                return
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                result = mutate_vpn_allowlist(
+                    action=str(payload.get("action") or ""),
+                    ip=str(payload.get("ip") or ""),
+                    note=str(payload.get("note") or ""),
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/ssh-login":
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                method = str(
+                    payload.get("method")
+                    or payload.get("login_method")
+                    or payload.get("mode")
+                    or ""
+                ).strip()
+                root = payload.get("permit_root_login")
+                if root is None:
+                    root = payload.get("root_login")
+                if method:
+                    result = apply_ssh_login_method(
+                        method,
+                        permit_root_login=str(root) if root is not None else None,
+                    )
+                elif root is not None:
+                    result = apply_ssh_root_login(str(root))
+                else:
+                    raise ValueError(
+                        "Provide method (password_and_keys|keys_only) "
+                        "and/or permit_root_login (yes|prohibit-password|no)"
+                    )
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/ssh-keys":
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                action = str(
+                    payload.get("action") or payload.get("op") or "add"
+                ).strip().lower()
+                if action in ("add", "create", "append"):
+                    result = add_ssh_authorized_key(
+                        str(payload.get("public_key") or payload.get("key") or "")
+                    )
+                elif action in ("generate", "auto", "auto_create", "autocreate"):
+                    result = generate_ssh_authorized_key(
+                        comment=str(payload.get("comment") or ""),
+                        username=str(payload.get("username") or "root"),
+                        also_root=bool(payload.get("also_root")),
+                    )
+                elif action in ("remove", "delete", "del"):
+                    idx = payload.get("index")
+                    result = remove_ssh_authorized_key(
+                        index=int(idx) if idx is not None and str(idx) != "" else None,
+                        fingerprint=(
+                            str(payload.get("fingerprint") or "").strip() or None
+                        ),
+                    )
+                else:
+                    raise ValueError("action must be add, generate, or remove")
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/security/ssh-users":
+            if not self._require_ssh_panel_unlock():
+                return
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                result = create_ssh_login_user(
+                    str(payload.get("username") or payload.get("user") or ""),
+                    sudo=bool(
+                        payload.get("sudo", True)
+                        if "sudo" in payload
+                        else True
+                    ),
+                    generate_key=bool(
+                        payload.get("generate_key", True)
+                        if "generate_key" in payload
+                        else True
+                    ),
+                    public_key=str(
+                        payload.get("public_key") or payload.get("key") or ""
+                    ),
+                    comment=str(payload.get("comment") or ""),
+                    also_root=bool(payload.get("also_root")),
+                )
+                tok = parse_session_cookie(self.headers.get("Cookie"))
+                if isinstance(result.get("ssh"), dict):
+                    result["ssh"]["panel_lock"] = ssh_panel_unlock_status(tok)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/backup":
+            try:
+                payload = self._read_json()
+                result = apply_backup_settings(
+                    payload if isinstance(payload, dict) else {}
+                )
+                # Always 200 so the UI can render status + token errors.
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(200, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path == "/api/backup/run":
             try:
                 result = run_backup_now()
-                self._json(200 if result.get("ok") else 400, result)
+                # Always 200 so the UI can show stdout/stderr on failure.
+                self._json(200, result)
             except Exception as exc:
-                self._json(500, {"error": str(exc)})
+                self._json(500, {"ok": False, "error": str(exc)})
             return
         if path == "/api/bond":
             try:
