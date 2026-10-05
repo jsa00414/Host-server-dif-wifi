@@ -46,8 +46,12 @@ stalls Windows TLS (`ERR_CONNECTION_TIMED_OUT`) due to MSS/MTU.
 - Clamps LAN SYN MSS toward portal; OVPN MTU 1200
 - Rejects non-circle LAN → VIP so DNAT cannot skip the trust circle
 
-`ensure-portal-http1-alpn.sh` forces portal TLS ALPN to `http/1.1` only (Surface
-Chrome HTTP/2 + abort path otherwise shows `ERR_HTTP2_PROTOCOL_ERROR`).
+`ensure-portal-http1-alpn.sh` (run on the VPS):
+
+- Forces portal TLS ALPN to `http/1.1` only
+- Removes `@denied_wan` / `abort` from **portal only** (campus Shared NAT was
+  producing Chrome `ERR_EMPTY_RESPONSE` when Surface missed the VIP relay).
+  Login auth still applies; other hostnames keep campus deny.
 
 ```bash
 bash /opt/ikev2/ensure-flint-portal-via-ovpn.sh
