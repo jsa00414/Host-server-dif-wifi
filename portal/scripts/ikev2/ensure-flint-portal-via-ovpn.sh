@@ -143,14 +143,10 @@ address=/portal.vpstruelord.com/$VIP
 address=/router.vpstruelord.com/$VIP
 # keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
 address=/keys.vpstruelord.com/$VPS
-# Chrome/Edge Secure DNS canary — NXDOMAIN disables DoH so Windows cannot
-# bypass portal→VIP rewrite (public/campus path times out on the PC).
+# Chrome/Edge Secure DNS canary — NXDOMAIN disables DoH so Windows uses
+# router DNS (portal→VIP). Do not REDIRECT :53 (breaks some Windows DNS probes).
 server=/use-application-dns.net/
 local=/use-application-dns.net/
-server=/mask.icloud.com/
-local=/mask.icloud.com/
-server=/mask-h2.icloud.com/
-local=/mask-h2.icloud.com/
 EOF
 
 if command -v uci >/dev/null 2>&1; then
@@ -166,18 +162,20 @@ if command -v uci >/dev/null 2>&1; then
   uci set dhcp.sm_keys=domain
   uci set dhcp.sm_keys.name="keys.vpstruelord.com"
   uci set dhcp.sm_keys.ip="$VPS"
+  # Pin LAN DHCP DNS to the router so Windows does not keep a stale resolver.
+  if ! uci -q get dhcp.lan.dhcp_option 2>/dev/null | grep -qE '(^|,| )6,'; then
+    uci add_list dhcp.lan.dhcp_option='6,192.168.8.1'
+  fi
   uci commit dhcp
 fi
 
 killall -HUP dnsmasq 2>/dev/null || true
 
-# Force LAN DNS through local dnsmasq (catches apps that ignore DHCP DNS).
+# Drop any prior DNS REDIRECT experiments (they caused Windows DNS_PROBE failures).
 while iptables -t nat -S PREROUTING 2>/dev/null | grep -q SM-DNS-FORCE; do
   line="$(iptables -t nat -S PREROUTING | grep SM-DNS-FORCE | head -1)"
   eval "iptables -t nat ${{line/-A/-D}}" 2>/dev/null || break
 done
-iptables -t nat -I PREROUTING 1 -i br-lan -p udp --dport 53 -m comment --comment SM-DNS-FORCE -j REDIRECT --to-ports 53
-iptables -t nat -I PREROUTING 1 -i br-lan -p tcp --dport 53 -m comment --comment SM-DNS-FORCE -j REDIRECT --to-ports 53
 
 conntrack -D -d "$VPS" >/dev/null 2>&1 || true
 conntrack -D -d "$VIP" >/dev/null 2>&1 || true
