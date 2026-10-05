@@ -1777,6 +1777,12 @@ GRAFANA_PUBLIC_HOST = (
 )
 GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "172.18.0.1").strip() or "172.18.0.1"
 GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3016") or "3016")
+FLOW_PUBLIC_HOST = (
+    os.environ.get("FLOW_PUBLIC_HOST", "flow.vpstruelord.com").strip()
+    or "flow.vpstruelord.com"
+)
+FLOW_HOST = os.environ.get("FLOW_HOST", "172.18.0.1").strip() or "172.18.0.1"
+FLOW_PORT = int(os.environ.get("FLOW_PORT", "3014") or "3014")
 PLEX_CTID = os.environ.get("PLEX_CTID", "101").strip() or "101"
 
 PROXMOX_SSH_HOST = os.environ.get("PROXMOX_SSH_HOST", PROXMOX_HOST).strip() or PROXMOX_HOST
@@ -4117,6 +4123,12 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
         out["name"] = str(out.get("name") or "grafana").strip() or "grafana"
+    elif domain == FLOW_PUBLIC_HOST.lower():
+        out["target_host"] = FLOW_HOST
+        out["target_port"] = int(out.get("target_port") or FLOW_PORT)
+        out["name"] = str(out.get("name") or "flowgorithm").strip() or "flowgorithm"
+        # Public classroom / homework app — never require VPN.
+        out["vpn_only"] = False
     return out
 
 
@@ -4201,6 +4213,40 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def ensure_flow_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee flow.vpstruelord.com is present and public (no VPN)."""
+    out = [dict(r) for r in (rules or [])]
+    domain = FLOW_PUBLIC_HOST.lower()
+    for i, rule in enumerate(out):
+        if str(rule.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **rule,
+                    "enabled": rule.get("enabled", True),
+                    "external": False,
+                    "target_host": FLOW_HOST,
+                    "target_port": int(rule.get("target_port") or FLOW_PORT),
+                    "name": rule.get("name") or "flowgorithm",
+                    "vpn_only": False,
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": FLOW_HOST,
+                "target_port": FLOW_PORT,
+                "name": "flowgorithm",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4210,7 +4256,9 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    return ensure_flow_hookup(
+        ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    )
 
 
 def _hookup_proxy_upstream(rule: dict) -> str:
