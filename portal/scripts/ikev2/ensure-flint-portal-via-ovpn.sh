@@ -207,7 +207,7 @@ iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p tcp -m multiport 
 mkdir -p /tmp/dnsmasq.d
 cat >/tmp/dnsmasq.d/sm-portal-via-ovpn.conf <<EOF
 # Managed by ensure-flint-portal-via-ovpn.sh
-address=/portal.vpstruelord.com/$VIP
+address=/portal.vpstruelord.com/192.168.8.1
 address=/router.vpstruelord.com/$VIP
 # keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
 address=/keys.vpstruelord.com/$VPS
@@ -233,7 +233,7 @@ if command -v uci >/dev/null 2>&1; then
   uci -q delete dhcp.sm_portal
   uci set dhcp.sm_portal=domain
   uci set dhcp.sm_portal.name="portal.vpstruelord.com"
-  uci set dhcp.sm_portal.ip="$VIP"
+  uci set dhcp.sm_portal.ip="192.168.8.1"
   uci -q delete dhcp.sm_router
   uci set dhcp.sm_router=domain
   uci set dhcp.sm_router.name="router.vpstruelord.com"
