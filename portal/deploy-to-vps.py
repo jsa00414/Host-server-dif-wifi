@@ -15,6 +15,7 @@ DEFAULT_USER = "root"
 
 UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "server.py", f"{REMOTE_UI}/server.py"),
+    (ROOT / "media_tmdb.py", f"{REMOTE_UI}/media_tmdb.py"),
     (ROOT / "static/index.html", f"{REMOTE_UI}/static/index.html"),
     (ROOT / "static/login.html", f"{REMOTE_UI}/static/login.html"),
     (ROOT / "static/files.html", f"{REMOTE_UI}/static/files.html"),
