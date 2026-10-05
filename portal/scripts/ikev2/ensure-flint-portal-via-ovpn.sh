@@ -137,11 +137,17 @@ RELAY_PORT=9443
 if command -v socat >/dev/null 2>&1; then
   if ! netstat -lntp 2>/dev/null | grep -q ":${{RELAY_PORT}} "; then
     pkill -f "TCP-LISTEN:${{RELAY_PORT}}" 2>/dev/null || true
-    socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,reuseaddr TCP:${{VIP}}:443 >/tmp/sm-portal-relay.log 2>&1 &
+    socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,reuseaddr,keepalive TCP:${{VIP}}:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &
     echo $! >/tmp/sm-portal-relay.pid
   fi
   iptables -t filter -C INPUT -i br-lan -p tcp --dport ${{RELAY_PORT}} -m comment --comment SM-PORTAL-RELAY -j ACCEPT 2>/dev/null || \
     iptables -t filter -I INPUT 1 -i br-lan -p tcp --dport ${{RELAY_PORT}} -m comment --comment SM-PORTAL-RELAY -j ACCEPT
+  # OVPN MSS/MTU: OUTPUT clamp is required for socat→VIP (locally originated).
+  iptables -t mangle -C OUTPUT -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || \
+    iptables -t mangle -I OUTPUT 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000
+  iptables -t mangle -C FORWARD -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || \
+    iptables -t mangle -I FORWARD 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000
+  ip link set ovpnclient1 mtu 1280 2>/dev/null || true
   # Persist keep-alive (values baked in; cron restarts socat if it dies)
   mkdir -p /etc/firewall.user.d
   printf '%s\n' \
@@ -151,11 +157,14 @@ if command -v socat >/dev/null 2>&1; then
     "VIP=${{VIP}}" \
     'if command -v socat >/dev/null 2>&1; then' \
     '  if ! netstat -lntp 2>/dev/null | grep -q ":$RELAY "; then' \
-    '    socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,reuseaddr TCP:$VIP:443 >/tmp/sm-portal-relay.log 2>&1 &' \
+    '    socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,reuseaddr,keepalive TCP:$VIP:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &' \
     '    echo $! >/tmp/sm-portal-relay.pid' \
     '  fi' \
     'fi' \
     'iptables -w -C INPUT -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT' \
+    'iptables -w -t mangle -C OUTPUT -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || iptables -w -t mangle -I OUTPUT 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000' \
+    'iptables -w -t mangle -C FORWARD -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || iptables -w -t mangle -I FORWARD 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000' \
+    'ip link set ovpnclient1 mtu 1280 2>/dev/null || true' \
     >/etc/firewall.user.d/sm-portal-relay.sh
   chmod +x /etc/firewall.user.d/sm-portal-relay.sh
   grep -q sm-portal-relay /etc/firewall.user 2>/dev/null || \
