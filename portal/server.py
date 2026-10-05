@@ -5066,12 +5066,20 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
     Proxy all paths to the panel (it enforces public vs session routes). A tight
     path allowlist previously 404'd legitimate assets/APIs and looked like a
     dead site. Alt-Svc clear matches portal — Caddy is h1/h2 only behind sslh.
+
+    Root `/` must send iPhone/iPad to auth-app-iphone.html (Face ID / passkey
+    flow). The Android page is a broken UX on iOS Safari.
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     lines = [
         f"{public} {{",
         "\tencode gzip",
+        "\t@ios_root {",
+        "\t\tpath /",
+        "\t\theader_regexp User-Agent (?i)(iphone|ipad|ipod)",
+        "\t}",
+        "\tredir @ios_root /auth-app-iphone.html 302",
         "\t@root path /",
         "\tredir @root /auth-app.html 302",
         f"\treverse_proxy {upstream} {{",

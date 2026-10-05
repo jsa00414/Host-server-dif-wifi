@@ -15,6 +15,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
   <title>ServerManager Authenticator</title>
+  <script>
+    /* iPhone/iPad must use the Face ID page — root used to land here. */
+    (function () {
+      try {
+        if (/iPhone|iPad|iPod/i.test(navigator.userAgent || "")) {
+          location.replace("/auth-app-iphone.html" + location.search + location.hash);
+        }
+      } catch (_) {}
+    })();
+  </script>
   <style>
     :root {
       --bg0: #0a0f0d;
