@@ -5062,6 +5062,10 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
     campus WAN (e.g. 192.81.235.246); blocking that IP made QR enroll look
     unreachable. Portal/router stay campus-denied; keys is gated by enroll unlock
     + TOTP secret instead.
+
+    Proxy all paths to the panel (it enforces public vs session routes). A tight
+    path allowlist previously 404'd legitimate assets/APIs and looked like a
+    dead site. Alt-Svc clear matches portal — Caddy is h1/h2 only behind sslh.
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
@@ -5070,30 +5074,19 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
         "\tencode gzip",
         "\t@root path /",
         "\tredir @root /auth-app.html 302",
-        "\t@auth path /auth-app.html /auth-app-iphone.html /api/auth-app/* "
-        "/static/auth-app-sw.js /static/auth-app-iphone-sw.js "
-        "/static/auth-app.html /static/auth-app-iphone.html "
-        "/static/auth-app.webmanifest /static/auth-app-iphone.webmanifest "
-        "/static/auth-app-icon-180.png /static/auth-app-icon-192.png "
-        "/static/auth-app-icon-512.png /static/sm-circle-crypto.js "
-        "/download/ServerManagerAuthenticator.exe /api/auth-app/windows-exe",
-        "\thandle @auth {",
-        f"\t\treverse_proxy {upstream} {{",
-        "\t\t\theader_up Host {host}",
-        "\t\t\theader_up X-Forwarded-Host {host}",
-        "\t\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\t\theader_up X-Forwarded-For {remote_host}",
-        "\t\t\theader_up X-Real-IP {remote_host}",
-        "\t\t}",
-        "\t}",
-        "\thandle {",
-        '\t\trespond "Not Found" 404',
+        f"\treverse_proxy {upstream} {{",
+        "\t\theader_up Host {host}",
+        "\t\theader_up X-Forwarded-Host {host}",
+        "\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\theader_up X-Forwarded-For {remote_host}",
+        "\t\theader_up X-Real-IP {remote_host}",
         "\t}",
         "\theader {",
         '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
         "\t\tX-Content-Type-Options nosniff",
         "\t\tReferrer-Policy strict-origin-when-cross-origin",
         '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        '\t\tAlt-Svc "clear"',
         "\t}",
         "}",
         "",
@@ -19669,7 +19662,9 @@ document.getElementById('f').onsubmit = async (e) => {
             "/auth-app-iphone.html",
             "/api/branding",
             "/api/health",
-        ) or path.startswith("/static/"):
+            "/api/auth-app/windows-exe",
+            "/download/ServerManagerAuthenticator.exe",
+        ) or path.startswith("/static/") or path.startswith("/api/auth-app/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             return self.do_GET()

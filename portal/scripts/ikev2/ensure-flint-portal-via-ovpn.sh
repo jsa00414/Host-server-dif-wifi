@@ -141,6 +141,8 @@ cat >/tmp/dnsmasq.d/sm-portal-via-ovpn.conf <<EOF
 # Managed by ensure-flint-portal-via-ovpn.sh
 address=/portal.vpstruelord.com/$VIP
 address=/router.vpstruelord.com/$VIP
+# keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
+address=/keys.vpstruelord.com/$VPS
 EOF
 
 if command -v uci >/dev/null 2>&1; then
@@ -152,6 +154,10 @@ if command -v uci >/dev/null 2>&1; then
   uci set dhcp.sm_router=domain
   uci set dhcp.sm_router.name="router.vpstruelord.com"
   uci set dhcp.sm_router.ip="$VIP"
+  uci -q delete dhcp.sm_keys
+  uci set dhcp.sm_keys=domain
+  uci set dhcp.sm_keys.name="keys.vpstruelord.com"
+  uci set dhcp.sm_keys.ip="$VPS"
   uci commit dhcp
 fi
 
@@ -169,6 +175,14 @@ print(base64.b64encode(remote.encode()).decode())
 PY
 )"
 
-echo "$REMOTE_B64" | base64 -d | sshpass -e ssh -o StrictHostKeyChecking=no \
+# Dropbear can hang mid-session; never block the systemd timer for tens of minutes.
+echo "$REMOTE_B64" | base64 -d | timeout 45 sshpass -e ssh -o StrictHostKeyChecking=no \
   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-  -o ConnectTimeout=12 "root@${FLINT_HOST}" sh -s
+  -o ConnectTimeout=12 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
+  "root@${FLINT_HOST}" sh -s
+rc=$?
+if [[ "$rc" -eq 124 ]]; then
+  echo "flint-portal-via-ovpn: ssh timed out after 45s"
+  exit 1
+fi
+exit "$rc"
