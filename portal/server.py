@@ -11355,9 +11355,15 @@ def complete_portal_login(
     login_token: str,
     code: str,
     client_ip: str = "",
+    circle_lease_ok: bool = False,
 ) -> dict:
     """Step 2: verify 2FA code for a pending login, then create session."""
     ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
     token = str(login_token or "").strip()
     if not token:
         raise ValueError("Login session expired. Sign in again.")
@@ -11367,6 +11373,13 @@ def complete_portal_login(
         pending = _pending_logins.get(token)
     if not pending or float(pending.get("exp") or 0) <= now:
         raise ValueError("Login session expired. Sign in again.")
+    pending_ip = _normalize_vpn_ip(pending.get("ip") or "")
+    client_n = _normalize_vpn_ip(client_ip or "")
+    if pending_ip and client_n and pending_ip != client_n:
+        raise PermissionError(
+            "Login session is bound to a different network. Sign in again from the "
+            "same network."
+        )
     method = str(pending.get("method") or "email")
     if method == "app":
         if not _verify_any_enroll_totp(code, purpose="portal-login"):
@@ -11419,9 +11432,15 @@ def complete_portal_login_passkey(
     login_token: str,
     credential: dict,
     client_ip: str = "",
+    circle_lease_ok: bool = False,
 ) -> dict:
     """Step 2 alternate: WebAuthn passkey assertion after password OK."""
     ip_jail_assert_allowed(client_ip)
+    if client_needs_circle_lease(client_ip) and not circle_lease_ok:
+        raise PermissionError(
+            "This IP is key-bound in the trust circle. Open Authenticator on this "
+            "network and tap Authorize network, then sign in again."
+        )
     token = str(login_token or "").strip()
     if not token:
         raise ValueError("Login session expired. Sign in again.")
@@ -11431,6 +11450,13 @@ def complete_portal_login_passkey(
         pending = _pending_logins.get(token)
     if not pending or float(pending.get("exp") or 0) <= now:
         raise ValueError("Login session expired. Sign in again.")
+    pending_ip = _normalize_vpn_ip(pending.get("ip") or "")
+    client_n = _normalize_vpn_ip(client_ip or "")
+    if pending_ip and client_n and pending_ip != client_n:
+        raise PermissionError(
+            "Login session is bound to a different network. Sign in again from the "
+            "same network."
+        )
     try:
         sm_auth.finish_webauthn_authentication(credential=credential)
     except Exception:
@@ -12840,6 +12866,67 @@ def verify_totp_code(secret_b32: str, code: str, *, window: int = 1) -> bool:
 _totp_used: dict[str, dict] = {}
 _totp_used_lock = threading.Lock()
 TOTP_USED_TTL_SECONDS = 120
+TOTP_USED_PATH = Path(
+    os.environ.get(
+        "TOTP_USED_PATH",
+        "/opt/servermanager/panel/totp-used.json",
+    )
+)
+
+
+def _persist_totp_used_unlocked() -> None:
+    """Survive panel restarts so purpose-binding holds across the 30s window."""
+    try:
+        now = time.time()
+        payload = {
+            "used": {
+                str(k): {
+                    "purpose": str(v.get("purpose") or ""),
+                    "exp": float(v.get("exp") or 0),
+                }
+                for k, v in _totp_used.items()
+                if float(v.get("exp") or 0) > now
+            }
+        }
+        TOTP_USED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = TOTP_USED_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(TOTP_USED_PATH)
+        try:
+            os.chmod(TOTP_USED_PATH, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _load_totp_used() -> None:
+    if not TOTP_USED_PATH.is_file():
+        return
+    try:
+        data = json.loads(TOTP_USED_PATH.read_text(encoding="utf-8"))
+        rows = data.get("used") if isinstance(data, dict) else None
+        if not isinstance(rows, dict):
+            return
+        now = time.time()
+        with _totp_used_lock:
+            for key, meta in rows.items():
+                if not isinstance(meta, dict):
+                    continue
+                try:
+                    exp_f = float(meta.get("exp") or 0)
+                except Exception:
+                    continue
+                if key and exp_f > now:
+                    _totp_used[str(key)] = {
+                        "purpose": str(meta.get("purpose") or ""),
+                        "exp": exp_f,
+                    }
+    except Exception:
+        pass
+
+
+_load_totp_used()
 
 
 def _totp_secret_fingerprint(secret_b32: str) -> str:
@@ -12865,6 +12952,7 @@ def verify_and_consume_totp(
 
     Portal sign-in and Settings SSH unlock share the same authenticator secret; without
     consumption, one 6-digit code would satisfy both within the same 30s window.
+    Burns persist to disk so a panel restart cannot revive a just-used code.
     """
     purpose_n = str(purpose or "").strip().lower()
     if not purpose_n:
@@ -12893,6 +12981,7 @@ def verify_and_consume_totp(
             "purpose": purpose_n,
             "exp": now + max(60, TOTP_USED_TTL_SECONDS),
         }
+        _persist_totp_used_unlocked()
     return True
 
 
@@ -12971,6 +13060,11 @@ def auth_app_device_enroll_unlocked() -> bool:
                 totp_secret=str(st.get("totp_secret") or ""),
                 device_enroll_unlocked=False,
             )
+            # Pending QR secrets must not remain valid after unlock expires.
+            try:
+                sm_auth.revoke_all_pending_secrets()
+            except Exception:
+                pass
             lan_gate = Path(
                 os.environ.get(
                     "LAN_CIRCLE_FLINT_GATE_SCRIPT",
@@ -13113,7 +13207,11 @@ def set_auth_app_device_enroll(
                 "Unlock requires the registering device LAN IP (192.168.8.x) — "
                 "only that phone can enroll this secret"
             )
-        enroll_row = sm_auth.generate_enroll_secret(for_ip=for_ip, label=f"enroll-{for_ip}")
+        enroll_row = sm_auth.generate_enroll_secret(
+            for_ip=for_ip,
+            label=f"enroll-{for_ip}",
+            ttl_seconds=max(60, AUTH_APP_ENROLL_UNLOCK_SECONDS),
+        )
         _write_ssh_panel_2fa(
             enabled=bool(cfg.get("enabled")),
             method=str(cfg.get("method") or "app"),
@@ -13131,6 +13229,10 @@ def set_auth_app_device_enroll(
             device_enroll_for_ip="",
             device_enroll_secret_id="",
         )
+        try:
+            sm_auth.revoke_all_pending_secrets()
+        except Exception:
+            pass
     lan_gate = Path(
         os.environ.get(
             "LAN_CIRCLE_FLINT_GATE_SCRIPT",
@@ -13711,11 +13813,23 @@ def _run_vpn_peer_acl_sync() -> str:
 
 
 def verify_auth_app_totp(code: str, *, purpose: str = "auth-app") -> bool:
-    """Validate a TOTP from the phone authenticator PWA against enrolled secrets."""
+    """Validate a TOTP from the phone authenticator PWA against enrolled secrets.
+
+    Pending enroll secrets are accepted only while Security enroll unlock is
+    active; portal login never sees them (list_verifiable_totp_secrets default).
+    """
     st = _read_ssh_panel_2fa()
     if not st.get("enabled") or str(st.get("method") or "") != "app":
         return False
-    return _verify_any_enroll_totp(code, purpose=purpose)
+    include_pending = auth_app_device_enroll_unlocked()
+    purpose_n = str(purpose or "auth-app").strip().lower() or "auth-app"
+    legacy = str(st.get("totp_secret") or "").strip()
+    for secret in sm_auth.list_verifiable_totp_secrets(
+        legacy, include_pending=include_pending
+    ):
+        if verify_and_consume_totp(secret, code, purpose=purpose_n, window=1):
+            return True
+    return False
 
 
 def _auth_app_totp_client_key(client_ip: str) -> str:
@@ -19626,6 +19740,7 @@ document.getElementById('f').onsubmit = async (e) => {
                         login_token=login_token,
                         credential=passkey_cred,
                         client_ip=request_client_ip(self),
+                        circle_lease_ok=circle_lease_valid_for_request(self),
                     )
                     self._json(
                         200,
@@ -19642,6 +19757,7 @@ document.getElementById('f').onsubmit = async (e) => {
                         login_token=login_token,
                         code=code,
                         client_ip=request_client_ip(self),
+                        circle_lease_ok=circle_lease_valid_for_request(self),
                     )
                     self._json(
                         200,

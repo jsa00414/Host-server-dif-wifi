@@ -153,16 +153,26 @@ def generate_enroll_secret(
     *,
     for_ip: str = "",
     label: str = "",
+    ttl_seconds: int = 900,
 ) -> dict:
-    """Create a new random TOTP secret for a pending enroll; keep existing rows."""
+    """Create a new random TOTP secret for a pending enroll; keep existing rows.
+
+    Pending secrets expire with ``expires_at`` so abandoned QR enrolls cannot
+    mint portal sessions forever.
+    """
     vault = read_enroll_vault()
+    # Drop expired pending before adding a new one.
+    purge_expired_pending_secrets(vault=vault, persist=False)
     secret = _b32_encode_secret(secrets.token_bytes(20))
+    now = int(time.time())
+    ttl = max(60, int(ttl_seconds or 900))
     row = {
         "id": f"s_{secrets.token_hex(6)}",
         "secret": secret,
         "label": (label or f"enroll-{time.strftime('%Y%m%d-%H%M%S')}").strip()[:80],
         "status": "pending",
-        "created_at": int(time.time()),
+        "created_at": now,
+        "expires_at": now + ttl,
         "enroll_for_ip": str(for_ip or "").strip(),
         "enrolled_device_ip": "",
         "enrolled_at": 0,
@@ -179,6 +189,50 @@ def generate_enroll_secret(
     vault["secrets"] = kept[-40:]
     write_enroll_vault(vault)
     return row
+
+
+def purge_expired_pending_secrets(
+    *,
+    vault: dict | None = None,
+    persist: bool = True,
+    now: int | None = None,
+) -> int:
+    """Revoke pending enroll secrets past expires_at. Returns count revoked."""
+    data = vault if isinstance(vault, dict) else read_enroll_vault()
+    ts = int(time.time() if now is None else now)
+    changed = 0
+    for row in data.get("secrets") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") != "pending":
+            continue
+        exp = int(row.get("expires_at") or 0)
+        # Legacy pending without expires_at: treat as already expired.
+        if exp <= 0 or exp <= ts:
+            row["status"] = "expired"
+            row["expired_at"] = ts
+            changed += 1
+    if changed and persist:
+        write_enroll_vault(data)
+    return changed
+
+
+def revoke_all_pending_secrets() -> int:
+    """Force-revoke every pending enroll secret (unlock window closed)."""
+    vault = read_enroll_vault()
+    ts = int(time.time())
+    changed = 0
+    for row in vault.get("secrets") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") != "pending":
+            continue
+        row["status"] = "expired"
+        row["expired_at"] = ts
+        changed += 1
+    if changed:
+        write_enroll_vault(vault)
+    return changed
 
 
 def mark_enroll_secret_enrolled(*, secret: str = "", for_ip: str = "", device_ip: str = "") -> bool:
@@ -209,17 +263,34 @@ def mark_enroll_secret_enrolled(*, secret: str = "", for_ip: str = "", device_ip
     return changed
 
 
-def list_verifiable_totp_secrets(legacy_secret: str = "") -> list[str]:
-    """All secrets that may satisfy portal / auth-app TOTP (legacy + vault)."""
+def list_verifiable_totp_secrets(
+    legacy_secret: str = "",
+    *,
+    include_pending: bool = False,
+) -> list[str]:
+    """Secrets that may satisfy TOTP checks (legacy + vault).
+
+    Pending enroll secrets are excluded by default — they must not unlock
+    portal login. Pass ``include_pending=True`` only during an active enroll
+    unlock window (auth-app APIs).
+    """
+    purge_expired_pending_secrets()
     out: list[str] = []
     legacy = str(legacy_secret or "").strip().upper().replace(" ", "")
     if legacy:
         out.append(legacy)
+    allowed = ("enrolled", "active", "pending") if include_pending else ("enrolled", "active")
+    now = int(time.time())
     for row in read_enroll_vault().get("secrets") or []:
         if not isinstance(row, dict):
             continue
-        if str(row.get("status") or "") not in ("enrolled", "active", "pending"):
+        st = str(row.get("status") or "")
+        if st not in allowed:
             continue
+        if st == "pending":
+            exp = int(row.get("expires_at") or 0)
+            if exp <= 0 or exp <= now:
+                continue
         sec = str(row.get("secret") or "").strip().upper().replace(" ", "")
         if sec and sec not in out:
             out.append(sec)
