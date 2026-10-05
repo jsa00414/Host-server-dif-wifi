@@ -1,0 +1,8 @@
+[Unit]
+Description=Route Flint LAN portal/router HTTPS via OpenVPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ikev2/ensure-flint-portal-via-ovpn.sh
