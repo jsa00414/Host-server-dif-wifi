@@ -3,9 +3,10 @@
 # (in @vpn_clients) instead of campus WAN 192.81.235.246 (@denied_wan abort
 # → Chrome ERR_HTTP2_PROTOCOL_ERROR).
 #
-# GL.iNet policy routing forces 74.208.76.213 via WAN (so OpenVPN itself does
-# not loop). LAN browsers must resolve portal/router to the internal VIP
-# 10.11.0.1, which is routed over ovpnclient1.
+# Flint WAN is school WiFi (shared campus NAT). GL.iNet policy routing also
+# forces the VPS public IP via WAN so OpenVPN does not loop. LAN browsers must
+# either resolve portal/router to VIP 10.11.0.1, or have DNAT rewrite public
+# :80/:443 to that VIP — both paths go over ovpnclient1.
 set -euo pipefail
 
 FLINT_HOST="${FLINT_LAN_IP:-192.168.8.1}"
@@ -50,7 +51,7 @@ vps = os.environ["VPS_IP"]
 gw = os.environ["OVPN_GW"]
 vip = os.environ["PORTAL_VIP"]
 table = os.environ["TABLE"]
-remote = f"""set -e
+remote = f"""set +e
 VPS="{vps}"
 GW="{gw}"
 VIP="{vip}"
@@ -61,23 +62,26 @@ if ! ip -4 addr show ovpnclient1 2>/dev/null | grep -q "inet 10.9.0.2"; then
   exit 0
 fi
 
-# VIP (and a backup table for public VPS IP) via OpenVPN
 ip route replace "$VIP"/32 via "$GW" dev ovpnclient1
 ip route replace "$VPS"/32 via "$GW" dev ovpnclient1 table "$TABLE"
 ip route replace "$VIP"/32 via "$GW" dev ovpnclient1 table "$TABLE" 2>/dev/null || true
 
-# Backup policy rules (GL.iNet table 1024/main usually wins for public VPS IP;
-# DNS VIP is the primary fix). Use high priority numbers that still help if
-# those rules are absent.
-while ip rule del from 192.168.8.0/24 to "$VPS" lookup "$TABLE" 2>/dev/null; do :; done
 while ip rule del iif br-lan to "$VPS" lookup "$TABLE" 2>/dev/null; do :; done
+while ip rule del from 192.168.8.0/24 to "$VPS" lookup "$TABLE" 2>/dev/null; do :; done
 ip rule add iif br-lan to "$VPS"/32 lookup "$TABLE" priority 35 2>/dev/null || true
 ip rule add from 192.168.8.0/24 to "$VPS"/32 lookup "$TABLE" priority 36 2>/dev/null || true
 
+# DNAT public VPS :80/:443 → VIP so Windows DNS cache / DoH still works
+iptables -t nat -D PREROUTING -s 192.168.8.0/24 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":443 2>/dev/null
+iptables -t nat -D PREROUTING -s 192.168.8.0/24 -d "$VPS"/32 -p tcp --dport 80 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":80 2>/dev/null
+iptables -t nat -I PREROUTING 1 -s 192.168.8.0/24 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":443
+iptables -t nat -I PREROUTING 1 -s 192.168.8.0/24 -d "$VPS"/32 -p tcp --dport 80 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":80
+
+iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -d "$VIP"/32 -o ovpnclient1 -j MASQUERADE 2>/dev/null || \\
+  iptables -t nat -I POSTROUTING 1 -s 192.168.8.0/24 -d "$VIP"/32 -o ovpnclient1 -j MASQUERADE
 iptables -t nat -C POSTROUTING -o ovpnclient1 -j MASQUERADE 2>/dev/null || \\
   iptables -t nat -A POSTROUTING -o ovpnclient1 -j MASQUERADE
 
-# Allow LAN → VIP / VPS over OVPN
 if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then
   iptables -t filter -C forwarding_rule -s 192.168.8.0/24 -d "$VIP"/32 -o ovpnclient1 -j ACCEPT 2>/dev/null || \\
     iptables -t filter -I forwarding_rule 1 -s 192.168.8.0/24 -d "$VIP"/32 -o ovpnclient1 -j ACCEPT
@@ -86,7 +90,6 @@ else
     iptables -t filter -I FORWARD 1 -s 192.168.8.0/24 -d "$VIP"/32 -o ovpnclient1 -j ACCEPT
 fi
 
-# Persist DNS rewrite: portal/router → VIP (dnsmasq + uci)
 mkdir -p /tmp/dnsmasq.d
 cat >/tmp/dnsmasq.d/sm-portal-via-ovpn.conf <<EOF
 # Managed by ensure-flint-portal-via-ovpn.sh
@@ -106,14 +109,15 @@ if command -v uci >/dev/null 2>&1; then
   uci commit dhcp
 fi
 
-if [ -x /etc/init.d/dnsmasq ]; then
-  /etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true
-fi
+killall -HUP dnsmasq 2>/dev/null || true
 
-echo "flint-portal-via-ovpn: DNS portal/router->$VIP via ovpn; backup table $TABLE for $VPS"
+conntrack -D -d "$VPS" >/dev/null 2>&1 || true
+conntrack -D -d "$VIP" >/dev/null 2>&1 || true
+
+echo "flint-portal-via-ovpn: DNS+DNAT portal/router->$VIP via ovpn (school WAN bypass)"
 curl -sk -o /dev/null -w "ovpn_portal=%{{http_code}}\\n" --interface ovpnclient1 --connect-timeout 8 https://portal.vpstruelord.com/ || echo ovpn_portal=fail
 curl -sk -o /dev/null -w "vip_portal=%{{http_code}}\\n" --connect-timeout 8 --resolve portal.vpstruelord.com:443:$VIP https://portal.vpstruelord.com/ || echo vip_portal=fail
-nslookup portal.vpstruelord.com 127.0.0.1 2>/dev/null | head -8 || true
+nslookup portal.vpstruelord.com 127.0.0.1 2>/dev/null | head -6 || true
 """
 print(base64.b64encode(remote.encode()).decode())
 PY
