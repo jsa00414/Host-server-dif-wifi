@@ -2173,6 +2173,18 @@ const HTML = `<!DOCTYPE html>
       URL.revokeObjectURL(a.href);
     }
 
+    function normalizeLoadedNodes(nodes) {
+      return (nodes || []).map((n) => {
+        const sz = STYLE.size[n.type] || { w: 170, h: 52 };
+        return {
+          ...n,
+          w: Number(n.w) || sz.w,
+          h: Number(n.h) || sz.h,
+          props: n.props || defaultProps(n.type),
+        };
+      });
+    }
+
     function openProgram(file) {
       const reader = new FileReader();
       reader.onload = () => {
@@ -2183,7 +2195,10 @@ const HTML = `<!DOCTYPE html>
           } else {
             const data = JSON.parse(text);
             if (data.functions && Array.isArray(data.functions)) {
-              state.functions = data.functions;
+              state.functions = data.functions.map((f) => ({
+                ...f,
+                nodes: normalizeLoadedNodes(f.nodes),
+              }));
               state.activeFn = data.activeFn || "Main";
             } else {
               // legacy single-chart files
@@ -2191,7 +2206,7 @@ const HTML = `<!DOCTYPE html>
                 name: "Main",
                 returnType: "None",
                 parameters: [],
-                nodes: data.nodes || [],
+                nodes: normalizeLoadedNodes(data.nodes || []),
                 edges: data.edges || [],
                 idSeq: data.idSeq || 1,
                 pan: { x: 40, y: 16 },
