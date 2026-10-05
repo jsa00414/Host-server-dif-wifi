@@ -125,6 +125,11 @@ else
   FWD=FORWARD
 fi
 iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VIP"/32 -p tcp -m multiport --dports 80,443 -m comment --comment SM-PORTAL-VIA-OVPN -j REJECT --reject-with tcp-reset
+# Kill HTTP/3 (QUIC) to portal VIP/VPS — cached Alt-Svc otherwise hangs on UDP/443.
+iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
+  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
+iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
+  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 
 count=0
 for ip in $LAN_IPS; do
@@ -143,10 +148,22 @@ address=/portal.vpstruelord.com/$VIP
 address=/router.vpstruelord.com/$VIP
 # keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
 address=/keys.vpstruelord.com/$VPS
-# Chrome/Edge Secure DNS canary — NXDOMAIN disables DoH so Windows uses
-# router DNS (portal→VIP). Do not REDIRECT :53 (breaks some Windows DNS probes).
+# Chrome/Edge/Windows Secure DNS — NXDOMAIN canaries + DoH hostnames so
+# clients use router DNS (portal→VIP). Do not REDIRECT :53 (breaks Windows).
 server=/use-application-dns.net/
 local=/use-application-dns.net/
+server=/cloudflare-dns.com/
+local=/cloudflare-dns.com/
+server=/mozilla.cloudflare-dns.com/
+local=/mozilla.cloudflare-dns.com/
+server=/dns.google/
+local=/dns.google/
+server=/dns.google.com/
+local=/dns.google.com/
+server=/doh.opendns.com/
+local=/doh.opendns.com/
+server=/dns.quad9.net/
+local=/dns.quad9.net/
 EOF
 
 if command -v uci >/dev/null 2>&1; then
