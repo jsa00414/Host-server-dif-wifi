@@ -130,6 +130,13 @@ iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
   iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 
+# Windows OpenVPN/IKEv2 often leaves DNS=10.11.0.1; answer via Flint dnsmasq when
+# those queries still traverse br-lan (portal→VIP override).
+iptables -t nat -C PREROUTING -i br-lan -d "$VIP"/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || \
+  iptables -t nat -I PREROUTING 1 -i br-lan -d "$VIP"/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53
+iptables -t nat -C PREROUTING -i br-lan -d "$VIP"/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || \
+  iptables -t nat -I PREROUTING 1 -i br-lan -d "$VIP"/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53
+
 # Local TCP relay: key-bound LAN → VIP/public:443 REDIRECT to socat → VIP.
 # DNAT+FORWARD over OVPN stalls TLS (MSS/MTU → ERR_CONNECTION_TIMED_OUT on Windows).
 # Relay keeps LAN↔Flint at 1500 MTU; Flint↔VIP uses the path curl already proves works.
@@ -165,6 +172,8 @@ if command -v socat >/dev/null 2>&1; then
     'iptables -w -t mangle -C OUTPUT -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || iptables -w -t mangle -I OUTPUT 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000' \
     'iptables -w -t mangle -C FORWARD -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000 2>/dev/null || iptables -w -t mangle -I FORWARD 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1000' \
     'ip link set ovpnclient1 mtu 1280 2>/dev/null || true' \
+    'iptables -w -t nat -C PREROUTING -i br-lan -d $VIP/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || iptables -w -t nat -I PREROUTING 1 -i br-lan -d $VIP/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53' \
+    'iptables -w -t nat -C PREROUTING -i br-lan -d $VIP/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || iptables -w -t nat -I PREROUTING 1 -i br-lan -d $VIP/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53' \
     >/etc/firewall.user.d/sm-portal-relay.sh
   chmod +x /etc/firewall.user.d/sm-portal-relay.sh
   grep -q sm-portal-relay /etc/firewall.user 2>/dev/null || \
