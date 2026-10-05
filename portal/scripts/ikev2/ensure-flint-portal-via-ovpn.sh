@@ -126,21 +126,34 @@ else
 fi
 # Kill HTTP/3 (QUIC) to portal VIP/VPS — cached Alt-Svc otherwise hangs on UDP/443.
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
-  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
+  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
-  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
-# Kill DNS-over-QUIC (DoQ :7844) — Windows/Chrome Secure DNS bypasses dnsmasq
-# hostname blocks and then hits campus WAN → Caddy @denied_wan abort
-# (Chrome ERR_HTTP2_PROTOCOL_ERROR) instead of the VIP relay.
-iptables -t filter -C "$FWD" -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
-  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable
-iptables -t filter -C "$FWD" -s 192.168.8.0/24 -p tcp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with tcp-reset 2>/dev/null || \
-  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -p tcp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with tcp-reset
+  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
+# Surface/Windows Secure DNS: DoQ (:7844) + DoT (:853). Must be INSERT at head of
+# FORWARD (not append after zone ACCEPT) or Chrome keeps Cloudflare DoQ and then
+# hits campus WAN → Caddy @denied_wan → ERR_HTTP2_PROTOCOL_ERROR.
+for proto_port in "udp:7844:icmp-port-unreachable" "tcp:7844:tcp-reset" "udp:853:icmp-port-unreachable" "tcp:853:tcp-reset"; do
+  p="$(echo "$proto_port" | cut -d: -f1)"
+  port="$(echo "$proto_port" | cut -d: -f2)"
+  rej="$(echo "$proto_port" | cut -d: -f3-)"
+  iptables -t filter -C FORWARD -s 192.168.8.0/24 -p "$p" --dport "$port" -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with "$rej" 2>/dev/null || \
+    iptables -t filter -I FORWARD 1 -s 192.168.8.0/24 -p "$p" --dport "$port" -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with "$rej"
+  if [ "$FWD" != "FORWARD" ]; then
+    iptables -t filter -C "$FWD" -s 192.168.8.0/24 -p "$p" --dport "$port" -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with "$rej" 2>/dev/null || \
+      iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -p "$p" --dport "$port" -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with "$rej"
+  fi
+done
+conntrack -D -p udp --dport 7844 >/dev/null 2>&1 || true
+conntrack -D -p udp --dport 853 >/dev/null 2>&1 || true
 # Drop leftover Surface MSS clamps that were too aggressive (536) and stall TLS.
 while iptables -t mangle -S 2>/dev/null | grep -qE 'SM-SURFACE-FIX|SM-PORTAL-MSS.*--set-mss 536'; do
   line="$(iptables -t mangle -S | grep -E 'SM-SURFACE-FIX|SM-PORTAL-MSS.*--set-mss 536' | head -1)"
   eval "iptables -t mangle ${{line/-A/-D}}" 2>/dev/null || break
 done
+# Windows Chrome PQ ClientHello is large — clamp LAN SYN MSS toward portal so
+# segments fit the OVPN path (Surface WiFi stalls without this; other LAN OK).
+iptables -t mangle -C PREROUTING -i br-lan -p tcp -m multiport --dports 443,9443 -m tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || \
+  iptables -t mangle -I PREROUTING 1 -i br-lan -p tcp -m multiport --dports 443,9443 -m tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200
 
 # Windows OpenVPN/IKEv2 often leaves DNS=10.11.0.1; answer via Flint dnsmasq when
 # those queries still traverse br-lan (portal→VIP override).
@@ -157,23 +170,31 @@ iptables -t nat -C PREROUTING -i br-lan -d "$VIP"/32 -p tcp --dport 53 -m commen
 # and made timer+cron kill healthy relays mid-TLS (Windows timeouts).
 RELAY_PORT=9443
 if command -v socat >/dev/null 2>&1; then
+  # Always ensure a single listener WITHOUT reuseaddr (reuseaddr let timer+cron
+  # stack multiple accepts → Surface TLS half-open while other devices "got lucky").
   listen_n="$(netstat -lntp 2>/dev/null | grep -c ":${{RELAY_PORT}} " || true)"
   if [ -z "$listen_n" ]; then listen_n=0; fi
-  if [ "$listen_n" -ne 1 ]; then
-    # Only touch processes when the listener count is wrong.
-    pkill -f "TCP-LISTEN:${{RELAY_PORT}}" 2>/dev/null || true
-    sleep 1
+  need_restart=0
+  [ "$listen_n" -ne 1 ] && need_restart=1
+  # Migrate off legacy reuseaddr multi-listener builds.
+  if ps w 2>/dev/null | grep -v grep | grep -q "TCP-LISTEN:${{RELAY_PORT}}.*reuseaddr"; then
+    need_restart=1
+  fi
+  if [ "$need_restart" -eq 1 ]; then
+    killall socat 2>/dev/null || true
     pkill -9 -f "TCP-LISTEN:${{RELAY_PORT}}" 2>/dev/null || true
+    sleep 1
+    # mss= caps TCP_MAXSEG for Windows PQ ClientHellos over OVPN.
     if command -v flock >/dev/null 2>&1; then
       ( flock -n 9 || exit 0
         if ! netstat -lntp 2>/dev/null | grep -q ":${{RELAY_PORT}} "; then
-          socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,keepalive,reuseaddr TCP:${{VIP}}:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &
+          socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,keepalive,mss=1200 TCP:${{VIP}}:443,keepalive,mss=1200 >/tmp/sm-portal-relay.log 2>&1 &
           echo $! >/tmp/sm-portal-relay.pid
         fi
       ) 9>/tmp/sm-portal-relay.lock
     else
       if ! netstat -lntp 2>/dev/null | grep -q ":${{RELAY_PORT}} "; then
-        socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,keepalive,reuseaddr TCP:${{VIP}}:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &
+        socat TCP-LISTEN:${{RELAY_PORT}},bind=0.0.0.0,fork,keepalive,mss=1200 TCP:${{VIP}}:443,keepalive,mss=1200 >/tmp/sm-portal-relay.log 2>&1 &
         echo $! >/tmp/sm-portal-relay.pid
       fi
     fi
@@ -186,7 +207,9 @@ if command -v socat >/dev/null 2>&1; then
     iptables -t mangle -I OUTPUT 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200
   iptables -t mangle -C FORWARD -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || \
     iptables -t mangle -I FORWARD 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200
-  ip link set ovpnclient1 mtu 1280 2>/dev/null || true
+  iptables -t mangle -C FORWARD -i ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || \
+    iptables -t mangle -I FORWARD 1 -i ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200
+  ip link set ovpnclient1 mtu 1200 2>/dev/null || true
   # Persist keep-alive (values baked in; cron restarts socat if it dies)
   mkdir -p /etc/firewall.user.d
   printf '%s\n' \
@@ -195,17 +218,16 @@ if command -v socat >/dev/null 2>&1; then
     "RELAY=${{RELAY_PORT}}" \
     "VIP=${{VIP}}" \
     'if command -v socat >/dev/null 2>&1; then' \
-    '  # Only start when no LISTENER (ignore forked children in ps).' \
     '  if ! netstat -lntp 2>/dev/null | grep -q ":$RELAY "; then' \
     '    if command -v flock >/dev/null 2>&1; then' \
     '      ( flock -n 9 || exit 0' \
     '        if ! netstat -lntp 2>/dev/null | grep -q ":$RELAY "; then' \
-    '          socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,keepalive,reuseaddr TCP:$VIP:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &' \
+    '          socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,keepalive,mss=1200 TCP:$VIP:443,keepalive,mss=1200 >/tmp/sm-portal-relay.log 2>&1 &' \
     '          echo $! >/tmp/sm-portal-relay.pid' \
     '        fi' \
     '      ) 9>/tmp/sm-portal-relay.lock' \
     '    else' \
-    '      socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,keepalive,reuseaddr TCP:$VIP:443,keepalive >/tmp/sm-portal-relay.log 2>&1 &' \
+    '      socat TCP-LISTEN:$RELAY,bind=0.0.0.0,fork,keepalive,mss=1200 TCP:$VIP:443,keepalive,mss=1200 >/tmp/sm-portal-relay.log 2>&1 &' \
     '      echo $! >/tmp/sm-portal-relay.pid' \
     '    fi' \
     '  fi' \
@@ -213,8 +235,10 @@ if command -v socat >/dev/null 2>&1; then
     'iptables -w -C INPUT -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -i br-lan -p tcp --dport $RELAY -m comment --comment SM-PORTAL-RELAY -j ACCEPT' \
     'iptables -w -t mangle -C OUTPUT -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || iptables -w -t mangle -I OUTPUT 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200' \
     'iptables -w -t mangle -C FORWARD -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || iptables -w -t mangle -I FORWARD 1 -o ovpnclient1 -p tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200' \
-    'ip link set ovpnclient1 mtu 1280 2>/dev/null || true' \
-    'iptables -w -t filter -C forwarding_rule -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || iptables -w -t filter -A forwarding_rule -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable' \
+    'iptables -w -t mangle -C PREROUTING -i br-lan -p tcp -m multiport --dports 443,9443 -m tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200 2>/dev/null || iptables -w -t mangle -I PREROUTING 1 -i br-lan -p tcp -m multiport --dports 443,9443 -m tcp --tcp-flags SYN,RST SYN -m comment --comment SM-PORTAL-MSS -j TCPMSS --set-mss 1200' \
+    'ip link set ovpnclient1 mtu 1200 2>/dev/null || true' \
+    'iptables -w -t filter -C FORWARD -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || iptables -w -t filter -I FORWARD 1 -s 192.168.8.0/24 -p udp --dport 7844 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with icmp-port-unreachable' \
+    'iptables -w -t filter -C FORWARD -s 192.168.8.0/24 -p tcp --dport 853 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with tcp-reset 2>/dev/null || iptables -w -t filter -I FORWARD 1 -s 192.168.8.0/24 -p tcp --dport 853 -m comment --comment SM-NODOQ-LAN -j REJECT --reject-with tcp-reset' \
     'iptables -w -t nat -C PREROUTING -i br-lan -d $VIP/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || iptables -w -t nat -I PREROUTING 1 -i br-lan -d $VIP/32 -p udp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53' \
     'iptables -w -t nat -C PREROUTING -i br-lan -d $VIP/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53 2>/dev/null || iptables -w -t nat -I PREROUTING 1 -i br-lan -d $VIP/32 -p tcp --dport 53 -m comment --comment SM-DNS-VIP -j REDIRECT --to-ports 53' \
     >/etc/firewall.user.d/sm-portal-relay.sh
