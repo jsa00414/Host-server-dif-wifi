@@ -12445,6 +12445,100 @@ def remove_auth_app_device(token: str | None, *, ip: str) -> dict:
     }
 
 
+def _rematch_key_bound_allowlist_lan(
+    *,
+    pubkey: str,
+    new_ip: str,
+    mac: str = "",
+    hostname: str = "",
+) -> dict | None:
+    """Move a key-bound allowlist LAN row when Windows MAC/DHCP IP rotates.
+
+    Authenticator enrollment and circle approve bind an Ed25519 key to an IP.
+    Randomized Wi-Fi MACs often force a new lease (.204 → .186) while the same
+    key is still valid — without rematch, portal stays broken for an approved PC.
+    """
+    pub_n = _normalize_ed25519_pubkey(pubkey or "")
+    ip_n = _normalize_vpn_ip(new_ip)
+    if not pub_n or not _is_home_lan_ipv4(ip_n):
+        return None
+    kid = _circle_key_id(pub_n)
+    data = _read_vpn_allowlist()
+    now = int(time.time())
+    changed = False
+    matched: dict | None = None
+    rebuilt: list[dict] = []
+    for row in list(data.get("allowed") or []):
+        if not isinstance(row, dict):
+            continue
+        row_ip = _normalize_vpn_ip(row.get("ip", ""))
+        row_pub = str(row.get("pubkey") or "").strip()
+        row_kid = str(row.get("key_id") or "").strip()
+        same_key = False
+        if row_pub:
+            try:
+                same_key = _normalize_ed25519_pubkey(row_pub) == pub_n
+            except Exception:
+                same_key = False
+        if not same_key and row_kid and row_kid == kid:
+            same_key = True
+        if not same_key or not _is_home_lan_ipv4(row_ip):
+            rebuilt.append(row)
+            continue
+        if row_ip == ip_n:
+            matched = dict(row)
+            rebuilt.append(row)
+            continue
+        updated = dict(row)
+        updated["previous_ip"] = row_ip
+        if row.get("mac"):
+            updated["previous_mac"] = row.get("mac")
+        updated["ip"] = ip_n
+        updated["ip_rematched_at"] = now
+        if mac:
+            updated["mac"] = mac.lower()
+        if hostname:
+            updated["hostname"] = hostname[:64]
+            updated["name"] = hostname[:64]
+        note = str(updated.get("note") or "")
+        tag = f" · IP rematch {row_ip}→{ip_n} (key-bound)"
+        if tag not in note:
+            updated["note"] = (note + tag).strip(" ·")[:200]
+        matched = updated
+        rebuilt.append(updated)
+        changed = True
+    if not changed:
+        return matched
+    # Drop stale pending/denied duplicates for the new IP (same device).
+    for bucket in ("pending", "denied"):
+        data[bucket] = [
+            r
+            for r in (data.get(bucket) or [])
+            if not (
+                isinstance(r, dict)
+                and _normalize_vpn_ip(r.get("ip", "")) == ip_n
+            )
+        ]
+    # Also drop pending for the abandoned previous IP when hostname matches Surface-like rematch.
+    if matched and matched.get("previous_ip"):
+        prev = _normalize_vpn_ip(matched.get("previous_ip", ""))
+        data["pending"] = [
+            r
+            for r in (data.get("pending") or [])
+            if not (
+                isinstance(r, dict)
+                and _normalize_vpn_ip(r.get("ip", "")) == prev
+            )
+        ]
+    data["allowed"] = rebuilt
+    _write_vpn_allowlist(data)
+    try:
+        _run_vpn_peer_acl_sync()
+    except Exception:
+        pass
+    return matched
+
+
 def touch_auth_app_device(
     *,
     lan_ip: str = "",
@@ -12455,9 +12549,9 @@ def touch_auth_app_device(
 ) -> dict:
     """Record/refresh an enrolled Authenticator LAN IP for Flint pending exemption.
 
-    mode=refresh — only bump last_seen for already-enrolled IPs (never trust a
-    new client-supplied IP). mode=register — allow a new IP only while Security
-    has new-device enrollment unlocked (limits spoofed X-SM-Lan-Ip abuse).
+    mode=refresh — bump last_seen for an already-enrolled device. Prefer match by
+    Ed25519 pubkey so DHCP/MAC rotation can rematch the LAN IP. mode=register —
+    allow a new IP only while Security has new-device enrollment unlocked.
 
     New registrations require an Ed25519 pubkey so the LAN IP is cryptographically
     bound to this Authenticator install (prevents header spoofing later).
@@ -12478,6 +12572,22 @@ def touch_auth_app_device(
         if _normalize_vpn_ip(x.get("ip", ""))
     }
     existing = by_ip.get(ip)
+    # Key-bound rematch: Authenticator may report a new DHCP IP after MAC rotate.
+    if not existing and pub_n:
+        for old_ip, row in list(by_ip.items()):
+            if not isinstance(row, dict):
+                continue
+            bound = str(row.get("pubkey") or "").strip()
+            if not bound:
+                continue
+            try:
+                same = _normalize_ed25519_pubkey(bound) == pub_n
+            except Exception:
+                same = False
+            if same and _is_home_lan_ipv4(old_ip) and old_ip != ip:
+                existing = dict(row)
+                by_ip.pop(old_ip, None)
+                break
     already = bool(existing and existing.get("enrolled", True))
     newly_enrolled = False
     if mode_n == "refresh":
@@ -12569,6 +12679,17 @@ def touch_auth_app_device(
                 )
         except Exception:
             pass
+    # Keep VPN allowlist LAN /32 in sync when DHCP IP rotates for this key.
+    rematched = None
+    if pub_n:
+        try:
+            rematched = _rematch_key_bound_allowlist_lan(
+                pubkey=pub_n,
+                new_ip=ip,
+                hostname=str(note or row.get("note") or "")[:64],
+            )
+        except Exception:
+            rematched = None
     # Refresh Flint gate so enrolled phones are not blocked while pending.
     lan_gate = Path(
         os.environ.get(
@@ -12594,6 +12715,10 @@ def touch_auth_app_device(
         "newly_enrolled": newly_enrolled,
         "key_id": str(row.get("key_id") or ""),
         "key_bound": bool(row.get("pubkey")),
+        "allowlist_rematched": bool(
+            rematched and rematched.get("previous_ip") and rematched.get("previous_ip") != ip
+        ),
+        "previous_ip": str((rematched or {}).get("previous_ip") or "") or None,
     }
 
 
