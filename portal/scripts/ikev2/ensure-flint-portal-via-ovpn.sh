@@ -143,6 +143,14 @@ address=/portal.vpstruelord.com/$VIP
 address=/router.vpstruelord.com/$VIP
 # keys must stay on the VPS public IP (campus phones enroll here). Never VIP.
 address=/keys.vpstruelord.com/$VPS
+# Chrome/Edge Secure DNS canary — NXDOMAIN disables DoH so Windows cannot
+# bypass portal→VIP rewrite (public/campus path times out on the PC).
+server=/use-application-dns.net/
+local=/use-application-dns.net/
+server=/mask.icloud.com/
+local=/mask.icloud.com/
+server=/mask-h2.icloud.com/
+local=/mask-h2.icloud.com/
 EOF
 
 if command -v uci >/dev/null 2>&1; then
@@ -163,6 +171,14 @@ fi
 
 killall -HUP dnsmasq 2>/dev/null || true
 
+# Force LAN DNS through local dnsmasq (catches apps that ignore DHCP DNS).
+while iptables -t nat -S PREROUTING 2>/dev/null | grep -q SM-DNS-FORCE; do
+  line="$(iptables -t nat -S PREROUTING | grep SM-DNS-FORCE | head -1)"
+  eval "iptables -t nat ${{line/-A/-D}}" 2>/dev/null || break
+done
+iptables -t nat -I PREROUTING 1 -i br-lan -p udp --dport 53 -m comment --comment SM-DNS-FORCE -j REDIRECT --to-ports 53
+iptables -t nat -I PREROUTING 1 -i br-lan -p tcp --dport 53 -m comment --comment SM-DNS-FORCE -j REDIRECT --to-ports 53
+
 conntrack -D -d "$VPS" >/dev/null 2>&1 || true
 conntrack -D -d "$VIP" >/dev/null 2>&1 || true
 
@@ -170,6 +186,7 @@ echo "flint-portal-via-ovpn: $count key-bound LAN /32s → VIP $VIP via ovpn; ot
 curl -sk -o /dev/null -w "ovpn_portal=%{{http_code}}\\n" --interface ovpnclient1 --connect-timeout 8 https://portal.vpstruelord.com/ || echo ovpn_portal=fail
 curl -sk -o /dev/null -w "vip_portal=%{{http_code}}\\n" --connect-timeout 8 --resolve portal.vpstruelord.com:443:$VIP https://portal.vpstruelord.com/ || echo vip_portal=fail
 nslookup portal.vpstruelord.com 127.0.0.1 2>/dev/null | head -6 || true
+nslookup use-application-dns.net 127.0.0.1 2>&1 | head -6 || true
 """
 print(base64.b64encode(remote.encode()).decode())
 PY
