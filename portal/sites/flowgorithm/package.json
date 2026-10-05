@@ -1,0 +1,13 @@
+{
+  "name": "flowgorithm",
+  "version": "1.0.0",
+  "description": "Educational flowchart programming tool served by Node.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
