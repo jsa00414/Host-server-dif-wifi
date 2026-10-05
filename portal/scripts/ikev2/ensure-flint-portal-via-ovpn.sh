@@ -124,12 +124,11 @@ if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then
 else
   FWD=FORWARD
 fi
-iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VIP"/32 -p tcp -m multiport --dports 80,443 -m comment --comment SM-PORTAL-VIA-OVPN -j REJECT --reject-with tcp-reset
 # Kill HTTP/3 (QUIC) to portal VIP/VPS — cached Alt-Svc otherwise hangs on UDP/443.
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
-  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
+  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 iptables -t filter -C "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \
-  iptables -t filter -I "$FWD" 1 -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
+  iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VPS"/32 -p udp --dport 443 -m comment --comment SM-NOH3-LAN -j REJECT --reject-with icmp-port-unreachable
 
 count=0
 for ip in $LAN_IPS; do
@@ -138,8 +137,13 @@ for ip in $LAN_IPS; do
   iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":443
   iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VPS"/32 -p tcp --dport 80 -m comment --comment SM-PORTAL-VIA-OVPN -j DNAT --to-destination "$VIP":80
   iptables -t nat -I POSTROUTING 1 -s "$ip"/32 -d "$VIP"/32 -o ovpnclient1 -m comment --comment SM-PORTAL-VIA-OVPN -j MASQUERADE
-  iptables -t filter -I "$FWD" 1 -s "$ip"/32 -d "$VIP"/32 -o ovpnclient1 -m comment --comment SM-PORTAL-VIA-OVPN -j ACCEPT
+  # ACCEPT must NOT require -o ovpnclient1 — that footgun REJECT'd approved LAN when
+  # FORWARD saw a different out-iface. Allow VIP + public VPS TCP for key-bound /32s.
+  iptables -t filter -I "$FWD" 1 -s "$ip"/32 -d "$VIP"/32 -p tcp -m multiport --dports 80,443 -m comment --comment SM-PORTAL-VIA-OVPN -j ACCEPT
+  iptables -t filter -I "$FWD" 1 -s "$ip"/32 -d "$VPS"/32 -p tcp -m multiport --dports 80,443 -m comment --comment SM-PORTAL-VIA-OVPN -j ACCEPT
 done
+# Default deny other LAN → VIP :80/:443 AFTER per-IP ACCEPTs (insert at end of our block).
+iptables -t filter -A "$FWD" -s 192.168.8.0/24 -d "$VIP"/32 -p tcp -m multiport --dports 80,443 -m comment --comment SM-PORTAL-VIA-OVPN -j REJECT --reject-with tcp-reset
 
 mkdir -p /tmp/dnsmasq.d
 cat >/tmp/dnsmasq.d/sm-portal-via-ovpn.conf <<EOF
