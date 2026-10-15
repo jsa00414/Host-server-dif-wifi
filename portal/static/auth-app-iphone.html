@@ -85,6 +85,10 @@
       background: #060b09;
       padding-bottom: 12px;
     }
+    /* Circle tab: drop brand header so lists use the full stage */
+    body.tab-circle .app-header {
+      display: none !important;
+    }
     .brand-row {
       display: grid;
       grid-template-columns: auto 1fr auto;
@@ -282,6 +286,9 @@
     body.tab-circle #circlePane,
     body.tab-network #networkPane {
       display: flex !important;
+    }
+    body.tab-circle #circlePane {
+      padding-top: calc(10px + var(--sat));
     }
     .panel-head { margin: 0 0 10px; flex: 0 0 auto; }
     .panel-head h3 {
