@@ -134,8 +134,10 @@
       .join("");
   }
 
-  async function signForIp(ip, { method, path, bodyText }) {
-    const row = await ensureKeyForIp(ip);
+  async function signWithRow(row, ip, { method, path, bodyText }) {
+    if (!row?.privateJwk || !row?.publicKey) {
+      throw new Error("circle key row missing");
+    }
     const priv = await importPrivateJwk(row.privateJwk);
     const ts = Math.floor(Date.now() / 1000);
     const nonce = b64urlFromBuf(crypto.getRandomValues(new Uint8Array(16)));
@@ -151,11 +153,37 @@
     const sig = await crypto.subtle.sign(ALG, priv, new TextEncoder().encode(msg));
     return {
       publicKey: row.publicKey,
-      keyId: row.keyId,
+      keyId: row.keyId || keyIdFromPub(row.publicKey),
       ts,
       nonce,
       signature: b64urlFromBuf(sig),
       message: msg,
+    };
+  }
+
+  async function signForIp(ip, { method, path, bodyText }) {
+    const row = await ensureKeyForIp(ip);
+    return signWithRow(row, ip, { method, path, bodyText });
+  }
+
+  /**
+   * Sign a claim IP with an existing key row (no ensureKeyForIp).
+   * Used so OpenVPN 10.9.0.x can reuse the home Wi‑Fi key that shares the
+   * same server-side pubkey binding.
+   */
+  async function circleHeadersWithRow(ip, row, { method, path, bodyText } = {}) {
+    const proof = await signWithRow(row, ip, {
+      method: method || "GET",
+      path: path || "/",
+      bodyText: bodyText || "",
+    });
+    return {
+      "X-SM-Circle-Pub": proof.publicKey,
+      "X-SM-Circle-Kid": proof.keyId,
+      "X-SM-Circle-Ts": String(proof.ts),
+      "X-SM-Circle-Nonce": proof.nonce,
+      "X-SM-Circle-Sig": proof.signature,
+      "X-SM-Circle-Ip": ip,
     };
   }
 
@@ -179,7 +207,9 @@
     ensureKeyForIp,
     getKeyForIp,
     signForIp,
+    signWithRow,
     circleHeaders,
+    circleHeadersWithRow,
     keyIdFromPub,
     loadStore,
     mergeStore,

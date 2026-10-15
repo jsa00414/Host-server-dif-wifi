@@ -85,11 +85,11 @@
     return String(codeInt % 10 ** TOTP_DIGITS).padStart(TOTP_DIGITS, "0");
   }
 
-  function circleStoreLanIps() {
+  function circleStoreIps() {
     try {
       const store = (global.SmCircleCrypto && SmCircleCrypto.loadStore()) || {};
       return Object.keys(store)
-        .filter(isHomeLanIp)
+        .filter(isExitDeviceIp)
         .sort((a, b) => {
           const ca = Number(store[a]?.createdAt || 0);
           const cb = Number(store[b]?.createdAt || 0);
@@ -97,6 +97,35 @@
         });
     } catch (_) {
       return [];
+    }
+  }
+
+  function circleStoreLanIps() {
+    return circleStoreIps().filter(isHomeLanIp);
+  }
+
+  /**
+   * Prefer an exact key for the claim IP; otherwise reuse any local key so
+   * OpenVPN 10.9.0.x can prove with the home Wi‑Fi key that shares the same
+   * server-side pubkey binding.
+   */
+  async function resolveKeyRowForClaim(claimIp) {
+    if (!global.SmCircleCrypto?.getKeyForIp) return null;
+    const direct = await SmCircleCrypto.getKeyForIp(claimIp);
+    if (direct?.privateJwk && direct?.publicKey) return direct;
+    try {
+      const store = SmCircleCrypto.loadStore() || {};
+      const rows = Object.entries(store)
+        .filter(([, row]) => row?.privateJwk && row?.publicKey)
+        .sort((a, b) => {
+          const aLan = isHomeLanIp(a[0]) ? 1 : 0;
+          const bLan = isHomeLanIp(b[0]) ? 1 : 0;
+          if (aLan !== bLan) return bLan - aLan;
+          return Number(b[1]?.createdAt || 0) - Number(a[1]?.createdAt || 0);
+        });
+      return rows[0]?.[1] || null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -118,38 +147,33 @@
         if (done) return;
         done = true;
         try {
-          pc.close();
+          pc && pc.close();
         } catch (_) {}
         resolve(ip || "");
       };
+      const timer = setTimeout(() => finish(""), 1800);
       try {
         pc = new RTCPeerConnection({ iceServers: [] });
+        pc.createDataChannel("x");
+        pc.onicecandidate = (ev) => {
+          const cand = ev.candidate && ev.candidate.candidate;
+          if (!cand) return;
+          const ips = extractLanFromText(cand);
+          if (ips.length) {
+            clearTimeout(timer);
+            finish(ips[0]);
+          }
+        };
+        pc.createOffer()
+          .then((o) => pc.setLocalDescription(o))
+          .catch(() => {
+            clearTimeout(timer);
+            finish("");
+          });
       } catch (_) {
-        resolve("");
-        return;
-      }
-      try {
-        pc.createDataChannel("sm");
-      } catch (_) {}
-      const consider = (text) => {
-        const ips = extractLanFromText(text);
-        if (ips.length) finish(ips[0]);
-      };
-      pc.onicecandidate = (ev) => {
-        if (!ev?.candidate) return;
-        consider(ev.candidate.candidate || "");
-        try {
-          consider(JSON.stringify(ev.candidate));
-        } catch (_) {}
-      };
-      pc.createOffer()
-        .then((offer) => pc.setLocalDescription(offer))
-        .then(() => consider(pc.localDescription?.sdp || ""))
-        .catch(() => finish(""));
-      setTimeout(() => {
-        consider(pc.localDescription?.sdp || "");
+        clearTimeout(timer);
         finish("");
-      }, 2000);
+      }
     });
   }
 
@@ -176,6 +200,8 @@
     let state = null;
     let lanIp = "";
     let wired = false;
+    let picking = false; // ignore select rebuild side-effects
+    let userPicked = false;
 
     function rememberIp(ip) {
       if (!isExitDeviceIp(ip)) return;
@@ -215,7 +241,7 @@
           add(row.ip, row.label || row.ip);
         }
       }
-      for (const ip of circleStoreLanIps()) add(ip, ip);
+      for (const ip of circleStoreIps()) add(ip, ip);
       return [...byIp.values()].sort((a, b) =>
         String(a.label).localeCompare(String(b.label))
       );
@@ -226,24 +252,35 @@
       const member = !!(state?.circle_member || state?.circle_ok);
       if (els.deviceRow) els.deviceRow.hidden = !(member || opts.length || selected);
       if (!els.devicePick) return;
-      if (!opts.length) {
-        els.devicePick.innerHTML = member
-          ? `<option value="">No circle LAN devices yet</option>`
-          : `<option value="">Authenticator required…</option>`;
-      } else {
-        els.devicePick.innerHTML =
-          `<option value="">Select this device’s Wi‑Fi IP…</option>` +
-          opts
-            .map((row) => {
-              const text =
-                row.label && row.label !== row.ip
-                  ? `${row.label} — ${row.ip}`
-                  : row.ip;
-              return `<option value="${row.ip}" ${
-                row.ip === selected ? "selected" : ""
-              }>${text}</option>`;
-            })
-            .join("");
+      picking = true;
+      try {
+        if (!opts.length) {
+          els.devicePick.innerHTML = member
+            ? `<option value="">No circle devices yet</option>`
+            : `<option value="">Authenticator required…</option>`;
+        } else {
+          els.devicePick.innerHTML =
+            `<option value="">Select this device’s IP…</option>` +
+            opts
+              .map((row) => {
+                const text =
+                  row.label && row.label !== row.ip
+                    ? `${row.label} — ${row.ip}`
+                    : row.ip;
+                return `<option value="${row.ip}" ${
+                  row.ip === selected ? "selected" : ""
+                }>${text}</option>`;
+              })
+              .join("");
+        }
+        if (selected && isExitDeviceIp(selected)) {
+          els.devicePick.value = selected;
+        }
+      } finally {
+        // iOS can fire change when options are replaced; ignore one tick.
+        setTimeout(() => {
+          picking = false;
+        }, 0);
       }
       if (els.deviceManual && selected && isExitDeviceIp(selected)) {
         els.deviceManual.value = selected;
@@ -253,7 +290,11 @@
 
     function renderUi() {
       if (!state) return;
-      const ip = state.control_ip || (state.circle_ok ? lanIp : "") || "";
+      const ip =
+        (state.circle_ok && state.control_ip) ||
+        (userPicked && lanIp) ||
+        state.control_ip ||
+        "";
       const needsCircle = !!(
         state.needs_circle &&
         !state.circle_member &&
@@ -269,13 +310,13 @@
         if (state.client_ip && state.client_ip !== ip) {
           bits.push(`connection ${state.client_ip}`);
         }
-        if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
+        if (state.lan_ip && state.lan_ip !== ip) bits.push(`LAN ${state.lan_ip}`);
         if (state.provider_label && state.circle_ok) {
           bits.push(`now: ${state.provider_label}`);
         }
         if (state.global_exit) bits.push(`default: ${state.global_exit}`);
         if (state.needs_device_ip && !state.circle_ok) {
-          bits.push("pick this device’s home Wi‑Fi IP");
+          bits.push("pick this device’s home Wi‑Fi or OpenVPN IP");
         }
       }
       if (els.meta) els.meta.textContent = bits.join(" · ") || "Ready";
@@ -320,14 +361,21 @@
         if (code) headers["X-SM-Totp"] = code;
       } catch (_) {}
       try {
-        if (lanIp && global.SmCircleCrypto?.getKeyForIp) {
-          const row = await SmCircleCrypto.getKeyForIp(lanIp);
+        if (lanIp && global.SmCircleCrypto) {
+          const row = await resolveKeyRowForClaim(lanIp);
           if (row?.publicKey && row?.privateJwk) {
-            const proof = await SmCircleCrypto.circleHeaders(lanIp, {
-              method: headers["Content-Type"] ? "POST" : "GET",
-              path: "/api/network/exit",
-              bodyText: bodyText || "",
-            });
+            const method = headers["Content-Type"] ? "POST" : "GET";
+            const proof = SmCircleCrypto.circleHeadersWithRow
+              ? await SmCircleCrypto.circleHeadersWithRow(lanIp, row, {
+                  method,
+                  path: "/api/network/exit",
+                  bodyText: bodyText || "",
+                })
+              : await SmCircleCrypto.circleHeaders(lanIp, {
+                  method,
+                  path: "/api/network/exit",
+                  bodyText: bodyText || "",
+                });
             Object.assign(headers, proof);
           }
         }
@@ -356,29 +404,33 @@
         toast("Choose a circle device IP (192.168.8.x or OpenVPN 10.9.0.x)", true);
         return;
       }
-      const hasLocalKey = !!(
-        global.SmCircleCrypto &&
-        (await SmCircleCrypto.getKeyForIp(ip))?.privateJwk
-      );
+      const keyRow = await resolveKeyRowForClaim(ip);
+      const hasLocalKey = !!(keyRow?.privateJwk && keyRow?.publicKey);
       const hasTotp = !!loadTotpAccount()?.secret;
       if (!hasLocalKey && !hasTotp) {
         toast("Unlock Authenticator first", true);
         return;
       }
+      userPicked = true;
       lanIp = ip;
       rememberIp(ip);
+      if (els.devicePick) els.devicePick.value = ip;
+      if (els.deviceManual) els.deviceManual.value = ip;
       await refresh();
-      if (state?.circle_ok && state?.control_ip === ip) toast(`Controlling ${ip}`);
-      else if (state?.needs_circle && !state?.circle_member) {
+      if (state?.circle_ok && state?.control_ip === ip) {
+        toast(`Controlling ${ip}`);
+      } else if (state?.needs_circle && !state?.circle_member) {
         toast(state.error || "Circle proof failed", true);
       } else if (state?.circle_member && !state?.circle_ok) {
-        toast(state.error || "That IP is not in the circle", true);
+        toast(state.error || "Could not prove that IP — unlock and retry", true);
+      } else if (!state?.circle_ok) {
+        toast(state?.error || "Could not control that IP", true);
       }
     }
 
     async function setProvider(provider) {
       if (!lanIp && !state?.control_ip) {
-        toast("Need this device’s 192.168.8.x IP first", true);
+        toast("Pick this device’s Wi‑Fi or OpenVPN IP first", true);
         return;
       }
       els.choices.classList.add("busy");
@@ -415,6 +467,7 @@
         if (data.control_ip && isExitDeviceIp(data.control_ip)) {
           lanIp = data.control_ip;
           rememberIp(lanIp);
+          userPicked = true;
         }
         renderUi();
         toast(data.message || `Set ${provider}`);
@@ -432,6 +485,7 @@
       wired = true;
       if (els.devicePick) {
         els.devicePick.onchange = async () => {
+          if (picking) return;
           const ip = els.devicePick.value;
           if (!isExitDeviceIp(ip)) return;
           if (els.deviceManual) els.deviceManual.value = ip;
@@ -469,33 +523,36 @@
       };
       renderUi();
       try {
+        // Keep an explicit user pick across Exit tab revisits.
+        if (userPicked && isExitDeviceIp(lanIp)) {
+          await refresh();
+          if (!state?.circle_ok) await applyChosenDeviceIp(lanIp);
+          return;
+        }
         await refresh();
         const allowed = new Set(
           (state?.candidate_ips || []).map((r) => r.ip).filter(isExitDeviceIp)
         );
-        for (const ip of circleStoreLanIps()) allowed.add(ip);
+        for (const ip of circleStoreIps()) allowed.add(ip);
         const webrtc = await detectHomeLanIpViaWebRtc();
         let best = "";
         if (isHomeLanIp(webrtc) && (!allowed.size || allowed.has(webrtc))) {
           best = webrtc;
         } else if (rememberedIp() && (!allowed.size || allowed.has(rememberedIp()))) {
           best = rememberedIp();
+        } else if (state?.client_ip && allowed.has(state.client_ip)) {
+          best = state.client_ip;
         } else {
-          const local = circleStoreLanIps().filter(
+          const local = circleStoreIps().filter(
             (ip) => !allowed.size || allowed.has(ip)
           );
           if (local.length) best = local[0];
-          else if (state?.client_ip && allowed.has(state.client_ip)) {
-            best = state.client_ip;
-          } else if (allowed.size === 1) best = [...allowed][0];
+          else if (allowed.size === 1) best = [...allowed][0];
         }
         if (best) {
-          lanIp = best;
-          rememberIp(lanIp);
-          await refresh();
-        }
-        if (state?.circle_member && !state?.circle_ok) {
-          toast("Pick this device’s home Wi‑Fi IP", false);
+          await applyChosenDeviceIp(best);
+        } else if (state?.circle_member && !state?.circle_ok) {
+          toast("Pick this device’s home Wi‑Fi or OpenVPN IP", false);
         }
       } catch (err) {
         if (els.controlIp) els.controlIp.textContent = "unavailable";

@@ -11379,16 +11379,18 @@ def _try_device_exit_circle(
     lan_ip: str = "",
     body_text: str = "",
     allow_totp: bool = True,
+    strict_totp: bool = False,
 ) -> tuple[str, bool]:
     """Probe circle auth for device-exit.
 
-    Returns (proven_lan_ip, is_circle_member).
-    - Crypto proof for an allowlisted LAN IP → (ip, True)
-    - Valid Authenticator TOTP + allowlisted LAN IP → (ip, True)
-    - Valid TOTP only (no LAN claim yet) → ("", True)
+    Returns (proven_device_ip, is_circle_member).
+    - Crypto proof for an allowlisted device IP → (ip, True)
+    - Valid Authenticator TOTP + allowlisted device IP → (ip, True)
+    - Valid TOTP only (no device claim yet) → ("", True)
     - No usable proof → ("", False)
 
-    Raises ValueError on an explicitly bad TOTP (IP jail still applies).
+    When strict_totp is False (GET status probe), a bad TOTP does not raise —
+    it falls through so a valid crypto proof is not wiped by a skewy code.
     """
     claimed = _normalize_vpn_ip(
         lan_ip
@@ -11419,15 +11421,25 @@ def _try_device_exit_circle(
     if allow_totp:
         code = _auth_app_totp_from_request(handler)
         if code:
-            require_auth_app_totp(
-                code,
-                client_ip=request_client_ip(handler),
-                purpose="network-device-exit",
-                consume=False,
-            )
-            if claimed:
-                return _device_exit_circle_member_ip(claimed), True
-            return "", True
+            try:
+                require_auth_app_totp(
+                    code,
+                    client_ip=request_client_ip(handler),
+                    purpose="network-device-exit",
+                    consume=False,
+                )
+            except (PermissionError, ValueError):
+                if strict_totp:
+                    raise
+            else:
+                if claimed:
+                    try:
+                        return _device_exit_circle_member_ip(claimed), True
+                    except (PermissionError, ValueError):
+                        if strict_totp:
+                            raise
+                        return "", True
+                return "", True
 
     return "", False
 
@@ -11439,12 +11451,13 @@ def _require_device_exit_circle(
     body_text: str = "",
     allow_totp: bool = True,
 ) -> str:
-    """Circle members only — must resolve to one allowlisted home Wi‑Fi IP."""
+    """Circle members only — must resolve to one allowlisted device IP."""
     proven, member = _try_device_exit_circle(
         handler,
         lan_ip=lan_ip,
         body_text=body_text,
         allow_totp=allow_totp,
+        strict_totp=True,
     )
     if proven:
         return proven
@@ -11455,6 +11468,49 @@ def _require_device_exit_circle(
     raise PermissionError(
         "Circle members only. Open Authenticator on this phone, then return here."
     )
+
+
+def _circle_sibling_device_ips(ip: str) -> list[str]:
+    """All allowlisted LAN/OpenVPN IPs that share this device's circle pubkey."""
+    ip_n = _normalize_vpn_ip(ip or "")
+    if not ip_n:
+        return []
+    pub = _circle_pubkey_for_ip(ip_n)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str) -> None:
+        c = _normalize_vpn_ip(candidate)
+        if not c or c in seen:
+            return
+        if not (_is_home_lan_ipv4(c) or _is_openvpn_client_ipv4(c)):
+            return
+        if c in _device_exit_infra_ips() or c in _denied_vpn_ips():
+            return
+        seen.add(c)
+        out.append(c)
+
+    _add(ip_n)
+    if not pub:
+        return out
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        row_ip = _normalize_vpn_ip(row.get("ip", ""))
+        row_pub = str(row.get("pubkey") or "").strip()
+        if not row_ip or not row_pub:
+            continue
+        try:
+            if _normalize_ed25519_pubkey(row_pub) != pub:
+                continue
+        except Exception:
+            continue
+        _add(row_ip)
+    return out
 
 
 def _device_exit_candidate_ips_for_circle() -> list[dict]:
@@ -11660,21 +11716,35 @@ def set_device_exit(
             _read_vpn_exit_state().get("exit_ip") or ""
         ).strip()
         extra = extra or "100.94.32.63"
-    cmd = [str(DEVICE_EXIT_SCRIPT), "set", control_ip, prov]
-    if extra and prov not in ("clear", "direct"):
-        cmd.append(extra)
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    if proc.returncode != 0:
-        raise ValueError(out or "device-exit failed")
+    targets = _circle_sibling_device_ips(control_ip) or [control_ip]
+    sync_bits: list[str] = []
+    for tip in targets:
+        cmd = [str(DEVICE_EXIT_SCRIPT), "set", tip, prov]
+        if extra and prov not in ("clear", "direct"):
+            cmd.append(extra)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        if proc.returncode != 0:
+            raise ValueError(out or f"device-exit failed for {tip}")
+        if out:
+            sync_bits.append(out[-200:])
     status = build_device_exit_status(
         client_ip=client_ip,
         lan_ip=control_ip,
         circle_ip=control_ip,
         circle_ok=True,
+        circle_member=True,
     )
-    status["message"] = f"{_provider_label('direct' if prov == 'clear' else prov)} for {control_ip}"
-    status["sync"] = out[-400:]
+    label = _provider_label("direct" if prov == "clear" else prov)
+    siblings = [ip for ip in targets if ip != control_ip]
+    if siblings:
+        status["message"] = (
+            f"{label} for {control_ip} (+ {' '.join(siblings)})"
+        )
+    else:
+        status["message"] = f"{label} for {control_ip}"
+    status["sibling_ips"] = targets
+    status["sync"] = " | ".join(sync_bits)[-400:]
     return status
 
 
