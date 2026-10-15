@@ -178,6 +178,13 @@ PY
     echo "tailscale0 missing" >&2
     return 1
   fi
+  # Never call `tailscale down` / logout. If the daemon was stopped, bring it
+  # back with the known prefs, then set the exit node for mark-based routing.
+  local backend
+  backend="$(tailscale status --json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("BackendState") or "")' 2>/dev/null || true)"
+  if [ "$backend" != "Running" ]; then
+    tailscale up --accept-dns=false --exit-node-allow-lan-access --hostname=vpstruelord-vps 2>&1 || true
+  fi
   tailscale set --exit-node="$exit_ip" --exit-node-allow-lan-access=true 2>&1 || true
   if [ -x "$TS_HOST_PROTECT" ]; then
     "$TS_HOST_PROTECT" protect-only 2>/dev/null || true

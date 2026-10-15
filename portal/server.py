@@ -11245,7 +11245,7 @@ def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
         or _is_loopback_or_link_local(client)
     ):
         return lan
-    if client and client not in {"unknown", "", VPS_PUBLIC_IP, "127.0.0.1"}:
+    if client and client not in {"unknown", ""}:
         return client
     if _is_home_lan_ipv4(lan):
         return lan
