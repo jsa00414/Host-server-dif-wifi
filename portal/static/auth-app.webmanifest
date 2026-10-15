@@ -6,8 +6,8 @@
   "scope": "/auth-app.html",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0a0f0d",
-  "theme_color": "#0a0f0d",
+  "background_color": "#070c0a",
+  "theme_color": "#070c0a",
   "icons": [
     {
       "src": "/static/auth-app-icon-192.png",
