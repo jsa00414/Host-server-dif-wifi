@@ -290,19 +290,28 @@ for ip in blocks:
             f'-m multiport --dports 80,443 -j REJECT --reject-with icmp-port-unreachable'
         )
 
-# --- Guest DNS (nat): same blocked set → public resolver, skip AdGuard ---
-print('iptables -t nat -N "$GD_CHAIN" 2>/dev/null || iptables -t nat -F "$GD_CHAIN"')
-print('iptables -t nat -C PREROUTING -j "$GD_CHAIN" 2>/dev/null || iptables -t nat -I PREROUTING 1 -j "$GD_CHAIN"')
-# Drop stale SM-LAN-GUEST-DNS helpers from dns_dispatcher / POSTROUTING / filter
+# --- Guest DNS: same blocked set → sm-guest-dns (.45), skip AdGuard ---
+# GL.iNet VPN dns-mark puts LAN :53 into conntrack zone 0xa000; DNAT+MASQ to
+# the OVPN VIP then never gets replies. Force CT zone 0 + mark 0x8000 (main)
+# before DNAT so guest DNS answers return to the LAN client.
 print(
     r"""
+iptables -t nat -N "$GD_CHAIN" 2>/dev/null || iptables -t nat -F "$GD_CHAIN"
+iptables -t mangle -N "$GD_CHAIN" 2>/dev/null || iptables -t mangle -F "$GD_CHAIN"
+iptables -t raw -N "$GD_CHAIN" 2>/dev/null || iptables -t raw -F "$GD_CHAIN"
+# Always place guest-DNS jumps first so CT zone/mark run before GL VPN dns-mark.
+for _t in raw mangle nat; do
+  while iptables -t "$_t" -C PREROUTING -j "$GD_CHAIN" 2>/dev/null; do
+    iptables -t "$_t" -D PREROUTING -j "$GD_CHAIN" || break
+  done
+  iptables -t "$_t" -I PREROUTING 1 -j "$GD_CHAIN"
+done
 # Clear prior per-IP helpers tagged SM-LAN-GUEST-DNS (idempotent rebuild).
 _clear_comment() {
   table="$1"; chain="$2"; tag="$3"
   while true; do
     line="$(iptables -t "$table" -S "$chain" 2>/dev/null | grep -F "$tag" | head -1 || true)"
     [ -n "$line" ] || break
-    # Convert -A/-I listing to -D delete
     del="$(echo "$line" | sed 's/^-A /-D /; s/^-I /-D /')"
     eval "iptables -t $table $del" 2>/dev/null || break
   done
@@ -310,16 +319,20 @@ _clear_comment() {
 if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then
   _clear_comment nat dns_dispatcher SM-LAN-GUEST-DNS
 fi
+# Drop legacy MASQ that broke guest DNS replies via OVPN LOCAL/zone.
 _clear_comment nat POSTROUTING SM-LAN-GUEST-DNS
 if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then
   _clear_comment filter forwarding_rule SM-LAN-GUEST-DNS
 else
   _clear_comment filter FORWARD SM-LAN-GUEST-DNS
 fi
+# Host routes so mark 0x8000 (main table) still reaches VPS DNS VIPs.
+ip route replace "$GUEST_DNS" via 10.9.0.1 dev ovpnclient1 metric 5 2>/dev/null || true
+ip route replace 10.42.42.44 via 10.9.0.1 dev ovpnclient1 metric 5 2>/dev/null || true
+conntrack -D -s 192.168.8.0/24 -p udp --dport 53 >/dev/null 2>&1 || true
 """
 )
 for ip in blocks:
-    # Skip Flint's AdGuard / dns_dispatcher force for this LAN client.
     print(
         "if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then\n"
         f'  iptables -t nat -C dns_dispatcher -s {ip}/32 -m comment '
@@ -328,6 +341,23 @@ for ip in blocks:
         f'--comment SM-LAN-GUEST-DNS -j RETURN\n'
         "fi"
     )
+    # Escape VPN dns-mark zone before DNAT.
+    print(
+        f'iptables -t raw -A "$GD_CHAIN" -s {ip}/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j CT --zone 0'
+    )
+    print(
+        f'iptables -t raw -A "$GD_CHAIN" -s {ip}/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j CT --zone 0'
+    )
+    print(
+        f'iptables -t mangle -A "$GD_CHAIN" -s {ip}/32 -p udp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MARK --set-xmark 0x8000/0xf000'
+    )
+    print(
+        f'iptables -t mangle -A "$GD_CHAIN" -s {ip}/32 -p tcp --dport 53 '
+        f'-m comment --comment SM-LAN-GUEST-DNS -j MARK --set-xmark 0x8000/0xf000'
+    )
     print(
         f'iptables -t nat -A "$GD_CHAIN" -s {ip}/32 -p udp --dport 53 '
         f'-m comment --comment SM-LAN-GUEST-DNS -j DNAT --to-destination "$GUEST_DNS":53'
@@ -335,18 +365,6 @@ for ip in blocks:
     print(
         f'iptables -t nat -A "$GD_CHAIN" -s {ip}/32 -p tcp --dport 53 '
         f'-m comment --comment SM-LAN-GUEST-DNS -j DNAT --to-destination "$GUEST_DNS":53'
-    )
-    print(
-        f'iptables -t nat -C POSTROUTING -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
-        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE 2>/dev/null || '
-        f'iptables -t nat -I POSTROUTING 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p udp --dport 53 '
-        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE'
-    )
-    print(
-        f'iptables -t nat -C POSTROUTING -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
-        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE 2>/dev/null || '
-        f'iptables -t nat -I POSTROUTING 1 -s {ip}/32 -d "$GUEST_DNS"/32 -p tcp --dport 53 '
-        f'-m comment --comment SM-LAN-GUEST-DNS -j MASQUERADE'
     )
     print(
         "if iptables -t filter -L forwarding_rule -n >/dev/null 2>&1; then\n"
