@@ -39,6 +39,11 @@ is_ipv4() {
   [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
+is_home_lan_ipv4() {
+  # Home Wi‑Fi hosts Flint SNATs onto FLINT_OVPN_IP (not OpenVPN CCD clients).
+  [[ "$1" =~ ^192\.168\.8\.([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]
+}
+
 read_json_devices() {
   python3 - <<'PY'
 import json
@@ -269,7 +274,7 @@ PY
 
 apply_rules() {
   export STATE_JSON
-  local lines need_ss=0 need_ts=0
+  local lines need_ss=0 need_ts=0 need_flint_ts=0 need_flint_ss=0
   lines="$(STATE_JSON="$STATE_JSON" read_json_devices)"
   del_device_chain
   iptables -t mangle -N "$CHAIN" 2>/dev/null || iptables -t mangle -F "$CHAIN"
@@ -289,10 +294,12 @@ apply_rules() {
       surfshark)
         need_ss=1
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$SS_MARK"
+        if is_home_lan_ipv4 "$ip"; then need_flint_ss=1; fi
         ;;
       tailscale)
         need_ts=1
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$TS_MARK"
+        if is_home_lan_ipv4 "$ip"; then need_flint_ts=1; fi
         ;;
       direct)
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$DIRECT_MARK"
@@ -300,11 +307,11 @@ apply_rules() {
     esac
   done <<<"$lines"
 
-  # Home Wi‑Fi Circle devices are SNATed by Flint to FLINT_OVPN_IP on tun0.
-  # Without marking that VIP, Exit only works for direct CCD clients (e.g. 10.9.0.3).
-  if [ "$need_ts" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
+  # Home Wi‑Fi devices are SNATed by Flint to FLINT_OVPN_IP on tun0. Mark that
+  # VIP only when a LAN /32 has Exit — OpenVPN CCD clients (10.9.0.x) do not need it.
+  if [ "$need_flint_ts" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
     iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$TS_MARK"
-  elif [ "$need_ss" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
+  elif [ "$need_flint_ss" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
     iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$SS_MARK"
   fi
 

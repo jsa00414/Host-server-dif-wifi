@@ -678,34 +678,34 @@
       <section class="panel network-pane" id="networkPane" hidden>
         <div class="panel-head">
           <h3>Network exit</h3>
-          <p>Route the whole Circle through Tailscale or Surfshark.</p>
+          <p>Route one Circle device through Tailscale or Surfshark.</p>
         </div>
         <div class="net-control">
-          <div class="label">Proving as</div>
+          <div class="label">Controlling</div>
           <div class="ip" id="netControlIp">…</div>
           <div class="meta" id="netMeta"></div>
           <div class="device-row" id="netDeviceRow" hidden>
-            <select id="netDevicePick" aria-label="Your Circle device IP"></select>
+            <select id="netDevicePick" aria-label="This device IP"></select>
             <input id="netDeviceManual" type="text" inputmode="decimal" autocomplete="off"
-              placeholder="or type 192.168.8.x" aria-label="Type your Circle device IP" />
+              placeholder="or type 192.168.8.x" aria-label="Type this device LAN IP" />
             <button type="button" class="primary" id="netUseDeviceBtn">Use this device IP</button>
           </div>
         </div>
         <div class="net-choices" id="netChoices">
           <button type="button" class="choice" data-provider="tailscale" id="netBtnTs">
             <span class="title">Tailscale exit node</span>
-            <span class="hint">Route every Circle device via the active Tailscale exit node.</span>
+            <span class="hint">Route this IP via the active Tailscale exit node.</span>
           </button>
           <div>
             <button type="button" class="choice" data-provider="surfshark" id="netBtnSs">
               <span class="title">Surfshark</span>
-              <span class="hint">Route every Circle device through the Surfshark WireGuard tunnel.</span>
+              <span class="hint">Route this IP through the Surfshark WireGuard tunnel.</span>
             </button>
             <select id="netSsServer" aria-label="Surfshark server" hidden></select>
           </div>
           <button type="button" class="choice" data-provider="direct" id="netBtnDirect">
             <span class="title">Direct / default</span>
-            <span class="hint">Clear Circle exit overrides (follow the normal exit).</span>
+            <span class="hint">Clear this device’s override (follow the normal exit).</span>
           </button>
         </div>
       </section>

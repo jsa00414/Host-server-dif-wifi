@@ -11705,41 +11705,19 @@ def build_device_exit_status(
     control_ip = proven
     base["lan_ip"] = proven
     state = _read_device_exit_state()
-    devices = state.get("devices") or {}
-    circle_ips = _circle_device_exit_target_ips(control_ip)
-    # Prefer Circle-wide provider when the roster shares one override.
-    circle_provs: list[str] = []
-    for tip in circle_ips:
-        prow = devices.get(tip) if isinstance(devices, dict) else None
-        if isinstance(prow, dict):
-            p = str(prow.get("provider") or "direct").strip().lower() or "direct"
-        else:
-            p = "direct"
-        if p == "clear":
-            p = "direct"
-        circle_provs.append(p)
-    row = devices.get(control_ip) if isinstance(devices, dict) else {}
+    row = (state.get("devices") or {}).get(control_ip) or {}
     if not isinstance(row, dict):
         row = {}
-    if circle_provs and len(set(circle_provs)) == 1:
-        provider = circle_provs[0]
-        # Prefer a row that actually has the shared provider extras.
-        for tip in circle_ips:
-            cand = devices.get(tip) if isinstance(devices, dict) else None
-            if isinstance(cand, dict) and str(cand.get("provider") or "").lower() == provider:
-                row = cand
-                break
-    else:
-        provider = str(row.get("provider") or "direct").strip().lower() or "direct"
+    provider = str(row.get("provider") or "direct").strip().lower() or "direct"
     if provider == "clear":
         provider = "direct"
+    siblings = _circle_sibling_device_ips(control_ip)
     base.update(
         {
             "control_ip": control_ip,
             "provider": provider,
             "provider_label": _provider_label(provider),
-            "circle_ips": circle_ips,
-            "circle_device_count": len(circle_ips),
+            "sibling_ips": siblings,
             "surfshark_server": str(
                 row.get("server") or (ss_servers[0]["id"] if ss_servers else "")
             ),
@@ -11789,11 +11767,17 @@ def set_device_exit(
             _read_vpn_exit_state().get("exit_ip") or ""
         ).strip()
         extra = extra or "100.94.32.63"
-    # One Circle member proves auth; Exit applies to the entire Circle roster.
-    targets = _circle_device_exit_target_ips(control_ip) or [control_ip]
+    # Individual device (+ same-key Wi‑Fi/OpenVPN siblings), not the whole Circle.
+    targets = _circle_sibling_device_ips(control_ip) or [control_ip]
+    target_set = set(targets)
     state = _read_device_exit_state()
     devices = dict(state.get("devices") or {})
     now = int(time.time())
+    # Drop leftover circle-wide rows so only this device group keeps an override.
+    circle_ips = set(_circle_device_exit_target_ips())
+    for tip in list(devices.keys()):
+        if tip in circle_ips and tip not in target_set:
+            devices.pop(tip, None)
     if prov == "clear":
         for tip in targets:
             devices.pop(tip, None)
@@ -11823,10 +11807,12 @@ def set_device_exit(
         circle_member=True,
     )
     label = _provider_label("direct" if prov == "clear" else prov)
-    n = len(targets)
-    status["message"] = f"{label} for entire Circle ({n} device{'s' if n != 1 else ''})"
-    status["circle_ips"] = targets
-    status["sibling_ips"] = targets  # back-compat for older Authenticator builds
+    siblings = [ip for ip in targets if ip != control_ip]
+    if siblings:
+        status["message"] = f"{label} for {control_ip} (+ {' '.join(siblings)})"
+    else:
+        status["message"] = f"{label} for {control_ip}"
+    status["sibling_ips"] = targets
     status["sync"] = out[-400:]
     return status
 
