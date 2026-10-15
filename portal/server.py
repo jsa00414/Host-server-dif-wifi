@@ -4484,6 +4484,43 @@ def ensure_keys_hookup(rules: list[dict]) -> list[dict]:
     return out
 
 
+def ensure_portal_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee portal.vpstruelord.com → port-forward-ui (:5002)."""
+    domain = (PORTAL_HOST or "portal.vpstruelord.com").strip().lower()
+    out = list(rules or [])
+    for i, r in enumerate(out):
+        if str(r.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **r,
+                    "enabled": True,
+                    "domain": domain,
+                    "target_host": r.get("target_host") or DOCKER_HOST_GW,
+                    "target_port": int(r.get("target_port") or 5002),
+                    "name": "portal-panel",
+                    "external": False,
+                    # Login-gated panel; campus WAN still hard-denied in Caddy.
+                    "vpn_only": False,
+                }
+            )
+            return out
+    out.insert(
+        0,
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": DOCKER_HOST_GW,
+                "target_port": 5002,
+                "name": "portal-panel",
+                "external": False,
+                "vpn_only": False,
+            }
+        ),
+    )
+    return out
+
+
 def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     """Keep always-on portal services present in managed hookups."""
     # Drop retired Windows Guacamole hookup if present.
@@ -4495,7 +4532,9 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
     ]
     return retire_network_hookup(
         ensure_keys_hookup(
-            ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+            ensure_portal_hookup(
+                ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+            )
         )
     )
 
@@ -5206,6 +5245,11 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             # Site-level deny first so shared campus egress cannot use public
             # auth-app paths either (phones on cellular still work from other IPs).
             lines.extend(_caddy_denied_wan_lines("\t"))
+            # Prefer HTTP/1.1 through sslh PROXY — avoids flaky h2 mid-handshake.
+            lines.append('\theader Alt-Svc "clear"')
+            lines.append("\ttls {")
+            lines.append("\t\talpn http/1.1")
+            lines.append("\t}")
             # Legacy Authenticator URLs on portal → keys host.
             lines.append(
                 "\t@auth_app_legacy path /auth-app.html /auth-app-iphone.html "
