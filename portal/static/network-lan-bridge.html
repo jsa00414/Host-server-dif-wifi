@@ -9,19 +9,28 @@
 <script>
   (function () {
     const LAN_RE = /^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/;
-    function ips() {
+    function exportLanKeys() {
+      const out = {};
       try {
         const store = (window.SmCircleCrypto && SmCircleCrypto.loadStore()) || {};
-        return Object.keys(store).filter((ip) => LAN_RE.test(ip));
-      } catch (_) {
-        return [];
-      }
+        Object.keys(store).forEach((ip) => {
+          if (!LAN_RE.test(ip)) return;
+          const row = store[ip];
+          if (row && row.privateJwk && row.publicKey) out[ip] = row;
+        });
+      } catch (_) {}
+      return out;
     }
     function send() {
-      const list = ips();
+      const keys = exportLanKeys();
       try {
         parent.postMessage(
-          { type: "sm-network-lan-ips", ips: list, source: location.origin },
+          {
+            type: "sm-network-lan-ips",
+            ips: Object.keys(keys),
+            keys,
+            source: location.origin,
+          },
           "*"
         );
       } catch (_) {}

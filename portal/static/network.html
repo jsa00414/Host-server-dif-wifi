@@ -333,66 +333,75 @@
     }
 
     function candidateEntries() {
+      // Only IPs this browser holds a circle key for (synced from keys.*).
       const byIp = new Map();
-      const add = (ip, label, extra) => {
+      const add = (ip, label) => {
         if (!isHomeLanIp(ip)) return;
         const prev = byIp.get(ip);
-        const nextLabel = label && label !== ip ? label : (prev?.label || ip);
         byIp.set(ip, {
           ip,
-          label: nextLabel,
-          online: !!(extra?.online || prev?.online),
+          label: (label && label !== ip ? label : null) || prev?.label || ip,
         });
       };
-      for (const ip of circleStoreLanIps()) add(ip, ip, { source: "circle" });
-      for (const ip of bridgeIps) add(ip, ip, { source: "keys" });
+      for (const ip of circleStoreLanIps()) add(ip, ip);
+      for (const ip of bridgeIps) add(ip, ip);
       for (const row of state?.candidate_ips || []) {
-        add(row.ip, row.label || row.ip, row);
+        if (circleStoreLanIps().includes(row.ip) || bridgeIps.includes(row.ip)) {
+          add(row.ip, row.label || row.ip);
+        }
       }
-      if (lanIp) add(lanIp, lanIp);
-      return [...byIp.values()].sort((a, b) => {
-        if (!!b.online !== !!a.online) return b.online ? 1 : -1;
-        return String(a.label).localeCompare(String(b.label));
-      });
+      return [...byIp.values()].sort((a, b) =>
+        String(a.label).localeCompare(String(b.label))
+      );
+    }
+
+    function keysUrl() {
+      const host = (state?.hosts?.keys || "keys.vpstruelord.com").replace(/^https?:\/\//, "");
+      return `https://${host}/`;
     }
 
     function fillDevicePicker(selected) {
       const opts = candidateEntries();
-      const need = !!state?.needs_device_ip || !!state?.via_flint || !selected;
-      els.deviceRow.hidden = !(need || opts.length > 1);
+      const locked = !!state?.needs_circle && !state?.circle_ok;
+      els.deviceRow.hidden = locked || (!opts.length && !selected);
       if (!opts.length) {
-        els.devicePick.innerHTML = `<option value="">Select your device IP…</option>`;
+        els.devicePick.innerHTML = `<option value="">No circle device key on this browser…</option>`;
       } else {
         els.devicePick.innerHTML =
-          `<option value="">Select your device IP…</option>` +
+          `<option value="">Select your circle device…</option>` +
           opts.map((row) => {
-            const mark = row.online ? " · online" : "";
             const text = row.label && row.label !== row.ip
-              ? `${row.label} — ${row.ip}${mark}`
-              : `${row.ip}${mark}`;
+              ? `${row.label} — ${row.ip}`
+              : row.ip;
             return `<option value="${row.ip}" ${row.ip === selected ? "selected" : ""}>${text}</option>`;
           }).join("");
       }
       if (selected && isHomeLanIp(selected)) {
         els.deviceManual.value = selected;
       }
+      els.deviceManual.placeholder = opts.length
+        ? "or confirm 192.168.8.x"
+        : "Approve this device on keys.vpstruelord.com first";
+      els.useDeviceBtn.disabled = !opts.length;
     }
 
     function render() {
       if (!state) return;
-      const ip = state.control_ip || lanIp || "";
-      els.controlIp.textContent = ip || "pick this device";
+      const ip = state.control_ip || (state.circle_ok ? lanIp : "") || "";
+      els.controlIp.textContent = ip || (state.needs_circle ? "circle required" : "pick this device");
       const bits = [];
-      if (state.via_flint) bits.push("via Flint VPN");
-      if (state.client_ip && state.client_ip !== ip) bits.push(`connection ${state.client_ip}`);
-      if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
-      if (state.needs_device_ip) {
-        bits.push("choose your 192.168.8.x below (Wi‑Fi device IP)");
-      } else if (state.provider_label) {
-        bits.push(`now: ${state.provider_label}`);
+      if (state.needs_circle && !state.circle_ok) {
+        bits.push(`Circle members only — open ${keysUrl()} and Approve this device`);
+      } else {
+        if (state.via_flint) bits.push("via Flint VPN");
+        if (state.client_ip && state.client_ip !== ip) bits.push(`connection ${state.client_ip}`);
+        if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
+        if (state.provider_label) bits.push(`now: ${state.provider_label}`);
+        if (state.global_exit) bits.push(`network default: ${state.global_exit}`);
       }
-      if (state.global_exit) bits.push(`network default: ${state.global_exit}`);
-      els.meta.textContent = bits.join(" · ") || "Ready";
+      els.meta.innerHTML = state.needs_circle && !state.circle_ok
+        ? `Circle members only. <a href="${keysUrl()}" style="color:var(--accent)">Open Authenticator</a>, unlock, Approve this device on home Wi‑Fi, then return here.`
+        : (bits.join(" · ") || "Ready");
       fillDevicePicker(ip || lanIp);
 
       const prov = String(state.provider || "direct");
@@ -412,21 +421,21 @@
         els.ssServer.hidden = true;
       }
 
-      const canAct = !!(state.control_ip);
+      const canAct = !!(state.circle_ok && state.control_ip);
       els.choices.classList.toggle("busy", !canAct);
     }
 
-    async function exitHeaders(extra) {
+    async function exitHeaders(extra, bodyText) {
       const headers = { Accept: "application/json", ...(extra || {}) };
       if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
       try {
         if (lanIp && window.SmCircleCrypto && SmCircleCrypto.getKeyForIp) {
           const row = await SmCircleCrypto.getKeyForIp(lanIp);
-          if (row?.publicKey) {
+          if (row?.publicKey && row?.privateJwk) {
             const proof = await SmCircleCrypto.circleHeaders(lanIp, {
               method: headers["Content-Type"] ? "POST" : "GET",
               path: "/api/network/exit",
-              bodyText: "",
+              bodyText: bodyText || "",
             });
             Object.assign(headers, proof);
           }
@@ -441,28 +450,30 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
       state = data;
-      if (data.control_ip && isHomeLanIp(data.control_ip)) {
+      if (data.control_ip && isHomeLanIp(data.control_ip) && data.circle_ok) {
         lanIp = data.control_ip;
         rememberIp(lanIp);
       }
       render();
-      if (data.needs_device_ip && !lanIp) {
-        toast("Pick this device’s Wi‑Fi IP below", true);
-      }
     }
 
     async function applyChosenDeviceIp(ip) {
       if (!isHomeLanIp(ip)) {
-        toast("Enter a home Wi‑Fi IP like 192.168.8.186", true);
+        toast("Choose a circle device IP (192.168.8.x)", true);
+        return;
+      }
+      const row = window.SmCircleCrypto
+        ? await SmCircleCrypto.getKeyForIp(ip)
+        : null;
+      if (!row?.privateJwk) {
+        toast("No Authenticator key for that IP on this browser — approve it on keys.vpstruelord.com first", true);
         return;
       }
       lanIp = ip;
       rememberIp(ip);
-      try {
-        if (window.SmCircleCrypto) await SmCircleCrypto.ensureKeyForIp(ip);
-      } catch (_) {}
       await refresh();
-      if (state?.control_ip === ip) toast(`Controlling ${ip}`);
+      if (state?.circle_ok && state?.control_ip === ip) toast(`Controlling ${ip}`);
+      else if (state?.needs_circle) toast(state.error || "Circle proof failed", true);
     }
 
     async function setProvider(provider) {
@@ -483,20 +494,13 @@
           body.exit_ip = state.tailscale_exit_ip;
         }
         const bodyText = JSON.stringify(body);
-        const headers = await exitHeaders({ "Content-Type": "application/json" });
-        // Re-sign with body hash for POST
-        try {
-          if (lanIp && window.SmCircleCrypto && (await SmCircleCrypto.getKeyForIp(lanIp))) {
-            Object.assign(
-              headers,
-              await SmCircleCrypto.circleHeaders(lanIp, {
-                method: "POST",
-                path: "/api/network/exit",
-                bodyText,
-              })
-            );
-          }
-        } catch (_) {}
+        const headers = await exitHeaders(
+          { "Content-Type": "application/json" },
+          bodyText
+        );
+        if (!headers["X-SM-Circle-Sig"]) {
+          throw new Error("Circle proof missing — approve this device in Authenticator first");
+        }
         const res = await fetch("/api/network/exit", {
           method: "POST",
           headers,
@@ -563,7 +567,12 @@
           if (originHost && originHost !== keysHost && !originHost.endsWith(".vpstruelord.com")) {
             return;
           }
-          done(Array.isArray(data.ips) ? data.ips : []);
+          try {
+            if (data.keys && window.SmCircleCrypto?.mergeStore) {
+              SmCircleCrypto.mergeStore(data.keys);
+            }
+          } catch (_) {}
+          done(Array.isArray(data.ips) ? data.ips : Object.keys(data.keys || {}));
         };
         window.addEventListener("message", onMsg);
         const iframe = document.createElement("iframe");
@@ -571,25 +580,34 @@
         iframe.style.cssText = "position:absolute;width:0;height:0;border:0;opacity:0";
         iframe.src = `https://${keysHost}/static/network-lan-bridge.html`;
         document.body.appendChild(iframe);
-        setTimeout(() => done(bridgeIps), 1200);
+        setTimeout(() => done(bridgeIps), 1500);
       });
     }
 
     (async () => {
       try {
-        lanIp = await detectDeviceIp();
+        // Circle keys live on keys.* — sync them before proving membership.
+        state = {
+          hosts: { keys: "keys.vpstruelord.com" },
+          needs_circle: true,
+          circle_ok: false,
+          candidate_ips: [],
+        };
+        render();
+        await loadKeysBridge();
+        const webrtc = await detectHomeLanIpViaWebRtc();
+        const circleIps = circleStoreLanIps();
+        if (isHomeLanIp(webrtc) && circleIps.includes(webrtc)) {
+          lanIp = webrtc;
+        } else if (rememberedIp() && circleIps.includes(rememberedIp())) {
+          lanIp = rememberedIp();
+        } else if (circleIps.length === 1) {
+          lanIp = circleIps[0];
+        }
         if (lanIp) rememberIp(lanIp);
         await refresh();
-        // Circle keys live on keys.* — pull them across if WebRTC missed.
-        if ((!lanIp || state?.needs_device_ip) && state?.via_flint) {
-          await loadKeysBridge();
-          if (!lanIp && bridgeIps.length === 1) {
-            lanIp = bridgeIps[0];
-            rememberIp(lanIp);
-            await refresh();
-          } else {
-            render();
-          }
+        if (state?.needs_circle && !state?.circle_ok) {
+          toast("Circle members only — approve this device in Authenticator", true);
         }
       } catch (err) {
         els.controlIp.textContent = "unavailable";

@@ -36,6 +36,20 @@
     localStorage.setItem(STORE_KEYS, JSON.stringify(data));
   }
 
+  function mergeStore(rows) {
+    const store = loadStore();
+    let n = 0;
+    if (!rows || typeof rows !== "object") return 0;
+    Object.keys(rows).forEach((ip) => {
+      const row = rows[ip];
+      if (!row || !row.privateJwk || !row.publicKey) return;
+      store[String(ip).trim()] = row;
+      n += 1;
+    });
+    saveStore(store);
+    return n;
+  }
+
   async function exportRawPublic(key) {
     const raw = await crypto.subtle.exportKey("raw", key);
     return b64urlFromBuf(raw);
@@ -168,6 +182,7 @@
     circleHeaders,
     keyIdFromPub,
     loadStore,
+    mergeStore,
     proofMessage,
     sha256Hex,
   };

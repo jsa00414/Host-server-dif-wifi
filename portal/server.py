@@ -11326,81 +11326,95 @@ def _global_exit_summary() -> str:
     return "direct"
 
 
-def _device_exit_candidate_ips() -> list[dict]:
-    """LAN devices the browser can pick when WebRTC/circle store cannot see 192.168.8.x.
+def _device_exit_circle_member_ip(ip: str) -> str:
+    """Return normalized LAN IP if it is an allowlisted circle member."""
+    ip_n = _normalize_vpn_ip(ip or "")
+    if not _is_home_lan_ipv4(ip_n):
+        raise ValueError("Circle device exit only works for home Wi‑Fi 192.168.8.x IPs")
+    if ip_n not in _allowlisted_lan_ips():
+        raise ValueError(
+            "This IP is not in the circle. Open keys.vpstruelord.com, unlock "
+            "Authenticator, and Approve this device on home Wi‑Fi first."
+        )
+    if not _circle_pubkey_for_ip(ip_n):
+        raise ValueError(
+            "No circle key bound to this IP. Approve it again from Authenticator."
+        )
+    return ip_n
 
-    Prefer circle-allowlisted LAN /32s, then currently-online DHCP/ARP hosts.
-    """
-    rows: dict[str, dict] = {}
-    online: set[str] = set()
+
+def _require_device_exit_circle(
+    handler: "Handler",
+    *,
+    lan_ip: str = "",
+    body_text: str = "",
+) -> str:
+    """Circle members only: verify Ed25519 proof for an allowlisted LAN IP."""
+    claimed = _normalize_vpn_ip(
+        lan_ip
+        or handler.headers.get("X-SM-Circle-Ip")
+        or handler.headers.get("X-SM-Lan-Ip")
+        or ""
+    )
+    if not claimed:
+        raise PermissionError(
+            "Circle proof required. Open keys.vpstruelord.com and Approve this device first."
+        )
+    member_ip = _device_exit_circle_member_ip(claimed)
+    proof = verify_circle_device_proof(
+        handler,
+        body_text=body_text or "",
+        claimed_ip=member_ip,
+        require_existing_bind=True,
+    )
+    proven = _normalize_vpn_ip(str(proof.get("ip") or ""))
+    if proven != member_ip:
+        raise PermissionError("Circle proof IP mismatch")
+    return proven
+
+
+def _device_exit_label_for_ip(ip: str) -> str:
+    ip_n = _normalize_vpn_ip(ip)
+    try:
+        data = _read_vpn_allowlist()
+        for row in data.get("allowed") or []:
+            if not isinstance(row, dict):
+                continue
+            if _normalize_vpn_ip(str(row.get("ip") or "")) != ip_n:
+                continue
+            name = str(row.get("name") or row.get("hostname") or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
     try:
         lan = read_lan_devices()
         for d in lan.get("devices") or []:
             if not isinstance(d, dict):
                 continue
-            ip = _normalize_vpn_ip(str(d.get("ip") or ""))
-            if not _is_home_lan_ipv4(ip):
+            if _normalize_vpn_ip(str(d.get("ip") or "")) != ip_n:
                 continue
-            if d.get("online"):
-                online.add(ip)
-            rows[ip] = {
-                "ip": ip,
-                "label": str(d.get("hostname") or d.get("name") or ip),
-                "online": bool(d.get("online")),
-                "source": "lan",
-            }
+            name = str(d.get("hostname") or d.get("name") or "").strip()
+            if name:
+                return name
     except Exception:
         pass
-    try:
-        for ip in sorted(_allowlisted_lan_ips()):
-            if not _is_home_lan_ipv4(ip):
-                continue
-            cur = rows.get(ip) or {
-                "ip": ip,
-                "label": ip,
-                "online": ip in online,
-                "source": "circle",
-            }
-            cur["source"] = "circle"
-            cur["online"] = bool(cur.get("online") or ip in online)
-            if cur.get("label") in {"", ip}:
-                # Prefer a friendlier name from allowlist when present.
-                try:
-                    data = _read_vpn_allowlist()
-                    for row in data.get("allowed") or []:
-                        if not isinstance(row, dict):
-                            continue
-                        if _normalize_vpn_ip(str(row.get("ip") or "")) != ip:
-                            continue
-                        name = str(row.get("name") or row.get("hostname") or "").strip()
-                        if name:
-                            cur["label"] = name
-                        break
-                except Exception:
-                    pass
-            rows[ip] = cur
-    except Exception:
-        pass
-    out = list(rows.values())
-    out.sort(
-        key=lambda r: (
-            0 if r.get("source") == "circle" else 1,
-            0 if r.get("online") else 1,
-            str(r.get("label") or ""),
-            str(r.get("ip") or ""),
-        )
-    )
-    return out
+    return ip_n
 
 
 def build_device_exit_status(
-    *, client_ip: str, lan_ip: str = ""
+    *,
+    client_ip: str,
+    lan_ip: str = "",
+    circle_ip: str = "",
+    circle_ok: bool = False,
 ) -> dict:
     client_n = _normalize_vpn_ip(client_ip or "") or ""
     lan_n = _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else ""
+    proven = _normalize_vpn_ip(circle_ip or "") if circle_ok else ""
     ts = _read_vpn_exit_state()
     ss_servers = list_surfshark_servers()
-    candidates = _device_exit_candidate_ips()
+    keys_host = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip()
     base = {
         "ok": True,
         "client_ip": client_n,
@@ -11409,24 +11423,39 @@ def build_device_exit_status(
         "surfshark_servers": ss_servers,
         "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
         "global_exit": _global_exit_summary(),
-        "hosts": {"network": NETWORK_PUBLIC_HOST, "keys": KEYS_PUBLIC_HOST},
+        "hosts": {"network": NETWORK_PUBLIC_HOST, "keys": keys_host},
         "needs_device_ip": False,
+        "needs_circle": not bool(proven),
+        "circle_ok": bool(proven),
         "via_flint": client_n in _device_exit_infra_ips(),
-        "candidate_ips": candidates,
+        # Never leak the full circle roster to unauthenticated browsers.
+        "candidate_ips": [],
     }
-    try:
-        control_ip = _device_exit_control_ip(client_ip, lan_ip)
-    except ValueError as exc:
+    if not proven:
         base.update(
             {
                 "control_ip": "",
                 "provider": "direct",
                 "provider_label": _provider_label("direct"),
-                "needs_device_ip": True,
-                "error": str(exc),
+                "error": (
+                    "Circle members only. Open https://"
+                    f"{keys_host}/ , unlock Authenticator, and Approve this "
+                    "device on home Wi‑Fi — then return here."
+                ),
             }
         )
         return base
+
+    control_ip = proven
+    base["lan_ip"] = proven
+    base["candidate_ips"] = [
+        {
+            "ip": proven,
+            "label": _device_exit_label_for_ip(proven),
+            "online": True,
+            "source": "circle",
+        }
+    ]
     state = _read_device_exit_state()
     row = (state.get("devices") or {}).get(control_ip) or {}
     provider = str(row.get("provider") or "direct").strip().lower() or "direct"
@@ -11455,8 +11484,13 @@ def set_device_exit(
     provider: str,
     server: str = "",
     exit_ip: str = "",
+    circle_ip: str = "",
 ) -> dict:
-    control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    # Circle-proven LAN IP is authoritative — never trust an unauthenticated guess.
+    control_ip = _normalize_vpn_ip(circle_ip or "") or _device_exit_control_ip(
+        client_ip, lan_ip
+    )
+    control_ip = _device_exit_circle_member_ip(control_ip)
     if control_ip in {"127.0.0.1", "0.0.0.0", VPS_PUBLIC_IP}:
         raise ValueError(
             "Open this page from the device whose internet you want to switch "
@@ -11488,7 +11522,12 @@ def set_device_exit(
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if proc.returncode != 0:
         raise ValueError(out or "device-exit failed")
-    status = build_device_exit_status(client_ip=client_ip, lan_ip=lan_ip)
+    status = build_device_exit_status(
+        client_ip=client_ip,
+        lan_ip=control_ip,
+        circle_ip=control_ip,
+        circle_ok=True,
+    )
     status["message"] = f"{_provider_label('direct' if prov == 'clear' else prov)} for {control_ip}"
     status["sync"] = out[-400:]
     return status
@@ -19498,11 +19537,24 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/api/network/exit":
             try:
                 lan_hint = _device_exit_lan_hint_from_request(self)
+                circle_ip = ""
+                circle_ok = False
+                try:
+                    circle_ip = _require_device_exit_circle(
+                        self, lan_ip=lan_hint, body_text=""
+                    )
+                    circle_ok = True
+                except (PermissionError, ValueError):
+                    # Unauthenticated probe — return locked status, no roster leak.
+                    circle_ok = False
+                    circle_ip = ""
                 self._json(
                     200,
                     build_device_exit_status(
                         client_ip=request_client_ip(self),
-                        lan_ip=lan_hint,
+                        lan_ip=lan_hint or circle_ip,
+                        circle_ip=circle_ip,
+                        circle_ok=circle_ok,
                     ),
                 )
             except ValueError as exc:
@@ -20540,13 +20592,28 @@ document.getElementById('f').onsubmit = async (e) => {
             return
         if path == "/api/network/exit":
             try:
-                payload = self._read_json()
+                # Need raw body for circle signature (hash must match what was signed).
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                body_text = raw.decode("utf-8") if raw else "{}"
+                try:
+                    payload = json.loads(body_text or "{}")
+                except Exception:
+                    payload = {}
                 if not isinstance(payload, dict):
                     payload = {}
                 lan_hint = _device_exit_lan_hint_from_request(self, payload)
+                try:
+                    circle_ip = _require_device_exit_circle(
+                        self, lan_ip=lan_hint, body_text=body_text
+                    )
+                except (PermissionError, ValueError) as exc:
+                    self._json(403, {"ok": False, "error": str(exc), "needs_circle": True})
+                    return
                 result = set_device_exit(
                     client_ip=request_client_ip(self),
-                    lan_ip=lan_hint,
+                    lan_ip=circle_ip,
+                    circle_ip=circle_ip,
                     provider=str(payload.get("provider") or ""),
                     server=str(payload.get("server") or ""),
                     exit_ip=str(payload.get("exit_ip") or ""),
