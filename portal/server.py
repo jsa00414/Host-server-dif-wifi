@@ -11251,6 +11251,24 @@ def _read_device_exit_state() -> dict:
     return data
 
 
+def _write_device_exit_state(data: dict) -> None:
+    devices = data.get("devices") if isinstance(data, dict) else {}
+    if not isinstance(devices, dict):
+        devices = {}
+    payload = {
+        "devices": {
+            str(k): v for k, v in devices.items() if isinstance(v, dict)
+        },
+        "updated_at": int(time.time()),
+    }
+    DEVICE_EXIT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DEVICE_EXIT_STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    tmp.replace(DEVICE_EXIT_STATE_PATH)
+
+
 def _device_exit_infra_ips() -> set[str]:
     """Tunnel / router VIPs that are never a single end-user device."""
     ips = {
@@ -11520,6 +11538,28 @@ def _circle_sibling_device_ips(ip: str) -> list[str]:
     return out
 
 
+def _circle_device_exit_target_ips(control_ip: str = "") -> list[str]:
+    """Every Circle LAN/OpenVPN device Exit may mark (whole circle, not one IP)."""
+    infra = _device_exit_infra_ips() | set(_denied_vpn_ips())
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in sorted(_allowlisted_device_exit_ips()):
+        ip = _normalize_vpn_ip(raw)
+        if not ip or ip in seen or ip in infra:
+            continue
+        if not (_is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip)):
+            continue
+        seen.add(ip)
+        out.append(ip)
+    control = _normalize_vpn_ip(control_ip or "")
+    if control and control not in seen:
+        if _is_home_lan_ipv4(control) or _is_openvpn_client_ipv4(control):
+            if control not in infra:
+                out.append(control)
+                out.sort()
+    return out
+
+
 def _device_exit_candidate_ips_for_circle() -> list[dict]:
     """Allowlisted circle devices (home LAN + OpenVPN CCD) for the Exit picker."""
     online: set[str] = set()
@@ -11665,8 +11705,32 @@ def build_device_exit_status(
     control_ip = proven
     base["lan_ip"] = proven
     state = _read_device_exit_state()
-    row = (state.get("devices") or {}).get(control_ip) or {}
-    provider = str(row.get("provider") or "direct").strip().lower() or "direct"
+    devices = state.get("devices") or {}
+    circle_ips = _circle_device_exit_target_ips(control_ip)
+    # Prefer Circle-wide provider when the roster shares one override.
+    circle_provs: list[str] = []
+    for tip in circle_ips:
+        prow = devices.get(tip) if isinstance(devices, dict) else None
+        if isinstance(prow, dict):
+            p = str(prow.get("provider") or "direct").strip().lower() or "direct"
+        else:
+            p = "direct"
+        if p == "clear":
+            p = "direct"
+        circle_provs.append(p)
+    row = devices.get(control_ip) if isinstance(devices, dict) else {}
+    if not isinstance(row, dict):
+        row = {}
+    if circle_provs and len(set(circle_provs)) == 1:
+        provider = circle_provs[0]
+        # Prefer a row that actually has the shared provider extras.
+        for tip in circle_ips:
+            cand = devices.get(tip) if isinstance(devices, dict) else None
+            if isinstance(cand, dict) and str(cand.get("provider") or "").lower() == provider:
+                row = cand
+                break
+    else:
+        provider = str(row.get("provider") or "direct").strip().lower() or "direct"
     if provider == "clear":
         provider = "direct"
     base.update(
@@ -11674,6 +11738,8 @@ def build_device_exit_status(
             "control_ip": control_ip,
             "provider": provider,
             "provider_label": _provider_label(provider),
+            "circle_ips": circle_ips,
+            "circle_device_count": len(circle_ips),
             "surfshark_server": str(
                 row.get("server") or (ss_servers[0]["id"] if ss_servers else "")
             ),
@@ -11723,18 +11789,32 @@ def set_device_exit(
             _read_vpn_exit_state().get("exit_ip") or ""
         ).strip()
         extra = extra or "100.94.32.63"
-    targets = _circle_sibling_device_ips(control_ip) or [control_ip]
-    sync_bits: list[str] = []
-    for tip in targets:
-        cmd = [str(DEVICE_EXIT_SCRIPT), "set", tip, prov]
-        if extra and prov not in ("clear", "direct"):
-            cmd.append(extra)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-        if proc.returncode != 0:
-            raise ValueError(out or f"device-exit failed for {tip}")
-        if out:
-            sync_bits.append(out[-200:])
+    # One Circle member proves auth; Exit applies to the entire Circle roster.
+    targets = _circle_device_exit_target_ips(control_ip) or [control_ip]
+    state = _read_device_exit_state()
+    devices = dict(state.get("devices") or {})
+    now = int(time.time())
+    if prov == "clear":
+        for tip in targets:
+            devices.pop(tip, None)
+    else:
+        row: dict = {"provider": prov, "updated_at": now}
+        if prov == "surfshark" and extra:
+            row["server"] = extra
+        if prov == "tailscale" and extra:
+            row["exit_ip"] = extra
+        for tip in targets:
+            devices[tip] = dict(row)
+    _write_device_exit_state({"devices": devices})
+    proc = subprocess.run(
+        [str(DEVICE_EXIT_SCRIPT), "apply"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        raise ValueError(out or "device-exit apply failed")
     status = build_device_exit_status(
         client_ip=client_ip,
         lan_ip=control_ip,
@@ -11743,15 +11823,11 @@ def set_device_exit(
         circle_member=True,
     )
     label = _provider_label("direct" if prov == "clear" else prov)
-    siblings = [ip for ip in targets if ip != control_ip]
-    if siblings:
-        status["message"] = (
-            f"{label} for {control_ip} (+ {' '.join(siblings)})"
-        )
-    else:
-        status["message"] = f"{label} for {control_ip}"
-    status["sibling_ips"] = targets
-    status["sync"] = " | ".join(sync_bits)[-400:]
+    n = len(targets)
+    status["message"] = f"{label} for entire Circle ({n} device{'s' if n != 1 else ''})"
+    status["circle_ips"] = targets
+    status["sibling_ips"] = targets  # back-compat for older Authenticator builds
+    status["sync"] = out[-400:]
     return status
 
 

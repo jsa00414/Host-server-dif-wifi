@@ -314,9 +314,13 @@
         if (state.provider_label && state.circle_ok) {
           bits.push(`now: ${state.provider_label}`);
         }
+        const circleN = Number(state.circle_device_count || (state.circle_ips || []).length || 0);
+        if (state.circle_ok && circleN > 0) {
+          bits.push(`Circle ${circleN} device${circleN === 1 ? "" : "s"}`);
+        }
         if (state.global_exit) bits.push(`default: ${state.global_exit}`);
         if (state.needs_device_ip && !state.circle_ok) {
-          bits.push("pick this device’s home Wi‑Fi or OpenVPN IP");
+          bits.push("pick your Circle device IP to prove membership");
         }
       }
       if (els.meta) els.meta.textContent = bits.join(" · ") || "Ready";
@@ -418,7 +422,12 @@
       if (els.deviceManual) els.deviceManual.value = ip;
       await refresh();
       if (state?.circle_ok && state?.control_ip === ip) {
-        toast(`Controlling ${ip}`);
+        const n = Number(state.circle_device_count || (state.circle_ips || []).length || 0);
+        toast(
+          n > 1
+            ? `Proved as ${ip} · Exit covers ${n} Circle devices`
+            : `Proved as ${ip}`
+        );
       } else if (state?.needs_circle && !state?.circle_member) {
         toast(state.error || "Circle proof failed", true);
       } else if (state?.circle_member && !state?.circle_ok) {
