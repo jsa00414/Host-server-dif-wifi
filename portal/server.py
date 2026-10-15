@@ -11266,7 +11266,7 @@ def _device_exit_infra_ips() -> set[str]:
 
 
 def _device_exit_lan_hint_from_request(handler: "Handler", payload: dict | None = None) -> str:
-    """LAN /32 claimed by the browser (header, body, or circle proof IP)."""
+    """Device /32 claimed by the browser (header, body, or circle proof IP)."""
     payload = payload if isinstance(payload, dict) else {}
     for raw in (
         handler.headers.get("X-SM-Lan-Ip"),
@@ -11275,7 +11275,7 @@ def _device_exit_lan_hint_from_request(handler: "Handler", payload: dict | None 
         payload.get("device_ip"),
     ):
         ip = _normalize_vpn_ip(str(raw or ""))
-        if _is_home_lan_ipv4(ip):
+        if _is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip):
             return ip
     return ""
 
@@ -11337,12 +11337,31 @@ def _global_exit_summary() -> str:
     return "direct"
 
 
+def _allowlisted_device_exit_ips() -> set[str]:
+    """Circle IPs that may be controlled by Network Exit (LAN + OpenVPN CCD)."""
+    out = set(_allowlisted_lan_ips())
+    try:
+        data = _read_vpn_allowlist()
+    except Exception:
+        return out
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if ip and _is_openvpn_client_ipv4(ip):
+            out.add(ip)
+    return out
+
+
 def _device_exit_circle_member_ip(ip: str) -> str:
-    """Return normalized LAN IP if it is an allowlisted circle member."""
+    """Return normalized device IP if it is an allowlisted circle member."""
     ip_n = _normalize_vpn_ip(ip or "")
-    if not _is_home_lan_ipv4(ip_n):
-        raise ValueError("Circle device exit only works for home Wi‑Fi 192.168.8.x IPs")
-    if ip_n not in _allowlisted_lan_ips():
+    if not (_is_home_lan_ipv4(ip_n) or _is_openvpn_client_ipv4(ip_n)):
+        raise ValueError(
+            "Circle device exit only works for home Wi‑Fi 192.168.8.x "
+            "or OpenVPN client 10.9.0.x IPs"
+        )
+    if ip_n not in _allowlisted_device_exit_ips():
         raise ValueError(
             "This IP is not in the circle. Open keys.vpstruelord.com, unlock "
             "Authenticator, and Approve this device on home Wi‑Fi first."
@@ -11430,14 +11449,16 @@ def _require_device_exit_circle(
     if proven:
         return proven
     if member:
-        raise PermissionError("Pick this device's home Wi‑Fi IP (192.168.8.x)")
+        raise PermissionError(
+            "Pick this device's home Wi‑Fi IP (192.168.8.x) or OpenVPN IP (10.9.0.x)"
+        )
     raise PermissionError(
         "Circle members only. Open Authenticator on this phone, then return here."
     )
 
 
 def _device_exit_candidate_ips_for_circle() -> list[dict]:
-    """Allowlisted LAN devices (circle members) for the authenticated picker."""
+    """Allowlisted circle devices (home LAN + OpenVPN CCD) for the Exit picker."""
     online: set[str] = set()
     try:
         for d in (read_lan_devices().get("devices") or []):
@@ -11448,14 +11469,35 @@ def _device_exit_candidate_ips_for_circle() -> list[dict]:
                 online.add(ip)
     except Exception:
         pass
+    try:
+        st = build_openvpn_status()
+        connected_names = {
+            str(c.get("name") or "").strip().lower()
+            for c in (st.get("clients") or [])
+            if isinstance(c, dict) and str(c.get("name") or "").strip()
+        }
+        for row in st.get("routes") or []:
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(str(row.get("virtual") or ""))
+            name = str(row.get("name") or "").strip().lower()
+            if _is_openvpn_client_ipv4(ip) and name in connected_names:
+                online.add(ip)
+    except Exception:
+        pass
     out: list[dict] = []
-    for ip in sorted(_allowlisted_lan_ips()):
-        if not _is_home_lan_ipv4(ip):
+    for ip in sorted(_allowlisted_device_exit_ips()):
+        if not (_is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip)):
             continue
+        label = _device_exit_label_for_ip(ip)
+        if _is_openvpn_client_ipv4(ip) and "OpenVPN" not in label and ip == label:
+            label = f"OpenVPN {ip}"
+        elif _is_openvpn_client_ipv4(ip) and "OpenVPN" not in label:
+            label = f"{label} (OpenVPN)"
         out.append(
             {
                 "ip": ip,
-                "label": _device_exit_label_for_ip(ip),
+                "label": label,
                 "online": ip in online,
                 "source": "circle",
             }
@@ -11502,7 +11544,12 @@ def build_device_exit_status(
     circle_member: bool = False,
 ) -> dict:
     client_n = _normalize_vpn_ip(client_ip or "") or ""
-    lan_n = _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else ""
+    lan_raw = _normalize_vpn_ip(lan_ip or "")
+    lan_n = (
+        lan_raw
+        if (_is_home_lan_ipv4(lan_raw) or _is_openvpn_client_ipv4(lan_raw))
+        else ""
+    )
     proven = _normalize_vpn_ip(circle_ip or "") if circle_ok else ""
     member = bool(circle_member or proven)
     ts = _read_vpn_exit_state()
@@ -11521,9 +11568,9 @@ def build_device_exit_status(
         "needs_circle": not member,
         "circle_ok": bool(proven),
         "circle_member": member,
+        # Shared Flint VIP / campus WAN only — not the phone's own CCD IP.
         "via_flint": client_n in _device_exit_infra_ips()
-        or client_n in _denied_vpn_ips()
-        or client_n.startswith("10.9."),
+        or client_n in _denied_vpn_ips(),
         "candidate_ips": _device_exit_candidate_ips_for_circle() if member else [],
     }
     if not member:
@@ -12543,7 +12590,19 @@ def effective_vpn_client_cidrs() -> str:
                 _add(tok)
     except Exception:
         pass
-    for ip in sorted(_allowlisted_public_ips() | _allowlisted_lan_ips() | sealed):
+    allowlisted_ovpn: set[str] = set()
+    try:
+        for row in (_read_vpn_allowlist().get("allowed") or []):
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(row.get("ip", ""))
+            if ip and _is_openvpn_client_ipv4(ip):
+                allowlisted_ovpn.add(ip)
+    except Exception:
+        allowlisted_ovpn = set()
+    for ip in sorted(
+        _allowlisted_public_ips() | _allowlisted_lan_ips() | allowlisted_ovpn | sealed
+    ):
         if ip in denied:
             continue
         _add(f"{ip}/32")
@@ -14099,6 +14158,22 @@ def _is_home_lan_ipv4(ip: str) -> bool:
     return True
 
 
+def _is_openvpn_client_ipv4(ip: str) -> bool:
+    """True for OpenVPN CCD client /32s (10.9.0.x), not server/Flint infra.
+
+    10.9.0.1 = tun0 server, 10.9.0.2 = flint VIP (shared path). Phone/PC CCD
+    addresses (e.g. james-iphone 10.9.0.3) are real end-user devices.
+    """
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 10 or parts[1] != 9 or parts[2] != 0:
+        return False
+    if parts[3] in (0, 1, 2, 255):
+        return False
+    return True
+
+
 def _lan_circle_skip_ips() -> set[str]:
     """Always-on LAN infra — never park these in pending."""
     skip = {
@@ -14124,9 +14199,13 @@ def _lan_circle_skip_ips() -> set[str]:
 
 
 def _is_circle_candidate_ip(ip: str) -> bool:
-    """Public WAN or home LAN client IP may enter the trust-circle lists."""
+    """Public WAN, home LAN, or OpenVPN CCD client IP may enter the trust circle."""
     ip_n = _normalize_vpn_ip(ip)
-    return bool(ip_n) and (_is_public_ipv4(ip_n) or _is_home_lan_ipv4(ip_n))
+    return bool(ip_n) and (
+        _is_public_ipv4(ip_n)
+        or _is_home_lan_ipv4(ip_n)
+        or _is_openvpn_client_ipv4(ip_n)
+    )
 
 
 def _empty_vpn_allowlist() -> dict:
@@ -14315,7 +14394,9 @@ def mutate_vpn_allowlist(
 ) -> dict:
     ip_n = _normalize_vpn_ip(ip)
     if not ip_n or not _is_circle_candidate_ip(ip_n):
-        raise ValueError("A public WAN or home LAN (192.168.8.x) IPv4 address is required")
+        raise ValueError(
+            "A public WAN, home LAN (192.168.8.x), or OpenVPN (10.9.0.x) IPv4 is required"
+        )
     action_n = str(action or "").strip().lower()
     if action_n not in ("approve", "revoke", "deny", "pending"):
         raise ValueError("action must be approve, revoke, deny, or pending")
@@ -14394,6 +14475,11 @@ def mutate_vpn_allowlist(
             if is_lan:
                 row["kind"] = "lan"
                 row["source"] = src if src.startswith("auth-app") or src == "security-ui" else src
+            elif _is_openvpn_client_ipv4(ip_n):
+                row["kind"] = "openvpn"
+                if not device_name:
+                    row["name"] = f"OpenVPN {ip_n}"
+                    row["hostname"] = row["name"]
             if prev_hidden:
                 row["hidden"] = True
             # Non-sealed approve always binds a key (enforced above).
@@ -14542,7 +14628,11 @@ def _write_vpn_allowlist(data: dict) -> None:
         if not isinstance(row, dict):
             continue
         ip = _normalize_vpn_ip(row.get("ip", ""))
-        if not ip or not (_is_public_ipv4(ip) or _is_home_lan_ipv4(ip)):
+        if not ip or not (
+            _is_public_ipv4(ip)
+            or _is_home_lan_ipv4(ip)
+            or _is_openvpn_client_ipv4(ip)
+        ):
             continue
         if _circle_row_is_sealed(row) or _circle_row_has_key(row):
             lines.append(f"{ip}/32")

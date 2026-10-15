@@ -12,6 +12,8 @@
   const TOTP_PERIOD = 30;
   const TOTP_DIGITS = 6;
   const LAN_RE = /^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/;
+  // OpenVPN CCD clients (not server .1 / Flint .2)
+  const OVPN_RE = /^10\.9\.0\.(?:[3-9]|[1-9]\d|1\d{2}|2[0-4]\d|25[0-4])$/;
 
   function $(id) {
     return document.getElementById(id);
@@ -19,6 +21,11 @@
 
   function isHomeLanIp(ip) {
     return LAN_RE.test(String(ip || "").trim());
+  }
+
+  function isExitDeviceIp(ip) {
+    const s = String(ip || "").trim();
+    return LAN_RE.test(s) || OVPN_RE.test(s);
   }
 
   function loadTotpAccount() {
@@ -171,7 +178,7 @@
     let wired = false;
 
     function rememberIp(ip) {
-      if (!isHomeLanIp(ip)) return;
+      if (!isExitDeviceIp(ip)) return;
       try {
         localStorage.setItem(LAST_IP_KEY, ip);
       } catch (_) {}
@@ -180,7 +187,7 @@
     function rememberedIp() {
       try {
         const ip = localStorage.getItem(LAST_IP_KEY) || "";
-        return isHomeLanIp(ip) ? ip : "";
+        return isExitDeviceIp(ip) ? ip : "";
       } catch (_) {
         return "";
       }
@@ -195,7 +202,7 @@
     function candidateEntries() {
       const byIp = new Map();
       const add = (ip, label) => {
-        if (!isHomeLanIp(ip)) return;
+        if (!isExitDeviceIp(ip)) return;
         const prev = byIp.get(ip);
         byIp.set(ip, {
           ip,
@@ -238,7 +245,7 @@
             })
             .join("");
       }
-      if (els.deviceManual && selected && isHomeLanIp(selected)) {
+      if (els.deviceManual && selected && isExitDeviceIp(selected)) {
         els.deviceManual.value = selected;
       }
       if (els.useDeviceBtn) els.useDeviceBtn.disabled = !(member || opts.length);
@@ -336,7 +343,7 @@
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       state = data;
-      if (data.control_ip && isHomeLanIp(data.control_ip) && data.circle_ok) {
+      if (data.control_ip && isExitDeviceIp(data.control_ip) && data.circle_ok) {
         lanIp = data.control_ip;
         rememberIp(lanIp);
       }
@@ -345,8 +352,8 @@
     }
 
     async function applyChosenDeviceIp(ip) {
-      if (!isHomeLanIp(ip)) {
-        toast("Choose a circle device IP (192.168.8.x)", true);
+      if (!isExitDeviceIp(ip)) {
+        toast("Choose a circle device IP (192.168.8.x or OpenVPN 10.9.0.x)", true);
         return;
       }
       const hasLocalKey = !!(
@@ -405,7 +412,7 @@
           throw new Error(data.error || `HTTP ${res.status}`);
         }
         state = data;
-        if (data.control_ip && isHomeLanIp(data.control_ip)) {
+        if (data.control_ip && isExitDeviceIp(data.control_ip)) {
           lanIp = data.control_ip;
           rememberIp(lanIp);
         }
@@ -426,7 +433,7 @@
       if (els.devicePick) {
         els.devicePick.onchange = async () => {
           const ip = els.devicePick.value;
-          if (!isHomeLanIp(ip)) return;
+          if (!isExitDeviceIp(ip)) return;
           if (els.deviceManual) els.deviceManual.value = ip;
           try {
             await applyChosenDeviceIp(ip);
@@ -464,7 +471,7 @@
       try {
         await refresh();
         const allowed = new Set(
-          (state?.candidate_ips || []).map((r) => r.ip).filter(isHomeLanIp)
+          (state?.candidate_ips || []).map((r) => r.ip).filter(isExitDeviceIp)
         );
         for (const ip of circleStoreLanIps()) allowed.add(ip);
         const webrtc = await detectHomeLanIpViaWebRtc();
@@ -478,7 +485,9 @@
             (ip) => !allowed.size || allowed.has(ip)
           );
           if (local.length) best = local[0];
-          else if (allowed.size === 1) best = [...allowed][0];
+          else if (state?.client_ip && allowed.has(state.client_ip)) {
+            best = state.client_ip;
+          } else if (allowed.size === 1) best = [...allowed][0];
         }
         if (best) {
           lanIp = best;
@@ -498,5 +507,5 @@
     return { refresh, open, render: renderUi };
   }
 
-  global.SmNetworkExit = { create, isHomeLanIp };
+  global.SmNetworkExit = { create, isHomeLanIp, isExitDeviceIp };
 })(typeof window !== "undefined" ? window : globalThis);
