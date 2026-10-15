@@ -5196,6 +5196,26 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
                 lines.append("\t\t\tflush_interval -1")
                 lines.append("\t\t}")
             lines.append("\t}")
+            # Plex Upload: multi-GB POST bodies — no gzip, long timeouts, stream.
+            lines.append("\t@elements_upload path /api/elements/upload*")
+            lines.append("\thandle @elements_upload {")
+            lines.append("\t\trequest_body {")
+            lines.append("\t\t\tmax_size 16GB")
+            lines.append("\t\t}")
+            lines.append(f"\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
+            lines.append("\t\t\theader_up Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+            lines.append("\t\t\theader_down -X-Frame-Options")
+            lines.append("\t\t\theader_down -Content-Security-Policy")
+            lines.append("\t\t\tflush_interval -1")
+            lines.append("\t\t\ttransport http {")
+            lines.append("\t\t\t\tread_timeout 2h")
+            lines.append("\t\t\t\twrite_timeout 2h")
+            lines.append("\t\t\t\tresponse_header_timeout 30m")
+            lines.append("\t\t\t}")
+            lines.append("\t\t}")
+            lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
             if r.get("vpn_only"):
@@ -9789,8 +9809,10 @@ def _elements_sanitize_filename(name: str) -> str:
 def elements_upload_media(
     library: str,
     filename: str,
-    data: bytes,
+    data: bytes | None = None,
     *,
+    stream=None,
+    size: int | None = None,
     process: bool = False,
     show_name: str = "",
     year: str = "",
@@ -9800,7 +9822,11 @@ def elements_upload_media(
     tmdb_id: int | None = None,
     full_form: bool = False,
 ) -> dict:
-    """Upload a media file into one of the four Elements library inboxes."""
+    """Upload a media file into one of the four Elements library inboxes.
+
+    Prefer ``stream`` + ``size`` for large files so the VPS never buffers the
+    whole movie in RAM (OOM). ``data`` remains for small/test callers.
+    """
     lib = str(library or "").strip().lower().replace(" ", "-").replace("_", "-")
     if lib in ("movie", "movies", "film", "films"):
         sub = "inbox/movies"
@@ -9840,11 +9866,17 @@ def elements_upload_media(
         raise ValueError(
             "library must be movies, kids-movies, tvshows, or kids-tvshows"
         )
-    if not data:
-        raise ValueError("empty upload")
-    if len(data) > ELEMENTS_UPLOAD_MAX_BYTES:
+    if stream is not None:
+        nbytes = int(size if size is not None else 0)
+        if nbytes <= 0:
+            raise ValueError("empty upload")
+    else:
+        if not data:
+            raise ValueError("empty upload")
+        nbytes = len(data)
+    if nbytes > ELEMENTS_UPLOAD_MAX_BYTES:
         raise ValueError(
-            f"file too large ({len(data)} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
+            f"file too large ({nbytes} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
         )
     name = _elements_sanitize_filename(filename)
     rel_under_inbox = name
@@ -9953,8 +9985,8 @@ def elements_upload_media(
             )
     dest = f"/mnt/plex-usb/{sub}/{rel_under_inbox}"
     dest_dir = str(Path(dest).parent).replace("'", "")
-    # Stream bytes over SSH stdin
-    timeout = max(300, len(data) // (512 * 1024) + 120)
+    # Stream bytes over SSH stdin (chunked — never hold the whole file in RAM).
+    timeout = max(300, nbytes // (512 * 1024) + 120)
     cmd = [
         "ssh",
         "-i",
@@ -9968,18 +10000,56 @@ def elements_upload_media(
         f"{PROXMOX_SSH_USER}@{PROXMOX_SSH_HOST}",
         f"mkdir -p {shlex.quote(dest_dir)} && cat > {shlex.quote(dest)}",
     ]
-    proc = subprocess.run(
-        cmd, input=data, capture_output=True, timeout=timeout
-    )
+    chunk_size = 1024 * 1024
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert proc.stdin is not None
+        written = 0
+        try:
+            if stream is not None:
+                remaining = nbytes
+                while remaining > 0:
+                    chunk = stream.read(min(chunk_size, remaining))
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+                    written += len(chunk)
+                    remaining -= len(chunk)
+            else:
+                assert data is not None
+                view = memoryview(data)
+                for i in range(0, nbytes, chunk_size):
+                    proc.stdin.write(view[i : i + chunk_size])
+                    written += min(chunk_size, nbytes - i)
+            proc.stdin.close()
+            proc.stdin = None  # so communicate() does not flush a closed pipe
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("upload to Proxmox timed out") from exc
     if proc.returncode != 0:
-        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        err = (stderr or b"").decode("utf-8", errors="replace")
         raise RuntimeError(err.strip() or f"upload failed ({proc.returncode})")
+    if written != nbytes:
+        raise RuntimeError(
+            f"upload incomplete ({written} of {nbytes} bytes written)"
+        )
     result: dict = {
         "ok": True,
         "library": kind,
         "folder": folder,
         "filename": name,
-        "bytes": len(data),
+        "bytes": nbytes,
         "path": dest,
         "processed": False,
     }
@@ -20330,13 +20400,14 @@ document.getElementById('f').onsubmit = async (e) => {
                     )
                 if not filename:
                     filename = self.headers.get("X-Filename") or "upload.bin"
-                data = self.rfile.read(length)
+                # Stream request body → Proxmox SSH; do not buffer multi-GB files.
                 self._json(
                     200,
                     elements_upload_media(
                         library,
                         filename,
-                        data,
+                        stream=self.rfile,
+                        size=length,
                         process=process,
                         show_name=show_name,
                         year=year,
