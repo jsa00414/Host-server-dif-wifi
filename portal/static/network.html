@@ -213,6 +213,9 @@
   <script src="/static/sm-circle-crypto.js"></script>
   <script>
     const LAST_IP_KEY = "sm.network.deviceIp.v1";
+    const TOTP_STORE_KEY = "sm.auth.totp.v1";
+    const TOTP_PERIOD = 30;
+    const TOTP_DIGITS = 6;
     const LAN_RE = /^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/;
     const els = {
       controlIp: document.getElementById("controlIp"),
@@ -257,6 +260,69 @@
       } catch (_) {
         return "";
       }
+    }
+
+    function loadTotpAccount() {
+      try {
+        const raw = localStorage.getItem(TOTP_STORE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        const secret = String(data?.secret || "").replace(/\s+/g, "").toUpperCase();
+        return secret ? { secret } : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function b32Decode(secret) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = "";
+      const cleaned = String(secret || "").replace(/=+$/, "").toUpperCase();
+      for (const ch of cleaned) {
+        const val = alphabet.indexOf(ch);
+        if (val < 0) continue;
+        bits += val.toString(2).padStart(5, "0");
+      }
+      const bytes = [];
+      for (let i = 0; i + 8 <= bits.length; i += 8) {
+        bytes.push(parseInt(bits.slice(i, i + 8), 2));
+      }
+      return new Uint8Array(bytes);
+    }
+
+    async function hmacSha1(keyBytes, msgBytes) {
+      const key = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "HMAC", hash: "SHA-1" },
+        false,
+        ["sign"]
+      );
+      return new Uint8Array(await crypto.subtle.sign("HMAC", key, msgBytes));
+    }
+
+    async function totpAt(secret, forTime = Date.now() / 1000) {
+      const counter = Math.floor(forTime / TOTP_PERIOD);
+      const msg = new Uint8Array(8);
+      let n = counter;
+      for (let i = 7; i >= 0; i--) {
+        msg[i] = n & 0xff;
+        n = Math.floor(n / 256);
+      }
+      const digest = await hmacSha1(b32Decode(secret), msg);
+      const offset = digest[digest.length - 1] & 0x0f;
+      const codeInt =
+        ((digest[offset] & 0x7f) << 24) |
+        ((digest[offset + 1] & 0xff) << 16) |
+        ((digest[offset + 2] & 0xff) << 8) |
+        (digest[offset + 3] & 0xff);
+      return String(codeInt % 10 ** TOTP_DIGITS).padStart(TOTP_DIGITS, "0");
+    }
+
+    async function currentTotpCode() {
+      const account = loadTotpAccount();
+      if (!account?.secret) return "";
+      return totpAt(account.secret);
     }
 
     function circleStoreLanIps() {
@@ -321,19 +387,9 @@
       });
     }
 
-    async function detectDeviceIp() {
-      const webrtc = await detectHomeLanIpViaWebRtc();
-      if (isHomeLanIp(webrtc)) return webrtc;
-      const remembered = rememberedIp();
-      if (remembered) return remembered;
-      const circleIps = circleStoreLanIps();
-      if (circleIps.length === 1) return circleIps[0];
-      if (circleIps.length > 1) return circleIps[0];
-      return "";
-    }
-
     function candidateEntries() {
-      // Only IPs this browser holds a circle key for (synced from keys.*).
+      // After Authenticator TOTP unlock, show the full circle LAN roster.
+      // Also include any local device keys for convenience.
       const byIp = new Map();
       const add = (ip, label) => {
         if (!isHomeLanIp(ip)) return;
@@ -343,13 +399,14 @@
           label: (label && label !== ip ? label : null) || prev?.label || ip,
         });
       };
-      for (const ip of circleStoreLanIps()) add(ip, ip);
-      for (const ip of bridgeIps) add(ip, ip);
-      for (const row of state?.candidate_ips || []) {
-        if (circleStoreLanIps().includes(row.ip) || bridgeIps.includes(row.ip)) {
+      const member = !!(state?.circle_member || state?.circle_ok);
+      if (member) {
+        for (const row of state?.candidate_ips || []) {
           add(row.ip, row.label || row.ip);
         }
       }
+      for (const ip of circleStoreLanIps()) add(ip, ip);
+      for (const ip of bridgeIps) add(ip, ip);
       return [...byIp.values()].sort((a, b) =>
         String(a.label).localeCompare(String(b.label))
       );
@@ -362,13 +419,15 @@
 
     function fillDevicePicker(selected) {
       const opts = candidateEntries();
-      // Always show the picker when this browser has circle keys (router Wi‑Fi devices).
-      els.deviceRow.hidden = opts.length === 0 && !selected;
+      const member = !!(state?.circle_member || state?.circle_ok);
+      els.deviceRow.hidden = !(member || opts.length || selected);
       if (!opts.length) {
-        els.devicePick.innerHTML = `<option value="">No circle device key on this browser…</option>`;
+        els.devicePick.innerHTML = member
+          ? `<option value="">No circle LAN devices yet — Approve one in Authenticator</option>`
+          : `<option value="">Authenticator required…</option>`;
       } else {
         els.devicePick.innerHTML =
-          `<option value="">Select your circle device…</option>` +
+          `<option value="">Select this device’s Wi‑Fi IP…</option>` +
           opts.map((row) => {
             const text = row.label && row.label !== row.ip
               ? `${row.label} — ${row.ip}`
@@ -379,28 +438,33 @@
       if (selected && isHomeLanIp(selected)) {
         els.deviceManual.value = selected;
       }
-      els.deviceManual.placeholder = opts.length
-        ? "or confirm 192.168.8.x"
-        : "Open Authenticator → Approve this device on home Wi‑Fi first";
-      els.useDeviceBtn.disabled = !opts.length;
+      els.deviceManual.placeholder = member || opts.length
+        ? "or type 192.168.8.x"
+        : "Open Authenticator on this phone first";
+      els.useDeviceBtn.disabled = !(member || opts.length);
     }
 
     function render() {
       if (!state) return;
       const ip = state.control_ip || (state.circle_ok ? lanIp : "") || "";
-      els.controlIp.textContent = ip || (state.needs_circle ? "circle required" : "pick this device");
+      const needsCircle = !!(state.needs_circle && !state.circle_member && !state.circle_ok);
+      els.controlIp.textContent = ip
+        || (needsCircle ? "circle required" : "pick this device");
       const bits = [];
-      if (state.needs_circle && !state.circle_ok) {
-        bits.push(`Circle members only — open ${keysUrl()} and Approve this device`);
+      if (needsCircle) {
+        bits.push(`Circle members only — open ${keysUrl()} Authenticator on this phone`);
       } else {
         if (state.via_flint) bits.push("via Flint VPN");
         if (state.client_ip && state.client_ip !== ip) bits.push(`connection ${state.client_ip}`);
         if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
-        if (state.provider_label) bits.push(`now: ${state.provider_label}`);
+        if (state.provider_label && state.circle_ok) bits.push(`now: ${state.provider_label}`);
         if (state.global_exit) bits.push(`network default: ${state.global_exit}`);
+        if (state.needs_device_ip && !state.circle_ok) {
+          bits.push("pick this phone/computer’s home Wi‑Fi IP");
+        }
       }
-      els.meta.innerHTML = state.needs_circle && !state.circle_ok
-        ? `Circle members only. <a href="${keysUrl()}" style="color:var(--accent)">Open Authenticator</a>, unlock, Approve this device on home Wi‑Fi, then return here.`
+      els.meta.innerHTML = needsCircle
+        ? `Circle members only. <a href="${keysUrl()}" style="color:var(--accent)">Open Authenticator</a> on this phone (enrolled secret required), then return here.`
         : (bits.join(" · ") || "Ready");
       fillDevicePicker(ip || lanIp);
 
@@ -428,6 +492,10 @@
     async function exitHeaders(extra, bodyText) {
       const headers = { Accept: "application/json", ...(extra || {}) };
       if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+      try {
+        const code = await currentTotpCode();
+        if (code) headers["X-SM-Totp"] = code;
+      } catch (_) {}
       try {
         if (lanIp && window.SmCircleCrypto && SmCircleCrypto.getKeyForIp) {
           const row = await SmCircleCrypto.getKeyForIp(lanIp);
@@ -462,18 +530,24 @@
         toast("Choose a circle device IP (192.168.8.x)", true);
         return;
       }
-      const row = window.SmCircleCrypto
-        ? await SmCircleCrypto.getKeyForIp(ip)
-        : null;
-      if (!row?.privateJwk) {
-        toast("No Authenticator key for that IP on this browser — approve it on keys.vpstruelord.com first", true);
+      const hasLocalKey = !!(
+        window.SmCircleCrypto &&
+        (await SmCircleCrypto.getKeyForIp(ip))?.privateJwk
+      );
+      const hasTotp = !!loadTotpAccount()?.secret;
+      if (!hasLocalKey && !hasTotp) {
+        toast("Open Authenticator on this phone first (enrolled code required)", true);
         return;
       }
       lanIp = ip;
       rememberIp(ip);
       await refresh();
       if (state?.circle_ok && state?.control_ip === ip) toast(`Controlling ${ip}`);
-      else if (state?.needs_circle) toast(state.error || "Circle proof failed", true);
+      else if (state?.needs_circle && !state?.circle_member) {
+        toast(state.error || "Circle proof failed", true);
+      } else if (state?.circle_member && !state?.circle_ok) {
+        toast(state.error || "That IP is not in the circle", true);
+      }
     }
 
     async function setProvider(provider) {
@@ -498,8 +572,8 @@
           { "Content-Type": "application/json" },
           bodyText
         );
-        if (!headers["X-SM-Circle-Sig"]) {
-          throw new Error("Circle proof missing — approve this device in Authenticator first");
+        if (!headers["X-SM-Circle-Sig"] && !headers["X-SM-Totp"]) {
+          throw new Error("Open Authenticator on this phone first, then retry");
         }
         const res = await fetch("/api/network/exit", {
           method: "POST",
@@ -554,7 +628,6 @@
     }
 
     function loadKeysBridge() {
-      // Already on keys.* — Authenticator keys are same-origin localStorage.
       if (onKeysOrigin()) {
         bridgeIps = circleStoreLanIps();
         return Promise.resolve(bridgeIps);
@@ -594,45 +667,60 @@
       });
     }
 
+    function pickBestLanIp(allowed) {
+      const allow = allowed instanceof Set ? allowed : new Set(allowed || []);
+      const webrtcPromise = detectHomeLanIpViaWebRtc();
+      return webrtcPromise.then((webrtc) => {
+        if (isHomeLanIp(webrtc) && (!allow.size || allow.has(webrtc))) return webrtc;
+        const remembered = rememberedIp();
+        if (remembered && (!allow.size || allow.has(remembered))) return remembered;
+        const circleIps = circleStoreLanIps().filter((ip) => !allow.size || allow.has(ip));
+        if (circleIps.length) return circleIps[0];
+        if (allow.size === 1) return [...allow][0];
+        return "";
+      });
+    }
+
     (async () => {
       try {
-        // Circle keys are stored on keys.* by Authenticator. Router/Wi‑Fi devices
-        // must use that origin — third-party iframes cannot read the keys on iOS.
+        // Circle keys + Authenticator TOTP live on keys.* localStorage.
         if (!onKeysOrigin()) {
-          const keysHost = "keys.vpstruelord.com";
-          location.replace(`https://${keysHost}/network.html`);
+          location.replace("https://keys.vpstruelord.com/network.html");
           return;
         }
         state = {
           hosts: { keys: "keys.vpstruelord.com", network: "network.vpstruelord.com" },
           needs_circle: true,
           circle_ok: false,
+          circle_member: false,
           candidate_ips: [],
         };
         render();
         await loadKeysBridge();
-        const webrtc = await detectHomeLanIpViaWebRtc();
-        const circleIps = circleStoreLanIps();
-        if (isHomeLanIp(webrtc) && circleIps.includes(webrtc)) {
-          lanIp = webrtc;
-        } else if (rememberedIp() && circleIps.includes(rememberedIp())) {
-          lanIp = rememberedIp();
-        } else if (circleIps.length === 1) {
-          lanIp = circleIps[0];
-        } else if (circleIps.length > 1) {
-          // Prefer an online-looking match later via picker; default to newest key.
-          lanIp = circleIps[0];
-        }
-        if (lanIp) rememberIp(lanIp);
+        // First probe with TOTP (and any local key) so the server can unlock the roster.
         await refresh();
-        if (state?.needs_circle && !state?.circle_ok) {
-          const hasKeys = circleStoreLanIps().length > 0;
+        const allowed = new Set(
+          (state?.candidate_ips || []).map((r) => r.ip).filter(isHomeLanIp)
+        );
+        for (const ip of circleStoreLanIps()) allowed.add(ip);
+        const best = await pickBestLanIp(allowed);
+        if (best) {
+          lanIp = best;
+          rememberIp(lanIp);
+          await refresh();
+        }
+        if (state?.needs_circle && !state?.circle_member && !state?.circle_ok) {
+          const hasTotp = !!loadTotpAccount()?.secret;
           toast(
-            hasKeys
-              ? "Circle proof failed — pick your Wi‑Fi device below"
-              : "Unlock Authenticator and Approve this device on home Wi‑Fi first",
+            hasTotp
+              ? "Authenticator code rejected — unlock Authenticator, then hard-refresh"
+              : "Open Authenticator on this phone and enroll first, then return here",
             true
           );
+          els.deviceRow.hidden = false;
+          fillDevicePicker(lanIp);
+        } else if (state?.circle_member && !state?.circle_ok) {
+          toast("Pick this device’s home Wi‑Fi IP below", false);
           els.deviceRow.hidden = false;
           fillDevicePicker(lanIp);
         }

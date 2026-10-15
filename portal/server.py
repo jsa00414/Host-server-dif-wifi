@@ -11352,34 +11352,114 @@ def _device_exit_circle_member_ip(ip: str) -> str:
     return ip_n
 
 
-def _require_device_exit_circle(
+def _try_device_exit_circle(
     handler: "Handler",
     *,
     lan_ip: str = "",
     body_text: str = "",
-) -> str:
-    """Circle members only: verify Ed25519 proof for an allowlisted LAN IP."""
+    allow_totp: bool = True,
+) -> tuple[str, bool]:
+    """Probe circle auth for device-exit.
+
+    Returns (proven_lan_ip, is_circle_member).
+    - Crypto proof for an allowlisted LAN IP → (ip, True)
+    - Valid Authenticator TOTP + allowlisted LAN IP → (ip, True)
+    - Valid TOTP only (no LAN claim yet) → ("", True)
+    - No usable proof → ("", False)
+
+    Raises ValueError on an explicitly bad TOTP (IP jail still applies).
+    """
     claimed = _normalize_vpn_ip(
         lan_ip
         or handler.headers.get("X-SM-Circle-Ip")
         or handler.headers.get("X-SM-Lan-Ip")
         or ""
     )
-    if not claimed:
-        raise PermissionError(
-            "Circle proof required. Open keys.vpstruelord.com and Approve this device first."
-        )
-    member_ip = _device_exit_circle_member_ip(claimed)
-    proof = verify_circle_device_proof(
-        handler,
-        body_text=body_text or "",
-        claimed_ip=member_ip,
-        require_existing_bind=True,
+    has_crypto = bool(
+        str(handler.headers.get("X-SM-Circle-Sig") or "").strip()
+        and str(handler.headers.get("X-SM-Circle-Pub") or "").strip()
     )
-    proven = _normalize_vpn_ip(str(proof.get("ip") or ""))
-    if proven != member_ip:
-        raise PermissionError("Circle proof IP mismatch")
-    return proven
+    if has_crypto and claimed:
+        try:
+            member_ip = _device_exit_circle_member_ip(claimed)
+            proof = verify_circle_device_proof(
+                handler,
+                body_text=body_text or "",
+                claimed_ip=member_ip,
+                require_existing_bind=True,
+            )
+            proven = _normalize_vpn_ip(str(proof.get("ip") or ""))
+            if proven == member_ip:
+                return proven, True
+        except (PermissionError, ValueError):
+            # Stale/wrong key on this browser — fall through to TOTP.
+            pass
+
+    if allow_totp:
+        code = _auth_app_totp_from_request(handler)
+        if code:
+            require_auth_app_totp(
+                code,
+                client_ip=request_client_ip(handler),
+                purpose="network-device-exit",
+                consume=False,
+            )
+            if claimed:
+                return _device_exit_circle_member_ip(claimed), True
+            return "", True
+
+    return "", False
+
+
+def _require_device_exit_circle(
+    handler: "Handler",
+    *,
+    lan_ip: str = "",
+    body_text: str = "",
+    allow_totp: bool = True,
+) -> str:
+    """Circle members only — must resolve to one allowlisted home Wi‑Fi IP."""
+    proven, member = _try_device_exit_circle(
+        handler,
+        lan_ip=lan_ip,
+        body_text=body_text,
+        allow_totp=allow_totp,
+    )
+    if proven:
+        return proven
+    if member:
+        raise PermissionError("Pick this device's home Wi‑Fi IP (192.168.8.x)")
+    raise PermissionError(
+        "Circle members only. Open Authenticator on this phone, then return here."
+    )
+
+
+def _device_exit_candidate_ips_for_circle() -> list[dict]:
+    """Allowlisted LAN devices (circle members) for the authenticated picker."""
+    online: set[str] = set()
+    try:
+        for d in (read_lan_devices().get("devices") or []):
+            if not isinstance(d, dict):
+                continue
+            ip = _normalize_vpn_ip(str(d.get("ip") or ""))
+            if _is_home_lan_ipv4(ip) and d.get("online"):
+                online.add(ip)
+    except Exception:
+        pass
+    out: list[dict] = []
+    for ip in sorted(_allowlisted_lan_ips()):
+        if not _is_home_lan_ipv4(ip):
+            continue
+        out.append(
+            {
+                "ip": ip,
+                "label": _device_exit_label_for_ip(ip),
+                "online": ip in online,
+                "source": "circle",
+            }
+        )
+    out.sort(key=lambda r: (0 if r.get("online") else 1, str(r.get("label") or "")))
+    return out
 
 
 def _device_exit_label_for_ip(ip: str) -> str:
@@ -11417,10 +11497,12 @@ def build_device_exit_status(
     lan_ip: str = "",
     circle_ip: str = "",
     circle_ok: bool = False,
+    circle_member: bool = False,
 ) -> dict:
     client_n = _normalize_vpn_ip(client_ip or "") or ""
     lan_n = _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else ""
     proven = _normalize_vpn_ip(circle_ip or "") if circle_ok else ""
+    member = bool(circle_member or proven)
     ts = _read_vpn_exit_state()
     ss_servers = list_surfshark_servers()
     keys_host = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip()
@@ -11433,14 +11515,16 @@ def build_device_exit_status(
         "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
         "global_exit": _global_exit_summary(),
         "hosts": {"network": NETWORK_PUBLIC_HOST, "keys": keys_host},
-        "needs_device_ip": False,
-        "needs_circle": not bool(proven),
+        "needs_device_ip": bool(member and not proven),
+        "needs_circle": not member,
         "circle_ok": bool(proven),
-        "via_flint": client_n in _device_exit_infra_ips(),
-        # Never leak the full circle roster to unauthenticated browsers.
-        "candidate_ips": [],
+        "circle_member": member,
+        "via_flint": client_n in _device_exit_infra_ips()
+        or client_n in _denied_vpn_ips()
+        or client_n.startswith("10.9."),
+        "candidate_ips": _device_exit_candidate_ips_for_circle() if member else [],
     }
-    if not proven:
+    if not member:
         base.update(
             {
                 "control_ip": "",
@@ -11448,23 +11532,26 @@ def build_device_exit_status(
                 "provider_label": _provider_label("direct"),
                 "error": (
                     "Circle members only. Open https://"
-                    f"{keys_host}/ , unlock Authenticator, and Approve this "
-                    "device on home Wi‑Fi — then return here."
+                    f"{keys_host}/ , unlock Authenticator on this phone, "
+                    "Approve this device on home Wi‑Fi, then open Network exit again."
                 ),
+            }
+        )
+        return base
+
+    if not proven:
+        base.update(
+            {
+                "control_ip": "",
+                "provider": "direct",
+                "provider_label": _provider_label("direct"),
+                "error": "Pick this phone/computer’s home Wi‑Fi IP below.",
             }
         )
         return base
 
     control_ip = proven
     base["lan_ip"] = proven
-    base["candidate_ips"] = [
-        {
-            "ip": proven,
-            "label": _device_exit_label_for_ip(proven),
-            "online": True,
-            "source": "circle",
-        }
-    ]
     state = _read_device_exit_state()
     row = (state.get("devices") or {}).get(control_ip) or {}
     provider = str(row.get("provider") or "direct").strip().lower() or "direct"
@@ -11496,14 +11583,14 @@ def set_device_exit(
     circle_ip: str = "",
 ) -> dict:
     # Circle-proven LAN IP is authoritative — never trust an unauthenticated guess.
-    control_ip = _normalize_vpn_ip(circle_ip or "") or _device_exit_control_ip(
-        client_ip, lan_ip
-    )
+    control_ip = _normalize_vpn_ip(circle_ip or lan_ip or "")
     control_ip = _device_exit_circle_member_ip(control_ip)
+    if control_ip in _device_exit_infra_ips() or control_ip in _denied_vpn_ips():
+        raise ValueError("That address is not a single home device")
     if control_ip in {"127.0.0.1", "0.0.0.0", VPS_PUBLIC_IP}:
         raise ValueError(
             "Open this page from the device whose internet you want to switch "
-            "(home Wi‑Fi or VPN), not from the VPS itself."
+            "(home Wi‑Fi), not from the VPS itself."
         )
     prov = str(provider or "").strip().lower()
     if prov in ("", "default", "off", "none", "clear", "direct"):
@@ -19548,14 +19635,16 @@ document.getElementById('f').onsubmit = async (e) => {
                 lan_hint = _device_exit_lan_hint_from_request(self)
                 circle_ip = ""
                 circle_ok = False
+                circle_member = False
                 try:
-                    circle_ip = _require_device_exit_circle(
+                    circle_ip, circle_member = _try_device_exit_circle(
                         self, lan_ip=lan_hint, body_text=""
                     )
-                    circle_ok = True
+                    circle_ok = bool(circle_ip)
                 except (PermissionError, ValueError):
-                    # Unauthenticated probe — return locked status, no roster leak.
+                    # Bad/missing proof — locked status, no roster leak.
                     circle_ok = False
+                    circle_member = False
                     circle_ip = ""
                 self._json(
                     200,
@@ -19564,6 +19653,7 @@ document.getElementById('f').onsubmit = async (e) => {
                         lan_ip=lan_hint or circle_ip,
                         circle_ip=circle_ip,
                         circle_ok=circle_ok,
+                        circle_member=circle_member,
                     ),
                 )
             except ValueError as exc:
