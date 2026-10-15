@@ -1847,6 +1847,22 @@ GRAFANA_PUBLIC_HOST = (
     os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
     or "grafana.vpstruelord.com"
 )
+NETWORK_PUBLIC_HOST = (
+    os.environ.get("NETWORK_PUBLIC_HOST", "network.vpstruelord.com").strip()
+    or "network.vpstruelord.com"
+)
+DEVICE_EXIT_STATE_PATH = Path(
+    os.environ.get(
+        "DEVICE_EXIT_STATE_PATH",
+        "/opt/servermanager/panel/device-exit.json",
+    )
+)
+DEVICE_EXIT_SCRIPT = Path(
+    os.environ.get(
+        "DEVICE_EXIT_SCRIPT",
+        "/opt/dns/sm-device-exit.sh",
+    )
+)
 # Caddy (truemail network) reaches the container by name — not a public host port.
 GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "sm-grafana").strip() or "sm-grafana"
 GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000") or "3000")
@@ -4417,6 +4433,41 @@ def _cookie_parent_domain() -> str:
     return ""
 
 
+def ensure_network_hookup(rules: list[dict]) -> list[dict]:
+    """Guarantee network.vpstruelord.com (per-device Surfshark/Tailscale exit)."""
+    domain = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
+    out = list(rules or [])
+    for i, r in enumerate(out):
+        if str(r.get("domain") or "").strip().lower() == domain:
+            out[i] = _normalize_hookup_rule(
+                {
+                    **r,
+                    "enabled": True,
+                    "domain": domain,
+                    "target_host": r.get("target_host") or DOCKER_HOST_GW,
+                    "target_port": int(r.get("target_port") or 5002),
+                    "name": "network-device-exit",
+                    "external": False,
+                    "vpn_only": False,
+                }
+            )
+            return out
+    out.append(
+        _normalize_hookup_rule(
+            {
+                "enabled": True,
+                "domain": domain,
+                "target_host": DOCKER_HOST_GW,
+                "target_port": 5002,
+                "name": "network-device-exit",
+                "external": False,
+                "vpn_only": False,
+            }
+        )
+    )
+    return out
+
+
 def ensure_keys_hookup(rules: list[dict]) -> list[dict]:
     """Guarantee keys.vpstruelord.com is present (Authenticator, public)."""
     domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
@@ -4461,8 +4512,10 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_keys_hookup(
-        ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+    return ensure_network_hookup(
+        ensure_keys_hookup(
+            ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
+        )
     )
 
 
@@ -5062,6 +5115,34 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
+def _network_hookup_site_lines(rule: dict) -> list[str]:
+    """Public per-device VPN exit picker (network.vpstruelord.com)."""
+    public = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
+    upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
+    return [
+        f"{public} {{",
+        "\tencode gzip",
+        "\t@root path /",
+        "\tredir @root /network.html 302",
+        f"\treverse_proxy {upstream} {{",
+        "\t\theader_up Host {host}",
+        "\t\theader_up X-Forwarded-Host {host}",
+        "\t\theader_up X-Forwarded-Proto {scheme}",
+        "\t\theader_up X-Forwarded-For {remote_host}",
+        "\t\theader_up X-Real-IP {remote_host}",
+        "\t}",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        '\t\tAlt-Svc "clear"',
+        "\t}",
+        "}",
+        "",
+    ]
+
+
 def _keys_hookup_site_lines(rule: dict) -> list[str]:
     """Public Authenticator host (keys.*) — reachable from home WiFi too.
 
@@ -5121,10 +5202,14 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
     if not active:
         lines.append("# (no managed domain hookups enabled)")
     keys_domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    network_domain = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
     for r in active:
         domain = r["domain"]
         if domain == keys_domain:
             lines.extend(_keys_hookup_site_lines(r))
+            continue
+        if domain == network_domain:
+            lines.extend(_network_hookup_site_lines(r))
             continue
         if domain == ROUTER_PUBLIC_HOST.lower():
             lines.extend(_router_hookup_site_lines(r))
@@ -11118,6 +11203,137 @@ def set_surfshark_vpn_exit(enabled: bool, server: str = "") -> tuple[bool, str]:
         )
     msg = ((proc.stdout or "") + (proc.stderr or "")).strip()
     return proc.returncode == 0, msg or ("ok" if proc.returncode == 0 else "surfshark vpn-exit failed")
+
+
+def _read_device_exit_state() -> dict:
+    data = {"devices": {}, "updated_at": 0}
+    if DEVICE_EXIT_STATE_PATH.is_file():
+        try:
+            loaded = json.loads(DEVICE_EXIT_STATE_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                devices = loaded.get("devices")
+                if isinstance(devices, dict):
+                    data["devices"] = {
+                        str(k): v for k, v in devices.items() if isinstance(v, dict)
+                    }
+                data["updated_at"] = int(loaded.get("updated_at") or 0)
+        except Exception:
+            pass
+    return data
+
+
+def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
+    """Pick which /32 this request may control.
+
+    Prefer a home-LAN IP when the connection is from Flint/OVPN/WG and the
+    browser reported 192.168.8.x — that matches mangle -s 192.168.8.0/24 -i tun0.
+    Otherwise the TCP client IP itself.
+    """
+    client = _normalize_vpn_ip(client_ip or "")
+    lan = _normalize_vpn_ip(lan_ip or "")
+    if _is_home_lan_ipv4(lan) and (
+        client == lan
+        or client.startswith("10.9.")
+        or client.startswith("10.8.")
+        or client.startswith("10.11.")
+        or _is_home_lan_ipv4(client)
+        or client in {"127.0.0.1", "172.18.0.1"}
+        or (client.startswith("172.") and _is_loopback_or_link_local(client))
+    ):
+        return lan
+    if client and client not in {"unknown", ""}:
+        return client
+    if _is_home_lan_ipv4(lan):
+        return lan
+    raise ValueError("Could not determine this device's IPv4 address")
+
+
+def _provider_label(provider: str) -> str:
+    return {
+        "surfshark": "Surfshark",
+        "tailscale": "Tailscale exit node",
+        "direct": "Direct / default",
+        "clear": "Direct / default",
+    }.get(str(provider or "").strip().lower(), "Direct / default")
+
+
+def _global_exit_summary() -> str:
+    ts = _read_vpn_exit_state()
+    ss = _read_ss_vpn_exit_state()
+    if ss.get("enabled"):
+        return f"Surfshark ({ss.get('server') or 'on'})"
+    if ts.get("enabled"):
+        return f"Tailscale ({ts.get('exit_ip') or 'on'})"
+    return "direct"
+
+
+def build_device_exit_status(
+    *, client_ip: str, lan_ip: str = ""
+) -> dict:
+    control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    state = _read_device_exit_state()
+    row = (state.get("devices") or {}).get(control_ip) or {}
+    provider = str(row.get("provider") or "direct").strip().lower() or "direct"
+    if provider == "clear":
+        provider = "direct"
+    ts = _read_vpn_exit_state()
+    ss_servers = list_surfshark_servers()
+    return {
+        "ok": True,
+        "client_ip": _normalize_vpn_ip(client_ip or "") or "",
+        "lan_ip": _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else "",
+        "control_ip": control_ip,
+        "provider": provider,
+        "provider_label": _provider_label(provider),
+        "surfshark_server": str(row.get("server") or (ss_servers[0]["id"] if ss_servers else "")),
+        "surfshark_servers": ss_servers,
+        "tailscale_exit_ip": str(
+            row.get("exit_ip") or ts.get("exit_ip") or "100.94.32.63"
+        ),
+        "global_exit": _global_exit_summary(),
+        "hosts": {"network": NETWORK_PUBLIC_HOST},
+    }
+
+
+def set_device_exit(
+    *,
+    client_ip: str,
+    lan_ip: str = "",
+    provider: str,
+    server: str = "",
+    exit_ip: str = "",
+) -> dict:
+    control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    prov = str(provider or "").strip().lower()
+    if prov in ("", "default", "off", "none", "clear", "direct"):
+        # Remove per-IP override so the device follows the global exit path.
+        prov = "clear"
+    if prov not in ("surfshark", "tailscale", "clear"):
+        raise ValueError("provider must be surfshark, tailscale, or direct")
+    if not DEVICE_EXIT_SCRIPT.is_file():
+        raise ValueError(f"device-exit script missing: {DEVICE_EXIT_SCRIPT}")
+    extra = ""
+    if prov == "surfshark":
+        extra = (server or "").strip()
+        if not extra:
+            servers = list_surfshark_servers()
+            extra = servers[0]["id"] if servers else "us-nyc"
+    elif prov == "tailscale":
+        extra = (exit_ip or "").strip() or str(
+            _read_vpn_exit_state().get("exit_ip") or ""
+        ).strip()
+        extra = extra or "100.94.32.63"
+    cmd = [str(DEVICE_EXIT_SCRIPT), "set", control_ip, prov]
+    if extra and prov not in ("clear", "direct"):
+        cmd.append(extra)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        raise ValueError(out or "device-exit failed")
+    status = build_device_exit_status(client_ip=client_ip, lan_ip=lan_ip)
+    status["message"] = f"{_provider_label('direct' if prov == 'clear' else prov)} for {control_ip}"
+    status["sync"] = out[-400:]
+    return status
 
 
 def ss_exit_dns_status() -> bool:
@@ -18915,8 +19131,10 @@ class Handler(BaseHTTPRequestHandler):
             "/email-code-test.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
+            "/network.html",
             "/api/branding",
             "/api/health",
+            "/api/network/exit",
             "/api/auth-app/vpn-allowlist",
             "/api/auth-app/enroll-status",
             "/api/auth-app/register-device",
@@ -19115,6 +19333,25 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(
                 STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
             )
+        if path == "/network.html":
+            return self._serve_file(
+                STATIC_DIR / "network.html", "text/html; charset=utf-8"
+            )
+        if path == "/api/network/exit":
+            try:
+                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                self._json(
+                    200,
+                    build_device_exit_status(
+                        client_ip=request_client_ip(self),
+                        lan_ip=lan_hint,
+                    ),
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
         if path in (
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
@@ -20137,6 +20374,27 @@ document.getElementById('f').onsubmit = async (e) => {
                 self._json(200, result)
             except ValueError as exc:
                 time.sleep(0.25)
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/network/exit":
+            try:
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    payload = {}
+                lan_hint = _normalize_vpn_ip(
+                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
+                )
+                result = set_device_exit(
+                    client_ip=request_client_ip(self),
+                    lan_ip=lan_hint,
+                    provider=str(payload.get("provider") or ""),
+                    server=str(payload.get("server") or ""),
+                    exit_ip=str(payload.get("exit_ip") or ""),
+                )
+                self._json(200, result)
+            except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
