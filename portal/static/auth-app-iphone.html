@@ -85,15 +85,17 @@
       padding-bottom: 12px;
     }
     /*
-     * Circle tab: hide brand header for list space, but keep the body grid
-     * as main+footer. display:none on the header removes it from the grid,
-     * so without retargeting rows the footer wrongly gets 1fr and the tab
-     * buttons stretch into full-height columns.
+     * Circle / Exit tabs: hide brand header for content space, but keep the
+     * body grid as main+footer. display:none on the header removes it from
+     * the grid, so without retargeting rows the footer wrongly gets 1fr and
+     * the tab buttons stretch into full-height columns.
      */
-    body.tab-circle {
+    body.tab-circle,
+    body.tab-network {
       grid-template-rows: minmax(0, 1fr) auto;
     }
-    body.tab-circle .app-header {
+    body.tab-circle .app-header,
+    body.tab-network .app-header {
       display: none !important;
     }
     .brand-row {
@@ -294,7 +296,8 @@
     body.tab-network #networkPane {
       display: flex !important;
     }
-    body.tab-circle #circlePane {
+    body.tab-circle #circlePane,
+    body.tab-network #networkPane {
       padding-top: calc(10px + var(--sat));
     }
     .panel-head { margin: 0 0 10px; flex: 0 0 auto; }
