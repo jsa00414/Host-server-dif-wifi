@@ -204,6 +204,8 @@
       display: flex;
       flex-direction: column;
       position: relative;
+      /* Leave room for the fixed full-bleed tab bar. */
+      padding-bottom: calc(64px + var(--sab));
     }
     .lock, .empty {
       flex: 1;
@@ -508,29 +510,31 @@
       border-color: rgba(74,127,181,.7);
       background: rgba(74,127,181,.16);
     }
-    /* —— Footer / nav: flush to the physical bottom; safe-area inside the pill —— */
+    /* —— Footer / nav: full-bleed iOS tab bar, flush to screen bottom —— */
     .app-footer {
-      position: relative;
-      flex: 0 0 auto;
-      margin-top: auto;
-      border-top: 1px solid rgba(170,210,185,.12);
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
       background: #050807;
-      padding: 8px calc(10px + var(--sar)) 0 calc(10px + var(--sal));
-      display: grid;
-      gap: 0;
-      box-shadow: 0 -12px 28px rgba(0,0,0,.35);
+      box-shadow: 0 -10px 24px rgba(0,0,0,.4);
       width: 100%;
-      z-index: 20;
+      z-index: 100;
     }
     .app-nav {
       display: none;
       grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-      padding: 5px 5px calc(5px + var(--sab));
-      border-radius: 18px 18px 0 0;
-      background: rgba(255,255,255,.035);
-      border: 1px solid rgba(170,210,185,.12);
-      border-bottom: 0;
+      gap: 4px;
+      margin: 0;
+      padding: 6px calc(6px + var(--sar)) calc(6px + var(--sab)) calc(6px + var(--sal));
+      border-radius: 0;
+      background: #050807;
+      border: 0;
+      border-top: 1px solid rgba(170,210,185,.12);
+      width: 100%;
     }
     body.is-unlocked .app-nav { display: grid; }
     .app-nav button {
@@ -1728,7 +1732,10 @@
     setInterval(tick, 250);
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/static/auth-app-sw.js").catch(() => {});
+      navigator.serviceWorker
+        .register("/static/auth-app-sw.js?v=27")
+        .then((reg) => reg.update())
+        .catch(() => {});
     }
   
   </script>

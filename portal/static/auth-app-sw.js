@@ -1,5 +1,5 @@
 /* ServerManager Authenticator — offline cache for the phone app. */
-const CACHE = "sm-auth-app-v26";
+const CACHE = "sm-auth-app-v27";
 const ASSETS = [
   "/auth-app.html",
   "/static/auth-app.webmanifest",
@@ -8,6 +8,7 @@ const ASSETS = [
   "/static/auth-app-icon-512.png",
   "/static/auth-app-sw.js",
   "/static/sm-circle-crypto.js",
+  "/static/sm-network-exit.js",
 ];
 
 self.addEventListener("install", (event) => {
@@ -27,13 +28,33 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
+  const url = new URL(req.url);
+  // HTML always prefers network so layout fixes land immediately.
+  const isHtml =
+    req.mode === "navigate" ||
+    req.destination === "document" ||
+    url.pathname.endsWith(".html");
+  if (isHtml) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          if (res.ok) {
+            caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match("/auth-app.html"))
+    );
+    return;
+  }
   event.respondWith(
     caches.match(req).then((hit) => {
       if (hit) return hit;
       return fetch(req)
         .then((res) => {
           const copy = res.clone();
-          if (res.ok && new URL(req.url).origin === self.location.origin) {
+          if (res.ok && url.origin === self.location.origin) {
             caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
           }
           return res;
