@@ -66,12 +66,15 @@
       -webkit-text-size-adjust: 100%;
     }
     body {
+      /* Stretch to the real screen edges — do NOT set height here; it fights
+         top/bottom and leaves a dead gap under the tab bar on iOS Safari. */
       position: fixed;
-      inset: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      left: 0;
       width: 100%;
-      height: 100%;
-      height: 100dvh;
-      height: -webkit-fill-available;
+      margin: 0;
       display: flex;
       flex-direction: column;
       background-color: var(--bg0);
@@ -100,6 +103,13 @@
       background: #060b09;
       padding-bottom: 12px;
     }
+    body.is-unlocked .brand-row {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      justify-items: stretch;
+      text-align: left;
+    }
+    body.is-unlocked .brand-text { text-align: left; }
+    body.is-unlocked .mark { margin-bottom: 0; }
     /* Circle / Exit: hide brand header; flex shell keeps tabs docked to bottom. */
     body.tab-circle .app-header,
     body.tab-network .app-header {
@@ -498,16 +508,16 @@
       border-color: rgba(74,127,181,.7);
       background: rgba(74,127,181,.16);
     }
-    /* —— Footer / nav: last flex row, flush with screen bottom —— */
+    /* —— Footer / nav: flush to the physical bottom; safe-area inside the pill —— */
     .app-footer {
       position: relative;
       flex: 0 0 auto;
       margin-top: auto;
       border-top: 1px solid rgba(170,210,185,.12);
       background: #050807;
-      padding: 8px calc(12px + var(--sar)) max(8px, var(--sab)) calc(12px + var(--sal));
+      padding: 8px calc(10px + var(--sar)) 0 calc(10px + var(--sal));
       display: grid;
-      gap: 8px;
+      gap: 0;
       box-shadow: 0 -12px 28px rgba(0,0,0,.35);
       width: 100%;
       z-index: 20;
@@ -516,10 +526,11 @@
       display: none;
       grid-template-columns: repeat(3, 1fr);
       gap: 6px;
-      padding: 5px;
-      border-radius: 18px;
+      padding: 5px 5px calc(5px + var(--sab));
+      border-radius: 18px 18px 0 0;
       background: rgba(255,255,255,.035);
       border: 1px solid rgba(170,210,185,.12);
+      border-bottom: 0;
     }
     body.is-unlocked .app-nav { display: grid; }
     .app-nav button {
