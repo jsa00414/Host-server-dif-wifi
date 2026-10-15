@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#050807" />
+  <meta name="theme-color" content="#070c0a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
@@ -17,13 +17,17 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
   <title>SM Auth · iPhone</title>
   <style>
+
     :root {
-      --bg: #050807;
-      --text: #eef7f1;
-      --muted: #7f9588;
-      --accent: #3ddea0;
-      --danger: #ff7a7a;
+      --bg0: #070c0a;
+      --bg1: #101815;
+      --card: rgba(255,255,255,.035);
       --line: rgba(170, 210, 185, .14);
+      --text: #eaf4ee;
+      --muted: #84998c;
+      --accent: #3ddea0;
+      --accent2: #5a9fd4;
+      --danger: #ff6b6b;
       --sat: env(safe-area-inset-top, 0px);
       --sar: env(safe-area-inset-right, 0px);
       --sab: env(safe-area-inset-bottom, 0px);
@@ -32,16 +36,13 @@
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
       margin: 0;
-      padding: 0;
       width: 100%;
       height: 100%;
-      background: var(--bg);
       color: var(--text);
       font-family: "Sora", system-ui, sans-serif;
-      overflow: hidden;
-      overscroll-behavior: none;
       -webkit-user-select: none;
       user-select: none;
+      overscroll-behavior: none;
     }
     body {
       position: fixed;
@@ -49,304 +50,292 @@
       display: grid;
       grid-template-rows: auto 1fr auto;
       background:
-        radial-gradient(110% 48% at 50% -8%, rgba(61,222,160,.22), transparent 52%),
-        radial-gradient(80% 40% at 80% 100%, rgba(20,70,50,.28), transparent 55%),
-        linear-gradient(180deg, #0b1410 0%, var(--bg) 42%, #030504 100%);
+        radial-gradient(120% 55% at 50% -12%, rgba(61,222,160,.2), transparent 55%),
+        radial-gradient(70% 40% at 100% 100%, rgba(74,127,181,.12), transparent 50%),
+        linear-gradient(180deg, #0c1511 0%, var(--bg0) 45%, #040706 100%);
     }
-    header {
-      padding: calc(14px + var(--sat)) calc(20px + var(--sar)) 10px calc(20px + var(--sal));
-      text-align: center;
+    /* —— Header —— */
+    .app-header {
+      padding: calc(10px + var(--sat)) calc(16px + var(--sar)) 8px calc(16px + var(--sal));
+      border-bottom: 1px solid transparent;
+    }
+    body.is-unlocked .app-header {
+      border-bottom-color: rgba(170,210,185,.1);
+      background: rgba(0,0,0,.18);
+    }
+    .brand-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 12px;
+      align-items: center;
     }
     .mark {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 16px;
-      border-radius: 18px;
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
       border: 1px solid rgba(61,222,160,.42);
       background:
         radial-gradient(circle at 35% 30%, rgba(138,240,196,.55), transparent 45%),
         linear-gradient(160deg, rgba(61,222,160,.28), rgba(61,222,160,.06));
-      box-shadow: 0 12px 32px rgba(0,0,0,.3);
       position: relative;
+      flex: 0 0 auto;
     }
     .mark::after {
       content: "";
       position: absolute;
-      inset: 15px;
+      inset: 12px;
       border-radius: 50%;
-      border: 2.5px solid rgba(61,222,160,.9);
-      box-shadow: inset 0 0 0 6px rgba(5,8,7,.55);
+      border: 2px solid rgba(61,222,160,.9);
+      box-shadow: inset 0 0 0 5px rgba(7,12,10,.55);
     }
+    body:not(.has-account) .brand-row,
+    body.has-account:not(.is-unlocked) .brand-row {
+      grid-template-columns: 1fr;
+      justify-items: center;
+      text-align: center;
+    }
+    body:not(.has-account) .mark,
+    body.has-account:not(.is-unlocked) .mark {
+      width: 56px;
+      height: 56px;
+      margin-bottom: 4px;
+      border-radius: 18px;
+    }
+    body:not(.has-account) .mark::after,
+    body.has-account:not(.is-unlocked) .mark::after {
+      inset: 15px;
+      border-width: 2.5px;
+    }
+    body:not(.is-unlocked) .hdr-lock { display: none !important; }
+    .brand-text { min-width: 0; }
+    body:not(.is-unlocked) .brand-text { text-align: center; }
     .brand {
       margin: 0;
       color: var(--accent);
-      font-size: clamp(1.85rem, 8.5vw, 2.35rem);
+      font-size: 1.15rem;
       font-weight: 700;
-      letter-spacing: -.05em;
-      line-height: 1.02;
-      text-transform: none;
+      letter-spacing: -.03em;
+      line-height: 1.1;
     }
-    h1 {
-      margin: 8px 0 0;
-      font-size: 1.05rem;
+    body:not(.is-unlocked) .brand {
+      font-size: clamp(1.85rem, 8vw, 2.3rem);
+      letter-spacing: -.05em;
+    }
+    .section-title {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: .78rem;
       font-weight: 500;
       letter-spacing: .01em;
-      color: var(--muted);
     }
-    body.is-unlocked .mark {
-      width: 34px;
-      height: 34px;
-      margin-bottom: 8px;
-      border-radius: 10px;
+    body:not(.is-unlocked) .section-title {
+      margin-top: 8px;
+      font-size: 1.02rem;
     }
-    body.is-unlocked .mark::after {
-      inset: 9px;
-      border-width: 1.5px;
-      box-shadow: inset 0 0 0 3.5px rgba(5,8,7,.55);
-    }
-    body.is-unlocked .brand {
-      font-size: 1.2rem;
-      letter-spacing: -.03em;
-    }
-    body.is-unlocked h1 { display: none; }
-    body.is-unlocked header {
-      padding-top: calc(8px + var(--sat));
-      padding-bottom: 4px;
-    }
-    body.is-unlocked {
-      overflow: hidden;
-    }
-    body.is-unlocked main {
-      justify-content: stretch;
-      overflow: hidden;
-      min-height: 0;
-    }
-    body.tab-circle .code-pane > .code,
-    body.tab-circle .code-pane > .bar,
-    body.tab-network .code-pane > .code,
-    body.tab-network .code-pane > .bar {
-      display: none !important;
-    }
-    /* VPN trust circle: no brand mark / logo */
-    body.tab-circle header .mark,
-    body.tab-circle header .brand,
-    body.tab-network header .mark,
-    body.tab-network header .brand {
-      display: none !important;
-    }
-    body.tab-circle header h1,
-    body.tab-network header h1 {
-      display: none !important;
-    }
-    body.tab-circle header,
-    body.tab-network header {
-      padding-top: calc(8px + var(--sat, env(safe-area-inset-top, 0px)));
-      padding-bottom: 4px;
-      min-height: 0;
-    }
-    /* Allowed tab: no approve-IP / refresh controls */
-    body.circle-allowed .circle-add {
-      display: none !important;
-    }
-    .tabs {
-      display: none;
-      gap: 8px;
-      padding: 0;
-    }
-    body.is-unlocked .tabs { display: grid; }
-    .circle-toggle,
-    .network-exit-btn {
-      width: 100%;
-      min-height: 48px;
-      border-radius: 14px;
-      font-size: .86rem;
-      letter-spacing: .02em;
-      font-weight: 600;
-    }
-    .circle-toggle[aria-pressed="true"] {
-      background: rgba(61,222,160,.22);
-      border-color: rgba(61,222,160,.6);
-      color: #d9ffe9;
-    }
-    .network-exit-btn {
-      background: rgba(74, 127, 181, 0.16);
-      border: 1px solid rgba(74, 127, 181, 0.45);
-      color: #d7e8f8;
-    }
-    .network-exit-btn[aria-pressed="true"] {
-      background: rgba(74, 127, 181, 0.28);
-      border-color: rgba(74, 127, 181, 0.7);
-      color: #eaf4ff;
-    }
-    .network-pane .net-control {
-      margin: 0 0 12px;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: rgba(255,255,255,.03);
-    }
-    .network-pane .net-control .label {
-      color: var(--muted);
-      font-size: .62rem;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      margin-bottom: 4px;
-    }
-    .network-pane .net-control .ip {
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-      font-size: 1.05rem;
-      font-weight: 650;
-      word-break: break-all;
-    }
-    .network-pane .net-control .meta {
-      color: var(--muted);
-      font-size: .72rem;
-      margin-top: 6px;
-      line-height: 1.35;
-    }
-    .network-pane .device-row {
-      display: grid;
-      gap: 8px;
-      margin-top: 10px;
-    }
-    .network-pane .device-row[hidden] { display: none; }
-    .network-pane select,
-    .network-pane input[type="text"] {
-      width: 100%;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: rgba(0,0,0,.28);
-      color: var(--text);
-      padding: 12px 14px;
-      font: inherit;
-      font-size: .84rem;
-    }
-    .network-pane .net-choices {
-      display: grid;
-      gap: 8px;
-      overflow: auto;
-      -webkit-overflow-scrolling: touch;
-      flex: 1 1 auto;
-      min-height: 0;
-    }
-    .network-pane .net-choices.busy { opacity: .55; pointer-events: none; }
-    .network-pane button.choice {
+    .hdr-lock {
       appearance: none;
-      width: 100%;
-      text-align: left;
       border: 1px solid var(--line);
-      background: rgba(0,0,0,.22);
+      background: rgba(255,255,255,.04);
       color: var(--text);
-      border-radius: 14px;
-      padding: 12px 14px;
-    }
-    .network-pane button.choice .title {
-      display: block;
-      font-weight: 700;
-      margin-bottom: 2px;
-    }
-    .network-pane button.choice .hint {
-      display: block;
-      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
       font-size: .72rem;
-      line-height: 1.35;
+      font-weight: 650;
+      cursor: pointer;
     }
-    .network-pane button.choice.active {
-      border-color: rgba(61,222,160,.6);
-      background: rgba(61,222,160,.14);
+    /* —— Main —— */
+    .app-main {
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
     }
-    .network-pane button.choice.active.ts {
-      border-color: rgba(74,127,181,.7);
-      background: rgba(74,127,181,.16);
+    .lock, .empty {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 12px;
+      padding: 24px calc(18px + var(--sar)) 24px calc(18px + var(--sal));
+      color: var(--muted);
     }
-    .circle {
+    .lock .face {
+      width: 78px; height: 78px; border-radius: 22px;
+      border: 1px solid rgba(61,222,160,.4);
+      background: radial-gradient(circle at 40% 30%, rgba(138,240,196,.35), transparent 50%), rgba(61,222,160,.1);
+      display: grid; place-items: center;
+      font-size: 1.45rem; color: var(--accent);
+    }
+    .lock h2 { margin: 0; color: var(--text); font-size: 1.15rem; }
+    .lock p { margin: 0; max-width: 28rem; font-size: .88rem; line-height: 1.45; }
+    .pin-row { display: grid; gap: 8px; width: min(280px, 100%); }
+    .pin-row[hidden] { display: none !important; }
+    .pin-row input {
+      width: 100%; border-radius: 12px; border: 1px solid var(--line);
+      background: rgba(0,0,0,.28); color: var(--text);
+      padding: 12px 14px; font: inherit; text-align: center; letter-spacing: .2em;
+    }
+    .workspace {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .workspace[hidden] { display: none !important; }
+    .code-stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 20px calc(16px + var(--sar)) 16px calc(16px + var(--sal));
+      min-height: 0;
+    }
+    body.tab-circle .code-stage,
+    body.tab-network .code-stage { display: none !important; }
+    .code-card {
+      width: min(420px, 100%);
+      padding: 28px 18px 22px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(165deg, rgba(61,222,160,.08), transparent 42%),
+        var(--card);
+      text-align: center;
+    }
+    .code-label {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: .68rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-weight: 650;
+    }
+    .code {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: clamp(2.8rem, 14vw, 3.8rem);
+      font-weight: 600;
+      letter-spacing: .18em;
+      margin: 0;
+      padding-left: .18em;
+      line-height: 1;
+      color: var(--text);
+    }
+    .bar {
+      margin: 18px auto 0;
+      width: min(220px, 70%);
+      height: 5px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block; height: 100%; width: 100%;
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--accent), #8af0c4);
+      transition: transform .2s linear;
+    }
+    .code-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      width: min(420px, 100%);
+      gap: 8px;
+    }
+    /* —— Panels —— */
+    .panel {
+      display: none;
       position: absolute;
       inset: 0;
-      width: auto;
-      margin: 0;
-      padding: 12px calc(14px + var(--sar)) 12px calc(14px + var(--sal));
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      text-align: left;
-      display: flex;
       flex-direction: column;
       min-height: 0;
       overflow: hidden;
-      animation: rise .28s ease both;
+      padding: 12px calc(14px + var(--sar)) 8px calc(14px + var(--sal));
     }
-    .circle[hidden] { display: none !important; }
-    .circle h3 {
-      margin: 0 0 4px;
-      font-size: .9rem;
-      letter-spacing: .04em;
-      text-transform: uppercase;
-      color: var(--accent);
+    body.tab-circle #circlePane,
+    body.tab-network #networkPane {
+      display: flex !important;
     }
-    .circle .sub {
-      margin: 0 0 12px;
+    .panel-head { margin: 0 0 10px; flex: 0 0 auto; }
+    .panel-head h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .panel-head p {
+      margin: 4px 0 0;
       color: var(--muted);
-      font-size: .74rem;
+      font-size: .78rem;
       line-height: 1.4;
     }
-    .circle .meta {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-bottom: 12px;
-      flex: 0 0 auto;
-    }
-    .circle .meta div {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: rgba(255,255,255,.03);
-    }
-    .circle .meta label {
-      display: block;
-      color: var(--muted);
-      font-size: .62rem;
-      margin-bottom: 2px;
-    }
-    .circle .meta strong {
-      font-size: 1rem;
-      font-weight: 600;
-    }
-    .circle-tabs {
+    .stat-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
       margin: 0 0 10px;
+      flex: 0 0 auto;
     }
-    .circle-tabs button {
-      margin: 0;
-      border-radius: 12px;
+    .stat {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,.03);
-      color: var(--muted);
-      font-weight: 700;
+      border-radius: 14px;
+      background: var(--card);
       padding: 10px 12px;
     }
-    .circle-tabs button[aria-selected="true"] {
-      background: rgba(52,211,153,.16);
-      border-color: rgba(52,211,153,.4);
+    .stat label {
+      display: block;
+      color: var(--muted);
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 2px;
+    }
+    .stat strong { font-size: 1.05rem; }
+    .seg {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 0 0 10px;
+      padding: 4px;
+      border-radius: 14px;
+      background: rgba(0,0,0,.28);
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+    .seg button {
+      margin: 0;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 10px 8px;
+      font-size: .8rem;
+    }
+    .seg button[aria-selected="true"] {
+      background: rgba(61,222,160,.18);
       color: var(--text);
     }
     .circle-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 10px;
       flex: 1 1 auto;
       min-height: 0;
       overflow: auto;
       -webkit-overflow-scrolling: touch;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 8px;
     }
     .circle-row {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 12px;
-      background: rgba(255,255,255,.03);
+      background: var(--card);
     }
     .circle-row .ip {
       font-family: "IBM Plex Mono", monospace;
@@ -364,262 +353,193 @@
       gap: 6px;
       margin-top: 10px;
     }
-    .circle-row .row-actions button {
-      min-height: 42px;
-      font-size: .8rem;
-    }
     .circle-empty {
       color: var(--muted);
       font-size: .78rem;
-      padding: 18px 4px;
+      padding: 28px 8px;
       text-align: center;
     }
-    .circle-add {
+    .panel-foot {
+      flex: 0 0 auto;
       display: grid;
       gap: 8px;
-      margin-top: auto;
-      padding-top: 10px;
+      padding-top: 8px;
       border-top: 1px solid var(--line);
-      flex: 0 0 auto;
     }
-    .circle-add input {
+    body.circle-allowed .panel-foot .only-pending { display: none !important; }
+    .panel-foot input, .network-pane select, .network-pane input[type="text"] {
       width: 100%;
       border-radius: 12px;
       border: 1px solid var(--line);
-      background: rgba(0,0,0,.35);
+      background: rgba(0,0,0,.28);
       color: var(--text);
-      padding: 12px;
+      padding: 12px 14px;
       font: inherit;
       font-size: .84rem;
     }
-    .code-pane {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      position: relative;
-      gap: 22px;
-      padding: 0 0 24px;
-      min-height: 0;
+    .net-control {
+      margin: 0 0 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      flex: 0 0 auto;
     }
-    body.tab-circle .code-pane,
-    body.tab-network .code-pane {
-      justify-content: stretch;
-      align-items: stretch;
-      gap: 0;
-      padding: 0;
-    }
-    body.tab-circle .actions #copyBtn,
-    body.tab-network .actions #copyBtn { display: none !important; }
-    main {
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      width: 100%;
-    }
-    .code-pane {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      position: relative;
-      gap: 22px;
-      padding: 0 0 24px;
-    }
-    .code-pane[hidden],
-    .empty[hidden],
-    .lock[hidden],
-    button[hidden] { display: none !important; }
-    .acct {
-      text-align: center;
+    .net-control .label {
       color: var(--muted);
-      font-size: .72rem;
-      padding: 0 calc(14px + var(--sar)) 14px calc(14px + var(--sal));
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+    .net-control .ip {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 1.05rem;
+      font-weight: 650;
       word-break: break-all;
     }
-    .code {
-      width: 100%;
-      text-align: center;
-      font-family: "IBM Plex Mono", monospace;
-      font-size: clamp(3.4rem, 17.5vw, 5rem);
-      font-weight: 600;
-      letter-spacing: .18em;
-      padding-left: .18em;
-      line-height: 1;
-      margin: 0;
-    }
-    .bar {
-      position: relative;
-      left: auto;
-      right: auto;
-      bottom: auto;
-      width: min(220px, 56%);
-      height: 5px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.08);
-      overflow: hidden;
-    }
-    .bar > i {
-      display: block;
-      height: 100%;
-      width: 100%;
-      transform-origin: left center;
-      background: linear-gradient(90deg, var(--accent), #8af0c4);
-      transition: transform .18s linear;
-    }
-    .empty, .lock {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
+    .net-control .meta {
       color: var(--muted);
-      font-size: .92rem;
-      line-height: 1.45;
-      padding: 24px calc(22px + var(--sar)) 24px calc(22px + var(--sal));
-      gap: 16px;
-      animation: rise .45s ease both;
+      font-size: .72rem;
+      margin-top: 6px;
+      line-height: 1.35;
     }
-    @keyframes rise {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .lock .face {
-      width: 78px;
-      height: 78px;
-      border-radius: 22px;
-      border: 1px solid rgba(61,222,160,.4);
-      background:
-        radial-gradient(circle at 40% 30%, rgba(138,240,196,.35), transparent 50%),
-        rgba(61,222,160,.1);
+    .device-row { display: grid; gap: 8px; margin-top: 10px; }
+    .device-row[hidden] { display: none; }
+    .net-choices {
       display: grid;
-      place-items: center;
-      font-size: 1.55rem;
-      letter-spacing: .08em;
-      color: var(--accent);
-      box-shadow: 0 16px 40px rgba(0,0,0,.28);
+      gap: 8px;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      flex: 1 1 auto;
+      min-height: 0;
+      padding-bottom: 4px;
     }
-    .lock h2 {
-      margin: 0;
-      color: var(--text);
-      font-size: 1.2rem;
-    }
-    .lock p { margin: 0; max-width: 18rem; }
-    .pin-row {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      width: min(280px, 100%);
-    }
-    .pin-row[hidden] { display: none !important; }
-    .pin-row input {
+    .net-choices.busy { opacity: .55; pointer-events: none; }
+    button.choice {
+      appearance: none;
       width: 100%;
-      text-align: center;
-      letter-spacing: .35em;
-      font-family: "IBM Plex Mono", monospace;
-      font-size: 1.35rem;
-      border-radius: 14px;
+      text-align: left;
       border: 1px solid var(--line);
-      background: rgba(0,0,0,.35);
+      background: rgba(0,0,0,.22);
       color: var(--text);
-      padding: 14px 12px;
-    }
-    footer {
-      border-top: 1px solid var(--line);
-      background: rgba(0,0,0,.28);
-      padding: 12px calc(12px + var(--sar)) calc(12px + var(--sab)) calc(12px + var(--sal));
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .install {
-      display: none;
-      border: 1px dashed rgba(61,222,160,.4);
       border-radius: 14px;
       padding: 12px 14px;
-      background: rgba(61,222,160,.07);
-      font-size: .8rem;
-      line-height: 1.45;
+      cursor: pointer;
     }
-    .install.show { display: block; }
-    .install strong { color: var(--accent); }
-    .actions {
+    button.choice .title { display: block; font-weight: 700; margin-bottom: 2px; }
+    button.choice .hint { display: block; color: var(--muted); font-size: .72rem; line-height: 1.35; }
+    button.choice.active {
+      border-color: rgba(61,222,160,.6);
+      background: rgba(61,222,160,.14);
+    }
+    button.choice.active.ts {
+      border-color: rgba(74,127,181,.7);
+      background: rgba(74,127,181,.16);
+    }
+    /* —— Footer / nav —— */
+    .app-footer {
+      border-top: 1px solid rgba(170,210,185,.12);
+      background: rgba(0,0,0,.28);
+      padding: 8px calc(10px + var(--sar)) calc(8px + var(--sab)) calc(10px + var(--sal));
       display: grid;
-      grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
-    body.tab-circle .actions,
-    body.tab-network .actions {
-      grid-template-columns: 1fr;
-    }
-    .actions:empty { display: none; }
-    body.is-unlocked .install { display: none !important; }
-    .manual {
-      width: 100%;
+    .app-nav {
       display: none;
-      gap: 10px;
-      flex-direction: column;
-    }
-    .manual.show { display: flex; }
-    .manual input {
-      width: 100%;
-      border-radius: 12px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 4px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.03);
       border: 1px solid var(--line);
-      background: rgba(0,0,0,.28);
-      color: var(--text);
-      padding: 12px 14px;
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-      font-size: .9rem;
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      box-sizing: border-box;
     }
-    .manual label {
-      font-size: .78rem;
+    body.is-unlocked .app-nav { display: grid; }
+    .app-nav button {
+      appearance: none;
+      border: 0;
+      background: transparent;
       color: var(--muted);
+      border-radius: 12px;
+      padding: 10px 6px 8px;
+      font: inherit;
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .02em;
+      cursor: pointer;
+      display: grid;
+      gap: 4px;
+      justify-items: center;
     }
-    body.tab-circle .actions #manualBtn,
-    body.tab-circle .manual,
-    body.tab-network .actions #manualBtn,
-    body.tab-network .manual { display: none !important; }
-    button {
+    .app-nav button .glyph {
+      width: 22px; height: 22px;
+      border-radius: 7px;
+      border: 1px solid currentColor;
+      opacity: .85;
+      position: relative;
+    }
+    .app-nav button[data-view="codes"] .glyph::after {
+      content: "···";
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      font-size: .55rem; letter-spacing: .08em;
+    }
+    .app-nav button[data-view="circle"] .glyph {
+      border-radius: 50%;
+    }
+    .app-nav button[data-view="network"] .glyph {
+      border-radius: 4px 4px 8px 8px;
+    }
+    .app-nav button[aria-selected="true"] {
+      background: rgba(61,222,160,.16);
+      color: #d9ffe9;
+    }
+    .app-nav button[data-view="network"][aria-selected="true"] {
+      background: rgba(74,127,181,.2);
+      color: #e0efff;
+    }
+    .footer-actions { display: none; gap: 8px; }
+    body:not(.is-unlocked) .footer-actions.enroll { display: grid; }
+    button, .btn {
       appearance: none;
       border: 1px solid var(--line);
       background: rgba(255,255,255,.04);
       color: var(--text);
-      border-radius: 14px;
-      min-height: 48px;
-      padding: 12px 10px;
+      border-radius: 12px;
+      padding: 13px 12px;
       font: inherit;
       font-size: .86rem;
       font-weight: 600;
+      cursor: pointer;
     }
     button.primary {
       background: rgba(61,222,160,.18);
-      border-color: rgba(61,222,160,.5);
-      color: #d9ffe9;
+      border-color: rgba(61,222,160,.45);
+      color: #d8ffe9;
     }
     button.danger {
-      border-color: rgba(255,122,122,.4);
-      color: #ffc0c0;
+      border-color: rgba(255,107,107,.35);
+      color: #ffb4b4;
     }
-    .hint {
-      margin: 0;
-      text-align: center;
-      color: var(--muted);
-      font-size: .72rem;
+    button:disabled { opacity: .45; cursor: default; }
+    .manual {
+      display: none;
+      gap: 8px;
+      flex-direction: column;
+    }
+    .manual.show { display: flex; }
+    .manual label { font-size: .74rem; color: var(--muted); }
+    .manual input {
+      width: 100%; border-radius: 12px; border: 1px solid var(--line);
+      background: rgba(0,0,0,.28); color: var(--text);
+      padding: 12px 14px; font-family: "IBM Plex Mono", monospace;
+      font-size: .86rem; letter-spacing: .04em; text-transform: uppercase;
     }
     .toast {
       position: fixed;
       left: 50%;
       bottom: calc(18px + var(--sab));
-      transform: translateX(-50%) translateY(16px);
+      transform: translateX(-50%) translateY(8px);
       background: #132019;
       border: 1px solid rgba(61,222,160,.4);
       color: var(--text);
@@ -632,20 +552,25 @@
       z-index: 30;
       max-width: calc(100% - 28px);
     }
-    .toast.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    [hidden] { display: none !important; }
+
   </style>
 </head>
+
 <body>
-  <header>
-    <div class="mark" aria-hidden="true"></div>
-    <p class="brand">ServerManager</p>
-    <h1>Authenticator</h1>
+  <header class="app-header">
+    <div class="brand-row">
+      <div class="mark" aria-hidden="true"></div>
+      <div class="brand-text">
+        <p class="brand">ServerManager</p>
+        <p class="section-title" id="sectionTitle">Authenticator</p>
+      </div>
+      <button type="button" class="hdr-lock" id="lockNowBtn" hidden>Lock</button>
+    </div>
   </header>
 
-  <main>
+  <main class="app-main" id="stage">
     <section class="lock" id="lockView" hidden>
       <div class="face" aria-hidden="true">◉</div>
       <h2 id="lockTitle">Face ID required</h2>
@@ -658,28 +583,46 @@
         <button type="button" class="primary" id="pinSubmitBtn">Unlock with PIN</button>
       </div>
     </section>
-    <section class="code-pane" id="codePane" hidden>
-      <div class="code" id="codeView">------</div>
-      <div class="bar"><i id="tickBar"></i></div>
-      <section class="circle" id="circlePane" hidden>
-        <h3>VPN trust circle</h3>
-        <p class="sub">View pending or allowed. Allowed IPs can be moved back to pending or removed.</p>
-        <div class="meta">
-          <div><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
-          <div><label>Pending</label><strong id="circlePendingCount">0</strong></div>
+
+    <div class="workspace" id="codePane" hidden>
+      <div class="code-stage" id="codeStage">
+        <div class="code-card">
+          <p class="code-label">One-time code</p>
+          <div class="code" id="codeView">------</div>
+          <div class="bar"><i id="tickBar"></i></div>
         </div>
-        <div class="circle-tabs" role="tablist" aria-label="Circle lists">
+        <div class="code-actions">
+          <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+        </div>
+      </div>
+
+      <section class="panel" id="circlePane" hidden>
+        <div class="panel-head">
+          <h3>VPN trust circle</h3>
+          <p>Approve devices onto the home network, or move them back to pending.</p>
+        </div>
+        <div class="stat-row">
+          <div class="stat"><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
+          <div class="stat"><label>Pending</label><strong id="circlePendingCount">0</strong></div>
+        </div>
+        <div class="seg" role="tablist" aria-label="Circle lists">
           <button type="button" id="circleTabPending" role="tab" aria-selected="true">Pending</button>
           <button type="button" id="circleTabAllowed" role="tab" aria-selected="false">Allowed</button>
         </div>
-        <div class="circle-list" id="circleList"><div class="circle-empty">Unlock, then open Circle.</div></div>
-        <div class="circle-add">
+        <div class="circle-list" id="circleList"><div class="circle-empty">Open Circle to load the list.</div></div>
+        <div class="panel-foot">
+          <input class="only-pending" id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
+          <button type="button" class="primary only-pending" id="circleApproveBtn">Approve into circle</button>
+          <button type="button" class="only-pending" id="circleAuthorizeBtn">Authorize this network</button>
           <button type="button" id="circleRefreshBtn">Refresh list</button>
         </div>
       </section>
-      <section class="circle network-pane" id="networkPane" hidden>
-        <h3>Network exit</h3>
-        <p class="sub">Pick this device’s home Wi‑Fi IP, then send only that address through Tailscale or Surfshark.</p>
+
+      <section class="panel network-pane" id="networkPane" hidden>
+        <div class="panel-head">
+          <h3>Network exit</h3>
+          <p>Route one home Wi‑Fi IP through Tailscale or Surfshark.</p>
+        </div>
         <div class="net-control">
           <div class="label">Controlling</div>
           <div class="ip" id="netControlIp">…</div>
@@ -709,18 +652,18 @@
           </button>
         </div>
       </section>
-    </section>
+    </div>
+
     <div class="empty" id="emptyView" hidden></div>
   </main>
 
-  <footer>
-    <div class="tabs" id="tabBar" hidden>
-      <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
-      <button type="button" class="network-exit-btn" id="networkExitBtn">Network exit</button>
-    </div>
-    <div class="actions">
-      <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
-      <button type="button" id="lockNowBtn" hidden>Lock</button>
+  <footer class="app-footer">
+    <nav class="app-nav" id="tabBar" hidden aria-label="Authenticator sections">
+      <button type="button" id="navCode" data-view="codes" aria-selected="true"><span class="glyph" aria-hidden="true"></span>Code</button>
+      <button type="button" id="navCircle" data-view="circle" aria-selected="false"><span class="glyph" aria-hidden="true"></span>Circle</button>
+      <button type="button" id="navNetwork" data-view="network" aria-selected="false"><span class="glyph" aria-hidden="true"></span>Exit</button>
+    </nav>
+    <div class="footer-actions enroll" id="footerActions">
       <button type="button" id="manualBtn" hidden>Enter secret</button>
     </div>
     <div class="manual" id="manualForm">
@@ -736,6 +679,7 @@
   <script src="/static/sm-circle-crypto.js"></script>
   <script src="/static/sm-network-exit.js"></script>
   <script>
+
     const STORE_KEY = "sm.auth.totp.v1";
     const FACE_KEY = "sm.auth.face.cred.v1";
     const PIN_KEY = "sm.auth.pin.hash.v1";
@@ -748,6 +692,7 @@
       lockTitle: document.getElementById("lockTitle"),
       lockSub: document.getElementById("lockSub"),
       codePane: document.getElementById("codePane"),
+      codeShell: document.getElementById("codePane"),
       emptyView: document.getElementById("emptyView"),
       codeView: document.getElementById("codeView"),
       tickBar: document.getElementById("tickBar"),
@@ -776,9 +721,13 @@
       circleTabPending: document.getElementById("circleTabPending"),
       circleTabAllowed: document.getElementById("circleTabAllowed"),
       tabBar: document.getElementById("tabBar"),
-      circleToggle: document.getElementById("circleToggle"),
-      networkExitBtn: document.getElementById("networkExitBtn"),
+      navCode: document.getElementById("navCode"),
+      navCircle: document.getElementById("navCircle"),
+      navNetwork: document.getElementById("navNetwork"),
+      sectionTitle: document.getElementById("sectionTitle"),
       networkPane: document.getElementById("networkPane"),
+      codeStage: document.getElementById("codeStage"),
+      footerActions: document.getElementById("footerActions"),
     };
 
     let account = null;
@@ -796,16 +745,30 @@
     let enrollUnlocked = false;
     let enrollStatusLoaded = false;
 
-    function syncPanelButtons() {
-      const away = !!(circleOpen || networkOpen);
-      if (els.circleToggle) {
-        els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
-        els.circleToggle.textContent = away ? "Back to codes" : "VPN trust circle";
-      }
-      if (els.networkExitBtn) {
-        els.networkExitBtn.setAttribute("aria-pressed", networkOpen ? "true" : "false");
-      }
+
+    function currentView() {
+      if (networkOpen) return "network";
+      if (circleOpen) return "circle";
+      return "codes";
     }
+
+    function syncPanelButtons() {
+      const view = currentView();
+      document.body.dataset.view = view;
+      const map = { codes: els.navCode, circle: els.navCircle, network: els.navNetwork };
+      Object.entries(map).forEach(([key, btn]) => {
+        if (!btn) return;
+        btn.setAttribute("aria-selected", view === key ? "true" : "false");
+      });
+      if (els.sectionTitle) {
+        els.sectionTitle.textContent =
+          view === "circle" ? "VPN circle"
+          : view === "network" ? "Network exit"
+          : "Authenticator";
+      }
+      if (els.copyBtn) els.copyBtn.hidden = !(unlocked && view === "codes");
+    }
+
 
     function setPanelView(view) {
       if (!unlocked) return;
@@ -1338,11 +1301,7 @@
       circleOpen = false;
       networkOpen = false;
       document.body.classList.remove("tab-circle", "tab-network", "circle-allowed");
-      if (els.circleToggle) {
-        els.circleToggle.setAttribute("aria-pressed", "false");
-        els.circleToggle.textContent = "VPN trust circle";
-      }
-      if (els.networkExitBtn) els.networkExitBtn.setAttribute("aria-pressed", "false");
+      syncPanelButtons();
       els.codeView.textContent = "------";
       els.pinInput.value = "";
       if (els.circlePane) els.circlePane.hidden = true;
@@ -1488,16 +1447,19 @@
       }
     });
     els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
-    els.circleToggle?.addEventListener("click", () => {
+    els.navCode?.addEventListener("click", () => {
       if (!unlocked) return;
-      if (circleOpen || networkOpen) setPanelView("codes");
-      else setPanelView("circle");
+      setPanelView("codes");
       bumpIdle();
     });
-    els.networkExitBtn?.addEventListener("click", () => {
+    els.navCircle?.addEventListener("click", () => {
       if (!unlocked) return;
-      if (networkOpen) setPanelView("codes");
-      else setPanelView("network");
+      setPanelView("circle");
+      bumpIdle();
+    });
+    els.navNetwork?.addEventListener("click", () => {
+      if (!unlocked) return;
+      setPanelView("network");
       bumpIdle();
     });
     els.circleTabPending?.addEventListener("click", () => {
@@ -1598,6 +1560,7 @@
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/static/auth-app-iphone-sw.js").catch(() => {});
     }
+  
   </script>
 </body>
 </html>
