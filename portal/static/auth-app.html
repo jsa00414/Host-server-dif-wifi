@@ -65,8 +65,8 @@
     body {
       position: fixed;
       inset: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
+      display: flex;
+      flex-direction: column;
       background-color: var(--bg0);
       background-image:
         radial-gradient(120% 55% at 50% -12%, rgba(61,222,160,.16), transparent 55%),
@@ -83,6 +83,7 @@
     }
     /* —— Header —— */
     .app-header {
+      flex: 0 0 auto;
       padding: calc(12px + var(--sat)) calc(16px + var(--sar)) 10px calc(16px + var(--sal));
       border-bottom: 1px solid transparent;
       background: transparent;
@@ -92,16 +93,7 @@
       background: #060b09;
       padding-bottom: 12px;
     }
-    /*
-     * Circle / Exit tabs: hide brand header for content space, but keep the
-     * body grid as main+footer. display:none on the header removes it from
-     * the grid, so without retargeting rows the footer wrongly gets 1fr and
-     * the tab buttons stretch into full-height columns.
-     */
-    body.tab-circle,
-    body.tab-network {
-      grid-template-rows: minmax(0, 1fr) auto;
-    }
+    /* Circle / Exit: hide brand header; flex shell keeps tabs docked to bottom. */
     body.tab-circle .app-header,
     body.tab-network .app-header {
       display: none !important;
@@ -189,6 +181,7 @@
     }
     /* —— Main —— */
     .app-main {
+      flex: 1 1 auto;
       min-height: 0;
       overflow: hidden;
       display: flex;
@@ -484,17 +477,19 @@
       border-color: rgba(74,127,181,.7);
       background: rgba(74,127,181,.16);
     }
-    /* —— Footer / nav —— */
+    /* —— Footer / nav (always docked to bottom of the screen) —— */
     .app-footer {
       position: relative;
+      flex: 0 0 auto;
+      margin-top: auto;
       border-top: 1px solid rgba(170,210,185,.12);
       background: #050807;
       padding: 10px calc(12px + var(--sar)) calc(10px + var(--sab)) calc(12px + var(--sal));
       display: grid;
       gap: 8px;
       box-shadow: 0 -12px 28px rgba(0,0,0,.35);
-      align-self: end;
-      flex: 0 0 auto;
+      width: 100%;
+      z-index: 20;
     }
     .app-footer::after {
       content: "";
