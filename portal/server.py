@@ -5116,14 +5116,23 @@ def _as_bool(value) -> bool:
 
 
 def _network_hookup_site_lines(rule: dict) -> list[str]:
-    """Public per-device VPN exit picker (network.vpstruelord.com)."""
+    """Public per-device VPN exit picker (network.vpstruelord.com).
+
+    Circle Ed25519 keys live in localStorage on keys.* (Authenticator). Safari
+    and many mobile browsers block third-party iframe storage, so the exit UI
+    must run on keys.* to prove circle membership for home-router devices.
+    network.* keeps the short name and redirects there.
+    """
     public = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
+    keys = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     return [
         f"{public} {{",
         "\tencode gzip",
         "\t@root path /",
-        "\tredir @root /network.html 302",
+        f"\tredir @root https://{keys}/network.html 302",
+        "\t@legacy_network path /network.html",
+        f"\tredir @legacy_network https://{keys}/network.html 302",
         f"\treverse_proxy {upstream} {{",
         "\t\theader_up Host {host}",
         "\t\theader_up X-Forwarded-Host {host}",

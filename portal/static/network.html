@@ -177,7 +177,7 @@
 <body>
   <main>
     <h1>Network exit</h1>
-    <p class="sub">This device’s IPv4 can send internet through Tailscale (exit node) or Surfshark — only this address is changed.</p>
+    <p class="sub">Circle devices only. This device’s Wi‑Fi IPv4 can send internet through Tailscale (exit node) or Surfshark — only that address is changed.</p>
 
     <section class="panel">
       <div class="label">Controlling</div>
@@ -362,8 +362,8 @@
 
     function fillDevicePicker(selected) {
       const opts = candidateEntries();
-      const locked = !!state?.needs_circle && !state?.circle_ok;
-      els.deviceRow.hidden = locked || (!opts.length && !selected);
+      // Always show the picker when this browser has circle keys (router Wi‑Fi devices).
+      els.deviceRow.hidden = opts.length === 0 && !selected;
       if (!opts.length) {
         els.devicePick.innerHTML = `<option value="">No circle device key on this browser…</option>`;
       } else {
@@ -381,7 +381,7 @@
       }
       els.deviceManual.placeholder = opts.length
         ? "or confirm 192.168.8.x"
-        : "Approve this device on keys.vpstruelord.com first";
+        : "Open Authenticator → Approve this device on home Wi‑Fi first";
       els.useDeviceBtn.disabled = !opts.length;
     }
 
@@ -548,7 +548,17 @@
     els.btnSs.onclick = () => setProvider("surfshark");
     els.btnDirect.onclick = () => setProvider("direct");
 
+    function onKeysOrigin() {
+      const host = String(location.hostname || "").toLowerCase();
+      return host === "keys.vpstruelord.com" || host.startsWith("keys.");
+    }
+
     function loadKeysBridge() {
+      // Already on keys.* — Authenticator keys are same-origin localStorage.
+      if (onKeysOrigin()) {
+        bridgeIps = circleStoreLanIps();
+        return Promise.resolve(bridgeIps);
+      }
       return new Promise((resolve) => {
         const keysHost = (state?.hosts?.keys || "keys.vpstruelord.com").replace(/^https?:\/\//, "");
         let settled = false;
@@ -586,9 +596,15 @@
 
     (async () => {
       try {
-        // Circle keys live on keys.* — sync them before proving membership.
+        // Circle keys are stored on keys.* by Authenticator. Router/Wi‑Fi devices
+        // must use that origin — third-party iframes cannot read the keys on iOS.
+        if (!onKeysOrigin()) {
+          const keysHost = "keys.vpstruelord.com";
+          location.replace(`https://${keysHost}/network.html`);
+          return;
+        }
         state = {
-          hosts: { keys: "keys.vpstruelord.com" },
+          hosts: { keys: "keys.vpstruelord.com", network: "network.vpstruelord.com" },
           needs_circle: true,
           circle_ok: false,
           candidate_ips: [],
@@ -603,11 +619,22 @@
           lanIp = rememberedIp();
         } else if (circleIps.length === 1) {
           lanIp = circleIps[0];
+        } else if (circleIps.length > 1) {
+          // Prefer an online-looking match later via picker; default to newest key.
+          lanIp = circleIps[0];
         }
         if (lanIp) rememberIp(lanIp);
         await refresh();
         if (state?.needs_circle && !state?.circle_ok) {
-          toast("Circle members only — approve this device in Authenticator", true);
+          const hasKeys = circleStoreLanIps().length > 0;
+          toast(
+            hasKeys
+              ? "Circle proof failed — pick your Wi‑Fi device below"
+              : "Unlock Authenticator and Approve this device on home Wi‑Fi first",
+            true
+          );
+          els.deviceRow.hidden = false;
+          fillDevicePicker(lanIp);
         }
       } catch (err) {
         els.controlIp.textContent = "unavailable";
