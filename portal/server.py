@@ -11222,18 +11222,57 @@ def _read_device_exit_state() -> dict:
     return data
 
 
+def _device_exit_infra_ips() -> set[str]:
+    """Tunnel / router VIPs that are never a single end-user device."""
+    ips = {
+        OVPN_FLINT_VPN_IP,
+        "10.9.0.2",
+        "10.9.0.1",
+        "10.8.0.1",
+        "10.8.0.3",
+        "10.11.0.1",
+        "10.42.42.1",
+        VPS_PUBLIC_IP,
+        "127.0.0.1",
+        "172.18.0.1",
+    }
+    for h in ROUTER_HOSTS:
+        n = _normalize_vpn_ip(str(h or ""))
+        if n:
+            ips.add(n)
+    return {i for i in ips if i}
+
+
+def _device_exit_lan_hint_from_request(handler: "Handler", payload: dict | None = None) -> str:
+    """LAN /32 claimed by the browser (header, body, or circle proof IP)."""
+    payload = payload if isinstance(payload, dict) else {}
+    for raw in (
+        handler.headers.get("X-SM-Lan-Ip"),
+        handler.headers.get("X-SM-Circle-Ip"),
+        payload.get("lan_ip"),
+        payload.get("device_ip"),
+    ):
+        ip = _normalize_vpn_ip(str(raw or ""))
+        if _is_home_lan_ipv4(ip):
+            return ip
+    return ""
+
+
 def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
     """Pick which /32 this request may control.
 
     Prefer a home-LAN IP when the browser reported 192.168.8.x and the HTTP
     client is a path we expect from Flint (VPN pools, docker/Caddy peer, or the
     known campus/home shared WAN). That LAN /32 is what mangle sees on tun0.
-    Otherwise the TCP client IP itself (IKEv2/WG peers, cellular, etc.).
+
+    Never return Flint's OVPN VIP (10.9.0.2) or other infra addresses — those
+    are shared paths, not "this device".
     """
     client = _normalize_vpn_ip(client_ip or "")
     lan = _normalize_vpn_ip(lan_ip or "")
+    infra = _device_exit_infra_ips()
     denied_wan = _denied_vpn_ips()
-    if _is_home_lan_ipv4(lan) and (
+    from_trusted_path = (
         client == lan
         or client.startswith("10.9.")
         or client.startswith("10.8.")
@@ -11241,14 +11280,21 @@ def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
         or client.startswith("10.10.")
         or _is_home_lan_ipv4(client)
         or client in denied_wan
-        or client in {"127.0.0.1", "172.18.0.1"}
+        or client in infra
         or _is_loopback_or_link_local(client)
-    ):
+    )
+    if _is_home_lan_ipv4(lan) and from_trusted_path:
         return lan
-    if client and client not in {"unknown", ""}:
+    if client and client not in {"unknown", ""} and client not in infra:
         return client
     if _is_home_lan_ipv4(lan):
         return lan
+    if client in infra:
+        raise ValueError(
+            "Could not see this device's LAN IP (connection is via Flint VPN). "
+            "Stay on home Wi‑Fi and allow local network access, or open keys.vpstruelord.com "
+            "once so this browser stores your circle device IP."
+        )
     raise ValueError("Could not determine this device's IPv4 address")
 
 
@@ -11274,29 +11320,54 @@ def _global_exit_summary() -> str:
 def build_device_exit_status(
     *, client_ip: str, lan_ip: str = ""
 ) -> dict:
-    control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    client_n = _normalize_vpn_ip(client_ip or "") or ""
+    lan_n = _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else ""
+    ts = _read_vpn_exit_state()
+    ss_servers = list_surfshark_servers()
+    base = {
+        "ok": True,
+        "client_ip": client_n,
+        "lan_ip": lan_n,
+        "surfshark_server": ss_servers[0]["id"] if ss_servers else "",
+        "surfshark_servers": ss_servers,
+        "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
+        "global_exit": _global_exit_summary(),
+        "hosts": {"network": NETWORK_PUBLIC_HOST},
+        "needs_device_ip": False,
+        "via_flint": client_n in _device_exit_infra_ips(),
+    }
+    try:
+        control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    except ValueError as exc:
+        base.update(
+            {
+                "control_ip": "",
+                "provider": "direct",
+                "provider_label": _provider_label("direct"),
+                "needs_device_ip": True,
+                "error": str(exc),
+            }
+        )
+        return base
     state = _read_device_exit_state()
     row = (state.get("devices") or {}).get(control_ip) or {}
     provider = str(row.get("provider") or "direct").strip().lower() or "direct"
     if provider == "clear":
         provider = "direct"
-    ts = _read_vpn_exit_state()
-    ss_servers = list_surfshark_servers()
-    return {
-        "ok": True,
-        "client_ip": _normalize_vpn_ip(client_ip or "") or "",
-        "lan_ip": _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else "",
-        "control_ip": control_ip,
-        "provider": provider,
-        "provider_label": _provider_label(provider),
-        "surfshark_server": str(row.get("server") or (ss_servers[0]["id"] if ss_servers else "")),
-        "surfshark_servers": ss_servers,
-        "tailscale_exit_ip": str(
-            row.get("exit_ip") or ts.get("exit_ip") or "100.94.32.63"
-        ),
-        "global_exit": _global_exit_summary(),
-        "hosts": {"network": NETWORK_PUBLIC_HOST},
-    }
+    base.update(
+        {
+            "control_ip": control_ip,
+            "provider": provider,
+            "provider_label": _provider_label(provider),
+            "surfshark_server": str(
+                row.get("server") or (ss_servers[0]["id"] if ss_servers else "")
+            ),
+            "tailscale_exit_ip": str(
+                row.get("exit_ip") or ts.get("exit_ip") or "100.94.32.63"
+            ),
+        }
+    )
+    return base
 
 
 def set_device_exit(
@@ -19348,7 +19419,7 @@ document.getElementById('f').onsubmit = async (e) => {
             )
         if path == "/api/network/exit":
             try:
-                lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
+                lan_hint = _device_exit_lan_hint_from_request(self)
                 self._json(
                     200,
                     build_device_exit_status(
@@ -20394,9 +20465,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 payload = self._read_json()
                 if not isinstance(payload, dict):
                     payload = {}
-                lan_hint = _normalize_vpn_ip(
-                    self.headers.get("X-SM-Lan-Ip") or payload.get("lan_ip") or ""
-                )
+                lan_hint = _device_exit_lan_hint_from_request(self, payload)
                 result = set_device_exit(
                     client_ip=request_client_ip(self),
                     lan_ip=lan_hint,

@@ -73,6 +73,19 @@
       font-size: 0.85rem;
       line-height: 1.4;
     }
+    #devicePick {
+      margin-top: 0.85rem;
+      width: 100%;
+      font: inherit;
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      color: var(--ink);
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+    }
+    #devicePick[hidden] { display: none; }
     .choices {
       display: grid;
       gap: 0.65rem;
@@ -155,6 +168,7 @@
       <div class="label">Controlling</div>
       <div class="ip" id="controlIp">…</div>
       <div class="meta" id="meta"></div>
+      <select id="devicePick" aria-label="This device IP" hidden></select>
     </section>
 
     <section class="panel choices" id="choices">
@@ -176,10 +190,14 @@
     </section>
   </main>
   <div class="toast" id="toast"></div>
+  <script src="/static/sm-circle-crypto.js"></script>
   <script>
+    const LAST_IP_KEY = "sm.network.deviceIp.v1";
+    const LAN_RE = /^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/;
     const els = {
       controlIp: document.getElementById("controlIp"),
       meta: document.getElementById("meta"),
+      devicePick: document.getElementById("devicePick"),
       choices: document.getElementById("choices"),
       toast: document.getElementById("toast"),
       ssServer: document.getElementById("ssServer"),
@@ -196,10 +214,53 @@
       els.toast.classList.toggle("err", !!err);
       els.toast.classList.add("show");
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 3200);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 3600);
     }
 
-    async function detectHomeLanIp() {
+    function isHomeLanIp(ip) {
+      return LAN_RE.test(String(ip || "").trim());
+    }
+
+    function rememberIp(ip) {
+      if (!isHomeLanIp(ip)) return;
+      try { localStorage.setItem(LAST_IP_KEY, ip); } catch (_) {}
+    }
+
+    function rememberedIp() {
+      try {
+        const ip = localStorage.getItem(LAST_IP_KEY) || "";
+        return isHomeLanIp(ip) ? ip : "";
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function circleStoreLanIps() {
+      try {
+        const store = (window.SmCircleCrypto && SmCircleCrypto.loadStore()) || {};
+        return Object.keys(store)
+          .filter(isHomeLanIp)
+          .sort((a, b) => {
+            const ca = Number(store[a]?.createdAt || 0);
+            const cb = Number(store[b]?.createdAt || 0);
+            return cb - ca;
+          });
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function extractLanFromText(text) {
+      const found = [];
+      const re = /\b(192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4]))\b/g;
+      let m;
+      while ((m = re.exec(String(text || "")))) {
+        if (!found.includes(m[1])) found.push(m[1]);
+      }
+      return found;
+    }
+
+    async function detectHomeLanIpViaWebRtc() {
       return await new Promise((resolve) => {
         let done = false;
         const finish = (ip) => {
@@ -216,32 +277,72 @@
           return;
         }
         try { pc.createDataChannel("sm"); } catch (_) {}
+        const consider = (text) => {
+          const ips = extractLanFromText(text);
+          if (ips.length) finish(ips[0]);
+        };
         pc.onicecandidate = (ev) => {
-          const cand = ev?.candidate?.candidate || "";
-          const m = cand.match(/(?:^| )(\d{1,3}(?:\.\d{1,3}){3})(?: |\n|$)/);
-          if (!m) return;
-          const ip = m[1];
-          if (/^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/.test(ip)) {
-            finish(ip);
-          }
+          if (!ev?.candidate) return;
+          consider(ev.candidate.candidate || "");
+          try { consider(JSON.stringify(ev.candidate)); } catch (_) {}
         };
         pc.createOffer()
           .then((offer) => pc.setLocalDescription(offer))
+          .then(() => consider(pc.localDescription?.sdp || ""))
           .catch(() => finish(""));
-        setTimeout(() => finish(""), 1600);
+        setTimeout(() => {
+          consider(pc.localDescription?.sdp || "");
+          finish("");
+        }, 2800);
       });
+    }
+
+    async function detectDeviceIp() {
+      const webrtc = await detectHomeLanIpViaWebRtc();
+      if (isHomeLanIp(webrtc)) return webrtc;
+      const remembered = rememberedIp();
+      if (remembered) return remembered;
+      const circleIps = circleStoreLanIps();
+      if (circleIps.length === 1) return circleIps[0];
+      if (circleIps.length > 1) return circleIps[0];
+      return "";
+    }
+
+    function fillDevicePicker(selected) {
+      const ips = circleStoreLanIps();
+      const opts = [...ips];
+      if (selected && isHomeLanIp(selected) && !opts.includes(selected)) {
+        opts.unshift(selected);
+      }
+      if (!opts.length) {
+        els.devicePick.hidden = true;
+        els.devicePick.innerHTML = "";
+        return;
+      }
+      // Show picker when WebRTC missed or multiple circle keys exist.
+      const show = !selected || opts.length > 1 || !!state?.needs_device_ip || !!state?.via_flint;
+      els.devicePick.hidden = !show;
+      els.devicePick.innerHTML = opts.map((ip) =>
+        `<option value="${ip}" ${ip === selected ? "selected" : ""}>${ip}</option>`
+      ).join("");
     }
 
     function render() {
       if (!state) return;
-      const ip = state.control_ip || state.client_ip || "—";
-      els.controlIp.textContent = ip;
+      const ip = state.control_ip || lanIp || "";
+      els.controlIp.textContent = ip || "device IP needed";
       const bits = [];
+      if (state.via_flint) bits.push("via Flint VPN");
       if (state.client_ip && state.client_ip !== ip) bits.push(`connection ${state.client_ip}`);
       if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
-      if (state.provider_label) bits.push(`now: ${state.provider_label}`);
+      if (state.needs_device_ip) {
+        bits.push("pick this device’s 192.168.8.x below");
+      } else if (state.provider_label) {
+        bits.push(`now: ${state.provider_label}`);
+      }
       if (state.global_exit) bits.push(`network default: ${state.global_exit}`);
       els.meta.textContent = bits.join(" · ") || "Ready";
+      fillDevicePicker(ip || lanIp);
 
       const prov = String(state.provider || "direct");
       els.btnTs.classList.toggle("active", prov === "tailscale");
@@ -259,24 +360,56 @@
       } else {
         els.ssServer.hidden = true;
       }
+
+      const canAct = !!(state.control_ip);
+      els.choices.classList.toggle("busy", !canAct);
+    }
+
+    async function exitHeaders(extra) {
+      const headers = { Accept: "application/json", ...(extra || {}) };
+      if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+      try {
+        if (lanIp && window.SmCircleCrypto && SmCircleCrypto.getKeyForIp) {
+          const row = await SmCircleCrypto.getKeyForIp(lanIp);
+          if (row?.publicKey) {
+            const proof = await SmCircleCrypto.circleHeaders(lanIp, {
+              method: headers["Content-Type"] ? "POST" : "GET",
+              path: "/api/network/exit",
+              bodyText: "",
+            });
+            Object.assign(headers, proof);
+          }
+        }
+      } catch (_) {}
+      return headers;
     }
 
     async function refresh() {
-      const headers = { Accept: "application/json" };
-      if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+      const headers = await exitHeaders();
       const res = await fetch("/api/network/exit", { headers, cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
       state = data;
+      if (data.control_ip && isHomeLanIp(data.control_ip)) {
+        lanIp = data.control_ip;
+        rememberIp(lanIp);
+      }
       render();
+      if (data.needs_device_ip && !lanIp) {
+        toast(data.error || "Need this device’s LAN IP", true);
+      }
     }
 
     async function setProvider(provider) {
+      if (!lanIp && !state?.control_ip) {
+        toast("Need this device’s 192.168.8.x IP first", true);
+        return;
+      }
       els.choices.classList.add("busy");
       try {
         const body = {
           provider,
-          lan_ip: lanIp || undefined,
+          lan_ip: lanIp || state.control_ip || undefined,
         };
         if (provider === "surfshark" && els.ssServer.value) {
           body.server = els.ssServer.value;
@@ -284,27 +417,57 @@
         if (provider === "tailscale" && state?.tailscale_exit_ip) {
           body.exit_ip = state.tailscale_exit_ip;
         }
-        const headers = {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        };
-        if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+        const bodyText = JSON.stringify(body);
+        const headers = await exitHeaders({ "Content-Type": "application/json" });
+        // Re-sign with body hash for POST
+        try {
+          if (lanIp && window.SmCircleCrypto && (await SmCircleCrypto.getKeyForIp(lanIp))) {
+            Object.assign(
+              headers,
+              await SmCircleCrypto.circleHeaders(lanIp, {
+                method: "POST",
+                path: "/api/network/exit",
+                bodyText,
+              })
+            );
+          }
+        } catch (_) {}
         const res = await fetch("/api/network/exit", {
           method: "POST",
           headers,
-          body: JSON.stringify(body),
+          body: bodyText,
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
         state = data;
+        if (data.control_ip && isHomeLanIp(data.control_ip)) {
+          lanIp = data.control_ip;
+          rememberIp(lanIp);
+        }
         render();
         toast(data.message || `Set ${provider}`);
       } catch (err) {
         toast(String(err?.message || err), true);
       } finally {
         els.choices.classList.remove("busy");
+        render();
       }
     }
+
+    els.devicePick.onchange = async () => {
+      const ip = els.devicePick.value;
+      if (!isHomeLanIp(ip)) return;
+      lanIp = ip;
+      rememberIp(ip);
+      try {
+        if (window.SmCircleCrypto) await SmCircleCrypto.ensureKeyForIp(ip);
+      } catch (_) {}
+      try {
+        await refresh();
+      } catch (err) {
+        toast(String(err?.message || err), true);
+      }
+    };
 
     els.btnTs.onclick = () => setProvider("tailscale");
     els.btnSs.onclick = () => setProvider("surfshark");
@@ -312,11 +475,13 @@
 
     (async () => {
       try {
-        lanIp = await detectHomeLanIp();
+        lanIp = await detectDeviceIp();
+        if (lanIp) rememberIp(lanIp);
         await refresh();
       } catch (err) {
         els.controlIp.textContent = "unavailable";
         els.meta.textContent = String(err?.message || err);
+        fillDevicePicker(lanIp);
         toast(String(err?.message || err), true);
       }
     })();
