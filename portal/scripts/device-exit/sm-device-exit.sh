@@ -17,6 +17,10 @@ DIRECT_MARK="0x170"
 TS_TABLE="52"
 SS_TABLE="53"
 TS_IFACE="tailscale0"
+# Flint site-to-site SNATs home LAN onto this OVPN VIP before packets hit the VPS.
+# Per-LAN /32 marks alone never match Wi‑Fi Circle devices — also mark the VIP.
+FLINT_OVPN_IP="${FLINT_OVPN_IP:-10.9.0.2}"
+TS_EXIT_DNS="${TS_EXIT_DNS:-/opt/dns/ts-exit-dns.sh}"
 
 ACTION="${1:-status}"
 IP="${2:-}"
@@ -196,6 +200,9 @@ clear_ts_backend() {
   # Drop our main-shadow only when global ts-vpn-exit is not owning it.
   if ! grep -q '^ENABLED=1' "$TS_STATE" 2>/dev/null; then
     while ip rule del priority 200 2>/dev/null; do :; done
+    if [ -x "$TS_EXIT_DNS" ]; then
+      "$TS_EXIT_DNS" disable 2>/dev/null || true
+    fi
   fi
   ip route flush table "$TS_TABLE" 2>/dev/null || true
   echo "ts-backend cleared"
@@ -243,6 +250,20 @@ PY
     || iptables -t nat -I POSTROUTING 1 -o "$TS_IFACE" -m mark --mark "$TS_MARK" -m comment --comment "$COMMENT" -j MASQUERADE
   scrub_ts_hostwide_exit_rules
   ensure_ts_host_shadow
+  # Keep VPN/LAN DNS on AdGuard so lookups don't leak past the exit path.
+  if [ -x "$TS_EXIT_DNS" ]; then
+    "$TS_EXIT_DNS" enable "$TS_IFACE" 2>/dev/null || true
+  fi
+  # Nested OVPN→Tailscale exit needs explicit forward + MSS clamp or
+  # speedtest/websockets stall after the first HTML load.
+  iptables -C FORWARD -i tun0 -o "$TS_IFACE" -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -i tun0 -o "$TS_IFACE" -m comment --comment "$COMMENT" -j ACCEPT
+  iptables -C FORWARD -i "$TS_IFACE" -o tun0 -m state --state RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -i "$TS_IFACE" -o tun0 -m state --state RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT
+  iptables -t mangle -C FORWARD -o "$TS_IFACE" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT-MSS" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+    || iptables -t mangle -A FORWARD -o "$TS_IFACE" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT-MSS" -j TCPMSS --clamp-mss-to-pmtu
+  iptables -t mangle -C FORWARD -i "$TS_IFACE" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT-MSS" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+    || iptables -t mangle -A FORWARD -i "$TS_IFACE" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT-MSS" -j TCPMSS --clamp-mss-to-pmtu
   echo "ts-backend $exit_ip ok (mark-only; host shadowed via prio 200)"
 }
 
@@ -278,6 +299,14 @@ apply_rules() {
         ;;
     esac
   done <<<"$lines"
+
+  # Home Wi‑Fi Circle devices are SNATed by Flint to FLINT_OVPN_IP on tun0.
+  # Without marking that VIP, Exit only works for direct CCD clients (e.g. 10.9.0.3).
+  if [ "$need_ts" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
+    iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$TS_MARK"
+  elif [ "$need_ss" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
+    iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$SS_MARK"
+  fi
 
   # Jump first so device marks win over global SM-TS / SM-SS subnet marks.
   iptables -t mangle -I PREROUTING 1 -j "$CHAIN"
