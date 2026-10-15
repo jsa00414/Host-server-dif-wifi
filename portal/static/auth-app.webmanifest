@@ -2,12 +2,12 @@
   "name": "ServerManager Authenticator",
   "short_name": "SM Auth",
   "description": "Standalone two-factor codes for ServerManager",
-  "start_url": "/auth-app.html?v=28",
+  "start_url": "/auth-app.html?v=29",
   "scope": "/auth-app.html",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#070c0a",
-  "theme_color": "#070c0a",
+  "background_color": "#06110d",
+  "theme_color": "#06110d",
   "icons": [
     {
       "src": "/static/auth-app-icon-192.png",
