@@ -9041,16 +9041,17 @@ def _upsert_env_file(path: Path, updates: dict[str, str]) -> None:
             out.append(f"{key}={_env_quote(val)}")
     text = "\n".join(out).rstrip() + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Preserve mode when possible.
+    # Secret env files must stay owner-only. Never preserve a stale 644/640
+    # mode from an earlier world-readable write (security scan finding).
     mode = 0o600
-    try:
-        mode = path.stat().st_mode & 0o777
-    except Exception:
-        pass
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.chmod(tmp, mode)
     tmp.replace(path)
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
 
 
 def proxmox_ssh(remote_cmd: str, timeout: int = 20) -> subprocess.CompletedProcess:
