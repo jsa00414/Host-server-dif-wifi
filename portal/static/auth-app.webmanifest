@@ -2,7 +2,7 @@
   "name": "ServerManager Authenticator",
   "short_name": "SM Auth",
   "description": "Standalone two-factor codes for ServerManager",
-  "start_url": "/auth-app.html?v=30",
+  "start_url": "/auth-app.html?v=31",
   "scope": "/auth-app.html",
   "display": "standalone",
   "orientation": "portrait",

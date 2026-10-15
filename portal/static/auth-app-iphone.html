@@ -12,8 +12,8 @@
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="format-detection" content="telephone=no" />
-  <meta name="sm-auth-layout" content="v30-flush-dock" />
-  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=30" />
+  <meta name="sm-auth-layout" content="v31-vv-dock" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=31" />
   <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -23,7 +23,7 @@
   <script>
     /* Force-clear stale Authenticator SW/caches once so tab-bar layout can update. */
     (function () {
-      var MARK = "sm.auth.sw.bust.v30";
+      var MARK = "sm.auth.sw.bust.v31";
       try {
         if (sessionStorage.getItem(MARK) === "1") return;
       } catch (_) {}
@@ -36,6 +36,12 @@
           location.reload();
         }
       }
+      try {
+        /* Drop older bust markers so v31 always clears once. */
+        ["v28", "v29", "v30"].forEach(function (v) {
+          localStorage.removeItem("sm.auth.sw.bust." + v);
+        });
+      } catch (_) {}
       navigator.serviceWorker.getRegistrations().then(function (regs) {
         return Promise.all(regs.map(function (r) { return r.unregister(); }));
       }).then(function () {
@@ -101,12 +107,15 @@
       -webkit-text-size-adjust: 100%;
     }
     body {
-      position: fixed;
-      inset: 0;
+      position: relative;
       width: 100%;
       margin: 0;
+      min-height: 100%;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
       background:
         radial-gradient(90% 48% at 50% -8%, rgba(47,227,154,.18), transparent 58%),
         radial-gradient(55% 35% at 100% 85%, rgba(106,168,232,.1), transparent 55%),
@@ -241,7 +250,7 @@
       display: flex;
       flex-direction: column;
       position: relative;
-      padding-bottom: calc(var(--dock-h) + var(--sab));
+      padding-bottom: var(--dock-total, calc(var(--dock-h) + 8px));
     }
     .lock, .empty {
       flex: 1;
@@ -585,12 +594,13 @@
       width: calc(100% - 4px);
     }
 
-    /* —— Footer / dock: glued to physical bottom, compact —— */
+    /* —— Footer / dock: visual-viewport pinned, hug home indicator —— */
     .app-footer {
       position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
+      bottom: var(--vv-bottom, 0px);
       margin: 0;
       padding: 0;
       border: 0;
@@ -598,18 +608,16 @@
       width: 100%;
       max-width: 100vw;
       z-index: 100;
-      /* Safe-area lives inside .app-nav padding so tabs sit flush to the
-         screen edge and only the home-indicator strip is empty. */
     }
     .app-nav {
       display: none;
       grid-template-columns: repeat(3, 1fr);
       gap: 0;
       margin: 0;
-      /* Top/side tight; bottom inset only for the home indicator. */
-      padding: 1px calc(2px + var(--sar)) 0 calc(2px + var(--sal));
-      padding-bottom: constant(safe-area-inset-bottom);
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      /* Keep only a few px under labels — do NOT add full safe-area here
+         (that left a ~100px dead band on iPhone). Background still
+         paints edge-to-edge via the fixed footer. */
+      padding: 2px calc(2px + var(--sar)) 6px calc(2px + var(--sal));
       min-height: 0;
       height: auto;
       border-radius: 0;
@@ -619,7 +627,7 @@
       width: 100%;
       align-items: end;
     }
-    body.is-unlocked .app-nav { display: grid; }
+        body.is-unlocked .app-nav { display: grid; }
     .app-nav button {
       appearance: none;
       border: 0;
@@ -725,7 +733,7 @@
     .toast {
       position: fixed;
       left: 50%;
-      bottom: calc(var(--dock-h) + var(--sab) + 16px);
+      bottom: calc(var(--dock-total, calc(var(--dock-h) + 8px)) + 16px);
       transform: translateX(-50%) translateY(8px);
       background: #102019;
       border: 1px solid rgba(47,227,154,.4);
@@ -1771,9 +1779,35 @@
       }, 15000);
     })();
     setInterval(tick, 250);
+    /* Pin tab dock to the visible viewport bottom (iOS fixed-gap fix). */
+    (function pinAuthDock() {
+      var footer = document.querySelector(".app-footer");
+      if (!footer) return;
+      var sync = function () {
+        var lift = 0;
+        var vv = window.visualViewport;
+        if (vv) {
+          lift = Math.max(0, window.innerHeight - vv.offsetTop - vv.height);
+        }
+        document.documentElement.style.setProperty("--vv-bottom", lift ? lift + "px" : "0px");
+        footer.style.bottom = lift ? lift + "px" : "0px";
+        var h = Math.ceil(footer.getBoundingClientRect().height || 48);
+        document.documentElement.style.setProperty("--dock-total", h + "px");
+      };
+      sync();
+      requestAnimationFrame(sync);
+      window.addEventListener("resize", sync);
+      window.addEventListener("orientationchange", sync);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", sync);
+        window.visualViewport.addEventListener("scroll", sync);
+      }
+      setTimeout(sync, 50);
+      setTimeout(sync, 300);
+    })();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
-        .register("/static/auth-app-iphone-sw.js")
+        .register("/static/auth-app-iphone-sw.js?v=31")
         .then((reg) => reg.update())
         .catch(() => {});
     }
