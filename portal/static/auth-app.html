@@ -516,10 +516,11 @@
     .tabs {
       display: none;
       width: 100%;
-      gap: 0;
+      gap: 8px;
     }
     body.has-account .tabs { display: grid; }
-    .circle-toggle {
+    .circle-toggle,
+    .network-exit-btn {
       width: 100%;
       min-height: 48px;
       border-radius: 12px;
@@ -532,6 +533,11 @@
       background: rgba(61,222,160,.22);
       border-color: rgba(61,222,160,.6);
       color: #d9ffe9;
+    }
+    .network-exit-btn {
+      background: rgba(74, 127, 181, 0.16);
+      border: 1px solid rgba(74, 127, 181, 0.45);
+      color: #d7e8f8;
     }
     body.tab-circle .code-shell > .code,
     body.tab-circle .code-shell > .bar {
@@ -619,6 +625,7 @@
     <div class="dock">
       <div class="tabs" id="tabBar" hidden>
         <button type="button" class="circle-toggle" id="circleToggle" aria-pressed="false">VPN trust circle</button>
+        <button type="button" class="network-exit-btn" id="networkExitBtn">Network exit</button>
       </div>
       <div class="actions">
         <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
@@ -679,6 +686,7 @@
       circleTabAllowed: document.getElementById("circleTabAllowed"),
       tabBar: document.getElementById("tabBar"),
       circleToggle: document.getElementById("circleToggle"),
+      networkExitBtn: document.getElementById("networkExitBtn"),
     };
 
     let account = null;
@@ -1481,6 +1489,11 @@
       if (!unlocked) return;
       setCircleOpen(!circleOpen);
       bumpIdle();
+    });
+    els.networkExitBtn?.addEventListener("click", () => {
+      if (!unlocked) return;
+      // Same keys.* origin — Authenticator TOTP + circle keys stay available.
+      location.href = "/network.html";
     });
     els.circleTabPending?.addEventListener("click", () => {
       circleView = "pending";

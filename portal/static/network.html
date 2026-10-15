@@ -41,6 +41,16 @@
       letter-spacing: -0.02em;
       margin: 0 0 0.35rem;
     }
+    .back {
+      margin: 0 0 0.85rem;
+      font-size: 0.88rem;
+    }
+    .back a {
+      color: var(--accent2);
+      text-decoration: none;
+      font-weight: 550;
+    }
+    .back a:hover { text-decoration: underline; }
     .sub {
       color: var(--muted);
       font-size: 0.95rem;
@@ -176,6 +186,7 @@
 </head>
 <body>
   <main>
+    <p class="back"><a id="backAuth" href="/">← Authenticator</a></p>
     <h1>Network exit</h1>
     <p class="sub">Circle devices only. This device’s Wi‑Fi IPv4 can send internet through Tailscale (exit node) or Surfshark — only that address is changed.</p>
 
@@ -626,6 +637,16 @@
       const host = String(location.hostname || "").toLowerCase();
       return host === "keys.vpstruelord.com" || host.startsWith("keys.");
     }
+
+    function authAppHref() {
+      const ua = navigator.userAgent || "";
+      if (/iPhone|iPad|iPod/i.test(ua)) return "/auth-app-iphone.html";
+      return "/auth-app.html";
+    }
+    try {
+      const back = document.getElementById("backAuth");
+      if (back) back.href = authAppHref();
+    } catch (_) {}
 
     function loadKeysBridge() {
       if (onKeysOrigin()) {
