@@ -2402,7 +2402,14 @@ COREDNS_BEGIN = "# BEGIN SM-VPN-DNS"
 COREDNS_END = "# END SM-VPN-DNS"
 HOOKUPS_BEGIN = "# BEGIN PORT-FORWARD-HOOKUPS"
 HOOKUPS_END = "# END PORT-FORWARD-HOOKUPS"
-VPS_PUBLIC_IP = os.environ.get("VPS_PUBLIC_IP", "0.0.0.0")
+# Never default to 0.0.0.0 — CoreDNS hosts maps would blackhole VPN DNS.
+VPS_PUBLIC_IP = (
+    os.environ.get("VPS_PUBLIC_IP")
+    or os.environ.get("PUBLIC_IP")
+    or "74.208.76.213"
+).strip() or "74.208.76.213"
+if VPS_PUBLIC_IP in {"0.0.0.0", "127.0.0.1", "::", "::1"}:
+    VPS_PUBLIC_IP = "74.208.76.213"
 DOCKER_HOST_GW = os.environ.get("DOCKER_HOST_GW", "172.18.0.1")
 # Cloudflare DNS automation (optional)
 CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()

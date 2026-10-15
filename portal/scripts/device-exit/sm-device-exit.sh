@@ -159,6 +159,37 @@ PY
   echo "ss-backend $ifname ok"
 }
 
+scrub_ts_hostwide_exit_rules() {
+  # `tailscale set --exit-node=...` installs "from all lookup 52" (prio 5270),
+  # which blackholes the whole VPS when the exit path is down. Per-device exit
+  # must use fwmark→table 52 only — never the host-wide rule.
+  #
+  # IMPORTANT: do NOT use `ip rule del from all lookup 52` — iproute2 also
+  # matches fwmark→52 rules with that selector and would break device exit.
+  TS_TABLE="$TS_TABLE" python3 - <<'PY'
+import os, re, subprocess
+table = os.environ.get("TS_TABLE", "52")
+try:
+    out = subprocess.check_output(["ip", "rule", "list"], text=True)
+except Exception:
+    raise SystemExit(0)
+for line in out.splitlines():
+    if "fwmark" in line:
+        continue
+    m = re.match(r"^(\d+):\s+from all lookup (\S+)\s*$", line.strip())
+    if m and m.group(2) == table:
+        subprocess.run(["ip", "rule", "del", "priority", m.group(1)], check=False)
+PY
+}
+
+clear_ts_backend() {
+  tailscale set --exit-node= --exit-node-allow-lan-access=false 2>/dev/null || true
+  scrub_ts_hostwide_exit_rules
+  while ip rule del priority 150 2>/dev/null; do :; done
+  ip route flush table "$TS_TABLE" 2>/dev/null || true
+  echo "ts-backend cleared"
+}
+
 ensure_ts_backend() {
   local exit_ip="$1"
   if [ -z "$exit_ip" ]; then
@@ -183,18 +214,23 @@ PY
   local backend
   backend="$(tailscale status --json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("BackendState") or "")' 2>/dev/null || true)"
   if [ "$backend" != "Running" ]; then
-    tailscale up --accept-dns=false --exit-node-allow-lan-access --hostname=vpstruelord-vps 2>&1 || true
+    tailscale up --accept-dns=false --hostname=vpstruelord-vps 2>&1 || true
   fi
+  # Exit node is required so marked packets can leave via tailscale0, but we
+  # immediately scrub Tailscale's host-wide policy routing afterward.
   tailscale set --exit-node="$exit_ip" --exit-node-allow-lan-access=true 2>&1 || true
+  scrub_ts_hostwide_exit_rules
   if [ -x "$TS_HOST_PROTECT" ]; then
     "$TS_HOST_PROTECT" protect-only 2>/dev/null || true
   fi
+  scrub_ts_hostwide_exit_rules
   ip route flush table "$TS_TABLE" 2>/dev/null || true
   ip route add default dev "$TS_IFACE" table "$TS_TABLE" 2>/dev/null || true
   ip rule add priority 150 fwmark "$TS_MARK" lookup "$TS_TABLE" 2>/dev/null || true
   iptables -t nat -C POSTROUTING -o "$TS_IFACE" -m mark --mark "$TS_MARK" -m comment --comment "$COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -o "$TS_IFACE" -m mark --mark "$TS_MARK" -m comment --comment "$COMMENT" -j MASQUERADE
-  echo "ts-backend $exit_ip ok"
+  scrub_ts_hostwide_exit_rules
+  echo "ts-backend $exit_ip ok (mark-only; host-wide exit scrubbed)"
 }
 
 apply_rules() {
@@ -254,6 +290,8 @@ apply_rules() {
       fi
     done <<<"$lines"
     ensure_ts_backend "$ts_exit" || true
+  else
+    clear_ts_backend || true
   fi
 
   echo "applied device-exit ($(echo "$lines" | grep -c . || true) device(s)); need_ss=$need_ss need_ts=$need_ts"
