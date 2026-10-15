@@ -11,8 +11,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="sm-auth-layout" content="v29-redesign" />
-  <link rel="manifest" href="/static/auth-app.webmanifest?v=29" />
+  <meta name="sm-auth-layout" content="v30-flush-dock" />
+  <link rel="manifest" href="/static/auth-app.webmanifest?v=30" />
   <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -22,7 +22,7 @@
   <script>
     /* Force-clear stale Authenticator SW/caches once so tab-bar layout can update. */
     (function () {
-      var MARK = "sm.auth.sw.bust.v29";
+      var MARK = "sm.auth.sw.bust.v30";
       try {
         if (sessionStorage.getItem(MARK) === "1") return;
       } catch (_) {}
@@ -80,7 +80,7 @@
       --blue: #6aa8e8;
       --blue-dim: rgba(106, 168, 232, 0.16);
       --danger: #ff7a7a;
-      --dock-h: 58px;
+      --dock-h: 44px;
       --sat: env(safe-area-inset-top, 0px);
       --sar: env(safe-area-inset-right, 0px);
       --sab: env(safe-area-inset-bottom, 0px);
@@ -593,7 +593,7 @@
       width: calc(100% - 4px);
     }
 
-    /* —— Footer / dock —— */
+    /* —— Footer / dock: glued to physical bottom, compact —— */
     .app-footer {
       position: fixed;
       left: 0;
@@ -601,25 +601,31 @@
       bottom: 0;
       margin: 0;
       padding: 0;
-      padding-bottom: env(safe-area-inset-bottom, 0px);
       border: 0;
       background: #040a08;
       width: 100%;
       max-width: 100vw;
       z-index: 100;
+      /* Safe-area lives inside .app-nav padding so tabs sit flush to the
+         screen edge and only the home-indicator strip is empty. */
     }
     .app-nav {
       display: none;
       grid-template-columns: repeat(3, 1fr);
       gap: 0;
       margin: 0;
-      padding: 6px calc(6px + var(--sar)) 6px calc(6px + var(--sal));
-      min-height: var(--dock-h);
+      /* Top/side tight; bottom = tiny pad + iOS home indicator inset. */
+      padding: 2px calc(4px + var(--sar)) 0 calc(4px + var(--sal));
+      padding-bottom: constant(safe-area-inset-bottom);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      min-height: 0;
+      height: auto;
       border-radius: 0;
       background: #040a08;
       border: 0;
       border-top: 1px solid rgba(148,196,170,.14);
       width: 100%;
+      align-items: end;
     }
     body.is-unlocked .app-nav { display: grid; }
     .app-nav button {
@@ -627,25 +633,26 @@
       border: 0;
       background: transparent;
       color: var(--muted);
-      border-radius: 12px;
-      padding: 8px 4px 6px;
+      border-radius: 10px;
+      padding: 5px 2px 3px;
       font: inherit;
-      font-size: .68rem;
+      font-size: .62rem;
       font-weight: 700;
       letter-spacing: .04em;
       text-transform: uppercase;
       cursor: pointer;
       display: grid;
-      gap: 5px;
+      gap: 2px;
       justify-items: center;
-      align-content: center;
-      min-height: 48px;
+      align-content: end;
+      min-height: var(--dock-h);
+      max-height: var(--dock-h);
       transition: color .18s ease, background .18s ease;
       position: relative;
     }
     .app-nav button .glyph {
-      width: 22px; height: 22px;
-      border-radius: 6px;
+      width: 18px; height: 18px;
+      border-radius: 5px;
       border: 1.5px solid currentColor;
       opacity: .9;
       position: relative;
@@ -668,7 +675,7 @@
     .app-nav button[aria-selected="true"]::before {
       content: "";
       position: absolute;
-      top: 0; left: 28%; right: 28%;
+      top: 0; left: 26%; right: 26%;
       height: 2px;
       border-radius: 0 0 2px 2px;
       background: var(--accent);
@@ -679,8 +686,14 @@
     .app-nav button[data-view="network"][aria-selected="true"]::before {
       background: var(--blue);
     }
-    .footer-actions { display: none; gap: 8px; padding: 12px calc(16px + var(--sar)) 12px calc(16px + var(--sal)); }
+    .footer-actions {
+      display: none;
+      gap: 8px;
+      padding: 12px calc(16px + var(--sar)) calc(12px + var(--sab)) calc(16px + var(--sal));
+    }
     body:not(.is-unlocked) .footer-actions.enroll { display: grid; }
+    body.is-unlocked .footer-actions,
+    body.is-unlocked .manual { display: none !important; }
     button, .btn {
       appearance: none;
       border: 1px solid var(--line);
