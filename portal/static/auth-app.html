@@ -43,17 +43,21 @@
       --sar: env(safe-area-inset-right, 0px);
       --sab: env(safe-area-inset-bottom, 0px);
       --sal: env(safe-area-inset-left, 0px);
+      --footer-pad: calc(72px + env(safe-area-inset-bottom, 0px));
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html {
       background: var(--bg0);
       color-scheme: dark;
+      height: 100%;
+      height: -webkit-fill-available;
     }
     html, body {
       margin: 0;
       width: 100%;
       min-height: 100%;
       min-height: 100dvh;
+      min-height: -webkit-fill-available;
       height: 100%;
       color: var(--text);
       font-family: "Sora", system-ui, sans-serif;
@@ -65,6 +69,10 @@
     body {
       position: fixed;
       inset: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      height: -webkit-fill-available;
       display: flex;
       flex-direction: column;
       background-color: var(--bg0);
@@ -187,6 +195,7 @@
       display: flex;
       flex-direction: column;
       position: relative;
+      padding-bottom: var(--footer-pad);
     }
     .lock, .empty {
       flex: 1;
@@ -477,29 +486,20 @@
       border-color: rgba(74,127,181,.7);
       background: rgba(74,127,181,.16);
     }
-    /* —— Footer / nav (always docked to bottom of the screen) —— */
+    /* —— Footer / nav: fixed to the real screen bottom (iOS Safari safe) —— */
     .app-footer {
-      position: relative;
-      flex: 0 0 auto;
-      margin-top: auto;
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
       border-top: 1px solid rgba(170,210,185,.12);
       background: #050807;
-      padding: 10px calc(12px + var(--sar)) calc(10px + var(--sab)) calc(12px + var(--sal));
+      padding: 8px calc(12px + var(--sar)) max(8px, var(--sab)) calc(12px + var(--sal));
       display: grid;
       gap: 8px;
       box-shadow: 0 -12px 28px rgba(0,0,0,.35);
       width: 100%;
-      z-index: 20;
-    }
-    .app-footer::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: calc(-1 * var(--sab));
-      height: var(--sab);
-      background: #050807;
-      pointer-events: none;
+      z-index: 40;
     }
     .app-nav {
       display: none;
@@ -742,6 +742,33 @@
   <script src="/static/sm-circle-crypto.js"></script>
   <script src="/static/sm-network-exit.js"></script>
   <script>
+
+    // Keep the tab bar glued to the visible screen bottom on iOS Safari,
+    // where 100vh / position:fixed can leave a dead gap under the footer.
+    (function pinTabBarToViewport() {
+      const footer = document.querySelector(".app-footer");
+      if (!footer) return;
+      const sync = () => {
+        const vv = window.visualViewport;
+        let gap = 0;
+        if (vv) {
+          gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        }
+        footer.style.bottom = gap ? `${gap}px` : "0px";
+        const h = Math.ceil(footer.getBoundingClientRect().height) || 72;
+        document.documentElement.style.setProperty(
+          "--footer-pad",
+          `${h + gap}px`
+        );
+      };
+      sync();
+      window.addEventListener("resize", sync);
+      window.addEventListener("orientationchange", () => setTimeout(sync, 60));
+      if (window.visualViewport) {
+        visualViewport.addEventListener("resize", sync);
+        visualViewport.addEventListener("scroll", sync);
+      }
+    })();
 
     const STORE_KEY = "sm.auth.totp.v1";
     const BIO_KEY = "sm.auth.bio.cred.v1";
