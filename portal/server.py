@@ -4659,17 +4659,18 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
     claimed = _plex_is_claimed()
-    # Unclaimed: force setup wizard + local admin token.
-    # Claimed: send users to the normal web app (not #!/setup).
-    if claimed:
-        setup_path = "/web/index.html"
-    elif machine and admin:
-        from urllib.parse import quote
+    # Always attach LocalAdminToken when available so the web UI can auth
+    # through the reverse proxy (without it, claimed PMS shows "Not authorized").
+    # Unclaimed: also land on #!/setup/<machine>.
+    from urllib.parse import quote
 
+    if admin and not claimed and machine:
         setup_path = (
             f"/web/index.html?X-Plex-Token={quote(admin)}#!/setup/{machine}"
         )
-    elif machine:
+    elif admin:
+        setup_path = f"/web/index.html?X-Plex-Token={quote(admin)}"
+    elif not claimed and machine:
         setup_path = f"/web/index.html#!/setup/{machine}"
     else:
         setup_path = "/web/index.html"
@@ -4701,7 +4702,10 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     lines = [f"{public} {{"]
     if vpn_only:
         lines.extend(_caddy_denied_wan_lines("\t"))
-        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        # Home LAN (/24) always reaches Plex even for out-of-circle devices;
+        # portal/admin stay gated by /32 allowlist. Still block campus WAN.
+        plex_clients = f"{effective_vpn_client_cidrs()} 192.168.8.0/24".strip()
+        lines.append(f"\t@vpn_clients client_ip {plex_clients}")
         lines.append("\thandle @vpn_clients {")
     lines.extend(
         [

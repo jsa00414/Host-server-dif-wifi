@@ -15,8 +15,10 @@ STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ip
 ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
 GATE_SCRIPT="${VPN_CLIENT_GATE_SCRIPT:-/opt/ikev2/ensure-vpn-client-gate.sh}"
 LAN_GATE_SCRIPT="${LAN_CIRCLE_FLINT_GATE_SCRIPT:-/opt/ikev2/ensure-lan-circle-flint-gate.sh}"
-# No blanket 192.168.8.0/24 — only approved LAN /32s enter @vpn_clients.
-# Pending/denied LAN clients are blocked on Flint pre-NAT (see ensure-lan-circle-flint-gate.sh).
+# No blanket 192.168.8.0/24 on portal/admin sites — approved LAN /32s only.
+# Exception: plex.vpstruelord.com keeps 192.168.8.0/24 so all home LAN
+# devices can reach Plex (campus WAN still denied). Pending LAN clients are
+# blocked on Flint pre-NAT for portal (see ensure-lan-circle-flint-gate.sh).
 BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 10.9.0.2/32 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
 export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE ALLOWLIST_FILE BASE_CIDRS_DEFAULT
@@ -501,6 +503,61 @@ base = load_base_cidrs(allowed_ips, lan_ips)
 combined = [c for c in base if normalize_ip(c) not in DENIED_IPS]
 combined_s = " ".join(combined)
 
+PLEX_LAN_CIDR = "192.168.8.0/24"
+
+
+def _site_blocks(text: str) -> list[tuple[str, int, int]]:
+    """Return (site_keys, start, end) spans for top-level site blocks."""
+    lines = text.splitlines(True)
+    blocks: list[tuple[str, int, int]] = []
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        code = raw.split("#", 1)[0]
+        stripped = code.strip()
+        if stripped.endswith("{") and not raw[:1].isspace() and stripped != "{":
+            keys = stripped[:-1].strip()
+            depth = 0
+            start = i
+            for j in range(i, len(lines)):
+                c = lines[j].split("#", 1)[0]
+                depth += c.count("{") - c.count("}")
+                if depth <= 0:
+                    blocks.append((keys, start, j + 1))
+                    i = j + 1
+                    break
+            else:
+                break
+            continue
+        i += 1
+    return blocks
+
+
+def plex_lan_ok(text: str) -> bool:
+    """Plex site must keep the home LAN /24; other sites must not."""
+    lines = text.splitlines(True)
+    plex_has = False
+    other_has = False
+    for keys, start, end in _site_blocks(text):
+        chunk = "".join(lines[start:end])
+        has = bool(
+            re.search(
+                r"^[ \t]*@vpn_clients (?:client_ip|remote_ip) .*\b192\.168\.8\.0/24\b",
+                chunk,
+                re.M,
+            )
+        )
+        if "plex.vpstruelord.com" in keys.split():
+            plex_has = has
+        elif has:
+            other_has = True
+    # If plex site is missing entirely, don't block early-exit forever.
+    has_plex = any("plex.vpstruelord.com" in k.split() for k, _, _ in _site_blocks(text))
+    if not has_plex:
+        return not other_has
+    return plex_has and not other_has
+
+
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
 trusted_needed = sorted(
@@ -511,7 +568,8 @@ if prev == cur and caddyfile.is_file():
     live = vpn_clients_cidrs_in_caddy(text)
     # Require every trusted sticky/allowlisted /32 on the live matcher lines
     # (do NOT match comments — that previously skipped reseeding the router WAN).
-    blanket_lan_gone = "192.168.8.0/24" not in live
+    # Blanket LAN /24 is allowed ONLY on plex.vpstruelord.com.
+    lan_policy_ok = plex_lan_ok(text)
     denied_gone = all(f"{ip}/32" not in live for ip in DENIED_IPS)
     text2, deny_changed = ensure_denied_wan_blocks(text)
     text2, forbid_changed = scrub_forbidden_responds(text2)
@@ -523,7 +581,7 @@ if prev == cur and caddyfile.is_file():
     if (
         trusted_needed
         and all(f"{ip}/32" in live for ip in trusted_needed)
-        and blanket_lan_gone
+        and lan_policy_ok
         and denied_gone
         and not deny_changed
         and not forbid_changed
@@ -592,18 +650,39 @@ if forbid_n:
     print("scrubbed Forbidden/HTML responds → abort")
 
 
-def _repl(m):
-    return f"{m.group(1)}@vpn_clients client_ip {combined_s}"
+def _patch_vpn_clients(text: str, cidrs: str) -> tuple[str, int]:
+    """Rewrite every @vpn_clients line; keep LAN /24 on plex site only."""
+    lines = text.splitlines(True)
+    blocks = _site_blocks(text)
+    plex_ranges = {
+        (start, end)
+        for keys, start, end in blocks
+        if "plex.vpstruelord.com" in keys.split()
+    }
+    pat = re.compile(r"^([ \t]*)@vpn_clients (?:client_ip|remote_ip) (.+)$")
+    out: list[str] = []
+    n = 0
+    for idx, line in enumerate(lines):
+        m = pat.match(line)
+        if not m:
+            out.append(line)
+            continue
+        n += 1
+        in_plex = any(start <= idx < end for start, end in plex_ranges)
+        cidr_line = cidrs
+        if in_plex and PLEX_LAN_CIDR not in cidr_line.split():
+            cidr_line = f"{cidr_line} {PLEX_LAN_CIDR}".strip()
+        out.append(f"{m.group(1)}@vpn_clients client_ip {cidr_line}\n")
+    return "".join(out), n
 
 
-pat = re.compile(r"^([ \t]*)@vpn_clients (?:client_ip|remote_ip) (.+)$", re.M)
-new_text, n = pat.subn(_repl, text)
+new_text, n = _patch_vpn_clients(text, combined_s)
 if n == 0:
     print("WARN: no @vpn_clients client_ip/remote_ip lines found")
     caddyfile.write_text(text)
 else:
     caddyfile.write_text(new_text)
-    print(f"patched {n} Caddy @vpn_clients lines")
+    print(f"patched {n} Caddy @vpn_clients lines (plex keeps {PLEX_LAN_CIDR})")
 
 print("peers_seen:", ", ".join(peers) if peers else "(none)")
 print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")

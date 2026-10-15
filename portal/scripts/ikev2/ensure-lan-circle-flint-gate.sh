@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Home-LAN trust circle gate on Flint (pre-NAT):
-#   1) REJECT pending/denied/keyless LAN sources to VPS :80,:443 AND portal VIP
-#   2) Force those same LAN IPs onto guest DNS (sm-guest-dns / VPN_GUEST_DNS)
+#   1) REJECT only *denied* LAN sources to VPS :80,:443 AND portal VIP
+#   2) Force pending/denied/keyless LAN IPs onto guest DNS (sm-guest-dns)
 #      which NXDOMAINs portal/router/admin names (real browser DNS error page)
 #      and does not apply AdGuard admin rewrites.
+#
+# Pending (not denied) may still reach plex.vpstruelord.com — Caddy keeps
+# 192.168.8.0/24 on the plex site only; portal/admin stay /32-gated and are
+# NXDOMAIN'd by guest DNS. Do not REJECT pending on :443 or Plex breaks.
 #
 # Enrolled Authenticator LAN IPs and the timed enroll-unlock window are
 # exempt (phones must reach portal/keys and may keep circle DNS).
 # Key-bound allowlisted LAN /32s are NOT gated.
-#
-# Important: SM-LAN-CIRCLE must run before any blanket LAN→VPS ACCEPT that
-# full-tunnel OVPN policy may install — otherwise pending devices MASQ to
-# 10.9.0.2 and Caddy treats them as @vpn_clients.
 set -euo pipefail
 
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
@@ -162,54 +162,69 @@ keyless_allowed = {
     and is_home_lan(norm(r.get("ip", "")))
     and not str(r.get("pubkey") or "").strip()
 }
-blocked: list[str] = []
-seen = set()
+# REJECT on :80/:443 — denied only (pending must reach plex.vpstruelord.com).
+reject_ips: list[str] = []
+reject_seen: set[str] = set()
+# Guest DNS — pending + keyless + denied (NXDOMAIN portal/admin names).
+guest_ips: list[str] = []
+guest_seen: set[str] = set()
 
-# Denied LAN IPs are always blocked (unless later approved).
+# Denied LAN IPs: reject HTTPS + guest DNS (unless later approved).
 for row in data.get("denied") or []:
     if not isinstance(row, dict):
         continue
     ip = norm(row.get("ip", ""))
-    if not is_home_lan(ip) or ip in allowed or ip in seen:
+    if not is_home_lan(ip) or ip in allowed:
         continue
-    seen.add(ip)
-    blocked.append(ip)
+    if ip not in reject_seen:
+        reject_seen.add(ip)
+        reject_ips.append(ip)
+    if ip not in guest_seen:
+        guest_seen.add(ip)
+        guest_ips.append(ip)
 
-# Keyless circle rows + pending LAN IPs are blocked unless an enrolled
-# Authenticator owns that IP, or new-device enrollment is currently unlocked.
+# Keyless circle rows + pending LAN IPs → guest DNS only (not REJECT),
+# unless an enrolled Authenticator owns that IP or enroll is unlocked.
 for ip in sorted(keyless_allowed):
-    if ip in allowed or ip in seen:
+    if ip in allowed or ip in guest_seen:
         continue
     if ip in enrolled or enroll_unlocked:
         continue
-    seen.add(ip)
-    blocked.append(ip)
+    guest_seen.add(ip)
+    guest_ips.append(ip)
 
 for row in data.get("pending") or []:
     if not isinstance(row, dict):
         continue
     ip = norm(row.get("ip", ""))
-    if not is_home_lan(ip) or ip in allowed or ip in seen:
+    if not is_home_lan(ip) or ip in allowed or ip in guest_seen:
         continue
     if str(row.get("status") or "") == "denied":
         continue
     if ip in enrolled or enroll_unlocked:
         continue
-    seen.add(ip)
-    blocked.append(ip)
+    guest_seen.add(ip)
+    guest_ips.append(ip)
 
 block_file.parent.mkdir(parents=True, exist_ok=True)
 lines = [
     "# Managed by ensure-lan-circle-flint-gate.sh",
-    f"# Reject these LAN sources to {vps}:80,443 on Flint (pre-NAT).",
-    f"# Same set is forced to guest DNS {guest_dns} (no AdGuard admin rewrites).",
+    f"# REJECT (denied only) to {vps}/VIP:80,443 — pending may use Plex.",
+    f"# Guest DNS {guest_dns} for pending+denied (no AdGuard admin rewrites).",
     f"# Enrolled Authenticators exempt: {', '.join(sorted(enrolled)) or '(none)'}",
     f"# enroll_unlocked={int(enroll_unlocked)}",
-    "# one IPv4 per line",
+    "# reject IPv4s (one per line) follow 'REJECT:'; guest IPs follow 'GUEST:'",
+    "REJECT:",
 ]
-lines.extend(blocked)
+lines.extend(reject_ips)
+lines.append("GUEST:")
+lines.extend(guest_ips)
 block_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-print("\n".join(blocked))
+# stdout consumed by caller: first section reject, then guest (separated).
+print("REJECT")
+print("\n".join(reject_ips))
+print("GUEST")
+print("\n".join(guest_ips))
 PY
 )"
 
@@ -240,13 +255,36 @@ REMOTE_SCRIPT="$(
   BLOCK_LIST="$BLOCK_LIST" VPS_IP="$VPS_IP" PORTAL_VIP="$PORTAL_VIP" CHAIN="$CHAIN" \
   GUEST_DNS="$GUEST_DNS" GUEST_DNS_CHAIN="$GUEST_DNS_CHAIN" python3 - <<'PY'
 import os
+import re
 
 vps = os.environ.get("VPS_IP", "74.208.76.213")
 vip = os.environ.get("PORTAL_VIP", "10.11.0.1").strip() or "10.11.0.1"
 chain = os.environ.get("CHAIN", "SM-LAN-CIRCLE")
 guest = os.environ.get("GUEST_DNS", "10.42.42.45").strip() or "10.42.42.45"
 gd_chain = os.environ.get("GUEST_DNS_CHAIN", "SM-LAN-GUEST-DNS")
-blocks = [b.strip() for b in (os.environ.get("BLOCK_LIST") or "").splitlines() if b.strip()]
+raw = [b.strip() for b in (os.environ.get("BLOCK_LIST") or "").splitlines() if b.strip()]
+reject_ips: list[str] = []
+guest_ips: list[str] = []
+section = "guest"  # legacy flat lists → guest DNS (+ no reject unless marked)
+if raw and raw[0] in {"REJECT", "GUEST"}:
+    section = "reject" if raw[0] == "REJECT" else "guest"
+    for line in raw[1:]:
+        if line == "REJECT":
+            section = "reject"
+            continue
+        if line == "GUEST":
+            section = "guest"
+            continue
+        if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", line):
+            continue
+        if section == "reject":
+            reject_ips.append(line)
+        else:
+            guest_ips.append(line)
+else:
+    # Backward compat: flat IP list → guest DNS only (do not REJECT pending).
+    guest_ips = [b for b in raw if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", b)]
+
 print("set -e")
 print(f'VPS="{vps}"')
 print(f'VIP="{vip}"')
@@ -254,10 +292,8 @@ print(f'CHAIN="{chain}"')
 print(f'GUEST_DNS="{guest}"')
 print(f'GD_CHAIN="{gd_chain}"')
 
-# --- Portal HTTPS reject (filter) ---
-# Reject pending/denied LAN to BOTH the VPS public IP and the portal VIP.
-# Full-tunnel OVPN used to ACCEPT all LAN→VPS before this chain ran, so
-# pending devices still reached portal (MASQ'd as 10.9.0.2 ∈ @vpn_clients).
+# --- HTTPS reject (filter): denied IPs only ---
+# Pending stay off portal via guest DNS NXDOMAIN; they must reach Plex on :443.
 print('iptables -t filter -N "$CHAIN" 2>/dev/null || iptables -t filter -F "$CHAIN"')
 print(
     r"""
@@ -279,7 +315,7 @@ done
 iptables -t filter -I "$FWD" 1 -j "$CHAIN"
 """
 )
-for ip in blocks:
+for ip in reject_ips:
     for dest_var in ("$VPS", "$VIP"):
         print(
             f'iptables -t filter -A "$CHAIN" -s {ip}/32 -d {dest_var}/32 -p tcp '
@@ -290,7 +326,7 @@ for ip in blocks:
             f'-m multiport --dports 80,443 -j REJECT --reject-with icmp-port-unreachable'
         )
 
-# --- Guest DNS: same blocked set → sm-guest-dns (.45), skip AdGuard ---
+# --- Guest DNS: pending+denied → sm-guest-dns (.45), skip AdGuard ---
 # GL.iNet VPN dns-mark puts LAN :53 into conntrack zone 0xa000; DNAT+MASQ to
 # the OVPN VIP then never gets replies. Force CT zone 0 + mark 0x8000 (main)
 # before DNAT so guest DNS answers return to the LAN client.
@@ -332,7 +368,7 @@ ip route replace 10.42.42.44 via 10.9.0.1 dev ovpnclient1 metric 5 2>/dev/null |
 conntrack -D -s 192.168.8.0/24 -p udp --dport 53 >/dev/null 2>&1 || true
 """
 )
-for ip in blocks:
+for ip in guest_ips:
     print(
         "if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then\n"
         f'  iptables -t nat -C dns_dispatcher -s {ip}/32 -m comment '
@@ -389,8 +425,8 @@ for ip in blocks:
     )
 
 print(
-    f'echo "lan-circle: blocked {len(blocks)} LAN IP(s) to {vps}/VIP:80,443; '
-    f'guest DNS {guest} for same set"'
+    f'echo "lan-circle: reject {len(reject_ips)} denied to {vps}/VIP:80,443; '
+    f'guest DNS {guest} for {len(guest_ips)} pending/denied"'
 )
 # Keep circle jump first after guest-DNS ACCEPTs were inserted at position 1.
 print(
@@ -412,4 +448,4 @@ echo "$REMOTE_SCRIPT" | sshpass -e ssh -o StrictHostKeyChecking=no \
   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
   -o ConnectTimeout=8 "root@${FLINT_HOST}" sh -s
 
-echo "lan-circle: applied via ${FLINT_HOST} ($(echo "$BLOCK_LIST" | grep -c . || true) blocked + guest DNS ${GUEST_DNS})"
+echo "lan-circle: applied via ${FLINT_HOST} (guest DNS ${GUEST_DNS}; pending may reach Plex)"
