@@ -160,9 +160,10 @@ PY
 }
 
 scrub_ts_hostwide_exit_rules() {
-  # `tailscale set --exit-node=...` installs "from all lookup 52" (prio 5270),
-  # which blackholes the whole VPS when the exit path is down. Per-device exit
-  # must use fwmark→table 52 only — never the host-wide rule.
+  # Best-effort: drop Tailscale's host-wide "from all lookup 52" (prio 5270).
+  # tailscaled restores it quickly ("somebody deleted ip rules; restoring"), so
+  # durable protection is ensure_ts_host_shadow() — prio 200 → main — which
+  # wins over 5270 for unmarked traffic (same pattern as ts-vpn-exit.sh).
   #
   # IMPORTANT: do NOT use `ip rule del from all lookup 52` — iproute2 also
   # matches fwmark→52 rules with that selector and would break device exit.
@@ -182,10 +183,20 @@ for line in out.splitlines():
 PY
 }
 
+ensure_ts_host_shadow() {
+  # Unmarked traffic must hit main before Tailscale's prio 5270 exit table.
+  ip rule add priority 200 from all lookup main 2>/dev/null || true
+}
+
 clear_ts_backend() {
+  # Unset exit node so table 52 cannot blackhole the VPS even if 5270 remains.
   tailscale set --exit-node= --exit-node-allow-lan-access=false 2>/dev/null || true
   scrub_ts_hostwide_exit_rules
   while ip rule del priority 150 2>/dev/null; do :; done
+  # Drop our main-shadow only when global ts-vpn-exit is not owning it.
+  if ! grep -q '^ENABLED=1' "$TS_STATE" 2>/dev/null; then
+    while ip rule del priority 200 2>/dev/null; do :; done
+  fi
   ip route flush table "$TS_TABLE" 2>/dev/null || true
   echo "ts-backend cleared"
 }
@@ -216,8 +227,8 @@ PY
   if [ "$backend" != "Running" ]; then
     tailscale up --accept-dns=false --hostname=vpstruelord-vps 2>&1 || true
   fi
-  # Exit node is required so marked packets can leave via tailscale0, but we
-  # immediately scrub Tailscale's host-wide policy routing afterward.
+  # Exit node is required so marked packets can leave via tailscale0.
+  # Host stays on main via prio 200 shadow (and best-effort 5270 scrub).
   tailscale set --exit-node="$exit_ip" --exit-node-allow-lan-access=true 2>&1 || true
   scrub_ts_hostwide_exit_rules
   if [ -x "$TS_HOST_PROTECT" ]; then
@@ -227,10 +238,12 @@ PY
   ip route flush table "$TS_TABLE" 2>/dev/null || true
   ip route add default dev "$TS_IFACE" table "$TS_TABLE" 2>/dev/null || true
   ip rule add priority 150 fwmark "$TS_MARK" lookup "$TS_TABLE" 2>/dev/null || true
+  ensure_ts_host_shadow
   iptables -t nat -C POSTROUTING -o "$TS_IFACE" -m mark --mark "$TS_MARK" -m comment --comment "$COMMENT" -j MASQUERADE 2>/dev/null \
     || iptables -t nat -I POSTROUTING 1 -o "$TS_IFACE" -m mark --mark "$TS_MARK" -m comment --comment "$COMMENT" -j MASQUERADE
   scrub_ts_hostwide_exit_rules
-  echo "ts-backend $exit_ip ok (mark-only; host-wide exit scrubbed)"
+  ensure_ts_host_shadow
+  echo "ts-backend $exit_ip ok (mark-only; host shadowed via prio 200)"
 }
 
 apply_rules() {
