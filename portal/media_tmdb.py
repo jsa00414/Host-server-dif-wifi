@@ -322,9 +322,17 @@ def plex_episode_relpath(
 
 
 def guess_season_episode(filename: str) -> tuple[int, int]:
-    stem = PathName(filename).stem
+    """Parse season/episode from a filename or relative path.
+
+    Understands ``S01E05``, ``1x02``, ``Season 1 Episode 5``, multi-episode
+    ``S01E01-E03``, and bare ``E10`` / ``E1`` when a ``Season NN`` folder is
+    present in the path (common for ripped sets that omit Sxx).
+    """
+    text = str(filename or "").replace("\\", "/")
+    name = PathName(text).name
+    stem = PathName(name).stem
     patterns = [
-        r"[Ss](\d{1,2})[Ee](\d{1,3})",
+        r"[Ss](\d{1,2})[Ee](\d{1,3})(?:\s*-\s*E?(\d{1,3}))?",
         r"(\d{1,2})x(\d{1,3})",
         r"[Ss]eason[.\s_-]*(\d{1,2})[.\s_-]*[Ee]p(?:isode)?[.\s_-]*(\d{1,3})",
     ]
@@ -332,7 +340,54 @@ def guess_season_episode(filename: str) -> tuple[int, int]:
         m = re.search(pat, stem)
         if m:
             return int(m.group(1)), int(m.group(2))
+    # Bare E## / Ep## under a Season folder: Season 01/E10.mp4
+    season_from_path = 0
+    for part in text.split("/"):
+        sm = re.match(r"(?i)^season\s*0*(\d{1,2})$", part.strip())
+        if sm:
+            season_from_path = int(sm.group(1))
+    bare = re.fullmatch(r"(?i)e(?:p(?:isode)?)?[.\s_-]*(\d{1,3})", stem.strip())
+    if bare and season_from_path > 0:
+        return season_from_path, int(bare.group(1))
     return 0, 0
+
+
+def normalize_bare_episode_filename(
+    filename: str,
+    *,
+    show_name: str,
+    season: int,
+    year: str = "",
+) -> str | None:
+    """If ``filename`` is bare ``E10.mp4``, return a Plex ``Show - SxxExx.ext`` name.
+
+    Multi-part stems like ``E1-E3`` become ``S01E01-E03``. Returns None when the
+    name already looks Plex-ready or cannot be parsed.
+    """
+    name = PathName(filename).name
+    stem = PathName(name).stem
+    ext = PathName(name).suffix.lstrip(".") or "mp4"
+    if re.search(r"(?i)[Ss]\d{1,2}[Ee]\d{1,3}", stem):
+        return None
+    multi = re.fullmatch(
+        r"(?i)e(?:p(?:isode)?)?[.\s_-]*(\d{1,3})\s*[-–]\s*e?(?:p(?:isode)?)?[.\s_-]*(\d{1,3})",
+        stem.strip(),
+    )
+    if multi:
+        e1, e2 = int(multi.group(1)), int(multi.group(2))
+        folder = plex_show_folder_name(show_name, year)
+        sn = max(0, int(season))
+        return f"{folder} - S{sn:02d}E{e1:02d}-E{e2:02d}.{ext}"
+    bare = re.fullmatch(r"(?i)e(?:p(?:isode)?)?[.\s_-]*(\d{1,3})", stem.strip())
+    if not bare:
+        return None
+    return plex_episode_filename(
+        show_name=show_name,
+        year=year,
+        season=int(season),
+        episode=int(bare.group(1)),
+        ext=ext,
+    )
 
 
 class PathName:

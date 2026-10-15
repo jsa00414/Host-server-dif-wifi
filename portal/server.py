@@ -9926,6 +9926,13 @@ def elements_upload_media(
         en = episode
         if sn is None or en is None:
             gsn, gen = _media_tmdb.guess_season_episode(name)
+            # Bare E10.mp4 with season from the form: synthesize Season folder path.
+            if (gsn <= 0 or gen <= 0) and sn is not None:
+                gsn2, gen2 = _media_tmdb.guess_season_episode(
+                    f"Season {int(sn):02d}/{name}"
+                )
+                if gsn2 > 0 and gen2 > 0:
+                    gsn, gen = gsn2, gen2
             sn = sn if sn is not None else gsn
             en = en if en is not None else gen
         if tmdb_id and sn and en and not ep_title:

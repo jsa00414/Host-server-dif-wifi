@@ -45,6 +45,37 @@ class TestPlexNaming(unittest.TestCase):
         self.assertEqual(tmdb.guess_season_episode("Show.S01E05.mkv"), (1, 5))
         self.assertEqual(tmdb.guess_season_episode("Show.1x02.mkv"), (1, 2))
         self.assertEqual(tmdb.guess_season_episode("random.mkv"), (0, 0))
+        self.assertEqual(
+            tmdb.guess_season_episode("Show/Season 01/E10.mp4"), (1, 10)
+        )
+        self.assertEqual(
+            tmdb.guess_season_episode("Show/Season 2/E1.mp4"), (2, 1)
+        )
+        self.assertEqual(tmdb.guess_season_episode("E10.mp4"), (0, 0))
+        self.assertEqual(
+            tmdb.guess_season_episode("Show - S01E01-E03.mp4"), (1, 1)
+        )
+
+    def test_normalize_bare_episode_filename(self):
+        self.assertEqual(
+            tmdb.normalize_bare_episode_filename(
+                "E10.mp4", show_name="Stargate Universe", season=1
+            ),
+            "Stargate Universe - S01E10.mp4",
+        )
+        self.assertEqual(
+            tmdb.normalize_bare_episode_filename(
+                "E1-E3.mp4", show_name="Stargate Universe", season=1
+            ),
+            "Stargate Universe - S01E01-E03.mp4",
+        )
+        self.assertIsNone(
+            tmdb.normalize_bare_episode_filename(
+                "Stargate Universe - S01E10.mp4",
+                show_name="Stargate Universe",
+                season=1,
+            )
+        )
 
     def test_build_from_form(self):
         rel, base = tmdb.build_upload_name_from_form(

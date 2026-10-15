@@ -201,6 +201,40 @@ _process_movies_into() {
   echo "${key}_moved=${moved}"
 }
 
+# Normalize bare E10.mp4 / E1-E3.mp4 under Season NN → Show - SxxExx.ext for Plex.
+_normalize_tv_episode_name() {
+  local show="$1" season_folder="$2" name="$3"
+  python3 - "$show" "$season_folder" "$name" <<'PY'
+import re, sys
+show, season_folder, name = sys.argv[1], sys.argv[2], sys.argv[3]
+if "." in name:
+    stem, ext = name.rsplit(".", 1)
+else:
+    stem, ext = name, "mp4"
+if re.search(r"(?i)[Ss]\d{1,2}[Ee]\d{1,3}", stem):
+    print(name)
+    raise SystemExit(0)
+sm = re.match(r"(?i)^season\s*0*(\d{1,2})$", season_folder.strip())
+if not sm:
+    print(name)
+    raise SystemExit(0)
+sn = int(sm.group(1))
+multi = re.fullmatch(
+    r"(?i)e(?:p(?:isode)?)?[.\s_-]*(\d{1,3})\s*[-–]\s*e?(?:p(?:isode)?)?[.\s_-]*(\d{1,3})",
+    stem.strip(),
+)
+if multi:
+    e1, e2 = int(multi.group(1)), int(multi.group(2))
+    print("%s - S%02dE%02d-E%02d.%s" % (show, sn, e1, e2, ext))
+    raise SystemExit(0)
+bare = re.fullmatch(r"(?i)e(?:p(?:isode)?)?[.\s_-]*(\d{1,3})", stem.strip())
+if bare:
+    print("%s - S%02dE%02d.%s" % (show, sn, int(bare.group(1)), ext))
+    raise SystemExit(0)
+print(name)
+PY
+}
+
 _process_tv_into() {
   local inbox="$1" lib="$2" label="$3" key="$4"
   local f name show season ep dest_dir dest moved=0 parsed rel parent_show parent_season
@@ -213,6 +247,7 @@ _process_tv_into() {
     parent_season=$(basename "$(dirname "$f")")
     parent_show=$(basename "$(dirname "$(dirname "$f")")")
     if [[ "$parent_season" =~ ^[Ss]eason[[:space:]]*[0-9]+$ && "$parent_show" != "inbox" && "$parent_show" != "$(basename "$inbox")" ]]; then
+      name=$(_normalize_tv_episode_name "$parent_show" "$parent_season" "$name")
       dest_dir="$lib/$parent_show/$parent_season"
       mkdir -p "$dest_dir"
       dest="$dest_dir/$name"
@@ -221,7 +256,7 @@ _process_tv_into() {
         continue
       fi
       mv -- "$f" "$dest"
-      echo "  tv: $rel → ${dest_dir#"$HOST_MNT"/}/"
+      echo "  tv: $rel → ${dest_dir#"$HOST_MNT"/}/$name"
       _move_sidecars "$f" "$dest_dir"
       moved=$((moved + 1))
       # prune empty season/show dirs left in inbox
