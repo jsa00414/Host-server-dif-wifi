@@ -539,32 +539,127 @@
       border: 1px solid rgba(74, 127, 181, 0.45);
       color: #d7e8f8;
     }
+    .network-exit-btn[aria-pressed="true"] {
+      background: rgba(74, 127, 181, 0.28);
+      border-color: rgba(74, 127, 181, 0.7);
+      color: #eaf4ff;
+    }
     body.tab-circle .code-shell > .code,
-    body.tab-circle .code-shell > .bar {
+    body.tab-circle .code-shell > .bar,
+    body.tab-network .code-shell > .code,
+    body.tab-network .code-shell > .bar {
       display: none !important;
     }
-    body.tab-circle .code-shell {
+    body.tab-circle .code-shell,
+    body.tab-network .code-shell {
       justify-content: stretch;
       align-items: stretch;
     }
     body.tab-circle .dock .actions #copyBtn,
     body.tab-circle .dock .actions #manualBtn,
     body.tab-circle .dock .manual,
-    body.tab-circle .dock .install {
+    body.tab-circle .dock .install,
+    body.tab-network .dock .actions #copyBtn,
+    body.tab-network .dock .actions #manualBtn,
+    body.tab-network .dock .manual,
+    body.tab-network .dock .install {
       display: none !important;
     }
-    /* VPN trust circle: no brand mark / logo */
+    /* VPN trust circle / network exit: no brand mark / logo */
     body.tab-circle .top .mark,
-    body.tab-circle .top .brand {
+    body.tab-circle .top .brand,
+    body.tab-network .top .mark,
+    body.tab-network .top .brand {
       display: none !important;
     }
-    body.tab-circle .top {
+    body.tab-circle .top,
+    body.tab-network .top {
       padding-top: calc(8px + var(--safe-top));
       padding-bottom: 4px;
     }
     body.tab-circle .top .title,
-    body.tab-circle .top .sub {
+    body.tab-circle .top .sub,
+    body.tab-network .top .title,
+    body.tab-network .top .sub {
       display: none !important;
+    }
+    .network-pane .net-control {
+      margin: 0 0 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.03);
+    }
+    .network-pane .net-control .label {
+      color: var(--muted);
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+    .network-pane .net-control .ip {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 1.05rem;
+      font-weight: 650;
+      word-break: break-all;
+    }
+    .network-pane .net-control .meta {
+      color: var(--muted);
+      font-size: .72rem;
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+    .network-pane .device-row {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .network-pane .device-row[hidden] { display: none; }
+    .network-pane select,
+    .network-pane input[type="text"] {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
+      font-size: .84rem;
+    }
+    .network-pane .net-choices {
+      display: grid;
+      gap: 8px;
+    }
+    .network-pane .net-choices.busy { opacity: .55; pointer-events: none; }
+    .network-pane button.choice {
+      appearance: none;
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.22);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 12px 14px;
+      cursor: pointer;
+    }
+    .network-pane button.choice .title {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .network-pane button.choice .hint {
+      display: block;
+      color: var(--muted);
+      font-size: .72rem;
+      line-height: 1.35;
+    }
+    .network-pane button.choice.active {
+      border-color: rgba(61,222,160,.6);
+      background: rgba(61,222,160,.14);
+    }
+    .network-pane button.choice.active.ts {
+      border-color: rgba(74,127,181,.7);
+      background: rgba(74,127,181,.16);
     }
     /* Allowed tab: no approve-IP / refresh controls */
     body.circle-allowed .circle-add {
@@ -620,6 +715,38 @@
           <button type="button" id="circleRefreshBtn">Refresh list</button>
         </div>
       </section>
+      <section class="circle network-pane" id="networkPane" hidden>
+        <h3>Network exit</h3>
+        <p class="sub">Pick this device’s home Wi‑Fi IP, then send only that address through Tailscale or Surfshark.</p>
+        <div class="net-control">
+          <div class="label">Controlling</div>
+          <div class="ip" id="netControlIp">…</div>
+          <div class="meta" id="netMeta"></div>
+          <div class="device-row" id="netDeviceRow" hidden>
+            <select id="netDevicePick" aria-label="This device IP"></select>
+            <input id="netDeviceManual" type="text" inputmode="decimal" autocomplete="off"
+              placeholder="or type 192.168.8.x" aria-label="Type this device LAN IP" />
+            <button type="button" class="primary" id="netUseDeviceBtn">Use this device IP</button>
+          </div>
+        </div>
+        <div class="net-choices" id="netChoices">
+          <button type="button" class="choice" data-provider="tailscale" id="netBtnTs">
+            <span class="title">Tailscale exit node</span>
+            <span class="hint">Route this IP via the active Tailscale exit node.</span>
+          </button>
+          <div>
+            <button type="button" class="choice" data-provider="surfshark" id="netBtnSs">
+              <span class="title">Surfshark</span>
+              <span class="hint">Route this IP through the Surfshark WireGuard tunnel.</span>
+            </button>
+            <select id="netSsServer" aria-label="Surfshark server" hidden></select>
+          </div>
+          <button type="button" class="choice" data-provider="direct" id="netBtnDirect">
+            <span class="title">Direct / default</span>
+            <span class="hint">Clear the per-device override (follow the normal exit).</span>
+          </button>
+        </div>
+      </section>
     </div>
     <div class="empty" id="emptyView" hidden></div>
     <div class="dock">
@@ -644,6 +771,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="/static/sm-circle-crypto.js"></script>
+  <script src="/static/sm-network-exit.js"></script>
   <script>
     const STORE_KEY = "sm.auth.totp.v1";
     const BIO_KEY = "sm.auth.bio.cred.v1";
@@ -687,6 +815,7 @@
       tabBar: document.getElementById("tabBar"),
       circleToggle: document.getElementById("circleToggle"),
       networkExitBtn: document.getElementById("networkExitBtn"),
+      networkPane: document.getElementById("networkPane"),
     };
 
     let account = null;
@@ -698,9 +827,11 @@
     let circleData = null;
     let circleLoading = false;
     let circleOpen = false;
+    let networkOpen = false;
     let circleView = "pending";
     let enrollUnlocked = false;
     let enrollStatusLoaded = false;
+    let networkExit = { open: async () => {}, refresh: async () => {} };
 
     function isWindows() {
       return /Windows/i.test(navigator.userAgent || "") || /Win/.test(navigator.platform || "");
@@ -709,24 +840,40 @@
       return isWindows() ? "Windows Hello" : "Biometrics";
     }
 
-    function setCircleOpen(open) {
-      circleOpen = !!open && unlocked;
-      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
-      if (!circleOpen) document.body.classList.remove("circle-allowed");
+    function syncPanelButtons() {
+      const away = !!(circleOpen || networkOpen);
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
-        els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
+        els.circleToggle.textContent = away ? "Back to codes" : "VPN trust circle";
       }
-      if (account && unlocked) {
-        els.copyBtn.hidden = circleOpen;
-        els.manualBtn.hidden = true;
-        if (circleOpen) {
-          renderCircle();
-          if (!circleData && !circleLoading) fetchCircle();
-        } else if (els.circlePane) {
-          els.circlePane.hidden = true;
-        }
+      if (els.networkExitBtn) {
+        els.networkExitBtn.setAttribute("aria-pressed", networkOpen ? "true" : "false");
       }
+    }
+
+    function setPanelView(view) {
+      if (!unlocked) return;
+      const next = view === "circle" || view === "network" ? view : "codes";
+      circleOpen = next === "circle";
+      networkOpen = next === "network";
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      document.body.classList.toggle("tab-network", !!(account && unlocked && networkOpen));
+      if (!circleOpen) document.body.classList.remove("circle-allowed");
+      syncPanelButtons();
+      if (!(account && unlocked)) return;
+      els.copyBtn.hidden = circleOpen || networkOpen;
+      els.manualBtn.hidden = true;
+      if (els.circlePane) els.circlePane.hidden = !circleOpen;
+      if (els.networkPane) els.networkPane.hidden = !networkOpen;
+      if (circleOpen) {
+        renderCircle();
+        if (!circleData && !circleLoading) fetchCircle();
+      }
+      if (networkOpen) networkExit.open();
+    }
+
+    function setCircleOpen(open) {
+      setPanelView(open ? "circle" : "codes");
     }
 
     function toast(msg) {
@@ -734,6 +881,9 @@
       els.toast.classList.add("show");
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+    }
+    if (window.SmNetworkExit) {
+      networkExit = SmNetworkExit.create({ toast: (msg) => toast(msg) });
     }
 
     function b64urlFromBuf(buf) {
@@ -838,15 +988,18 @@
       unlocked = false;
       pinMode = false;
       circleOpen = false;
+      networkOpen = false;
       circleData = null;
-      document.body.classList.remove("tab-circle", "circle-allowed", "is-unlocked");
+      document.body.classList.remove("tab-circle", "tab-network", "circle-allowed", "is-unlocked");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
       }
+      if (els.networkExitBtn) els.networkExitBtn.setAttribute("aria-pressed", "false");
       els.codeView.textContent = "------";
       if (els.pinInput) els.pinInput.value = "";
       if (els.circlePane) els.circlePane.hidden = true;
+      if (els.networkPane) els.networkPane.hidden = true;
       clearTimeout(idleTimer);
       render();
       if (msg) toast(msg);
@@ -882,13 +1035,16 @@
       account = null;
       circleData = null;
       circleOpen = false;
+      networkOpen = false;
       unlocked = false;
       pinMode = false;
-      document.body.classList.remove("tab-circle", "circle-allowed", "is-unlocked");
+      document.body.classList.remove("tab-circle", "tab-network", "circle-allowed", "is-unlocked");
       if (els.circleToggle) {
         els.circleToggle.setAttribute("aria-pressed", "false");
         els.circleToggle.textContent = "VPN trust circle";
       }
+      if (els.networkExitBtn) els.networkExitBtn.setAttribute("aria-pressed", "false");
+      if (els.networkPane) els.networkPane.hidden = true;
       render();
       toast("Account removed");
     }
@@ -1313,6 +1469,7 @@
       document.body.classList.toggle("has-account", !!account);
       document.body.classList.toggle("is-unlocked", !!(account && unlocked));
       document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      document.body.classList.toggle("tab-network", !!(account && unlocked && networkOpen));
       if (!account) {
         els.lockView.hidden = true;
         els.codeShell.hidden = true;
@@ -1327,8 +1484,10 @@
         if (els.tabBar) els.tabBar.hidden = true;
         els.codeView.textContent = "------";
         if (els.circlePane) els.circlePane.hidden = true;
+        if (els.networkPane) els.networkPane.hidden = true;
         circleData = null;
         circleOpen = false;
+        networkOpen = false;
         unlocked = false;
         return;
       }
@@ -1342,6 +1501,7 @@
         els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = true;
         if (els.circlePane) els.circlePane.hidden = true;
+        if (els.networkPane) els.networkPane.hidden = true;
         if (pinMode && hasPin) {
           els.lockTitle.textContent = "Enter PIN";
           els.lockSub.textContent = "Unlock with your app PIN.";
@@ -1365,15 +1525,14 @@
       } else {
         els.lockView.hidden = true;
         els.codeShell.hidden = false;
-        els.copyBtn.hidden = circleOpen;
+        els.copyBtn.hidden = circleOpen || networkOpen;
         els.lockNowBtn.hidden = false;
         els.manualBtn.hidden = true;
         els.manualForm.classList.remove("show");
         if (els.tabBar) els.tabBar.hidden = false;
-        if (els.circleToggle) {
-          els.circleToggle.setAttribute("aria-pressed", circleOpen ? "true" : "false");
-          els.circleToggle.textContent = circleOpen ? "Back to codes" : "VPN trust circle";
-        }
+        syncPanelButtons();
+        if (els.circlePane) els.circlePane.hidden = !circleOpen;
+        if (els.networkPane) els.networkPane.hidden = !networkOpen;
         tick();
         bumpIdle();
         renderCircle();
@@ -1382,7 +1541,7 @@
     }
 
     els.copyBtn.addEventListener("click", async () => {
-      if (!unlocked || circleOpen) return;
+      if (!unlocked || circleOpen || networkOpen) return;
       const code = els.codeView.textContent || "";
       if (!/^\d{6}$/.test(code)) return;
       try {
@@ -1487,13 +1646,15 @@
 
     els.circleToggle?.addEventListener("click", () => {
       if (!unlocked) return;
-      setCircleOpen(!circleOpen);
+      if (circleOpen || networkOpen) setPanelView("codes");
+      else setPanelView("circle");
       bumpIdle();
     });
     els.networkExitBtn?.addEventListener("click", () => {
       if (!unlocked) return;
-      // Same keys.* origin — Authenticator TOTP + circle keys stay available.
-      location.href = "/network.html";
+      if (networkOpen) setPanelView("codes");
+      else setPanelView("network");
+      bumpIdle();
     });
     els.circleTabPending?.addEventListener("click", () => {
       circleView = "pending";

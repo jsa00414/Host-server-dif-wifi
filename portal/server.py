@@ -5116,30 +5116,17 @@ def _as_bool(value) -> bool:
 
 
 def _network_hookup_site_lines(rule: dict) -> list[str]:
-    """Public per-device VPN exit picker (network.vpstruelord.com).
+    """Short name network.* → Authenticator on keys.* (in-app Network exit).
 
-    Circle Ed25519 keys live in localStorage on keys.* (Authenticator). Safari
-    and many mobile browsers block third-party iframe storage, so the exit UI
-    must run on keys.* to prove circle membership for home-router devices.
-    network.* keeps the short name and redirects there.
+    Per-device Surfshark/Tailscale exit lives inside Authenticator now; keep the
+    hostname as a bookmark-friendly redirect.
     """
     public = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
     keys = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip().lower()
-    upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     return [
         f"{public} {{",
         "\tencode gzip",
-        "\t@root path /",
-        f"\tredir @root https://{keys}/network.html 302",
-        "\t@legacy_network path /network.html",
-        f"\tredir @legacy_network https://{keys}/network.html 302",
-        f"\treverse_proxy {upstream} {{",
-        "\t\theader_up Host {host}",
-        "\t\theader_up X-Forwarded-Host {host}",
-        "\t\theader_up X-Forwarded-Proto {scheme}",
-        "\t\theader_up X-Forwarded-For {remote_host}",
-        "\t\theader_up X-Real-IP {remote_host}",
-        "\t}",
+        f"\tredir https://{keys}/ 302",
         "\theader {",
         '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
         "\t\tX-Content-Type-Options nosniff",
@@ -5167,8 +5154,7 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
     Root `/` must send iPhone/iPad to auth-app-iphone.html (Face ID / passkey
     flow). The Android page is a broken UX on iOS Safari.
 
-    network.* may iframe /static/network-lan-bridge.html to read circle LAN
-    IPs stored on this origin (localStorage is per-host).
+    Network exit UI is embedded in Authenticator; /network.html redirects here.
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
     network = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
@@ -19424,7 +19410,7 @@ class Handler(BaseHTTPRequestHandler):
             "/email-code-test.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
-            "/network.html",
+            "/network.html",  # legacy → Authenticator redirect
             "/api/branding",
             "/api/health",
             "/api/network/exit",
@@ -19435,6 +19421,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
             "/static/sm-circle-crypto.js",
+            "/static/sm-network-exit.js",
         ) or path.startswith("/static/auth-app"):
             pass  # public (/, /login.html serve the sign-in page when logged out)
         elif path.startswith("/static/"):
@@ -19627,9 +19614,18 @@ document.getElementById('f').onsubmit = async (e) => {
                 STATIC_DIR / "auth-app-iphone.html", "text/html; charset=utf-8"
             )
         if path == "/network.html":
-            return self._serve_file(
-                STATIC_DIR / "network.html", "text/html; charset=utf-8"
+            # Legacy standalone page — Network exit is inside Authenticator now.
+            ua = str(self.headers.get("User-Agent") or "")
+            dest = (
+                "/auth-app-iphone.html"
+                if re.search(r"(?i)(iphone|ipad|ipod)", ua)
+                else "/auth-app.html"
             )
+            self.send_response(302)
+            self.send_header("Location", dest)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path == "/api/network/exit":
             try:
                 lan_hint = _device_exit_lan_hint_from_request(self)
@@ -20474,6 +20470,8 @@ document.getElementById('f').onsubmit = async (e) => {
             "/api/network/exit",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
+            "/static/sm-circle-crypto.js",
+            "/static/sm-network-exit.js",
         ) or path.startswith("/static/") or path.startswith("/api/auth-app/"):
             return self.do_GET()
         if path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
