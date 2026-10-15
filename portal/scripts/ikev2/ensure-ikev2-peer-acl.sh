@@ -394,43 +394,47 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
     # sticky arg is ignored for seeding — kept for call-site compatibility.
     _ = sticky
 
-    if changed or not allow_file.is_file():
-        rebuilt = []
-        seen = set()
-        for ip in sealed_ips:
-            if ip in by_ip:
-                rebuilt.append(by_ip[ip])
-                seen.add(ip)
-        for ip, row in by_ip.items():
-            if ip in seen:
-                continue
-            rebuilt.append(row)
+    rebuilt = []
+    seen = set()
+    for ip in sealed_ips:
+        if ip in by_ip:
+            rebuilt.append(by_ip[ip])
             seen.add(ip)
-        data["allowed"] = rebuilt
+    for ip, row in by_ip.items():
+        if ip in seen:
+            continue
+        rebuilt.append(row)
+        seen.add(ip)
+    data["allowed"] = rebuilt
+
+    if changed or not allow_file.is_file():
         allow_file.parent.mkdir(parents=True, exist_ok=True)
         allow_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         try:
             os.chmod(allow_file, 0o600)
         except Exception:
             pass
-        # Keep sticky file aligned: sealed + key-bound only.
-        sticky_file.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            "# Managed by vpn allowlist — key-bound sticky WAN + LAN IPs",
-            "# Key-bound only (except sealed router WAN).",
-            "# one IPv4 /32 per line",
-        ]
-        for row in rebuilt:
-            ip = normalize_ip(row.get("ip", ""))
-            if not ip or not (
-                is_public_ipv4(ip)
-                or is_home_lan_ipv4(ip)
-                or is_openvpn_client_ipv4(ip)
-            ):
-                continue
-            if row_is_circle_trusted(row):
-                lines.append(f"{ip}/32")
-        sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # Always realign sticky from allowlist (sealed + key-bound WAN/LAN/OpenVPN CCD).
+    # Peer-acl used to rewrite sticky only when allowlist JSON changed, so an
+    # OpenVPN CCD like 10.9.0.3 could stay missing after an older sticky write.
+    sticky_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Managed by vpn allowlist — key-bound sticky WAN + LAN + OpenVPN CCD IPs",
+        "# Key-bound only (except sealed router WAN). No blanket 192.168.8.0/24 or 10.9.0.0/24.",
+        "# one IPv4 /32 per line",
+    ]
+    for row in rebuilt:
+        ip = normalize_ip(row.get("ip", ""))
+        if not ip or not (
+            is_public_ipv4(ip)
+            or is_home_lan_ipv4(ip)
+            or is_openvpn_client_ipv4(ip)
+        ):
+            continue
+        if row_is_circle_trusted(row):
+            lines.append(f"{ip}/32")
+    sticky_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {ip for ip in allowed if ip and is_public_ipv4(ip)}
 
 

@@ -105,10 +105,17 @@ def compute_circle_drift() -> dict:
 
     sticky_not_allow = sorted(sticky - allow)
     allow_not_sticky = sorted(allow - sticky)
-    # Caddy sticky /32s should include sticky file entries; extra Caddy /32s
-    # (peer ACL LAN hosts) are informational only.
+    # Caddy /32s should include every sticky entry. Extra Caddy /32s that are
+    # infra base peers (localhost, VPS public, Flint VIP, OVPN VIP) are expected
+    # and informational only — they must not page as drift.
     sticky_not_caddy = sorted(sticky - caddy) if caddy else []
-    caddy_not_sticky = sorted(caddy - sticky) if caddy else []
+    _infra_caddy = {
+        "127.0.0.1",
+        "74.208.76.213",
+        "10.9.0.2",  # Flint OpenVPN VIP
+        "10.11.0.1",  # campus/OVPN peer VIP used as base ACL
+    }
+    caddy_not_sticky = sorted((caddy - sticky) - _infra_caddy) if caddy else []
 
     drifted = bool(sticky_not_allow or allow_not_sticky or sticky_not_caddy)
     return {
