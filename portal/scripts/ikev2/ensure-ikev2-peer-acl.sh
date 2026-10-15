@@ -72,6 +72,16 @@ def is_home_lan_ipv4(ip: str) -> bool:
     return parts[3] not in (0, 1, 255)
 
 
+def is_openvpn_client_ipv4(ip: str) -> bool:
+    """OpenVPN CCD clients (10.9.0.x), excluding server .1 and Flint VIP .2."""
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip or ""):
+        return False
+    parts = [int(x) for x in ip.split(".")]
+    if parts[0] != 10 or parts[1] != 9 or parts[2] != 0:
+        return False
+    return parts[3] not in (0, 1, 2, 255)
+
+
 def normalize_ip(raw: str) -> str:
     raw = (raw or "").strip()
     if "/" in raw:
@@ -258,6 +268,24 @@ def load_allowlist_lan_ips() -> set[str]:
     return ips
 
 
+def load_allowlist_ovpn_ips() -> set[str]:
+    """Key-bound OpenVPN CCD client /32s (not Flint 10.9.0.2 / whole /24)."""
+    ips: set[str] = set()
+    if not allow_file.is_file():
+        return ips
+    try:
+        data = json.loads(allow_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ips
+    for row in data.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = normalize_ip(row.get("ip", ""))
+        if ip and is_openvpn_client_ipv4(ip) and row_has_key(row):
+            ips.add(ip)
+    return ips
+
+
 def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
     """Ensure sealed WANs exist; scrub keyless; return trusted allowed IP set.
 
@@ -394,7 +422,11 @@ def ensure_allowlist_seeded(sticky: list[str]) -> set[str]:
         ]
         for row in rebuilt:
             ip = normalize_ip(row.get("ip", ""))
-            if not ip or not (is_public_ipv4(ip) or is_home_lan_ipv4(ip)):
+            if not ip or not (
+                is_public_ipv4(ip)
+                or is_home_lan_ipv4(ip)
+                or is_openvpn_client_ipv4(ip)
+            ):
                 continue
             if row_is_circle_trusted(row):
                 lines.append(f"{ip}/32")
@@ -413,12 +445,16 @@ def vpn_clients_cidrs_in_caddy(text: str) -> set[str]:
     return found
 
 
-def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
+def load_base_cidrs(
+    allowed_ips: set[str], lan_ips: set[str], ovpn_ips: set[str]
+) -> list[str]:
     base = base_default.split()
     sticky = [
         c
         for c in load_sticky_cidrs()
-        if normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips
+        if normalize_ip(c) in allowed_ips
+        or normalize_ip(c) in lan_ips
+        or normalize_ip(c) in ovpn_ips
     ]
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
@@ -436,6 +472,8 @@ def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
                         if is_public_ipv4(ip) and ip != "74.208.76.213" and ip not in allowed_ips:
                             continue
                         if is_home_lan_ipv4(ip) and ip not in lan_ips:
+                            continue
+                        if is_openvpn_client_ipv4(ip) and ip not in ovpn_ips:
                             continue
                     cleaned.append(p)
                 if cleaned:
@@ -475,6 +513,10 @@ def load_base_cidrs(allowed_ips: set[str], lan_ips: set[str]) -> list[str]:
         cidr = f"{ip}/32"
         if cidr not in base:
             base.append(cidr)
+    for ip in sorted(ovpn_ips):
+        cidr = f"{ip}/32"
+        if cidr not in base:
+            base.append(cidr)
     return base
 
 
@@ -482,12 +524,17 @@ peers = peer_ips()
 sticky_cidrs = load_sticky_cidrs()
 allowed_ips = ensure_allowlist_seeded(sticky_cidrs) - DENIED_IPS
 lan_ips = load_allowlist_lan_ips()
+ovpn_ips = load_allowlist_ovpn_ips()
 # Sticky file may include unapproved leftovers — only allowlisted count
 sticky_trusted = [
     c
     for c in sticky_cidrs
     if normalize_ip(c) not in DENIED_IPS
-    and (normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips)
+    and (
+        normalize_ip(c) in allowed_ips
+        or normalize_ip(c) in lan_ips
+        or normalize_ip(c) in ovpn_ips
+    )
 ]
 # Re-read sticky after possible reseal write.
 sticky_cidrs = load_sticky_cidrs()
@@ -495,9 +542,13 @@ sticky_trusted = [
     c
     for c in sticky_cidrs
     if normalize_ip(c) not in DENIED_IPS
-    and (normalize_ip(c) in allowed_ips or normalize_ip(c) in lan_ips)
+    and (
+        normalize_ip(c) in allowed_ips
+        or normalize_ip(c) in lan_ips
+        or normalize_ip(c) in ovpn_ips
+    )
 ]
-base = load_base_cidrs(allowed_ips, lan_ips)
+base = load_base_cidrs(allowed_ips, lan_ips, ovpn_ips)
 
 # IMPORTANT: do NOT auto-append live peer WANs. Only allowlisted sticky enter the circle.
 combined = [c for c in base if normalize_ip(c) not in DENIED_IPS]
@@ -561,7 +612,10 @@ def plex_lan_ok(text: str) -> bool:
 prev = state_file.read_text().strip() if state_file.is_file() else ""
 cur = "\n".join(peers)
 trusted_needed = sorted(
-    {normalize_ip(c) for c in sticky_trusted} | set(allowed_ips) | set(lan_ips)
+    {normalize_ip(c) for c in sticky_trusted}
+    | set(allowed_ips)
+    | set(lan_ips)
+    | set(ovpn_ips)
 )
 if prev == cur and caddyfile.is_file():
     text = caddyfile.read_text()
@@ -688,6 +742,7 @@ print("peers_seen:", ", ".join(peers) if peers else "(none)")
 print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")
 print("allowlisted:", ", ".join(sorted(allowed_ips)) if allowed_ips else "(none)")
 print("lan_approved:", ", ".join(sorted(lan_ips)) if lan_ips else "(none)")
+print("ovpn_approved:", ", ".join(sorted(ovpn_ips)) if ovpn_ips else "(none)")
 print("denied:", ", ".join(sorted(DENIED_IPS)) if DENIED_IPS else "(none)")
 print("cidrs:", combined_s)
 
