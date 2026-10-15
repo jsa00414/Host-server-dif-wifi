@@ -13185,12 +13185,16 @@ def verify_and_consume_totp(
     *,
     purpose: str,
     window: int = 1,
+    consume: bool = True,
 ) -> bool:
-    """Verify a TOTP and burn that timestep so it cannot be reused for another purpose.
+    """Verify a TOTP; optionally burn that timestep so it cannot be reused.
 
     Portal sign-in and Settings SSH unlock share the same authenticator secret; without
     consumption, one 6-digit code would satisfy both within the same 30s window.
     Burns persist to disk so a panel restart cannot revive a just-used code.
+
+    Pass ``consume=False`` for read-only Authenticator GETs (e.g. loading the
+    circle list) so the same visible code still works for the next mutation.
     """
     purpose_n = str(purpose or "").strip().lower()
     if not purpose_n:
@@ -13208,6 +13212,8 @@ def verify_and_consume_totp(
             break
     if matched_step is None:
         return False
+    if not consume:
+        return True
     used_key = f"{_totp_secret_fingerprint(secret_b32)}:{matched_step}"
     with _totp_used_lock:
         _purge_totp_used(now)
@@ -14050,7 +14056,9 @@ def _run_vpn_peer_acl_sync() -> str:
         return str(exc)
 
 
-def verify_auth_app_totp(code: str, *, purpose: str = "auth-app") -> bool:
+def verify_auth_app_totp(
+    code: str, *, purpose: str = "auth-app", consume: bool = True
+) -> bool:
     """Validate a TOTP from the phone authenticator PWA against enrolled secrets.
 
     Pending enroll secrets are accepted only while Security enroll unlock is
@@ -14065,7 +14073,9 @@ def verify_auth_app_totp(code: str, *, purpose: str = "auth-app") -> bool:
     for secret in sm_auth.list_verifiable_totp_secrets(
         legacy, include_pending=include_pending
     ):
-        if verify_and_consume_totp(secret, code, purpose=purpose_n, window=1):
+        if verify_and_consume_totp(
+            secret, code, purpose=purpose_n, window=1, consume=consume
+        ):
             return True
     return False
 
@@ -14313,11 +14323,15 @@ def build_ip_jail_status() -> dict:
 
 
 def require_auth_app_totp(
-    code: str, *, client_ip: str = "", purpose: str = "auth-app"
+    code: str,
+    *,
+    client_ip: str = "",
+    purpose: str = "auth-app",
+    consume: bool = True,
 ) -> None:
     """Validate auth-app TOTP with same-day IP jail (3 fails → 5 min)."""
     ip_jail_assert_allowed(client_ip)
-    if verify_auth_app_totp(code, purpose=purpose):
+    if verify_auth_app_totp(code, purpose=purpose, consume=consume):
         ip_jail_clear_success(client_ip)
         return
     st = ip_jail_record_failure(client_ip, reason="auth_app_totp")
@@ -19767,10 +19781,13 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/api/auth-app/vpn-allowlist":
             try:
                 # Header-only TOTP — never accept codes from query strings (logs/Referer).
+                # Do not burn the code on GET: opening Circle must leave the same
+                # visible code usable for Approve / Move to pending / Remove.
                 require_auth_app_totp(
                     _auth_app_totp_from_request(self),
                     client_ip=request_client_ip(self),
                     purpose="auth-app-vpn-allowlist",
+                    consume=False,
                 )
                 # Refresh-only: never enroll a new LAN IP from a Circle GET.
                 lan_hint = _normalize_vpn_ip(self.headers.get("X-SM-Lan-Ip") or "")
