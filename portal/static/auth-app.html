@@ -8,7 +8,7 @@
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#070c0a" />
   <meta name="color-scheme" content="dark" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
   <meta name="mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="/static/auth-app.webmanifest" />
@@ -72,7 +72,6 @@
         radial-gradient(120% 55% at 50% -12%, rgba(61,222,160,.16), transparent 55%),
         radial-gradient(70% 40% at 100% 100%, rgba(74,127,181,.1), transparent 50%),
         linear-gradient(180deg, #0a1210 0%, var(--bg0) 42%, #040706 100%);
-      background-attachment: fixed;
     }
     body::before {
       content: "";
@@ -93,7 +92,15 @@
       background: #060b09;
       padding-bottom: 12px;
     }
-    /* Circle tab: drop brand header so lists use the full stage */
+    /*
+     * Circle tab: hide brand header for list space, but keep the body grid
+     * as main+footer. display:none on the header removes it from the grid,
+     * so without retargeting rows the footer wrongly gets 1fr and the tab
+     * buttons stretch into full-height columns.
+     */
+    body.tab-circle {
+      grid-template-rows: minmax(0, 1fr) auto;
+    }
     body.tab-circle .app-header {
       display: none !important;
     }
@@ -483,6 +490,8 @@
       display: grid;
       gap: 8px;
       box-shadow: 0 -12px 28px rgba(0,0,0,.35);
+      align-self: end;
+      flex: 0 0 auto;
     }
     .app-footer::after {
       content: "";
@@ -519,6 +528,9 @@
       display: grid;
       gap: 5px;
       justify-items: center;
+      align-content: center;
+      min-height: 52px;
+      max-height: 64px;
       transition: background .15s ease, color .15s ease;
     }
     .app-nav button .glyph {
