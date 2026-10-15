@@ -12,8 +12,8 @@
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="format-detection" content="telephone=no" />
-  <meta name="sm-auth-layout" content="v31-vv-dock" />
-  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=31" />
+  <meta name="sm-auth-layout" content="v32-center-brand" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=32" />
   <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -23,7 +23,7 @@
   <script>
     /* Force-clear stale Authenticator SW/caches once so tab-bar layout can update. */
     (function () {
-      var MARK = "sm.auth.sw.bust.v31";
+      var MARK = "sm.auth.sw.bust.v32";
       try {
         if (sessionStorage.getItem(MARK) === "1") return;
       } catch (_) {}
@@ -38,7 +38,7 @@
       }
       try {
         /* Drop older bust markers so v31 always clears once. */
-        ["v28", "v29", "v30"].forEach(function (v) {
+        ["v28", "v29", "v30", "v31"].forEach(function (v) {
           localStorage.removeItem("sm.auth.sw.bust." + v);
         });
       } catch (_) {}
@@ -155,19 +155,16 @@
     }
     .brand-row {
       display: grid;
-      grid-template-columns: auto 1fr auto;
-      gap: 12px;
-      align-items: center;
-    }
-    body:not(.has-account) .brand-row,
-    body.has-account:not(.is-unlocked) .brand-row {
       grid-template-columns: 1fr;
+      gap: 10px;
+      align-items: center;
       justify-items: center;
       text-align: center;
+      position: relative;
     }
     body.is-unlocked .brand-row {
-      justify-items: stretch;
-      text-align: left;
+      /* Keep brand centered; Lock floats top-right and does not shift it. */
+      padding-inline: 56px;
     }
     .mark {
       width: 42px;
@@ -202,8 +199,7 @@
       border-width: 2.5px;
     }
     body:not(.is-unlocked) .hdr-lock { display: none !important; }
-    .brand-text { min-width: 0; }
-    body:not(.is-unlocked) .brand-text { text-align: center; }
+    .brand-text { min-width: 0; text-align: center; }
     .brand {
       margin: 0;
       color: var(--accent);
@@ -211,6 +207,7 @@
       font-weight: 700;
       letter-spacing: -.03em;
       line-height: 1.1;
+      text-align: center;
     }
     body:not(.is-unlocked) .brand {
       font-size: clamp(1.9rem, 8.5vw, 2.45rem);
@@ -223,6 +220,7 @@
       font-size: .74rem;
       font-weight: 500;
       letter-spacing: .02em;
+      text-align: center;
     }
     body:not(.is-unlocked) .section-title {
       margin-top: 10px;
@@ -231,6 +229,9 @@
     }
     .hdr-lock {
       appearance: none;
+      position: absolute;
+      top: 4px;
+      right: 0;
       border: 1px solid var(--line);
       background: rgba(255,255,255,.03);
       color: var(--ink);
@@ -240,6 +241,7 @@
       font-size: .7rem;
       font-weight: 650;
       cursor: pointer;
+      z-index: 2;
     }
 
     /* —— Main —— */
@@ -1807,7 +1809,7 @@
     })();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
-        .register("/static/auth-app-iphone-sw.js?v=31")
+        .register("/static/auth-app-iphone-sw.js?v=32")
         .then((reg) => reg.update())
         .catch(() => {});
     }
