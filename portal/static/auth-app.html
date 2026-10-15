@@ -1145,14 +1145,23 @@
         if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
         const code = await currentTotpCode();
         const lanIp = await detectHomeLanIp();
-        const keyRow = await SmCircleCrypto.ensureKeyForIp(ip);
-        const bodyObj = { action, ip, note: note || "", pubkey: keyRow.publicKey };
+        // Approve needs a per-IP key bind. pending/revoke/deny are TOTP-only
+        // admin actions (any enrolled phone can demote IPs it did not approve).
+        const needsKey = action === "approve";
+        const bodyObj = { action, ip, note: note || "" };
+        let proofHeaders = {};
+        if (needsKey) {
+          const keyRow = await SmCircleCrypto.ensureKeyForIp(ip);
+          bodyObj.pubkey = keyRow.publicKey;
+        }
         const bodyText = JSON.stringify(bodyObj);
-        const proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
-          method: "POST",
-          path: "/api/auth-app/vpn-allowlist",
-          bodyText,
-        });
+        if (needsKey) {
+          proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
+            method: "POST",
+            path: "/api/auth-app/vpn-allowlist",
+            bodyText,
+          });
+        }
         const headers = {
           "Content-Type": "application/json",
           Accept: "application/json",

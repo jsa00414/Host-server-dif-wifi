@@ -20149,6 +20149,9 @@ document.getElementById('f').onsubmit = async (e) => {
                     or ""
                 ).strip()
                 # Approve binds a unique Ed25519 key to the IP (anti-spoof).
+                # pending/revoke/deny are Authenticator admin actions — TOTP is
+                # enough. Requiring the IP's bound key blocked "Move to pending"
+                # from any phone that did not originally approve that IP.
                 if action == "approve":
                     if not pub:
                         raise ValueError("pubkey required to bind circle IP")
@@ -20159,8 +20162,10 @@ document.getElementById('f').onsubmit = async (e) => {
                         claimed_ip=target_ip,
                         require_existing_bind=False,
                     )
-                elif self.headers.get("X-SM-Circle-Sig"):
-                    # Mutations with an existing bind must prove key possession.
+                elif action not in ("pending", "revoke", "deny") and self.headers.get(
+                    "X-SM-Circle-Sig"
+                ):
+                    # Other mutations with an existing bind must prove key possession.
                     claim = target_ip or _normalize_vpn_ip(
                         self.headers.get("X-SM-Lan-Ip") or ""
                     )

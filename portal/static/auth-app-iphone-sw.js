@@ -1,5 +1,5 @@
 /* ServerManager iPhone Authenticator — offline cache */
-const CACHE = "sm-auth-iphone-v25";
+const CACHE = "sm-auth-iphone-v26";
 const ASSETS = [
   "/auth-app-iphone.html",
   "/static/auth-app-iphone.webmanifest",
