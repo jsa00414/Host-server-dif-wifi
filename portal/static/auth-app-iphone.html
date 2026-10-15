@@ -72,7 +72,7 @@
       --blue: #6aa8e8;
       --blue-dim: rgba(106, 168, 232, 0.16);
       --danger: #ff7a7a;
-      --dock-h: 44px;
+      --dock-h: 40px;
       --sat: env(safe-area-inset-top, 0px);
       --sar: env(safe-area-inset-right, 0px);
       --sab: env(safe-area-inset-bottom, 0px);
@@ -606,8 +606,8 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 0;
       margin: 0;
-      /* Top/side tight; bottom = tiny pad + iOS home indicator inset. */
-      padding: 2px calc(4px + var(--sar)) 0 calc(4px + var(--sal));
+      /* Top/side tight; bottom inset only for the home indicator. */
+      padding: 1px calc(2px + var(--sar)) 0 calc(2px + var(--sal));
       padding-bottom: constant(safe-area-inset-bottom);
       padding-bottom: env(safe-area-inset-bottom, 0px);
       min-height: 0;
@@ -626,15 +626,15 @@
       background: transparent;
       color: var(--muted);
       border-radius: 10px;
-      padding: 5px 2px 3px;
+      padding: 4px 2px 1px;
       font: inherit;
-      font-size: .62rem;
+      font-size: .6rem;
       font-weight: 700;
       letter-spacing: .04em;
       text-transform: uppercase;
       cursor: pointer;
       display: grid;
-      gap: 2px;
+      gap: 1px;
       justify-items: center;
       align-content: end;
       min-height: var(--dock-h);
