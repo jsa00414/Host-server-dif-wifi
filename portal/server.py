@@ -11225,23 +11225,27 @@ def _read_device_exit_state() -> dict:
 def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
     """Pick which /32 this request may control.
 
-    Prefer a home-LAN IP when the connection is from Flint/OVPN/WG and the
-    browser reported 192.168.8.x — that matches mangle -s 192.168.8.0/24 -i tun0.
-    Otherwise the TCP client IP itself.
+    Prefer a home-LAN IP when the browser reported 192.168.8.x and the HTTP
+    client is a path we expect from Flint (VPN pools, docker/Caddy peer, or the
+    known campus/home shared WAN). That LAN /32 is what mangle sees on tun0.
+    Otherwise the TCP client IP itself (IKEv2/WG peers, cellular, etc.).
     """
     client = _normalize_vpn_ip(client_ip or "")
     lan = _normalize_vpn_ip(lan_ip or "")
+    denied_wan = _denied_vpn_ips()
     if _is_home_lan_ipv4(lan) and (
         client == lan
         or client.startswith("10.9.")
         or client.startswith("10.8.")
         or client.startswith("10.11.")
+        or client.startswith("10.10.")
         or _is_home_lan_ipv4(client)
+        or client in denied_wan
         or client in {"127.0.0.1", "172.18.0.1"}
-        or (client.startswith("172.") and _is_loopback_or_link_local(client))
+        or _is_loopback_or_link_local(client)
     ):
         return lan
-    if client and client not in {"unknown", ""}:
+    if client and client not in {"unknown", "", VPS_PUBLIC_IP, "127.0.0.1"}:
         return client
     if _is_home_lan_ipv4(lan):
         return lan
@@ -11304,6 +11308,11 @@ def set_device_exit(
     exit_ip: str = "",
 ) -> dict:
     control_ip = _device_exit_control_ip(client_ip, lan_ip)
+    if control_ip in {"127.0.0.1", "0.0.0.0", VPS_PUBLIC_IP}:
+        raise ValueError(
+            "Open this page from the device whose internet you want to switch "
+            "(home Wi‑Fi or VPN), not from the VPS itself."
+        )
     prov = str(provider or "").strip().lower()
     if prov in ("", "default", "off", "none", "clear", "direct"):
         # Remove per-IP override so the device follows the global exit path.
@@ -20159,8 +20168,10 @@ document.getElementById('f').onsubmit = async (e) => {
             "/login.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
+            "/network.html",
             "/api/branding",
             "/api/health",
+            "/api/network/exit",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
         ) or path.startswith("/static/") or path.startswith("/api/auth-app/"):

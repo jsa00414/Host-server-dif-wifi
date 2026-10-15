@@ -97,12 +97,21 @@ PY
 
 ensure_skip_rules() {
   # If a packet already carries a device-exit mark, do not let global subnet
-  # chains overwrite it.
+  # chains overwrite it. -D must match the full rule or duplicates pile up.
   for chain in SM-TS-VPN-EXIT SM-SS-VPN-EXIT; do
     iptables -t mangle -nL "$chain" >/dev/null 2>&1 || continue
-    # Remove prior skip rules then re-insert at top.
-    while iptables -t mangle -D "$chain" -m comment --comment "$COMMENT-SKIP" -j RETURN 2>/dev/null; do :; done
-    iptables -t mangle -I "$chain" 1 -m mark ! --mark 0x0/0xffffffff -m comment --comment "$COMMENT-SKIP" -j RETURN 2>/dev/null || true
+    while iptables -t mangle -D "$chain" \
+      -m mark ! --mark 0x0/0xffffffff \
+      -m comment --comment "$COMMENT-SKIP" \
+      -j RETURN 2>/dev/null; do :; done
+    # Also scrub older incomplete -D matches that left orphan comments.
+    while iptables -t mangle -D "$chain" \
+      -m comment --comment "$COMMENT-SKIP" \
+      -j RETURN 2>/dev/null; do :; done
+    iptables -t mangle -I "$chain" 1 \
+      -m mark ! --mark 0x0/0xffffffff \
+      -m comment --comment "$COMMENT-SKIP" \
+      -j RETURN 2>/dev/null || true
   done
 }
 
