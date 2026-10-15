@@ -73,8 +73,13 @@
       font-size: 0.85rem;
       line-height: 1.4;
     }
-    #devicePick {
+    .device-row {
       margin-top: 0.85rem;
+      display: grid;
+      gap: 0.55rem;
+    }
+    .device-row[hidden] { display: none; }
+    #devicePick, #deviceManual {
       width: 100%;
       font: inherit;
       font-family: var(--mono);
@@ -85,7 +90,17 @@
       border-radius: 10px;
       padding: 0.65rem 0.75rem;
     }
-    #devicePick[hidden] { display: none; }
+    #useDeviceBtn {
+      font: inherit;
+      font-weight: 600;
+      border: 0;
+      border-radius: 10px;
+      padding: 0.7rem 0.9rem;
+      cursor: pointer;
+      background: var(--accent);
+      color: #04140f;
+    }
+    #useDeviceBtn:disabled { opacity: 0.5; cursor: default; }
     .choices {
       display: grid;
       gap: 0.65rem;
@@ -168,7 +183,12 @@
       <div class="label">Controlling</div>
       <div class="ip" id="controlIp">…</div>
       <div class="meta" id="meta"></div>
-      <select id="devicePick" aria-label="This device IP" hidden></select>
+      <div class="device-row" id="deviceRow" hidden>
+        <select id="devicePick" aria-label="This device IP"></select>
+        <input id="deviceManual" type="text" inputmode="decimal" autocomplete="off"
+          placeholder="or type 192.168.8.x" aria-label="Type this device LAN IP" />
+        <button type="button" id="useDeviceBtn">Use this device IP</button>
+      </div>
     </section>
 
     <section class="panel choices" id="choices">
@@ -197,7 +217,10 @@
     const els = {
       controlIp: document.getElementById("controlIp"),
       meta: document.getElementById("meta"),
+      deviceRow: document.getElementById("deviceRow"),
       devicePick: document.getElementById("devicePick"),
+      deviceManual: document.getElementById("deviceManual"),
+      useDeviceBtn: document.getElementById("useDeviceBtn"),
       choices: document.getElementById("choices"),
       toast: document.getElementById("toast"),
       ssServer: document.getElementById("ssServer"),
@@ -207,6 +230,7 @@
     };
     let state = null;
     let lanIp = "";
+    let bridgeIps = [];
     let toastTimer = 0;
 
     function toast(msg, err) {
@@ -308,35 +332,62 @@
       return "";
     }
 
+    function candidateEntries() {
+      const byIp = new Map();
+      const add = (ip, label, extra) => {
+        if (!isHomeLanIp(ip)) return;
+        const prev = byIp.get(ip);
+        const nextLabel = label && label !== ip ? label : (prev?.label || ip);
+        byIp.set(ip, {
+          ip,
+          label: nextLabel,
+          online: !!(extra?.online || prev?.online),
+        });
+      };
+      for (const ip of circleStoreLanIps()) add(ip, ip, { source: "circle" });
+      for (const ip of bridgeIps) add(ip, ip, { source: "keys" });
+      for (const row of state?.candidate_ips || []) {
+        add(row.ip, row.label || row.ip, row);
+      }
+      if (lanIp) add(lanIp, lanIp);
+      return [...byIp.values()].sort((a, b) => {
+        if (!!b.online !== !!a.online) return b.online ? 1 : -1;
+        return String(a.label).localeCompare(String(b.label));
+      });
+    }
+
     function fillDevicePicker(selected) {
-      const ips = circleStoreLanIps();
-      const opts = [...ips];
-      if (selected && isHomeLanIp(selected) && !opts.includes(selected)) {
-        opts.unshift(selected);
-      }
+      const opts = candidateEntries();
+      const need = !!state?.needs_device_ip || !!state?.via_flint || !selected;
+      els.deviceRow.hidden = !(need || opts.length > 1);
       if (!opts.length) {
-        els.devicePick.hidden = true;
-        els.devicePick.innerHTML = "";
-        return;
+        els.devicePick.innerHTML = `<option value="">Select your device IP…</option>`;
+      } else {
+        els.devicePick.innerHTML =
+          `<option value="">Select your device IP…</option>` +
+          opts.map((row) => {
+            const mark = row.online ? " · online" : "";
+            const text = row.label && row.label !== row.ip
+              ? `${row.label} — ${row.ip}${mark}`
+              : `${row.ip}${mark}`;
+            return `<option value="${row.ip}" ${row.ip === selected ? "selected" : ""}>${text}</option>`;
+          }).join("");
       }
-      // Show picker when WebRTC missed or multiple circle keys exist.
-      const show = !selected || opts.length > 1 || !!state?.needs_device_ip || !!state?.via_flint;
-      els.devicePick.hidden = !show;
-      els.devicePick.innerHTML = opts.map((ip) =>
-        `<option value="${ip}" ${ip === selected ? "selected" : ""}>${ip}</option>`
-      ).join("");
+      if (selected && isHomeLanIp(selected)) {
+        els.deviceManual.value = selected;
+      }
     }
 
     function render() {
       if (!state) return;
       const ip = state.control_ip || lanIp || "";
-      els.controlIp.textContent = ip || "device IP needed";
+      els.controlIp.textContent = ip || "pick this device";
       const bits = [];
       if (state.via_flint) bits.push("via Flint VPN");
       if (state.client_ip && state.client_ip !== ip) bits.push(`connection ${state.client_ip}`);
       if (state.lan_ip) bits.push(`LAN ${state.lan_ip}`);
       if (state.needs_device_ip) {
-        bits.push("pick this device’s 192.168.8.x below");
+        bits.push("choose your 192.168.8.x below (Wi‑Fi device IP)");
       } else if (state.provider_label) {
         bits.push(`now: ${state.provider_label}`);
       }
@@ -396,8 +447,22 @@
       }
       render();
       if (data.needs_device_ip && !lanIp) {
-        toast(data.error || "Need this device’s LAN IP", true);
+        toast("Pick this device’s Wi‑Fi IP below", true);
       }
+    }
+
+    async function applyChosenDeviceIp(ip) {
+      if (!isHomeLanIp(ip)) {
+        toast("Enter a home Wi‑Fi IP like 192.168.8.186", true);
+        return;
+      }
+      lanIp = ip;
+      rememberIp(ip);
+      try {
+        if (window.SmCircleCrypto) await SmCircleCrypto.ensureKeyForIp(ip);
+      } catch (_) {}
+      await refresh();
+      if (state?.control_ip === ip) toast(`Controlling ${ip}`);
     }
 
     async function setProvider(provider) {
@@ -457,13 +522,19 @@
     els.devicePick.onchange = async () => {
       const ip = els.devicePick.value;
       if (!isHomeLanIp(ip)) return;
-      lanIp = ip;
-      rememberIp(ip);
+      els.deviceManual.value = ip;
       try {
-        if (window.SmCircleCrypto) await SmCircleCrypto.ensureKeyForIp(ip);
-      } catch (_) {}
+        await applyChosenDeviceIp(ip);
+      } catch (err) {
+        toast(String(err?.message || err), true);
+      }
+    };
+
+    els.useDeviceBtn.onclick = async () => {
+      const typed = String(els.deviceManual.value || "").trim();
+      const picked = String(els.devicePick.value || "").trim();
       try {
-        await refresh();
+        await applyChosenDeviceIp(typed || picked);
       } catch (err) {
         toast(String(err?.message || err), true);
       }
@@ -473,11 +544,53 @@
     els.btnSs.onclick = () => setProvider("surfshark");
     els.btnDirect.onclick = () => setProvider("direct");
 
+    function loadKeysBridge() {
+      return new Promise((resolve) => {
+        const keysHost = (state?.hosts?.keys || "keys.vpstruelord.com").replace(/^https?:\/\//, "");
+        let settled = false;
+        const done = (ips) => {
+          if (settled) return;
+          settled = true;
+          bridgeIps = (ips || []).filter(isHomeLanIp);
+          window.removeEventListener("message", onMsg);
+          try { iframe.remove(); } catch (_) {}
+          resolve(bridgeIps);
+        };
+        const onMsg = (ev) => {
+          const data = ev?.data;
+          if (!data || data.type !== "sm-network-lan-ips") return;
+          const originHost = String(ev.origin || "").replace(/^https?:\/\//, "");
+          if (originHost && originHost !== keysHost && !originHost.endsWith(".vpstruelord.com")) {
+            return;
+          }
+          done(Array.isArray(data.ips) ? data.ips : []);
+        };
+        window.addEventListener("message", onMsg);
+        const iframe = document.createElement("iframe");
+        iframe.title = "lan-bridge";
+        iframe.style.cssText = "position:absolute;width:0;height:0;border:0;opacity:0";
+        iframe.src = `https://${keysHost}/static/network-lan-bridge.html`;
+        document.body.appendChild(iframe);
+        setTimeout(() => done(bridgeIps), 1200);
+      });
+    }
+
     (async () => {
       try {
         lanIp = await detectDeviceIp();
         if (lanIp) rememberIp(lanIp);
         await refresh();
+        // Circle keys live on keys.* — pull them across if WebRTC missed.
+        if ((!lanIp || state?.needs_device_ip) && state?.via_flint) {
+          await loadKeysBridge();
+          if (!lanIp && bridgeIps.length === 1) {
+            lanIp = bridgeIps[0];
+            rememberIp(lanIp);
+            await refresh();
+          } else {
+            render();
+          }
+        }
       } catch (err) {
         els.controlIp.textContent = "unavailable";
         els.meta.textContent = String(err?.message || err);

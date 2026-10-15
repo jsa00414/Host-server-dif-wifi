@@ -5157,8 +5157,12 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
 
     Root `/` must send iPhone/iPad to auth-app-iphone.html (Face ID / passkey
     flow). The Android page is a broken UX on iOS Safari.
+
+    network.* may iframe /static/network-lan-bridge.html to read circle LAN
+    IPs stored on this origin (localStorage is per-host).
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
+    network = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     lines = [
         f"{public} {{",
@@ -5177,11 +5181,18 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
         "\t\theader_up X-Forwarded-For {remote_host}",
         "\t\theader_up X-Real-IP {remote_host}",
         "\t}",
+        "\t@lan_bridge path /static/network-lan-bridge.html",
+        "\t@not_lan_bridge not path /static/network-lan-bridge.html",
+        "\theader @lan_bridge {",
+        f'\t\tContent-Security-Policy "frame-ancestors https://{network}"',
+        "\t}",
+        "\theader @not_lan_bridge {",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
+        "\t}",
         "\theader {",
         '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
         "\t\tX-Content-Type-Options nosniff",
         "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
         '\t\tAlt-Svc "clear"',
         "\t}",
         "}",
@@ -11291,9 +11302,7 @@ def _device_exit_control_ip(client_ip: str, lan_ip: str = "") -> str:
         return lan
     if client in infra:
         raise ValueError(
-            "Could not see this device's LAN IP (connection is via Flint VPN). "
-            "Stay on home Wi‑Fi and allow local network access, or open keys.vpstruelord.com "
-            "once so this browser stores your circle device IP."
+            "Connection is via Flint VPN — pick this device's 192.168.8.x Wi‑Fi IP below."
         )
     raise ValueError("Could not determine this device's IPv4 address")
 
@@ -11317,6 +11326,73 @@ def _global_exit_summary() -> str:
     return "direct"
 
 
+def _device_exit_candidate_ips() -> list[dict]:
+    """LAN devices the browser can pick when WebRTC/circle store cannot see 192.168.8.x.
+
+    Prefer circle-allowlisted LAN /32s, then currently-online DHCP/ARP hosts.
+    """
+    rows: dict[str, dict] = {}
+    online: set[str] = set()
+    try:
+        lan = read_lan_devices()
+        for d in lan.get("devices") or []:
+            if not isinstance(d, dict):
+                continue
+            ip = _normalize_vpn_ip(str(d.get("ip") or ""))
+            if not _is_home_lan_ipv4(ip):
+                continue
+            if d.get("online"):
+                online.add(ip)
+            rows[ip] = {
+                "ip": ip,
+                "label": str(d.get("hostname") or d.get("name") or ip),
+                "online": bool(d.get("online")),
+                "source": "lan",
+            }
+    except Exception:
+        pass
+    try:
+        for ip in sorted(_allowlisted_lan_ips()):
+            if not _is_home_lan_ipv4(ip):
+                continue
+            cur = rows.get(ip) or {
+                "ip": ip,
+                "label": ip,
+                "online": ip in online,
+                "source": "circle",
+            }
+            cur["source"] = "circle"
+            cur["online"] = bool(cur.get("online") or ip in online)
+            if cur.get("label") in {"", ip}:
+                # Prefer a friendlier name from allowlist when present.
+                try:
+                    data = _read_vpn_allowlist()
+                    for row in data.get("allowed") or []:
+                        if not isinstance(row, dict):
+                            continue
+                        if _normalize_vpn_ip(str(row.get("ip") or "")) != ip:
+                            continue
+                        name = str(row.get("name") or row.get("hostname") or "").strip()
+                        if name:
+                            cur["label"] = name
+                        break
+                except Exception:
+                    pass
+            rows[ip] = cur
+    except Exception:
+        pass
+    out = list(rows.values())
+    out.sort(
+        key=lambda r: (
+            0 if r.get("source") == "circle" else 1,
+            0 if r.get("online") else 1,
+            str(r.get("label") or ""),
+            str(r.get("ip") or ""),
+        )
+    )
+    return out
+
+
 def build_device_exit_status(
     *, client_ip: str, lan_ip: str = ""
 ) -> dict:
@@ -11324,6 +11400,7 @@ def build_device_exit_status(
     lan_n = _normalize_vpn_ip(lan_ip or "") if _is_home_lan_ipv4(lan_ip or "") else ""
     ts = _read_vpn_exit_state()
     ss_servers = list_surfshark_servers()
+    candidates = _device_exit_candidate_ips()
     base = {
         "ok": True,
         "client_ip": client_n,
@@ -11332,9 +11409,10 @@ def build_device_exit_status(
         "surfshark_servers": ss_servers,
         "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
         "global_exit": _global_exit_summary(),
-        "hosts": {"network": NETWORK_PUBLIC_HOST},
+        "hosts": {"network": NETWORK_PUBLIC_HOST, "keys": KEYS_PUBLIC_HOST},
         "needs_device_ip": False,
         "via_flint": client_n in _device_exit_infra_ips(),
+        "candidate_ips": candidates,
     }
     try:
         control_ip = _device_exit_control_ip(client_ip, lan_ip)
