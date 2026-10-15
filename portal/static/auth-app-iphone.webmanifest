@@ -2,7 +2,7 @@
   "name": "SM Auth iPhone",
   "short_name": "SM Auth",
   "description": "iPhone Authenticator for ServerManager",
-  "start_url": "/auth-app-iphone.html",
+  "start_url": "/auth-app-iphone.html?v=28",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

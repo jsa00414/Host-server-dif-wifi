@@ -1,5 +1,5 @@
 /* ServerManager iPhone Authenticator — offline cache */
-const CACHE = "sm-auth-iphone-v27";
+const CACHE = "sm-auth-iphone-v28";
 const ASSETS = [
   "/auth-app-iphone.html",
   "/static/auth-app-iphone.webmanifest",
@@ -13,15 +13,34 @@ const ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+    caches
+      .open(CACHE)
+      .then((cache) => cache.addAll(ASSETS))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    (async () => {
+      // Drop every Authenticator cache so stale layouts cannot stick.
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+      await caches.open(CACHE).then((cache) => cache.addAll(ASSETS));
+      await self.clients.claim();
+      const clients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      for (const client of clients) {
+        try {
+          client.postMessage({ type: "SM_AUTH_FORCE_RELOAD", cache: CACHE });
+        } catch (_) {}
+        try {
+          if (client.navigate) client.navigate(client.url);
+        } catch (_) {}
+      }
+    })()
   );
 });
 
@@ -29,18 +48,21 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // HTML always prefers network so layout fixes land immediately.
   const isHtml =
     req.mode === "navigate" ||
     req.destination === "document" ||
-    url.pathname.endsWith(".html");
+    url.pathname.endsWith(".html") ||
+    url.pathname.endsWith("-sw.js") ||
+    url.pathname.endsWith(".webmanifest");
+
+  // HTML / SW / manifest: always network-first so layout fixes land.
   if (isHtml) {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: "no-store" })
         .then((res) => {
           const copy = res.clone();
           if (res.ok) {
-            caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           }
           return res;
         })
@@ -48,18 +70,16 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+
   event.respondWith(
-    caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          if (res.ok && url.origin === self.location.origin) {
-            caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() => caches.match("/auth-app-iphone.html"));
-    })
+    fetch(req)
+      .then((res) => {
+        const copy = res.clone();
+        if (res.ok && url.origin === self.location.origin) {
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(() => caches.match(req))
   );
 });
