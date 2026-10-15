@@ -454,7 +454,7 @@
     async function open() {
       wireOnce();
       state = {
-        hosts: { keys: "keys.vpstruelord.com", network: "network.vpstruelord.com" },
+        hosts: { keys: "keys.vpstruelord.com" },
         needs_circle: true,
         circle_ok: false,
         circle_member: false,

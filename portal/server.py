@@ -4433,39 +4433,20 @@ def _cookie_parent_domain() -> str:
     return ""
 
 
-def ensure_network_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee network.vpstruelord.com (per-device Surfshark/Tailscale exit)."""
+def retire_network_hookup(rules: list[dict]) -> list[dict]:
+    """Drop network.vpstruelord.com — exit UI lives in Authenticator on keys.*."""
     domain = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
-    out = list(rules or [])
-    for i, r in enumerate(out):
-        if str(r.get("domain") or "").strip().lower() == domain:
-            out[i] = _normalize_hookup_rule(
-                {
-                    **r,
-                    "enabled": True,
-                    "domain": domain,
-                    "target_host": r.get("target_host") or DOCKER_HOST_GW,
-                    "target_port": int(r.get("target_port") or 5002),
-                    "name": "network-device-exit",
-                    "external": False,
-                    "vpn_only": False,
-                }
-            )
-            return out
-    out.append(
-        _normalize_hookup_rule(
-            {
-                "enabled": True,
-                "domain": domain,
-                "target_host": DOCKER_HOST_GW,
-                "target_port": 5002,
-                "name": "network-device-exit",
-                "external": False,
-                "vpn_only": False,
-            }
-        )
-    )
-    return out
+    return [
+        r
+        for r in (rules or [])
+        if str(r.get("domain") or "").strip().lower() != domain
+        and str(r.get("name") or "").strip().lower() != "network-device-exit"
+    ]
+
+
+def ensure_network_hookup(rules: list[dict]) -> list[dict]:
+    """Deprecated alias: network.* hostname is retired."""
+    return retire_network_hookup(rules)
 
 
 def ensure_keys_hookup(rules: list[dict]) -> list[dict]:
@@ -4512,7 +4493,7 @@ def ensure_managed_hookups(rules: list[dict]) -> list[dict]:
         if str(r.get("domain") or "").strip().lower() != "windows.vpstruelord.com"
         and str(r.get("name") or "").strip().lower() != "windows-rdp"
     ]
-    return ensure_network_hookup(
+    return retire_network_hookup(
         ensure_keys_hookup(
             ensure_grafana_hookup(ensure_plex_hookup(ensure_proxmox_hookup(out)))
         )
@@ -5154,10 +5135,9 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
     Root `/` must send iPhone/iPad to auth-app-iphone.html (Face ID / passkey
     flow). The Android page is a broken UX on iOS Safari.
 
-    Network exit UI is embedded in Authenticator; /network.html redirects here.
+    Network exit UI is embedded in Authenticator; legacy /network.html redirects here.
     """
     public = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
-    network = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
     upstream = f"{rule.get('target_host') or DOCKER_HOST_GW}:{int(rule.get('target_port') or 5002)}"
     lines = [
         f"{public} {{",
@@ -5176,18 +5156,11 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
         "\t\theader_up X-Forwarded-For {remote_host}",
         "\t\theader_up X-Real-IP {remote_host}",
         "\t}",
-        "\t@lan_bridge path /static/network-lan-bridge.html",
-        "\t@not_lan_bridge not path /static/network-lan-bridge.html",
-        "\theader @lan_bridge {",
-        f'\t\tContent-Security-Policy "frame-ancestors https://{network}"',
-        "\t}",
-        "\theader @not_lan_bridge {",
-        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
-        "\t}",
         "\theader {",
         '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
         "\t\tX-Content-Type-Options nosniff",
         "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        '\t\tContent-Security-Policy "frame-ancestors \'none\'"',
         '\t\tAlt-Svc "clear"',
         "\t}",
         "}",
@@ -5208,14 +5181,13 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
     if not active:
         lines.append("# (no managed domain hookups enabled)")
     keys_domain = (KEYS_PUBLIC_HOST or KEYS_HOST).strip().lower()
-    network_domain = (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower()
     for r in active:
         domain = r["domain"]
         if domain == keys_domain:
             lines.extend(_keys_hookup_site_lines(r))
             continue
-        if domain == network_domain:
-            lines.extend(_network_hookup_site_lines(r))
+        if domain == (NETWORK_PUBLIC_HOST or "network.vpstruelord.com").strip().lower():
+            # Retired hostname — skip even if a stale rule remains.
             continue
         if domain == ROUTER_PUBLIC_HOST.lower():
             lines.extend(_router_hookup_site_lines(r))
@@ -11500,7 +11472,7 @@ def build_device_exit_status(
         "surfshark_servers": ss_servers,
         "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
         "global_exit": _global_exit_summary(),
-        "hosts": {"network": NETWORK_PUBLIC_HOST, "keys": keys_host},
+        "hosts": {"keys": keys_host},
         "needs_device_ip": bool(member and not proven),
         "needs_circle": not member,
         "circle_ok": bool(proven),
