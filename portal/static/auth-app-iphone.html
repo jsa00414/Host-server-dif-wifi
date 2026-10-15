@@ -12,8 +12,8 @@
   <meta name="apple-mobile-web-app-title" content="SM Auth" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="format-detection" content="telephone=no" />
-  <meta name="sm-auth-layout" content="v32-center-brand" />
-  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=32" />
+  <meta name="sm-auth-layout" content="v33-circle-counts" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=33" />
   <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -23,7 +23,7 @@
   <script>
     /* Force-clear stale Authenticator SW/caches once so tab-bar layout can update. */
     (function () {
-      var MARK = "sm.auth.sw.bust.v32";
+      var MARK = "sm.auth.sw.bust.v33";
       try {
         if (sessionStorage.getItem(MARK) === "1") return;
       } catch (_) {}
@@ -38,7 +38,7 @@
       }
       try {
         /* Drop older bust markers so v31 always clears once. */
-        ["v28", "v29", "v30", "v31"].forEach(function (v) {
+        ["v28", "v29", "v30", "v31", "v32"].forEach(function (v) {
           localStorage.removeItem("sm.auth.sw.bust." + v);
         });
       } catch (_) {}
@@ -408,27 +408,6 @@
       font-size: .78rem;
       line-height: 1.4;
     }
-    .stat-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin: 0 0 12px;
-      flex: 0 0 auto;
-    }
-    .stat {
-      padding: 12px 4px 10px;
-      border-bottom: 1px solid var(--line);
-      background: transparent;
-    }
-    .stat label {
-      display: block;
-      color: var(--muted);
-      font-size: .62rem;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      margin-bottom: 4px;
-    }
-    .stat strong { font-size: 1.2rem; letter-spacing: -.02em; }
     .seg {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -451,6 +430,23 @@
       padding: 11px 8px 12px;
       font-size: .8rem;
       position: relative;
+    }
+    .seg button .tab-count {
+      display: inline-block;
+      margin-left: 6px;
+      min-width: 1.25em;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: inherit;
+      font-size: .72em;
+      font-weight: 700;
+      letter-spacing: 0;
+      vertical-align: 1px;
+    }
+    .seg button[aria-selected="true"] .tab-count {
+      background: rgba(47,227,154,.22);
+      color: #d8ffe9;
     }
     .seg button[aria-selected="true"] {
       background: transparent;
@@ -825,13 +821,9 @@
           <h3>Circle</h3>
           <p>Approve devices onto the home network, or move them back to pending.</p>
         </div>
-        <div class="stat-row">
-          <div class="stat"><label>Allowlisted</label><strong id="circleAllowedCount">0</strong></div>
-          <div class="stat"><label>Pending</label><strong id="circlePendingCount">0</strong></div>
-        </div>
         <div class="seg" role="tablist" aria-label="Circle lists">
-          <button type="button" id="circleTabPending" role="tab" aria-selected="true">Pending</button>
-          <button type="button" id="circleTabAllowed" role="tab" aria-selected="false">Allowed</button>
+          <button type="button" id="circleTabPending" role="tab" aria-selected="true">Pending <span class="tab-count" id="circlePendingCount">0</span></button>
+          <button type="button" id="circleTabAllowed" role="tab" aria-selected="false">Allowed <span class="tab-count" id="circleAllowedCount">0</span></button>
         </div>
         <div class="circle-list" id="circleList"><div class="circle-empty">Open Circle to load the list.</div></div>
         <div class="panel-foot">
@@ -1809,7 +1801,7 @@
     })();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
-        .register("/static/auth-app-iphone-sw.js?v=32")
+        .register("/static/auth-app-iphone-sw.js?v=33")
         .then((reg) => reg.update())
         .catch(() => {});
     }
