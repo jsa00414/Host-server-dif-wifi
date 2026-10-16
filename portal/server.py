@@ -14944,7 +14944,11 @@ def _run_vpn_peer_acl_sync() -> str:
 
 
 def verify_auth_app_totp(
-    code: str, *, purpose: str = "auth-app", consume: bool = True
+    code: str,
+    *,
+    purpose: str = "auth-app",
+    consume: bool = True,
+    window: int = 1,
 ) -> bool:
     """Validate a TOTP from the phone authenticator PWA against enrolled secrets.
 
@@ -14957,11 +14961,15 @@ def verify_auth_app_totp(
     include_pending = auth_app_device_enroll_unlocked()
     purpose_n = str(purpose or "auth-app").strip().lower() or "auth-app"
     legacy = str(st.get("totp_secret") or "").strip()
+    # Domain-gate apply tolerates a bit more phone clock skew than login.
+    win = max(1, min(3, int(window or 1)))
+    if purpose_n == "domain-access-gate":
+        win = max(win, 2)
     for secret in sm_auth.list_verifiable_totp_secrets(
         legacy, include_pending=include_pending
     ):
         if verify_and_consume_totp(
-            secret, code, purpose=purpose_n, window=1, consume=consume
+            secret, code, purpose=purpose_n, window=win, consume=consume
         ):
             return True
     return False
@@ -21841,19 +21849,32 @@ document.getElementById('f').onsubmit = async (e) => {
                     "router": payload.get("router") or {},
                 }
             hookups_in = payload.get("hookups") or {}
-            if "rules" in hookups_in and hookup_access_gates_changed(
+            gate_totp = ""
+            gates_need_code = "rules" in hookups_in and hookup_access_gates_changed(
                 hookups_in.get("rules") or []
-            ):
+            )
+            if gates_need_code:
                 # Changing VPN only / Circle only requires a fresh Authenticator code.
-                totp = str(
-                    self.headers.get("X-SM-Totp")
-                    or (payload.get("totp") if isinstance(payload, dict) else "")
-                    or ""
-                ).strip()
+                # Validate first without burning so a failed apply can retry the same code.
+                gate_totp = re.sub(
+                    r"\D+",
+                    "",
+                    str(
+                        self.headers.get("X-SM-Totp")
+                        or (payload.get("totp") if isinstance(payload, dict) else "")
+                        or ""
+                    ),
+                )
+                if len(gate_totp) != 6:
+                    raise ValueError(
+                        "Enter the current 6-digit Authenticator code to change "
+                        "VPN only / Circle only"
+                    )
                 require_auth_app_totp(
-                    totp,
+                    gate_totp,
                     client_ip=request_client_ip(self),
                     purpose="domain-access-gate",
+                    consume=False,
                 )
             result = write_and_apply(payload)
             # Ensure JSON-serializable summary always includes a top-level error hint
@@ -21867,12 +21888,30 @@ document.getElementById('f').onsubmit = async (e) => {
                         )
                 if bits and not result.get("error"):
                     result["error"] = " | ".join(bits)
+            elif gates_need_code and gate_totp:
+                # Burn only after a successful apply so retries keep working.
+                try:
+                    require_auth_app_totp(
+                        gate_totp,
+                        client_ip=request_client_ip(self),
+                        purpose="domain-access-gate",
+                        consume=True,
+                    )
+                except ValueError:
+                    # Apply already succeeded; ignore burn races (double-submit).
+                    pass
             self._json(200 if result["ok"] else 500, result)
         except PermissionError as exc:
             self._json(403, {"error": str(exc), "need_code": True})
         except ValueError as exc:
             msg = str(exc)
-            need = "authenticator code" in msg.lower() or "totp" in msg.lower() or "incorrect" in msg.lower()
+            need = (
+                "authenticator code" in msg.lower()
+                or "totp" in msg.lower()
+                or "incorrect" in msg.lower()
+                or "already-used" in msg.lower()
+                or "6-digit" in msg.lower()
+            )
             self._json(403 if need else 400, {"error": msg, "need_code": need})
         except Exception as exc:
             self._json(500, {"error": str(exc)})

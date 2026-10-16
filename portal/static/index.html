@@ -3555,22 +3555,28 @@
         renderHookups({ focusIdx: idx >= 0 ? idx : undefined });
         return;
       }
-      if (hookupAccessGatesChanged(hookupRules) && !codeFromPopup) {
+      const totpDigits = String(codeFromPopup || "").replace(/\D+/g, "").slice(0, 6);
+      if (hookupAccessGatesChanged(hookupRules) && totpDigits.length !== 6) {
         setStatus("Authenticator code required for VPN only / Circle only changes", "ok");
         openEmailCodePopup({
           title: "Authenticator code",
-          subtitle: "Changing VPN only or Circle only needs a fresh 6-digit Authenticator code (sign-in codes will not work).",
-          onSubmit: (c) => save(c),
+          subtitle: "Open Authenticator → Code tab, wait for a fresh 6-digit code, then paste it here. Wait for the timer to roll if a code was just used.",
+          onSubmit: (c) => {
+            if (window.__smGateSaveBusy) return;
+            save(c);
+          },
           onCancel: () => setStatus("Apply cancelled — access checkmarks not saved", "err"),
         });
         return;
       }
+      if (window.__smGateSaveBusy) return;
+      window.__smGateSaveBusy = true;
       [saveBtn, reloadBtn].forEach((b) => (b.disabled = true));
       setStatus("Applying…");
       showLog("Applying VPS, router, domains, and firewall…", true);
       try {
         const headers = {};
-        if (codeFromPopup) headers["X-SM-Totp"] = String(codeFromPopup).trim();
+        if (totpDigits) headers["X-SM-Totp"] = totpDigits;
         const result = await api("/api/forwards", {
           method: "PUT",
           headers,
@@ -3579,7 +3585,7 @@
             router: { dmz_ip: dmzIpEl.value.trim(), rules: routerRules },
             hookups: { rules: hookupRules },
             firewall: { rules: fwRules },
-            ...(codeFromPopup ? { totp: String(codeFromPopup).trim() } : {}),
+            ...(totpDigits ? { totp: totpDigits } : {}),
           }),
           timeoutMs: 180000,
         });
@@ -3602,12 +3608,17 @@
         setStatus(result.ok ? "Applied" : "Apply errors", result.ok ? "ok" : "err");
       } catch (err) {
         const msg = String(err.message || err);
-        if (/authenticator code|incorrect|missing|already-used|need_code/i.test(msg)) {
+        if (/authenticator code|incorrect|missing|already-used|need_code|6-digit/i.test(msg)) {
           setStatus(msg, "err");
           openEmailCodePopup({
             title: "Authenticator code",
-            subtitle: msg || "Enter a fresh 6-digit Authenticator code to apply access checkmark changes.",
-            onSubmit: (c) => save(c),
+            subtitle: /already-used/i.test(msg)
+              ? "That code was already used. Wait for Authenticator to show a new 6-digit code, then try again."
+              : (msg || "Enter the current 6-digit Authenticator code (Code tab)."),
+            onSubmit: (c) => {
+              if (window.__smGateSaveBusy) return;
+              save(c);
+            },
             onCancel: () => setStatus("Apply cancelled — access checkmarks not saved", "err"),
           });
           return;
@@ -3633,6 +3644,7 @@
         setStatus(msg || "Save failed", "err");
         showLog(msg, true);
       } finally {
+        window.__smGateSaveBusy = false;
         [saveBtn, reloadBtn].forEach((b) => (b.disabled = false));
       }
     }
