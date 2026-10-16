@@ -4316,6 +4316,12 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
         out["name"] = str(out.get("name") or "grafana").strip() or "grafana"
+    # Circle-only is stricter than VPN-only; keep both flags consistent.
+    if _as_bool(out.get("circle_only", False)):
+        out["circle_only"] = True
+        out["vpn_only"] = True
+    else:
+        out["circle_only"] = False
     return out
 
 
@@ -4574,18 +4580,14 @@ def _router_hookup_site_lines(rule: dict) -> list[str]:
     proxy_host = OVPN_FLINT_VPN_IP or lan_host
     port = int(rule.get("target_port") or 80)
     public = ROUTER_PUBLIC_HOST
-    vpn_only = rule.get("vpn_only", True)
-    if isinstance(vpn_only, str):
-        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        vpn_only = bool(vpn_only)
+    vpn_only = _hookup_is_access_gated(rule)
     lines = [
         f"{public} {{",
         "\tencode gzip",
     ]
     if vpn_only:
         lines.extend(_caddy_denied_wan_lines("\t"))
-        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        lines.append(f"\t@vpn_clients client_ip {_hookup_client_ip_cidrs(rule)}")
         lines.append("\thandle @vpn_clients {")
         indent = "\t\t"
     else:
@@ -4634,17 +4636,13 @@ def _proxmox_hookup_site_lines(rule: dict) -> list[str]:
     host = PROXMOX_HOST
     port = int(rule.get("target_port") or PROXMOX_PORT)
     public = PROXMOX_PUBLIC_HOST
-    vpn_only = rule.get("vpn_only", True)
-    if isinstance(vpn_only, str):
-        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        vpn_only = bool(vpn_only)
+    vpn_only = _hookup_is_access_gated(rule)
     lines = [
         f"{public} {{",
     ]
     if vpn_only:
         lines.extend(_caddy_denied_wan_lines("\t"))
-        lines.append(f"\t@vpn_clients client_ip {effective_vpn_client_cidrs()}")
+        lines.append(f"\t@vpn_clients client_ip {_hookup_client_ip_cidrs(rule)}")
         lines.append("\thandle @vpn_clients {")
         indent = "\t\t"
     else:
@@ -4731,11 +4729,7 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     host = PLEX_HOST
     port = int(rule.get("target_port") or PLEX_PORT)
     public = PLEX_PUBLIC_HOST
-    vpn_only = rule.get("vpn_only", True)
-    if isinstance(vpn_only, str):
-        vpn_only = vpn_only.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        vpn_only = bool(vpn_only)
+    vpn_only = _hookup_is_access_gated(rule)
     machine = _plex_machine_identifier()
     admin = _plex_local_admin_token()
     claimed = _plex_is_claimed()
@@ -4782,9 +4776,12 @@ def _plex_hookup_site_lines(rule: dict) -> list[str]:
     lines = [f"{public} {{"]
     if vpn_only:
         lines.extend(_caddy_denied_wan_lines("\t"))
-        # Home LAN (/24) always reaches Plex even for out-of-circle devices;
-        # portal/admin stay gated by /32 allowlist. Still block campus WAN.
-        plex_clients = f"{effective_vpn_client_cidrs()} 192.168.8.0/24".strip()
+        # VPN-only: home LAN (/24) still reaches Plex for out-of-circle devices.
+        # Circle-only: sticky /32s only — do not blanket the LAN.
+        if _as_bool(rule.get("circle_only", False)):
+            plex_clients = _hookup_client_ip_cidrs(rule)
+        else:
+            plex_clients = f"{_hookup_client_ip_cidrs(rule)} 192.168.8.0/24".strip()
         lines.append(f"\t@vpn_clients client_ip {plex_clients}")
         lines.append("\thandle @vpn_clients {")
     lines.extend(
@@ -5084,6 +5081,11 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
             name = str(rule.get("name", f"hook{i+1}")).strip() or f"hook{i+1}"
             external = bool(rule.get("external", False))
             vpn_only = _as_bool(rule.get("vpn_only", False))
+            circle_only = _as_bool(rule.get("circle_only", False))
+            # Circle-only is a stricter gate; keep vpn_only true when circle is on
+            # so existing Caddy generators that only check vpn_only still gate.
+            if circle_only:
+                vpn_only = True
             target_hosts_raw = rule.get("target_hosts")
             target_hosts: list[str] = []
             if isinstance(target_hosts_raw, list):
@@ -5125,6 +5127,7 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
             "name": name,
             "external": external,
             "vpn_only": vpn_only,
+            "circle_only": circle_only,
         }
         if target_hosts:
             entry["target_hosts"] = target_hosts
@@ -5140,6 +5143,94 @@ def _as_bool(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _hookup_is_access_gated(rule: dict) -> bool:
+    """True when the domain must be IP-gated (VPN and/or trust circle)."""
+    return _as_bool(rule.get("circle_only", False)) or _as_bool(rule.get("vpn_only", False))
+
+
+def effective_circle_client_cidrs() -> str:
+    """Trust-circle /32s only for @vpn_clients (no broad VPN/Tailscale pools).
+
+    Used when a domain hookup has circle_only=true — sticky/allowlisted members
+    plus infra loopbacks the proxy itself needs.
+    """
+    denied = set(_denied_vpn_ips())
+    toks: list[str] = []
+    seen: set[str] = set()
+
+    def _add(tok: str) -> None:
+        tok = (tok or "").strip()
+        if not tok or tok in seen:
+            return
+        # Circle gate is /32-only — never admit a whole LAN or VPN pool.
+        if not tok.endswith("/32"):
+            return
+        host = _cidr_host(tok)
+        if host in denied:
+            return
+        seen.add(tok)
+        toks.append(tok)
+
+    try:
+        if STICKY_VPN_IPS_PATH.is_file():
+            for line in STICKY_VPN_IPS_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                _add(line if "/" in line else f"{line}/32")
+    except Exception:
+        pass
+    allowlisted_ovpn: set[str] = set()
+    try:
+        for row in (_read_vpn_allowlist().get("allowed") or []):
+            if not isinstance(row, dict):
+                continue
+            ip = _normalize_vpn_ip(row.get("ip", ""))
+            if ip and _is_openvpn_client_ipv4(ip):
+                allowlisted_ovpn.add(ip)
+    except Exception:
+        allowlisted_ovpn = set()
+    sealed = set()
+    try:
+        sealed = set(_sealed_vpn_ips())
+    except Exception:
+        sealed = set()
+    for ip in sorted(
+        _allowlisted_public_ips() | _allowlisted_lan_ips() | allowlisted_ovpn | sealed
+    ):
+        if ip in denied:
+            continue
+        _add(f"{ip}/32")
+    for req in (
+        "127.0.0.1/32",
+        "74.208.76.213/32",
+        "10.11.0.1/32",
+        "10.9.0.2/32",
+    ):
+        _add(req)
+    return " ".join(toks) if toks else "127.0.0.1/32 10.9.0.2/32"
+
+
+def _hookup_client_ip_cidrs(rule: dict, *, extra: str = "") -> str:
+    """CIDR list for a gated hookup: circle_only beats vpn_only breadth."""
+    if _as_bool(rule.get("circle_only", False)):
+        base = effective_circle_client_cidrs()
+    else:
+        base = effective_vpn_client_cidrs()
+    extra = (extra or "").strip()
+    if not extra:
+        return base
+    # De-dupe while preserving order.
+    out: list[str] = []
+    seen: set[str] = set()
+    for tok in f"{base} {extra}".split():
+        if tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return " ".join(out)
 
 
 def _network_hookup_site_lines(rule: dict) -> list[str]:
@@ -5217,10 +5308,12 @@ def _keys_hookup_site_lines(rule: dict) -> list[str]:
 
 def serialize_hookups_caddy(rules: list[dict]) -> str:
     vpn_cidrs = effective_vpn_client_cidrs()
+    circle_cidrs = effective_circle_client_cidrs()
     lines = [
         HOOKUPS_BEGIN,
         "# managed by ServerManager — do not edit by hand",
         f"# vpn_only allows: {vpn_cidrs}",
+        f"# circle_only allows: {circle_cidrs}",
     ]
     # Never rewrite external/pre-existing Caddy sites into this block
     active = [r for r in rules if r.get("enabled", True) and not r.get("external")]
@@ -5289,8 +5382,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             # NXDOMAIN is the primary “site can’t be reached” path).
             lines.append("\t@nasmedia path /nas-files/rpc/cat* /nas-files/rpc/download* /nas-files/rpc/thumbnail*")
             lines.append("\thandle @nasmedia {")
-            if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
+            if _hookup_is_access_gated(r):
+                gate_cidrs = _hookup_client_ip_cidrs(r)
+                lines.append(f"\t\t@vpn_clients client_ip {gate_cidrs}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -5336,8 +5430,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
-            if r.get("vpn_only"):
-                lines.append(f"\t\t@vpn_clients client_ip {vpn_cidrs}")
+            if _hookup_is_access_gated(r):
+                gate_cidrs = _hookup_client_ip_cidrs(r)
+                lines.append(f"\t\t@vpn_clients client_ip {gate_cidrs}")
                 lines.append("\t\thandle @vpn_clients {")
                 lines.append(f"\t\t\treverse_proxy {r['target_host']}:{r['target_port']} {{")
                 lines.append("\t\t\t\theader_up Host {host}")
@@ -5361,10 +5456,11 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t}")
         else:
             lines.append("\tencode gzip")
-            if r.get("vpn_only"):
+            if _hookup_is_access_gated(r):
                 # VPN hairpin: wg clients reach VPS:443 with source 10.8.x (requires CF DNS-only).
+                gate_cidrs = _hookup_client_ip_cidrs(r)
                 lines.extend(_caddy_denied_wan_lines("\t"))
-                lines.append(f"\t@vpn_clients client_ip {vpn_cidrs}")
+                lines.append(f"\t@vpn_clients client_ip {gate_cidrs}")
                 lines.append("\thandle @vpn_clients {")
                 lines.extend(_hookup_reverse_proxy_lines(r, indent="\t\t"))
                 lines.append("\t}")
@@ -8730,17 +8826,67 @@ def _security_domain_exposure() -> list[dict]:
             continue
         if domain not in sensitive:
             continue
+        circle_only = bool(r.get("circle_only"))
+        vpn_only = bool(r.get("vpn_only")) or circle_only
+        if circle_only:
+            risk = "ok"
+        elif vpn_only:
+            risk = "ok"
+        else:
+            risk = "high"
         out.append(
             {
                 "domain": domain,
                 "name": r.get("name") or "",
                 "enabled": bool(r.get("enabled", True)),
-                "vpn_only": bool(r.get("vpn_only")),
+                "vpn_only": vpn_only,
+                "circle_only": circle_only,
                 "target": f"{r.get('target_host')}:{r.get('target_port')}",
-                "risk": "ok" if r.get("vpn_only") else "high",
+                "risk": risk,
             }
         )
     return out
+
+
+def _hookup_access_gate_fingerprint(rules: list[dict]) -> dict[str, tuple[bool, bool]]:
+    """domain -> (vpn_only, circle_only) for managed rules."""
+    out: dict[str, tuple[bool, bool]] = {}
+    for r in rules or []:
+        if not isinstance(r, dict) or r.get("external"):
+            continue
+        domain = str(r.get("domain") or "").strip().lower()
+        if not domain:
+            continue
+        out[domain] = (
+            _as_bool(r.get("vpn_only", False)),
+            _as_bool(r.get("circle_only", False)),
+        )
+    return out
+
+
+def hookup_access_gates_changed(new_rules: list[dict], old_rules: list[dict] | None = None) -> bool:
+    """True when VPN-only / Circle-only checkmarks changed (needs Authenticator code)."""
+    if old_rules is None:
+        try:
+            old_rules = (read_hookups_state().get("rules") or [])
+        except Exception:
+            old_rules = []
+    old_fp = _hookup_access_gate_fingerprint(old_rules)
+    new_fp = _hookup_access_gate_fingerprint(new_rules)
+    if old_fp != new_fp:
+        # Ignore brand-new public domains (both flags false) — only gate toggles.
+        for domain, flags in new_fp.items():
+            prev = old_fp.get(domain)
+            if prev is None:
+                if flags != (False, False):
+                    return True
+                continue
+            if prev != flags:
+                return True
+        for domain in old_fp:
+            if domain not in new_fp and old_fp[domain] != (False, False):
+                return True
+    return False
 
 
 def build_security_status() -> dict:
@@ -21694,6 +21840,21 @@ document.getElementById('f').onsubmit = async (e) => {
                     "vps": {"rules": payload.get("rules"), "comments": payload.get("comments")},
                     "router": payload.get("router") or {},
                 }
+            hookups_in = payload.get("hookups") or {}
+            if "rules" in hookups_in and hookup_access_gates_changed(
+                hookups_in.get("rules") or []
+            ):
+                # Changing VPN only / Circle only requires a fresh Authenticator code.
+                totp = str(
+                    self.headers.get("X-SM-Totp")
+                    or (payload.get("totp") if isinstance(payload, dict) else "")
+                    or ""
+                ).strip()
+                require_auth_app_totp(
+                    totp,
+                    client_ip=request_client_ip(self),
+                    purpose="domain-access-gate",
+                )
             result = write_and_apply(payload)
             # Ensure JSON-serializable summary always includes a top-level error hint
             if not result.get("ok"):
@@ -21707,8 +21868,12 @@ document.getElementById('f').onsubmit = async (e) => {
                 if bits and not result.get("error"):
                     result["error"] = " | ".join(bits)
             self._json(200 if result["ok"] else 500, result)
+        except PermissionError as exc:
+            self._json(403, {"error": str(exc), "need_code": True})
         except ValueError as exc:
-            self._json(400, {"error": str(exc)})
+            msg = str(exc)
+            need = "authenticator code" in msg.lower() or "totp" in msg.lower() or "incorrect" in msg.lower()
+            self._json(403 if need else 400, {"error": msg, "need_code": need})
         except Exception as exc:
             self._json(500, {"error": str(exc)})
 

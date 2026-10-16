@@ -1370,8 +1370,15 @@
         flex-wrap: nowrap;
         gap: 6px;
       }
-      .top-right .actions #reloadBtn,
-      .top-right .actions #saveBtn { display: none; }
+      .top-right .actions #reloadBtn { display: none; }
+      .top-right .actions #saveBtn {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 6px 10px;
+        font-size: .72rem;
+        white-space: nowrap;
+      }
       .top-right .actions #logoutBtn {
         min-height: 34px;
         padding: 6px 10px;
@@ -2639,6 +2646,8 @@
     let vpsRules = [];
     let routerRules = [];
     let hookupRules = [];
+    /** Snapshot of domain access gates after last successful load/apply (for code approval). */
+    let hookupAccessBaseline = {};
     let fwRules = [];
     let fwInfo = {};
     let lanDevices = [];
@@ -3223,15 +3232,20 @@
     function readHookupForm() {
       return [...document.querySelectorAll("#hookupMine .rule, #hookupSystem .rule")]
         .sort((a, b) => Number(a.dataset.idx) - Number(b.dataset.idx))
-        .map((el) => ({
-          enabled: el.querySelector('[data-k="enabled"]').checked,
-          vpn_only: el.querySelector('[data-k="vpn_only"]').checked,
-          domain: el.querySelector('[data-k="domain"]').value.trim(),
-          target_host: el.querySelector('[data-k="target_host"]').value.trim(),
-          target_port: el.querySelector('[data-k="target_port"]').value.trim(),
-          name: el.querySelector('[data-k="name"]').value.trim(),
-          external: el.dataset.external === "1",
-        }));
+        .map((el) => {
+          const circleOnly = !!el.querySelector('[data-k="circle_only"]')?.checked;
+          const vpnOnly = circleOnly || !!el.querySelector('[data-k="vpn_only"]')?.checked;
+          return {
+            enabled: el.querySelector('[data-k="enabled"]').checked,
+            vpn_only: vpnOnly,
+            circle_only: circleOnly,
+            domain: el.querySelector('[data-k="domain"]').value.trim(),
+            target_host: el.querySelector('[data-k="target_host"]').value.trim(),
+            target_port: el.querySelector('[data-k="target_port"]').value.trim(),
+            name: el.querySelector('[data-k="name"]').value.trim(),
+            external: el.dataset.external === "1",
+          };
+        });
     }
     function readFwForm() {
       return [...document.querySelectorAll("#fwMine .rule, #fwSystem .rule")]
@@ -3339,11 +3353,17 @@
         el.className = "rule" + (locked ? " locked" : "") + (rule.enabled === false ? " off" : "");
         el.dataset.idx = String(idx);
         if (locked) el.dataset.external = "1";
+        const circleOnly = !!rule.circle_only;
+        const vpnOnly = circleOnly || !!rule.vpn_only;
+        const accessChip = circleOnly
+          ? chip("circle", "warn")
+          : chip(vpnOnly ? "VPN" : "public", vpnOnly ? "warn" : "ok");
         el.innerHTML = `
           <div class="rule-top">
             <label class="rule-check"><input data-k="enabled" type="checkbox" ${rule.enabled !== false ? "checked" : ""} ${locked ? "disabled" : ""} /> On</label>
-            <label class="rule-check" title="Checked = WireGuard/LAN only"><input data-k="vpn_only" type="checkbox" ${rule.vpn_only ? "checked" : ""} ${locked ? "disabled" : ""} /> VPN only</label>
-            ${chip(rule.vpn_only ? "VPN" : "public", rule.vpn_only ? "warn" : "ok")}
+            <label class="rule-check" title="Checked = WireGuard / VPN pools (Authenticator code required to apply)"><input data-k="vpn_only" type="checkbox" ${vpnOnly ? "checked" : ""} ${locked || circleOnly ? "disabled" : ""} /> VPN only</label>
+            <label class="rule-check" title="Checked = trust-circle sticky IPs only — stricter than VPN only (Authenticator code required to apply)"><input data-k="circle_only" type="checkbox" ${circleOnly ? "checked" : ""} ${locked ? "disabled" : ""} /> Circle only</label>
+            ${accessChip}
             ${locked ? chip("existing Caddy", "warn") : ""}
             ${locked ? "" : `<button type="button" class="ghost danger" data-del-h="${idx}">Remove</button>`}
           </div>
@@ -3366,8 +3386,16 @@
       mine.querySelectorAll("[data-del-h]").forEach((btn) => btn.addEventListener("click", () => {
         hookupRules = readHookupForm(); hookupRules.splice(Number(btn.dataset.delH), 1); renderHookups(); updateCounts();
       }));
-      document.querySelectorAll('#hookupMine [data-k="vpn_only"], #hookupMine [data-k="enabled"]').forEach((el) => {
-        el.addEventListener("change", () => { hookupRules = readHookupForm(); renderHookups(); });
+      document.querySelectorAll('#hookupMine [data-k="vpn_only"], #hookupMine [data-k="circle_only"], #hookupMine [data-k="enabled"]').forEach((el) => {
+        el.addEventListener("change", () => {
+          // Circle only implies VPN only visually; Apply still needs Authenticator code.
+          if (el.dataset.k === "circle_only" && el.checked) {
+            const vpn = el.closest(".rule")?.querySelector('[data-k="vpn_only"]');
+            if (vpn) vpn.checked = true;
+          }
+          hookupRules = readHookupForm();
+          renderHookups();
+        });
       });
       bindIpPickers();
       updateCounts();
@@ -3438,6 +3466,7 @@
       vpsRules = data.vps?.rules || [];
       routerRules = data.router?.rules || [];
       hookupRules = data.hookups?.rules || [];
+      hookupAccessBaseline = hookupAccessFingerprint(hookupRules);
       fwInfo = data.firewall || {};
       fwRules = fwInfo.rules || [];
       lanDevices = data.lan_devices?.devices || [];
@@ -3474,9 +3503,34 @@
       }
     }
 
-    async function save() {
+    function hookupAccessFingerprint(rules) {
+      const out = {};
+      (rules || []).forEach((r) => {
+        if (!r || r.external) return;
+        const domain = String(r.domain || "").trim().toLowerCase();
+        if (!domain) return;
+        out[domain] = `${!!r.vpn_only}|${!!r.circle_only}`;
+      });
+      return out;
+    }
+    function hookupAccessGatesChanged(nextRules) {
+      const next = hookupAccessFingerprint(nextRules);
+      const prev = hookupAccessBaseline || {};
+      const domains = new Set([...Object.keys(next), ...Object.keys(prev)]);
+      for (const domain of domains) {
+        const a = next[domain];
+        const b = prev[domain];
+        if (a === b) continue;
+        if (a == null && b === "false|false") continue;
+        if (b == null && a === "false|false") continue;
+        return true;
+      }
+      return false;
+    }
+
+    async function save(codeFromPopup) {
       const prefs = readSettingsPrefs();
-      if (prefs.confirmSave) {
+      if (!codeFromPopup && prefs.confirmSave) {
         const ok = window.confirm("Apply Internet / Domains / Firewall / Router changes now?");
         if (!ok) return;
       }
@@ -3501,23 +3555,39 @@
         renderHookups({ focusIdx: idx >= 0 ? idx : undefined });
         return;
       }
+      if (hookupAccessGatesChanged(hookupRules) && !codeFromPopup) {
+        setStatus("Authenticator code required for VPN only / Circle only changes", "ok");
+        openEmailCodePopup({
+          title: "Authenticator code",
+          subtitle: "Changing VPN only or Circle only needs a fresh 6-digit Authenticator code (sign-in codes will not work).",
+          onSubmit: (c) => save(c),
+          onCancel: () => setStatus("Apply cancelled — access checkmarks not saved", "err"),
+        });
+        return;
+      }
       [saveBtn, reloadBtn].forEach((b) => (b.disabled = true));
       setStatus("Applying…");
       showLog("Applying VPS, router, domains, and firewall…", true);
       try {
+        const headers = {};
+        if (codeFromPopup) headers["X-SM-Totp"] = String(codeFromPopup).trim();
         const result = await api("/api/forwards", {
           method: "PUT",
+          headers,
           body: JSON.stringify({
             vps: { rules: vpsRules, comments },
             router: { dmz_ip: dmzIpEl.value.trim(), rules: routerRules },
             hookups: { rules: hookupRules },
             firewall: { rules: fwRules },
+            ...(codeFromPopup ? { totp: String(codeFromPopup).trim() } : {}),
           }),
           timeoutMs: 180000,
         });
+        closeEmailCodePopup();
         vpsRules = result.vps?.rules || vpsRules;
         routerRules = result.router?.rules || routerRules;
         hookupRules = result.hookups?.rules || hookupRules;
+        hookupAccessBaseline = hookupAccessFingerprint(hookupRules);
         fwInfo = result.firewall || fwInfo;
         fwRules = fwInfo.rules || fwRules;
         if (result.router?.dmz_ip) dmzIpEl.value = result.router.dmz_ip;
@@ -3532,6 +3602,16 @@
         setStatus(result.ok ? "Applied" : "Apply errors", result.ok ? "ok" : "err");
       } catch (err) {
         const msg = String(err.message || err);
+        if (/authenticator code|incorrect|missing|already-used|need_code/i.test(msg)) {
+          setStatus(msg, "err");
+          openEmailCodePopup({
+            title: "Authenticator code",
+            subtitle: msg || "Enter a fresh 6-digit Authenticator code to apply access checkmark changes.",
+            onSubmit: (c) => save(c),
+            onCancel: () => setStatus("Apply cancelled — access checkmarks not saved", "err"),
+          });
+          return;
+        }
         // Caddy reload/restart used to drop the HTTPS session mid-save. Recover by
         // reloading state so a successful apply is not shown as a hard failure.
         if (/abort|timeout|failed to fetch|network|disconnect|load failed/i.test(msg)) {
@@ -3581,6 +3661,7 @@
       hookupRules.push({
         enabled: true,
         vpn_only: false,
+        circle_only: false,
         domain: "",
         target_host: dmzIpEl.value || "192.168.8.159",
         target_port: "80",
@@ -4250,11 +4331,12 @@
         if (!rows.length) {
           domEl.innerHTML = `<div class="sec-empty">No sensitive domains in hookups.</div>`;
         } else {
-          domEl.innerHTML = `<table class="sec-table"><thead><tr><th>Risk</th><th>Domain</th><th>VPN only</th><th>Target</th></tr></thead><tbody>${
+          domEl.innerHTML = `<table class="sec-table"><thead><tr><th>Risk</th><th>Domain</th><th>VPN only</th><th>Circle only</th><th>Target</th></tr></thead><tbody>${
             rows.map((d) => `<tr>
               <td>${secSev(d.risk)}</td>
               <td><code>${escHtml(d.domain)}</code></td>
-              <td>${d.vpn_only ? "yes" : "no"}</td>
+              <td>${d.vpn_only || d.circle_only ? "yes" : "no"}</td>
+              <td>${d.circle_only ? "yes" : "no"}</td>
               <td class="sec-users">${escHtml(d.target || "")}</td>
             </tr>`).join("")
           }</tbody></table>`;
