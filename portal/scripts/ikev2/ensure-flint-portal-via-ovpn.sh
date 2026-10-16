@@ -183,10 +183,32 @@ if command -v socat >/dev/null 2>&1; then
   /etc/init.d/cron reload 2>/dev/null || true
 fi
 
+# Key-bound LAN: skip GL.iNet VPN DNS REDIRECT→:4153 (policy_redirect). That path
+# breaks Windows nslookup / resolver intermittently (conntrack zone + checksum),
+# which then leaves Chrome on public DoH → portal ERR_CONNECTION_TIMED_OUT.
+# Mark DNS 0x8000 so zone_lan_input lan_drop_leaked_dns accepts :53 without 4153.
+while iptables -t nat -S dns_dispatcher 2>/dev/null | grep -q SM-LAN-DNS-DIRECT; do
+  line="$(iptables -t nat -S dns_dispatcher | grep SM-LAN-DNS-DIRECT | head -1)"
+  eval "iptables -t nat ${{line/-A/-D}}" 2>/dev/null || break
+done
+if iptables -t mangle -L SM-LAN-GUEST-DNS -n >/dev/null 2>&1; then
+  while iptables -t mangle -S SM-LAN-GUEST-DNS 2>/dev/null | grep -q SM-LAN-DNS-DIRECT; do
+    line="$(iptables -t mangle -S SM-LAN-GUEST-DNS | grep SM-LAN-DNS-DIRECT | head -1)"
+    eval "iptables -t mangle ${{line/-A/-D}}" 2>/dev/null || break
+  done
+fi
+
 count=0
 for ip in $LAN_IPS; do
   [ -n "$ip" ] || continue
   count=$((count+1))
+  if iptables -t mangle -L SM-LAN-GUEST-DNS -n >/dev/null 2>&1; then
+    iptables -t mangle -I SM-LAN-GUEST-DNS 1 -s "$ip"/32 -p udp --dport 53 -m comment --comment SM-LAN-DNS-DIRECT -j MARK --set-xmark 0x8000/0xf000
+    iptables -t mangle -I SM-LAN-GUEST-DNS 1 -s "$ip"/32 -p tcp --dport 53 -m comment --comment SM-LAN-DNS-DIRECT -j MARK --set-xmark 0x8000/0xf000
+  fi
+  if iptables -t nat -L dns_dispatcher -n >/dev/null 2>&1; then
+    iptables -t nat -I dns_dispatcher 1 -s "$ip"/32 -m comment --comment SM-LAN-DNS-DIRECT -j RETURN
+  fi
   # HTTPS via local relay (not DNAT+FORWARD) — fixes Surface/Windows TLS timeout
   if command -v socat >/dev/null 2>&1; then
     iptables -t nat -I PREROUTING 1 -s "$ip"/32 -d "$VIP"/32 -p tcp --dport 443 -m comment --comment SM-PORTAL-RELAY -j REDIRECT --to-ports ${{RELAY_PORT}}
