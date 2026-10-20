@@ -22,8 +22,17 @@ Put these in `/opt/truemail/.env` (or the portal env):
 
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM_NUMBER` (E.164)
+- `TWILIO_FROM_NUMBER` (E.164) and/or `TWILIO_MESSAGING_SERVICE_SID`
 - `SMS_CODE_TO` (E.164 destination)
+
+US long codes need an approved **A2P 10DLC** brand/campaign (Twilio error `30034` otherwise).
+
+Apply on the VPS (with SSH access):
+
+```bash
+set -a; source ./twilio.env; set +a
+VPS=root@74.208.76.213 ./portal/scripts/configure-twilio-truemail.sh
+```
 
 Smoke test: `/sms-code-test.html` → `POST /api/sms-code/send` + `/api/sms-code/verify`.
 

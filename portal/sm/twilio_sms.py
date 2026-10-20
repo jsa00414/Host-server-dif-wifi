@@ -65,12 +65,17 @@ def from_number() -> str:
     return _env("TWILIO_FROM_NUMBER") or _env("TWILIO_PHONE_NUMBER")
 
 
+def messaging_service_sid() -> str:
+    return _env("TWILIO_MESSAGING_SERVICE_SID")
+
+
 def to_number() -> str:
     return _env("SMS_CODE_TO") or _env("TWILIO_TO_NUMBER")
 
 
 def configured() -> bool:
-    return bool(account_sid() and auth_token() and from_number() and to_number())
+    sender_ok = bool(messaging_service_sid() or from_number())
+    return bool(account_sid() and auth_token() and sender_ok and to_number())
 
 
 def normalize_e164(value: str) -> str:
@@ -100,21 +105,27 @@ def send_sms(body: str, *, to: str | None = None) -> dict[str, Any]:
     sid = account_sid()
     token = auth_token()
     sender = normalize_e164(from_number())
+    service = messaging_service_sid()
     dest = normalize_e164(to or to_number())
-    if not (sid and token and sender and dest):
+    if not (sid and token and dest and (service or sender)):
         raise RuntimeError(
             "Twilio SMS not configured "
-            "(set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, "
-            "SMS_CODE_TO in the portal env or /opt/truemail/.env)"
+            "(set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, SMS_CODE_TO, and "
+            "TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER in the portal "
+            "env or /opt/truemail/.env)"
         )
     text = str(body or "").strip()
     if not text:
         raise ValueError("SMS body is empty")
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
-    form = urllib.parse.urlencode(
-        {"To": dest, "From": sender, "Body": text}
-    ).encode("utf-8")
+    fields: dict[str, str] = {"To": dest, "Body": text}
+    # Prefer Messaging Service (A2P / campaign routing) when configured.
+    if service:
+        fields["MessagingServiceSid"] = service
+    else:
+        fields["From"] = sender
+    form = urllib.parse.urlencode(fields).encode("utf-8")
     req = urllib.request.Request(url, data=form, method="POST")
     basic = base64.b64encode(f"{sid}:{token}".encode("utf-8")).decode("ascii")
     req.add_header("Authorization", f"Basic {basic}")
@@ -150,5 +161,6 @@ def send_sms(body: str, *, to: str | None = None) -> dict[str, Any]:
         "sid": message_sid,
         "to": dest,
         "from": sender,
+        "messaging_service_sid": service,
         "status": status,
     }
