@@ -23,13 +23,16 @@ if [[ -n "${VPS_SSH_KEY_FILE:-}" && -f "${VPS_SSH_KEY_FILE}" ]]; then
 fi
 
 echo "Deploying portal to ${VPS}:${REMOTE_UI} …"
-ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static ${REMOTE_UI}/scripts/nas"
+ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static ${REMOTE_UI}/sm ${REMOTE_UI}/scripts/nas"
 scp "${SSH_OPTS[@]}" "$ROOT/server.py" "${VPS}:${REMOTE_UI}/server.py"
 scp "${SSH_OPTS[@]}" "$ROOT/media_tmdb.py" "${VPS}:${REMOTE_UI}/media_tmdb.py"
+scp "${SSH_OPTS[@]}" "$ROOT/sm/__init__.py" "$ROOT/sm/auth.py" "$ROOT/sm/nas.py" "$ROOT/sm/vpn_circle.py" "$ROOT/sm/twilio_sms.py" "${VPS}:${REMOTE_UI}/sm/"
 scp "${SSH_OPTS[@]}" "$ROOT/static/index.html" "${VPS}:${REMOTE_UI}/static/index.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/login.html" "${VPS}:${REMOTE_UI}/static/login.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/files.html" "${VPS}:${REMOTE_UI}/static/files.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/nas-windows.html" "${VPS}:${REMOTE_UI}/static/nas-windows.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/email-code-test.html" "${VPS}:${REMOTE_UI}/static/email-code-test.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/sms-code-test.html" "${VPS}:${REMOTE_UI}/static/sms-code-test.html"
 scp "${SSH_OPTS[@]}" "$ROOT/scripts/nas/Setup-ServerManagerNas.ps1" "${VPS}:${REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1"
 # Keep public-IP literals aligned with the target host when present in server.py
 case "$VPS" in

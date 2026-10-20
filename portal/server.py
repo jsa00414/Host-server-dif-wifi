@@ -34,6 +34,7 @@ from urllib.error import HTTPError, URLError
 # Extracted modules (auth / VPN circle / NAS) — keep handlers in this file.
 from sm import auth as sm_auth
 from sm import nas as sm_nas
+from sm import twilio_sms as sm_twilio
 from sm import vpn_circle as sm_vpn_circle
 
 CONF_PATH = Path(os.environ.get("FORWARDS_CONF", "/opt/servermanager/scripts/forwards.conf"))
@@ -7858,7 +7859,7 @@ def _security_sshd_config() -> dict:
     method = ssh_panel_2fa_method() if two_factor else "email"
     required = ["portal_password"]
     if two_factor:
-        required.append("app_code" if method == "app" else "email_code")
+        required.append(_two_factor_code_field(method))
     out["panel_lock"] = {
         "unlocked": False,
         "expires_at": None,
@@ -7868,6 +7869,8 @@ def _security_sshd_config() -> dict:
         "two_factor_method": method,
         **keys_auth_urls(),
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
+        "sms_configured": sm_twilio.configured(),
         "required": required,
     }
     return out
@@ -12209,11 +12212,25 @@ def _purge_pending_logins(now: float | None = None) -> None:
 
 
 def portal_login_2fa_method() -> str:
-    """Prefer authenticator app when a TOTP secret exists; otherwise email codes."""
+    """Return portal sign-in 2FA channel: app, email (Truemailor), or sms (Twilio)."""
     cfg = _read_ssh_panel_2fa()
-    if str(cfg.get("totp_secret") or "").strip():
+    method = str(cfg.get("method") or "").strip().lower()
+    if method == "sms":
+        return "sms"
+    if method == "email":
+        return "email"
+    if method == "app" or str(cfg.get("totp_secret") or "").strip():
         return "app"
     return "email"
+
+
+def _two_factor_code_field(method: str) -> str:
+    m = str(method or "").strip().lower()
+    if m == "app":
+        return "app_code"
+    if m == "sms":
+        return "sms_code"
+    return "email_code"
 
 
 def begin_portal_login(
@@ -12263,6 +12280,21 @@ def begin_portal_login(
                 if passkeys
                 else "Enter a fresh Authenticator code for portal sign-in."
             ),
+        }
+    if method == "sms":
+        sent = send_sms_test_code(
+            client_ip or "login",
+            key=f"portal-login:{login_token}",
+            purpose="portal-login",
+        )
+        return {
+            "ok": True,
+            "need_code": True,
+            "two_factor_method": "sms",
+            "login_token": login_token,
+            "passkey_available": passkeys,
+            "sms_to": sent.get("to_masked") or sm_twilio.mask_e164(SMS_CODE_TO),
+            "message": sent.get("message") or "Enter the portal sign-in SMS code.",
         }
     sent = send_email_test_code(
         client_ip or "login",
@@ -12319,6 +12351,21 @@ def complete_portal_login(
                     f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
                 )
             raise ValueError("Incorrect or already-used authenticator code")
+    elif method == "sms":
+        try:
+            verify_sms_test_code(
+                client_ip or "login",
+                code,
+                key=f"portal-login:{token}",
+                purpose="portal-login",
+            )
+        except Exception:
+            st = ip_jail_record_failure(client_ip, reason="login_sms_code")
+            if st.get("locked"):
+                raise ValueError(
+                    f"Too many failed SMS codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                ) from None
+            raise
     else:
         try:
             verify_email_test_code(
@@ -12439,9 +12486,18 @@ EMAIL_CODE_FROM = os.environ.get(
 PORTAL_SMTP_USER = os.environ.get("PORTAL_SMTP_USER", EMAIL_CODE_FROM).strip()
 EMAIL_CODE_TTL_SECONDS = int(os.environ.get("EMAIL_CODE_TTL_SECONDS", "600"))
 EMAIL_CODE_COOLDOWN_SECONDS = int(os.environ.get("EMAIL_CODE_COOLDOWN_SECONDS", "45"))
+# Twilio SMS OTP (credentials also fall back to /opt/truemail/.env via sm.twilio_sms).
+SMS_CODE_TO = sm_twilio.to_number()
+SMS_CODE_TTL_SECONDS = int(os.environ.get("SMS_CODE_TTL_SECONDS", str(EMAIL_CODE_TTL_SECONDS)))
+SMS_CODE_COOLDOWN_SECONDS = int(
+    os.environ.get("SMS_CODE_COOLDOWN_SECONDS", str(EMAIL_CODE_COOLDOWN_SECONDS))
+)
 _email_codes: dict[str, dict] = {}
 _email_codes_lock = threading.Lock()
 _email_code_last_send: dict[str, float] = {}
+_sms_codes: dict[str, dict] = {}
+_sms_codes_lock = threading.Lock()
+_sms_code_last_send: dict[str, float] = {}
 
 
 def _portal_smtp_password() -> str:
@@ -12681,6 +12737,115 @@ def verify_email_test_code(
         if not hmac.compare_digest(expect, got):
             raise ValueError("Incorrect code")
         _email_codes.pop(store_key, None)
+    return {
+        "ok": True,
+        "purpose": purpose_n,
+        "message": f"Code accepted for {_email_purpose_label(purpose_n)}.",
+    }
+
+
+def send_sms_test_code(
+    client_ip: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    """Generate + SMS a 6-digit code via Twilio (Truemailor /opt/truemail env)."""
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown SMS code purpose")
+    if not sm_twilio.configured():
+        raise RuntimeError(
+            "Twilio SMS not configured — add TWILIO_ACCOUNT_SID, "
+            "TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, SMS_CODE_TO to "
+            "/opt/truemail/.env (or the portal env)"
+        )
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
+    now = time.time()
+    with _sms_codes_lock:
+        last = float(_sms_code_last_send.get(store_key) or 0)
+        wait = SMS_CODE_COOLDOWN_SECONDS - (now - last)
+        if wait > 0:
+            raise ValueError(f"Wait {int(wait) + 1}s before sending another code")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        _sms_codes[store_key] = {
+            "hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "expires": now + max(60, SMS_CODE_TTL_SECONDS),
+            "attempts": 0,
+            "purpose": purpose_n,
+        }
+        _sms_code_last_send[store_key] = now
+
+    minutes = max(1, SMS_CODE_TTL_SECONDS // 60)
+    label = _email_purpose_label(purpose_n)
+    body = (
+        f"ServerManager {label} code: {code}. "
+        f"Valid {minutes} min. For {label} only."
+    )
+    try:
+        sent = sm_twilio.send_sms(body)
+    except Exception as exc:
+        with _sms_codes_lock:
+            _sms_codes.pop(store_key, None)
+        raise RuntimeError(f"Failed to send SMS: {exc}") from exc
+
+    dest = str(sent.get("to") or SMS_CODE_TO)
+    masked = sm_twilio.mask_e164(dest)
+    return {
+        "ok": True,
+        "to": masked,
+        "to_masked": masked,
+        "purpose": purpose_n,
+        "expires_in": SMS_CODE_TTL_SECONDS,
+        "message": f"Code sent for {label}. Check SMS at {masked}.",
+        "sid": sent.get("sid") or "",
+    }
+
+
+def verify_sms_test_code(
+    client_ip: str,
+    code: str,
+    *,
+    key: str | None = None,
+    purpose: str = "email-test",
+) -> dict:
+    purpose_n = str(purpose or "email-test").strip().lower() or "email-test"
+    if purpose_n not in _EMAIL_PURPOSE_LABELS:
+        raise ValueError("Unknown SMS code purpose")
+    raw_key = (key or "").strip()
+    if raw_key:
+        store_key = raw_key if raw_key.startswith(f"{purpose_n}:") else f"{purpose_n}:{raw_key}"
+    else:
+        ip = (client_ip or "unknown").strip() or "unknown"
+        store_key = f"{purpose_n}:{ip}"
+    raw = re.sub(r"\D+", "", str(code or ""))
+    if len(raw) != 6:
+        raise ValueError("Enter the 6-digit code")
+    now = time.time()
+    with _sms_codes_lock:
+        entry = _sms_codes.get(store_key)
+        if not entry:
+            raise ValueError("No code pending — send a new one")
+        if str(entry.get("purpose") or "") != purpose_n:
+            raise ValueError("Code is for a different action — request a new one")
+        if float(entry.get("expires") or 0) <= now:
+            _sms_codes.pop(store_key, None)
+            raise ValueError("Code expired — send a new one")
+        attempts = int(entry.get("attempts") or 0) + 1
+        entry["attempts"] = attempts
+        if attempts > 8:
+            _sms_codes.pop(store_key, None)
+            raise ValueError("Too many attempts — send a new code")
+        expect = str(entry.get("hash") or "")
+        got = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(expect, got):
+            raise ValueError("Incorrect code")
+        _sms_codes.pop(store_key, None)
     return {
         "ok": True,
         "purpose": purpose_n,
@@ -14103,13 +14268,14 @@ def _read_ssh_panel_2fa() -> dict:
                 "device_enroll_unlocked_at": 0,
             }
         method = str(data.get("method") or "email").strip().lower()
-        if method not in ("email", "app"):
+        if method not in ("email", "app", "sms"):
             method = "email"
         return {
             "enabled": bool(data.get("enabled")),
             "method": method,
             "totp_secret": str(data.get("totp_secret") or ""),
             "email_to": str(data.get("email_to") or EMAIL_CODE_TO),
+            "sms_to": str(data.get("sms_to") or sm_twilio.mask_e164(SMS_CODE_TO)),
             "updated_at": data.get("updated_at"),
             "device_enroll_unlocked": bool(data.get("device_enroll_unlocked")),
             "device_enroll_unlocked_at": int(data.get("device_enroll_unlocked_at") or 0),
@@ -14220,7 +14386,9 @@ def _write_ssh_panel_2fa(
     device_enroll_secret_id: str | None = None,
 ) -> None:
     SSH_PANEL_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    method_n = "app" if str(method).lower() == "app" else "email"
+    method_n = str(method or "email").strip().lower()
+    if method_n not in ("email", "app", "sms"):
+        method_n = "email"
     prev = _read_ssh_panel_2fa()
     secret = totp_secret or str(prev.get("totp_secret") or "")
     if method_n != "app":
@@ -14254,6 +14422,7 @@ def _write_ssh_panel_2fa(
         "totp_secret": secret if enabled and method_n == "app" else secret,
         "updated_at": int(time.time()),
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
         "device_enroll_unlocked": enroll_flag,
         "device_enroll_unlocked_at": unlocked_at if enroll_flag else 0,
         "device_enroll_for_ip": for_ip,
@@ -15284,7 +15453,7 @@ def set_ssh_panel_2fa(
     method: str = "",
     enroll_secret: str = "",
 ) -> dict:
-    """Enable/disable 2FA for the VPS login panel (email or authenticator app)."""
+    """Enable/disable 2FA for the VPS login panel (email, SMS, or authenticator)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     st = ssh_panel_unlock_status(token)
@@ -15293,7 +15462,7 @@ def set_ssh_panel_2fa(
     want = bool(enabled)
     cfg = _read_ssh_panel_2fa()
     method_n = str(method or cfg.get("method") or "app").strip().lower()
-    if method_n not in ("email", "app"):
+    if method_n not in ("email", "app", "sms"):
         method_n = "app"
     if want and want == bool(cfg.get("enabled")) and method_n == cfg.get("method"):
         return {
@@ -15301,6 +15470,7 @@ def set_ssh_panel_2fa(
             "two_factor_enabled": True,
             "two_factor_method": cfg.get("method"),
             "email_to": EMAIL_CODE_TO,
+            "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
             "message": "Two-factor already enabled.",
         }
     if want:
@@ -15318,6 +15488,7 @@ def set_ssh_panel_2fa(
                     "enroll": prov,
                     "enroll_secret": secret,
                     "email_to": EMAIL_CODE_TO,
+                    "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
                     "message": "Scan the QR in the Authenticator app, then enter the 6-digit code.",
                 }
             if not verify_and_consume_totp(secret, code, purpose="ssh-2fa-enroll"):
@@ -15333,10 +15504,39 @@ def set_ssh_panel_2fa(
                 "two_factor_enabled": True,
                 "two_factor_method": "app",
                 "email_to": EMAIL_CODE_TO,
+                "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
                 "auth_app_path": keys_auth_urls()["auth_app_path"],
                 "message": "Authenticator app two-factor enabled.",
             }
-        # Email method
+        if method_n == "sms":
+            key = f"ssh-2fa-enable:{token}"
+            if not str(code or "").strip():
+                sent = send_sms_test_code(
+                    client_ip or "panel", key=key, purpose="ssh-2fa-enable"
+                )
+                return {
+                    "ok": True,
+                    "need_code": True,
+                    "two_factor_enabled": False,
+                    "two_factor_method": "sms",
+                    "email_to": EMAIL_CODE_TO,
+                    "sms_to": sent.get("to_masked") or sm_twilio.mask_e164(SMS_CODE_TO),
+                    "message": sent.get("message")
+                    or "Enter the SMS code to enable two-factor.",
+                }
+            verify_sms_test_code(
+                client_ip or "panel", code, key=key, purpose="ssh-2fa-enable"
+            )
+            _write_ssh_panel_2fa(enabled=True, method="sms", totp_secret="")
+            return {
+                "ok": True,
+                "two_factor_enabled": True,
+                "two_factor_method": "sms",
+                "email_to": EMAIL_CODE_TO,
+                "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
+                "message": "Twilio SMS two-factor enabled.",
+            }
+        # Email method (Truemailor SMTP)
         key = f"ssh-2fa-enable:{token}"
         if not str(code or "").strip():
             sent = send_email_test_code(
@@ -15348,6 +15548,7 @@ def set_ssh_panel_2fa(
                 "two_factor_enabled": False,
                 "two_factor_method": "email",
                 "email_to": EMAIL_CODE_TO,
+                "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
                 "message": sent.get("message")
                 or "Enter the email code to enable two-factor.",
             }
@@ -15360,6 +15561,7 @@ def set_ssh_panel_2fa(
             "two_factor_enabled": True,
             "two_factor_method": "email",
             "email_to": EMAIL_CODE_TO,
+            "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
             "message": "Two-factor enabled.",
         }
     _write_ssh_panel_2fa(enabled=False, method=method_n, totp_secret="")
@@ -15368,6 +15570,7 @@ def set_ssh_panel_2fa(
         "two_factor_enabled": False,
         "two_factor_method": method_n,
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
         "message": "Two-factor disabled for VPS login panel.",
     }
 
@@ -15389,7 +15592,7 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
     enroll_unlocked = auth_app_device_enroll_unlocked()
     required = ["portal_password"]
     if two_factor:
-        required.append("app_code" if method == "app" else "email_code")
+        required.append(_two_factor_code_field(method))
     st = _read_ssh_panel_2fa()
     unlocked_at = int(st.get("device_enroll_unlocked_at") or 0)
     enroll_expires_in = 0
@@ -15410,6 +15613,8 @@ def ssh_panel_unlock_status(token: str | None) -> dict:
         "auth_app_devices": devices,
         **keys_auth_urls(),
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
+        "sms_configured": sm_twilio.configured(),
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
         "required": required,
     }
@@ -15444,7 +15649,7 @@ def unlock_ssh_panel(
     code: str = "",
     client_ip: str = "",
 ) -> dict:
-    """Unlock SSH panel with !!password!! (+ authenticator or email code when 2FA on)."""
+    """Unlock SSH panel with !!password!! (+ authenticator / email / SMS when 2FA on)."""
     if not token or not session_valid(token):
         raise ValueError("Not signed in")
     ip_jail_assert_allowed(client_ip)
@@ -15472,6 +15677,7 @@ def unlock_ssh_panel(
                     "two_factor_method": "app",
                     "auth_app_path": keys_auth_urls()["auth_app_path"],
                     "email_to": EMAIL_CODE_TO,
+                    "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
                     "expires_at": None,
                     "expires_in": 0,
                     "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -15485,6 +15691,37 @@ def unlock_ssh_panel(
                         f"Too many failed authenticator codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
                     )
                 raise ValueError("Incorrect or already-used authenticator code")
+        elif method == "sms":
+            key = f"ssh-unlock:{token}"
+            if not str(code or "").strip():
+                sent = send_sms_test_code(
+                    client_ip or "panel", key=key, purpose="ssh-unlock"
+                )
+                return {
+                    "ok": True,
+                    "unlocked": False,
+                    "need_code": True,
+                    "two_factor_enabled": True,
+                    "two_factor_method": "sms",
+                    "email_to": EMAIL_CODE_TO,
+                    "sms_to": sent.get("to_masked") or sm_twilio.mask_e164(SMS_CODE_TO),
+                    "expires_at": None,
+                    "expires_in": 0,
+                    "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
+                    "message": sent.get("message")
+                    or "Enter the Settings unlock SMS code.",
+                }
+            try:
+                verify_sms_test_code(
+                    client_ip or "panel", code, key=key, purpose="ssh-unlock"
+                )
+            except Exception:
+                st = ip_jail_record_failure(client_ip, reason="ssh_panel_sms_code")
+                if st.get("locked"):
+                    raise ValueError(
+                        f"Too many failed SMS codes — IP locked for {int(st.get('retry_after') or 0) + 1}s"
+                    ) from None
+                raise
         else:
             key = f"ssh-unlock:{token}"
             if not str(code or "").strip():
@@ -15498,6 +15735,7 @@ def unlock_ssh_panel(
                     "two_factor_enabled": True,
                     "two_factor_method": "email",
                     "email_to": EMAIL_CODE_TO,
+                    "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
                     "expires_at": None,
                     "expires_in": 0,
                     "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -15529,6 +15767,7 @@ def unlock_ssh_panel(
         "two_factor_method": method if two_factor else "email",
         "auth_app_path": keys_auth_urls()["auth_app_path"],
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
         "expires_at": int(exp),
         "expires_in": int(exp - now),
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -15549,6 +15788,7 @@ def lock_ssh_panel(token: str | None) -> dict:
         "two_factor_method": method,
         "auth_app_path": keys_auth_urls()["auth_app_path"],
         "email_to": EMAIL_CODE_TO,
+        "sms_to": sm_twilio.mask_e164(SMS_CODE_TO),
         "expires_at": None,
         "expires_in": 0,
         "unlock_seconds": SSH_PANEL_UNLOCK_SECONDS,
@@ -19808,6 +20048,7 @@ class Handler(BaseHTTPRequestHandler):
             "/",
             "/login.html",
             "/email-code-test.html",
+            "/sms-code-test.html",
             "/auth-app.html",
             "/auth-app-iphone.html",
             "/network.html",  # legacy → Authenticator redirect
@@ -19848,8 +20089,13 @@ class Handler(BaseHTTPRequestHandler):
             pass  # public OpenVPN downloads (token checked below)
         elif path in ("/claim", "/claim/", "/claim/api", "/api/plex/claim"):
             pass  # public plex claim helper (proxied from plex.vpstruelord.com)
-        elif path in ("/api/email-code/send", "/api/email-code/verify"):
-            pass  # public email-code test form APIs (rate-limited)
+        elif path in (
+            "/api/email-code/send",
+            "/api/email-code/verify",
+            "/api/sms-code/send",
+            "/api/sms-code/verify",
+        ):
+            pass  # public OTP test form APIs (rate-limited)
         elif not self._is_authed():
             if path.startswith("/api/") or path.startswith("/claim"):
                 self._unauthorized(api=True)
@@ -20004,6 +20250,10 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/email-code-test.html":
             return self._serve_file(
                 STATIC_DIR / "email-code-test.html", "text/html; charset=utf-8"
+            )
+        if path == "/sms-code-test.html":
+            return self._serve_file(
+                STATIC_DIR / "sms-code-test.html", "text/html; charset=utf-8"
             )
         if path == "/auth-app.html":
             return self._serve_file(
@@ -21078,6 +21328,33 @@ document.getElementById('f').onsubmit = async (e) => {
                 code = str((payload or {}).get("code") or "")
                 ip = request_client_ip(self)
                 result = verify_email_test_code(
+                    ip, code, key=f"email-test:{ip}", purpose="email-test"
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                time.sleep(0.25)
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/sms-code/send":
+            try:
+                ip = request_client_ip(self)
+                result = send_sms_test_code(
+                    ip, key=f"email-test:{ip}", purpose="email-test"
+                )
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(429, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/sms-code/verify":
+            try:
+                payload = self._read_json()
+                code = str((payload or {}).get("code") or "")
+                ip = request_client_ip(self)
+                result = verify_sms_test_code(
                     ip, code, key=f"email-test:{ip}", purpose="email-test"
                 )
                 self._json(200, result)

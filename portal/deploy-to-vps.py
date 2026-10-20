@@ -16,11 +16,18 @@ DEFAULT_USER = "root"
 UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "server.py", f"{REMOTE_UI}/server.py"),
     (ROOT / "media_tmdb.py", f"{REMOTE_UI}/media_tmdb.py"),
+    (ROOT / "sm/__init__.py", f"{REMOTE_UI}/sm/__init__.py"),
+    (ROOT / "sm/auth.py", f"{REMOTE_UI}/sm/auth.py"),
+    (ROOT / "sm/nas.py", f"{REMOTE_UI}/sm/nas.py"),
+    (ROOT / "sm/vpn_circle.py", f"{REMOTE_UI}/sm/vpn_circle.py"),
+    (ROOT / "sm/twilio_sms.py", f"{REMOTE_UI}/sm/twilio_sms.py"),
     (ROOT / "static/index.html", f"{REMOTE_UI}/static/index.html"),
     (ROOT / "static/login.html", f"{REMOTE_UI}/static/login.html"),
     (ROOT / "static/files.html", f"{REMOTE_UI}/static/files.html"),
     (ROOT / "static/nas-windows.html", f"{REMOTE_UI}/static/nas-windows.html"),
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
+    (ROOT / "static/email-code-test.html", f"{REMOTE_UI}/static/email-code-test.html"),
+    (ROOT / "static/sms-code-test.html", f"{REMOTE_UI}/static/sms-code-test.html"),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
@@ -124,7 +131,7 @@ def main() -> int:
         try:
             _run(
                 client,
-                f"mkdir -p {REMOTE_UI}/static {REMOTE_UI}/scripts/nas",
+                f"mkdir -p {REMOTE_UI}/static {REMOTE_UI}/sm {REMOTE_UI}/scripts/nas",
             )
             for local, remote in UPLOADS:
                 if not local.is_file():

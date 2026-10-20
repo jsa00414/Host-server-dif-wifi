@@ -97,5 +97,54 @@ class TestEmailPurposeBinding(unittest.TestCase):
             server.send_email_test_code("9.9.9.9", purpose="not-a-real-purpose")
 
 
+class TestSmsPurposeBinding(unittest.TestCase):
+    def setUp(self) -> None:
+        with server._sms_codes_lock:
+            server._sms_codes.clear()
+            server._sms_code_last_send.clear()
+
+    def test_login_sms_not_valid_for_settings(self) -> None:
+        login_key = "portal-login:tok-sms-a"
+        unlock_key = "ssh-unlock:tok-sms-b"
+        code = "112233"
+        now = time.time()
+        with server._sms_codes_lock:
+            server._sms_codes[login_key] = {
+                "hash": __import__("hashlib").sha256(code.encode()).hexdigest(),
+                "expires": now + 600,
+                "attempts": 0,
+                "purpose": "portal-login",
+            }
+        with self.assertRaises(ValueError):
+            server.verify_sms_test_code(
+                "1.2.3.4", code, key=unlock_key, purpose="ssh-unlock"
+            )
+        ok = server.verify_sms_test_code(
+            "1.2.3.4", code, key=login_key, purpose="portal-login"
+        )
+        self.assertTrue(ok.get("ok"))
+
+    def test_sms_unknown_purpose_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            server.send_sms_test_code("9.9.9.9", purpose="not-a-real-purpose")
+
+    def test_two_factor_code_field(self) -> None:
+        self.assertEqual(server._two_factor_code_field("app"), "app_code")
+        self.assertEqual(server._two_factor_code_field("sms"), "sms_code")
+        self.assertEqual(server._two_factor_code_field("email"), "email_code")
+
+
+class TestTwilioHelpers(unittest.TestCase):
+    def test_normalize_and_mask_e164(self) -> None:
+        from sm import twilio_sms as tw
+
+        self.assertEqual(tw.normalize_e164("5551234567"), "+15551234567")
+        self.assertEqual(tw.normalize_e164("+1 (555) 123-4567"), "+15551234567")
+        masked = tw.mask_e164("+15551234567")
+        self.assertTrue(masked.startswith("+15"))
+        self.assertIn("••••", masked)
+        self.assertTrue(masked.endswith("67"))
+
+
 if __name__ == "__main__":
     unittest.main()

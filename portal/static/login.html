@@ -210,11 +210,17 @@
       const wrap = document.getElementById("codeWrap");
       wrap.classList.add("show");
       wrap.childNodes[0].textContent =
-        twoFactorMethod === "email" ? "Email code" : "Authenticator code";
+        twoFactorMethod === "email"
+          ? "Email code"
+          : (twoFactorMethod === "sms" ? "SMS code" : "Authenticator code");
       const sub = document.getElementById("sub");
-      sub.textContent = message || (twoFactorMethod === "email"
-        ? "Enter the portal sign-in code from your email."
-        : "Enter a fresh Authenticator code for portal sign-in.");
+      sub.textContent = message || (
+        twoFactorMethod === "email"
+          ? "Enter the portal sign-in code from your email."
+          : (twoFactorMethod === "sms"
+              ? "Enter the portal sign-in code from your text message."
+              : "Enter a fresh Authenticator code for portal sign-in.")
+      );
       sub.classList.add("show");
       document.getElementById("btn").textContent = "Verify & sign in";
       document.getElementById("backBtn").classList.add("show");

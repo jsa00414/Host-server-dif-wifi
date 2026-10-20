@@ -15,6 +15,18 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 - `POST /api/surfshark` — enable/disable Surfshark WireGuard VPN exit for WG clients only
 - Scripts deployed to `/opt/surfshark/` (`ss-vpn-exit.sh`, `ss-manage.sh`)
 
+## Twilio SMS (Truemailor)
+
+Portal two-factor can use Twilio SMS alongside Authenticator and Truemailor email codes.
+Put these in `/opt/truemail/.env` (or the portal env):
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_NUMBER` (E.164)
+- `SMS_CODE_TO` (E.164 destination)
+
+Smoke test: `/sms-code-test.html` → `POST /api/sms-code/send` + `/api/sms-code/verify`.
+
 ## NAS Files (WebAccess)
 
 - Sidebar / Overview **Files** tile embeds Buffalo WebAccess

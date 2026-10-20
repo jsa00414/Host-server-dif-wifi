@@ -4122,6 +4122,7 @@
         const authAppAndroidPath = panelLock.auth_app_android_path || "https://keys.vpstruelord.com/auth-app.html";
         const authAppWindowsPath = panelLock.auth_app_windows_path || "https://keys.vpstruelord.com/download/ServerManagerAuthenticator.exe";
         const emailTo = panelLock.email_to || "portalvpsserver@truemailor.com";
+        const smsTo = panelLock.sms_to || "";
         if (!unlocked) {
           sshEl.innerHTML = `
             <div class="sec-ssh-lock">
@@ -4141,12 +4142,16 @@
         window.__sshUnlockNeedCode = false;
         closeEmailCodePopup();
         const methodLabel2fa = twoFactor
-          ? (twoFactorMethod === "app" ? "Authenticator app" : "Email")
+          ? (twoFactorMethod === "app"
+              ? "Authenticator app"
+              : (twoFactorMethod === "sms" ? "SMS (Twilio)" : "Email"))
           : "Off";
         const methodSub2fa = twoFactor
           ? (twoFactorMethod === "app"
               ? `Require a code from the phone Authenticator app when unlocking.`
-              : `Require an email code when unlocking this panel.`)
+              : (twoFactorMethod === "sms"
+                  ? `Require a Twilio SMS code when unlocking${smsTo ? ` (${smsTo})` : ""}.`
+                  : `Require an email code when unlocking this panel.`))
           : `Turn on to require a second step when unlocking. Phone app recommended.`;
         sshEl.innerHTML = `
           <div class="sec-ssh-lock unlocked">
@@ -4643,10 +4648,11 @@
       backdrop.innerHTML = `
         <div class="sec-code-modal" role="dialog" aria-modal="true">
           <h3>Enable two-factor</h3>
-          <p>Use the phone Authenticator app (recommended) or email codes.</p>
+          <p>Use the phone Authenticator app (recommended), Truemailor email codes, or Twilio SMS.</p>
           <div class="sec-2fa-methods">
             <button type="button" class="active" id="sec2faPickApp">Phone Authenticator app</button>
             <button type="button" id="sec2faPickEmail">Email codes</button>
+            <button type="button" id="sec2faPickSms">SMS (Twilio)</button>
           </div>
           <div class="sec-login-actions">
             <button type="button" class="ghost" id="secCodeModalCancel">Cancel</button>
@@ -4659,6 +4665,7 @@
       };
       document.getElementById("sec2faPickApp")?.addEventListener("click", () => finish("app"));
       document.getElementById("sec2faPickEmail")?.addEventListener("click", () => finish("email"));
+      document.getElementById("sec2faPickSms")?.addEventListener("click", () => finish("sms"));
       document.getElementById("secCodeModalCancel")?.addEventListener("click", () => {
         closeEmailCodePopup();
         onCancel?.();
@@ -4669,6 +4676,34 @@
           onCancel?.();
         }
       });
+    }
+    function twoFactorCodeLabels(method) {
+      const m = method || "email";
+      if (m === "app") {
+        return {
+          title: "Authenticator code",
+          subtitle: "Enter a fresh 6-digit Authenticator code (a code already used to sign in will not work).",
+          enableTitle: "Set up Authenticator",
+          enableSubtitle: "Open the app on your phone (or scan the QR), then enter the 6-digit code.",
+          status: "Open the Authenticator app.",
+        };
+      }
+      if (m === "sms") {
+        return {
+          title: "SMS code",
+          subtitle: "Enter the 6-digit Twilio SMS code for this action (portal sign-in codes will not work here).",
+          enableTitle: "Enable two-factor (SMS)",
+          enableSubtitle: "Enter the verification code texted via Twilio.",
+          status: "SMS code sent.",
+        };
+      }
+      return {
+        title: "Email code",
+        subtitle: "Enter the code from your email (portal sign-in codes will not work here).",
+        enableTitle: "Enable two-factor",
+        enableSubtitle: "Enter the verification code from your email.",
+        status: "Code sent.",
+      };
     }
     async function unlockSshPanel(codeFromPopup) {
       const pass = window.__sshUnlockPassCache || document.getElementById("secSshUnlockPass")?.value || "";
@@ -4688,13 +4723,11 @@
         if (result.need_code) {
           window.__sshUnlockNeedCode = true;
           window.__sshUnlockPassCache = pass;
-          const isApp = (result.two_factor_method || methodHint) === "app";
-          setStatus(result.message || (isApp ? "Enter authenticator code." : "Code sent."), "ok");
+          const labels = twoFactorCodeLabels(result.two_factor_method || methodHint);
+          setStatus(result.message || labels.status, "ok");
           openEmailCodePopup({
-            title: isApp ? "Authenticator code" : "Email code",
-            subtitle: isApp
-              ? "Enter a fresh 6-digit Authenticator code for Settings unlock (a code already used to sign in will not work)."
-              : "Enter the Settings unlock code from your email (portal sign-in codes will not work here).",
+            title: labels.title,
+            subtitle: labels.subtitle,
             onSubmit: (c) => unlockSshPanel(c),
             onCancel: () => {
               window.__sshUnlockNeedCode = false;
@@ -4813,7 +4846,11 @@
       }
       window.__ssh2faPassCache = pass;
       if (toggle) toggle.disabled = true;
-      setStatus(codeFromPopup ? "Confirming two-factor…" : (method === "app" ? "Preparing Authenticator app…" : "Sending verification code…"));
+      setStatus(
+        codeFromPopup
+          ? "Confirming two-factor…"
+          : (method === "app" ? "Preparing Authenticator app…" : "Sending verification code…")
+      );
       try {
         const body = {
           action: "2fa",
@@ -4835,13 +4872,12 @@
           if (result.enroll_secret) {
             window.__ssh2faEnrollSecret = result.enroll_secret;
           }
+          const labels = twoFactorCodeLabels(result.two_factor_method || method);
           const isApp = (result.two_factor_method || method) === "app";
-          setStatus(result.message || (isApp ? "Open the Authenticator app." : "Code sent."), "ok");
+          setStatus(result.message || labels.status, "ok");
           openEmailCodePopup({
-            title: isApp ? "Set up Authenticator" : "Enable two-factor",
-            subtitle: isApp
-              ? "Open the app on your phone (or scan the QR), then enter the 6-digit code."
-              : "Enter the verification code from your email.",
+            title: labels.enableTitle,
+            subtitle: labels.enableSubtitle,
             enroll: isApp ? (result.enroll || null) : null,
             onSubmit: (c) => setSshPanel2fa(true, c, { method }),
             onCancel: () => {
