@@ -33,10 +33,9 @@ echo "Installed legal pages in ${LEGAL_DIR}"
 # Also drop into common static roots so SPA try_files can serve real files.
 for webroot in \
   /opt/truemail/www \
+  /opt/truemail/www/site \
   /opt/truemail/public \
-  /var/www/truemailor \
-  /opt/traceface/dist \
-  /opt/traceface/public
+  /var/www/truemailor
  do
   if [[ -d "$webroot" ]]; then
     install -m 0644 "$SRC_PRIVACY" "$webroot/privacy.html"
