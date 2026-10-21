@@ -7,8 +7,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"
+# Host paths (bind-mounted into Caddy as /srv/www via docker-compose).
 SITE_DIR="${SITE_DIR:-/opt/truemail/www/site}"
 LEGAL_DIR="${LEGAL_DIR:-/opt/truemail/www/legal}"
+# Paths seen inside the truemail-caddy container.
+CADDY_SITE_ROOT="${CADDY_SITE_ROOT:-/srv/www/site}"
+CADDY_LEGAL_ROOT="${CADDY_LEGAL_ROOT:-/srv/www/legal}"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/truemail/docker-compose.yml}"
 SRC_SITE="${ROOT}/static/truemailor"
 SRC_PRIVACY="${ROOT}/static/privacy.html"
 SRC_TERMS="${ROOT}/static/terms.html"
@@ -109,17 +114,55 @@ if command -v docker >/dev/null 2>&1; then
   done < <(docker ps -a --format '{{.Names}}' | grep -Ei 'traceface|trace-face' || true)
 fi
 
+# Ensure Caddy can read host www/ (container path /srv/www).
+if [[ -f "$COMPOSE_FILE" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path(__import__("os").environ.get("COMPOSE_FILE", "/opt/truemail/docker-compose.yml"))
+t = p.read_text(encoding="utf-8", errors="replace")
+changed = False
+if "./www:/srv/www" not in t and "/srv/www" not in t:
+    if "- /var/www/acme:/acme:ro" in t:
+        t = t.replace(
+            "- /var/www/acme:/acme:ro",
+            "- /var/www/acme:/acme:ro\n      - ./www:/srv/www:ro",
+            1,
+        )
+        changed = True
+if re.search(r"depends_on:\n(?:\s+-\s+\w+\n)*\s+-\s+facesearch\n", t):
+    t = re.sub(r"(depends_on:\n(?:\s+-\s+\w+\n)*)\s+-\s+facesearch\n", r"\1", t)
+    changed = True
+if "facesearch:" in t and 'profiles: ["traceface"]' not in t:
+    t = t.replace(
+        "  facesearch:\n    build:\n      context: /opt/facetrace/app\n    restart: unless-stopped",
+        '  facesearch:\n    build:\n      context: /opt/facetrace/app\n    profiles: ["traceface"]\n    restart: "no"',
+        1,
+    )
+    changed = True
+if changed:
+    p.write_text(t, encoding="utf-8")
+    print(f"Updated {p} for www mount / facesearch off")
+else:
+    print(f"{p} already configured")
+PY
+  (
+    cd "$(dirname "$COMPOSE_FILE")"
+    docker compose up -d caddy --force-recreate >/dev/null
+  ) || true
+fi
+
 # Point truemailor.com / www at the new site directory in Caddy.
 if [[ -f "$CADDYFILE" ]]; then
-  export CADDYFILE SITE_DIR LEGAL_DIR
+  export CADDYFILE SITE_DIR LEGAL_DIR CADDY_SITE_ROOT CADDY_LEGAL_ROOT
   python3 - <<'PY'
 from pathlib import Path
 import os
 import re
 
 caddy = Path(os.environ["CADDYFILE"])
-site = os.environ["SITE_DIR"]
-legal = os.environ["LEGAL_DIR"]
+site = os.environ.get("CADDY_SITE_ROOT", "/srv/www/site")
+legal = os.environ.get("CADDY_LEGAL_ROOT", "/srv/www/legal")
 text = caddy.read_text(encoding="utf-8", errors="replace")
 
 marker = "# BEGIN truemailor-public-site"
@@ -177,10 +220,11 @@ if marker in text:
 else:
     text = snippet + "\n" + text
 
-# Remove TraceFace reverse_proxy / root lines that mention traceface.
+# Remove TraceFace / facesearch reverse_proxy / root lines.
 text = re.sub(r"(?mi)^[ \t]*#.*traceface.*\n", "", text)
-text = re.sub(r"(?mi)^[ \t]*reverse_proxy[^\n]*traceface[^\n]*\n", "", text)
+text = re.sub(r"(?mi)^[ \t]*reverse_proxy[^\n]*(traceface|facesearch)[^\n]*\n", "", text)
 text = re.sub(r"(?mi)^[ \t]*root[ \t]+\*[ \t]+/opt/traceface[^\n]*\n", "", text)
+text = text.replace("/opt/truemail/www/site", site).replace("/opt/truemail/www/legal", legal)
 
 def rewrite_host_block(body: str, host: str) -> str:
     host_pat = re.compile(rf"(?ms)^({re.escape(host)}\s*\{{)(.*?)(^\}})")
