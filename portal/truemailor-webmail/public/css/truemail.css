@@ -183,15 +183,13 @@ a {
 }
 
 .tm-login-form {
-  margin-top: 26px;
+  margin-top: 28px;
   display: grid;
   gap: 14px;
-  padding: 22px 20px 20px;
-  border: 1px solid var(--tm-line);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 24px 50px rgba(16, 40, 28, 0.08);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   animation: tm-login-rise 0.75s ease both 0.08s;
 }
 
@@ -206,11 +204,11 @@ a {
 .tm-field input {
   width: 100%;
   border: 1px solid var(--tm-line);
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 13px 14px;
   font: 500 1rem/1.2 "Source Sans 3", Georgia, sans-serif;
   color: var(--tm-ink);
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.55);
   min-height: 48px;
 }
 
