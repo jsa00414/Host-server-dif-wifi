@@ -20049,6 +20049,10 @@ class Handler(BaseHTTPRequestHandler):
             "/login.html",
             "/email-code-test.html",
             "/sms-code-test.html",
+            "/privacy.html",
+            "/privacy",
+            "/terms.html",
+            "/terms",
             "/auth-app.html",
             "/auth-app-iphone.html",
             "/network.html",  # legacy → Authenticator redirect
@@ -20254,6 +20258,14 @@ document.getElementById('f').onsubmit = async (e) => {
         if path == "/sms-code-test.html":
             return self._serve_file(
                 STATIC_DIR / "sms-code-test.html", "text/html; charset=utf-8"
+            )
+        if path in ("/privacy.html", "/privacy"):
+            return self._serve_file(
+                STATIC_DIR / "privacy.html", "text/html; charset=utf-8"
+            )
+        if path in ("/terms.html", "/terms"):
+            return self._serve_file(
+                STATIC_DIR / "terms.html", "text/html; charset=utf-8"
             )
         if path == "/auth-app.html":
             return self._serve_file(

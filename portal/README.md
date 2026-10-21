@@ -27,7 +27,21 @@ Put these in `/opt/truemail/.env` (or the portal env):
 
 US long codes need an approved **A2P 10DLC** brand/campaign (Twilio error `30034` otherwise).
 
-Apply on the VPS (with SSH access):
+### A2P Privacy Policy / Terms URLs
+
+Public pages (no login):
+
+- Privacy: `https://mail.truemailor.com/privacy.html`
+- Terms: `https://mail.truemailor.com/terms.html`
+- Portal fallback: `https://portal.vpstruelord.com/privacy.html`
+
+Publish on the VPS:
+
+```bash
+sudo bash /opt/wireguard/port-forward-ui/scripts/truemail/install-legal-pages.sh
+```
+
+Apply Twilio env (with SSH access):
 
 ```bash
 set -a; source ./twilio.env; set +a

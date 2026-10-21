@@ -28,6 +28,12 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/windows-vpn.html", f"{REMOTE_UI}/static/windows-vpn.html"),
     (ROOT / "static/email-code-test.html", f"{REMOTE_UI}/static/email-code-test.html"),
     (ROOT / "static/sms-code-test.html", f"{REMOTE_UI}/static/sms-code-test.html"),
+    (ROOT / "static/privacy.html", f"{REMOTE_UI}/static/privacy.html"),
+    (ROOT / "static/terms.html", f"{REMOTE_UI}/static/terms.html"),
+    (
+        ROOT / "scripts/truemail/install-legal-pages.sh",
+        f"{REMOTE_UI}/scripts/truemail/install-legal-pages.sh",
+    ),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
         f"{REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1",
@@ -131,7 +137,8 @@ def main() -> int:
         try:
             _run(
                 client,
-                f"mkdir -p {REMOTE_UI}/static {REMOTE_UI}/sm {REMOTE_UI}/scripts/nas",
+                f"mkdir -p {REMOTE_UI}/static {REMOTE_UI}/sm "
+                f"{REMOTE_UI}/scripts/nas {REMOTE_UI}/scripts/truemail",
             )
             for local, remote in UPLOADS:
                 if not local.is_file():
@@ -146,6 +153,14 @@ def main() -> int:
                 client,
                 f"sed -i 's/74\\.208\\.54\\.132/74.208.76.213/g' {REMOTE_UI}/server.py || true",
             )
+        try:
+            _run(
+                client,
+                f"chmod +x {REMOTE_UI}/scripts/truemail/install-legal-pages.sh "
+                f"&& bash {REMOTE_UI}/scripts/truemail/install-legal-pages.sh",
+            )
+        except RuntimeError as exc:
+            print(f"Legal pages install skipped: {exc}")
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,
