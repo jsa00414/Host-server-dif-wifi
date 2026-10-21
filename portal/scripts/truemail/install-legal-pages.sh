@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Publish Truemailor Privacy + Terms pages for Twilio A2P 10DLC.
-# Serves:
-#   https://mail.truemailor.com/privacy.html
-#   https://mail.truemailor.com/terms.html
-#   https://truemailor.com/privacy.html  (if that site is file_server-based)
 #
-# Run on the VPS (or via SSH):
+# Prefer remove-traceface.sh (replaces TraceFace on truemailor.com and
+# publishes legal pages). This script remains as a legal-pages-only helper.
+#
 #   sudo bash portal/scripts/truemail/install-legal-pages.sh
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ "${TRUEMAIL_REMOVE_TRACEFACE:-1}" == "1" && -x "$ROOT/scripts/truemail/remove-traceface.sh" ]]; then
+  exec bash "$ROOT/scripts/truemail/remove-traceface.sh"
+fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"

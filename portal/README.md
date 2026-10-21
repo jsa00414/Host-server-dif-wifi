@@ -31,14 +31,16 @@ US long codes need an approved **A2P 10DLC** brand/campaign (Twilio error `30034
 
 Public pages (no login):
 
-- Privacy: `https://mail.truemailor.com/privacy.html`
-- Terms: `https://mail.truemailor.com/terms.html`
+- Site: `https://truemailor.com/`
+- Privacy: `https://truemailor.com/privacy.html`
+- Terms: `https://truemailor.com/terms.html`
+- Mail aliases: `https://mail.truemailor.com/privacy.html`
 - Portal fallback: `https://portal.vpstruelord.com/privacy.html`
 
-Publish on the VPS:
+Remove TraceFace and publish the Truemailor site on the VPS:
 
 ```bash
-sudo bash /opt/wireguard/port-forward-ui/scripts/truemail/install-legal-pages.sh
+sudo bash /opt/wireguard/port-forward-ui/scripts/truemail/remove-traceface.sh
 ```
 
 Apply Twilio env (with SSH access):

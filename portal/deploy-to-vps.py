@@ -30,9 +30,14 @@ UPLOADS: list[tuple[Path, str]] = [
     (ROOT / "static/sms-code-test.html", f"{REMOTE_UI}/static/sms-code-test.html"),
     (ROOT / "static/privacy.html", f"{REMOTE_UI}/static/privacy.html"),
     (ROOT / "static/terms.html", f"{REMOTE_UI}/static/terms.html"),
+    (ROOT / "static/truemailor/index.html", f"{REMOTE_UI}/static/truemailor/index.html"),
     (
         ROOT / "scripts/truemail/install-legal-pages.sh",
         f"{REMOTE_UI}/scripts/truemail/install-legal-pages.sh",
+    ),
+    (
+        ROOT / "scripts/truemail/remove-traceface.sh",
+        f"{REMOTE_UI}/scripts/truemail/remove-traceface.sh",
     ),
     (
         ROOT / "scripts/nas/Setup-ServerManagerNas.ps1",
@@ -137,7 +142,7 @@ def main() -> int:
         try:
             _run(
                 client,
-                f"mkdir -p {REMOTE_UI}/static {REMOTE_UI}/sm "
+                f"mkdir -p {REMOTE_UI}/static/truemailor {REMOTE_UI}/sm "
                 f"{REMOTE_UI}/scripts/nas {REMOTE_UI}/scripts/truemail",
             )
             for local, remote in UPLOADS:
@@ -156,11 +161,11 @@ def main() -> int:
         try:
             _run(
                 client,
-                f"chmod +x {REMOTE_UI}/scripts/truemail/install-legal-pages.sh "
-                f"&& bash {REMOTE_UI}/scripts/truemail/install-legal-pages.sh",
+                f"chmod +x {REMOTE_UI}/scripts/truemail/remove-traceface.sh "
+                f"&& bash {REMOTE_UI}/scripts/truemail/remove-traceface.sh",
             )
         except RuntimeError as exc:
-            print(f"Legal pages install skipped: {exc}")
+            print(f"TraceFace removal / Truemailor site install skipped: {exc}")
         _run(client, "systemctl restart port-forward-ui && systemctl is-active port-forward-ui")
         _run(
             client,

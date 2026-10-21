@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Truemailor</title>
+  <meta name="description" content="Truemailor — private email hosting and secure sign-in for mail.truemailor.com." />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="https://truemailor.com/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #102018;
+      --muted: #53665c;
+      --line: rgba(20, 48, 34, 0.14);
+      --paper: #f3f7f4;
+      --accent: #1f6b4a;
+      --accent-2: #2d8f64;
+      --cream: #f8fbf9;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Source Sans 3", Georgia, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 640px at 12% -8%, rgba(45, 143, 100, 0.22), transparent 58%),
+        radial-gradient(900px 520px at 92% 8%, rgba(20, 70, 48, 0.16), transparent 52%),
+        linear-gradient(165deg, #e8f1ec 0%, var(--paper) 42%, #e4eee8 100%);
+      overflow-x: hidden;
+    }
+    .sky {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cg fill='none' stroke='%231f6b4a' stroke-opacity='0.06' stroke-width='1'%3E%3Cpath d='M0 40h160M0 80h160M0 120h160M40 0v160M80 0v160M120 0v160'/%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.9;
+      z-index: 0;
+    }
+    .frame {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      width: min(1120px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 22px 0 28px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      opacity: 0;
+      animation: rise 0.7s ease forwards 0.05s;
+    }
+    .nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-left: 18px;
+    }
+    .nav a:hover { color: var(--accent); }
+    .hero {
+      display: grid;
+      align-content: center;
+      padding: clamp(28px, 8vh, 72px) 0 clamp(36px, 10vh, 88px);
+      max-width: 720px;
+    }
+    .brand {
+      margin: 0;
+      font-family: Fraunces, Georgia, serif;
+      font-size: clamp(3.4rem, 9vw, 5.6rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+      color: var(--accent);
+      opacity: 0;
+      animation: rise 0.8s ease forwards 0.12s;
+    }
+    .headline {
+      margin: 22px 0 0;
+      font-family: Fraunces, Georgia, serif;
+      font-size: clamp(1.45rem, 3.2vw, 2rem);
+      letter-spacing: -0.02em;
+      font-weight: 600;
+      max-width: 18ch;
+      opacity: 0;
+      animation: rise 0.8s ease forwards 0.22s;
+    }
+    .lead {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2.2vw, 1.2rem);
+      max-width: 34ch;
+      opacity: 0;
+      animation: rise 0.8s ease forwards 0.32s;
+    }
+    .cta {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      opacity: 0;
+      animation: rise 0.8s ease forwards 0.42s;
+    }
+    .cta a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 20px;
+      border-radius: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: transform 0.18s ease, background 0.18s ease;
+    }
+    .cta a.primary {
+      background: var(--accent);
+      color: #f4fbf7;
+    }
+    .cta a.primary:hover {
+      background: var(--accent-2);
+      transform: translateY(-1px);
+    }
+    .cta a.ghost {
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.45);
+    }
+    .cta a.ghost:hover { background: rgba(255,255,255,0.75); }
+    .visual {
+      position: absolute;
+      right: max(-40px, calc(50% - 560px));
+      top: 18%;
+      width: min(46vw, 420px);
+      aspect-ratio: 4/5;
+      border-radius: 28px 28px 40% 40%;
+      background:
+        linear-gradient(160deg, rgba(31,107,74,0.85), rgba(16,48,34,0.92)),
+        radial-gradient(circle at 30% 20%, rgba(255,255,255,0.25), transparent 45%);
+      box-shadow: 0 40px 80px rgba(16, 40, 28, 0.22);
+      opacity: 0;
+      animation: drift 0.95s ease forwards 0.2s;
+      overflow: hidden;
+      z-index: 0;
+    }
+    .visual::after {
+      content: "";
+      position: absolute;
+      inset: 18% 16% auto;
+      height: 38%;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.28);
+      background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.04));
+    }
+    footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      opacity: 0;
+      animation: rise 0.7s ease forwards 0.5s;
+    }
+    footer a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes drift {
+      from { opacity: 0; transform: translateY(28px) rotate(-2deg); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (max-width: 860px) {
+      .visual { display: none; }
+      .headline { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sky" aria-hidden="true"></div>
+  <div class="visual" aria-hidden="true"></div>
+  <div class="frame">
+    <header>
+      <span aria-hidden="true"></span>
+      <nav class="nav" aria-label="Site">
+        <a href="https://mail.truemailor.com/">Webmail</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/terms.html">Terms</a>
+      </nav>
+    </header>
+    <main class="hero">
+      <p class="brand">Truemailor</p>
+      <h1 class="headline">Private mail, secured sign-in.</h1>
+      <p class="lead">Hosted email for your domain — with authenticator, passkeys, and SMS codes when you need them.</p>
+      <div class="cta">
+        <a class="primary" href="https://mail.truemailor.com/">Open webmail</a>
+        <a class="ghost" href="/privacy.html">Privacy Policy</a>
+      </div>
+    </main>
+    <footer>
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms of Service</a>
+      <span>© 2026 Truemailor</span>
+    </footer>
+  </div>
+</body>
+</html>
