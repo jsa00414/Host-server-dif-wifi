@@ -4311,8 +4311,13 @@ def _normalize_hookup_rule(rule: dict) -> dict:
         out["target_port"] = int(out.get("target_port") or PLEX_PORT)
         out["target_hosts"] = [PLEX_HOST]
         out["name"] = str(out.get("name") or "plex-server").strip() or "plex-server"
-        # Media server must not be public — force VPN-only.
-        out["vpn_only"] = True
+        # Always managed in the hookups Caddy block (external=true would drop it).
+        # vpn_only=false exposes plex.vpstruelord.com for off-site apps; PMS auths.
+        out["external"] = False
+        if "vpn_only" in out and out.get("vpn_only") is not None:
+            out["vpn_only"] = _as_bool(out.get("vpn_only"))
+        else:
+            out["vpn_only"] = True
     elif domain == GRAFANA_PUBLIC_HOST.lower():
         out["target_host"] = GRAFANA_HOST
         out["target_port"] = int(out.get("target_port") or GRAFANA_PORT)
@@ -4353,13 +4358,27 @@ def ensure_proxmox_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox, VPN-only)."""
+    """Guarantee plex.vpstruelord.com is present (Plex LXC on Proxmox).
+
+    Default VPN-only. Set vpn_only=false for off-site Plex apps
+    (customConnections → https://plex.vpstruelord.com:443).
+    """
     out = [dict(r) for r in (rules or [])]
     domain = PLEX_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
+            vpn_only = (
+                True
+                if rule.get("vpn_only") is None
+                else _as_bool(rule.get("vpn_only"))
+            )
             out[i] = _normalize_hookup_rule(
-                {**rule, "enabled": rule.get("enabled", True), "external": False, "vpn_only": True}
+                {
+                    **rule,
+                    "enabled": rule.get("enabled", True),
+                    "external": False,
+                    "vpn_only": vpn_only,
+                }
             )
             return out
     out.append(
