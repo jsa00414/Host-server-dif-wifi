@@ -70,7 +70,14 @@ else
   apt-get install -y -qq ntfs-3g exfatprogs 2>/dev/null || apt-get install -y -qq ntfs-3g || true
   opts="rw,nosuid,nodev,noatime,uid=0,gid=0,umask=0022"
   case "${fstype,,}" in
-    ntfs|ntfs3) mount -t ntfs3 "$part" "$HOST_MNT" -o "$opts" 2>/dev/null || mount -t ntfs-3g "$part" "$HOST_MNT" -o "$opts" ;;
+    ntfs|ntfs3)
+      if ! mount -t ntfs3 "$part" "$HOST_MNT" -o "$opts" 2>/dev/null \
+        && ! mount -t ntfs-3g "$part" "$HOST_MNT" -o "$opts,remove_hiberfile,recover" 2>/dev/null; then
+        echo "==> ntfs-3g failed; running ntfsfix…"
+        ntfsfix -d -b "$part" || true
+        mount -t ntfs-3g "$part" "$HOST_MNT" -o "$opts,remove_hiberfile,recover,force"
+      fi
+      ;;
     exfat) mount -t exfat "$part" "$HOST_MNT" -o "$opts" ;;
     vfat|fat32) mount -t vfat "$part" "$HOST_MNT" -o "$opts" ;;
     ext4|xfs|btrfs) mount "$part" "$HOST_MNT" ;;
