@@ -172,7 +172,7 @@
         ...options,
       });
       if (res.status === 401) {
-        location.href = "/login.html";
+        location.href = "/";
         throw new Error("unauthorized");
       }
       const data = await res.json().catch(() => ({}));
