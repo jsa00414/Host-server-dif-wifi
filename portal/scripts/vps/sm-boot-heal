@@ -147,13 +147,22 @@ main() {
   ensure_compose /opt/truemail
   ensure_compose /opt/wireguard
   if [[ -f /opt/dns/docker-compose.yml ]]; then
-    (cd /opt/dns && docker compose up -d --no-deps pihole pihole-sso guest-dns) || true
+    # AdGuard (.44) + guest-dns (.45) are required for Flint WiFi internet.
+    # Do not bind host 127.0.0.1:53 (conflicts with systemd-resolved).
+    (cd /opt/dns && docker compose up -d --no-deps pihole pihole-sso guest-dns adguard) || true
     (cd /opt/dns && docker compose stop inject >/dev/null 2>&1 || true)
   fi
 
   systemctl start port-forward-ui >/dev/null 2>&1 || true
   systemctl start openvpn-server-sm >/dev/null 2>&1 || true
   systemctl start sslh-sm >/dev/null 2>&1 || true
+
+  # Docker raw PREROUTING otherwise drops tun0 -> 10.42.42.44/.45 (breaks LAN DNS).
+  if [[ -x /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh ]]; then
+    /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh >/dev/null 2>&1 || true
+  elif [[ -x /opt/openvpn/scripts/ovpn-firewall.sh ]]; then
+    /opt/openvpn/scripts/ovpn-firewall.sh >/dev/null 2>&1 || true
+  fi
 
   ensure_vpn_caddy_site
   reload_caddy || true
