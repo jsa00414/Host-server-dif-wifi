@@ -6015,7 +6015,7 @@
         const act = btn.getAttribute("data-elements-action");
         btn.classList.toggle("is-active", !busy && !!readable && act === "attach");
       });
-      ["mediaUploadMoviesBtn", "mediaUploadKidsMoviesBtn", "mediaUploadTvBtn", "mediaUploadKidsTvBtn", "mediaRefreshBtn", "settingsElementsRefreshBtn", "mediaAttachBtn", "mediaPipelineBtn", "mediaScanBtn"].forEach((id) => {
+      ["mediaUploadMoviesBtn", "mediaUploadKidsMoviesBtn", "mediaUploadTvBtn", "mediaUploadTvFolderBtn", "mediaUploadKidsTvBtn", "mediaUploadKidsTvFolderBtn", "mediaRefreshBtn", "settingsElementsRefreshBtn", "mediaAttachBtn", "mediaPipelineBtn", "mediaScanBtn"].forEach((id) => {
         const btn = document.getElementById(id);
         if (btn) btn.disabled = !!busy;
       });
@@ -6854,8 +6854,11 @@
         elementsBusy = false;
         setStatus(`Uploaded ${done} file(s). Sorting into Plex…`, "ok");
         showLog(`Elements upload ${library}: ${done} file(s)${formMeta ? " (TMDB form)" : anyNested ? " (folder tree)" : ""}`, true);
-        await refreshElementsSettings();
+        try {
+          await refreshElementsSettings();
+        } catch (_) {}
         // Auto-run pipeline so uploads appear in Plex without a second click.
+        // Always attempt even if status refresh failed (that used to leave files in inbox).
         await setElementsAction("pipeline");
       } catch (e) {
         elementsBusy = false;
@@ -6867,6 +6870,12 @@
           ok: false,
           error: msg,
         });
+        // Still try to sort whatever landed in the inbox.
+        if (done > 0) {
+          try {
+            await setElementsAction("pipeline");
+          } catch (_) {}
+        }
         setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
       }
     }
