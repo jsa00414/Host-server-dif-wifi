@@ -6802,6 +6802,7 @@
       }
       elementsBusy = true;
       let done = 0;
+      const failed = [];
       resetMediaQueue(library, files);
       try {
         for (let i = 0; i < files.length; i++) {
@@ -6817,7 +6818,7 @@
             uploadLabel: label,
             uploadPct: pct,
           });
-          setStatus(`Uploading ${uploadName} to Elements ${library}…`);
+          setStatus(`Uploading ${uploadName} to Elements ${library}… (${done} ok${failed.length ? ", " + failed.length + " failed" : ""})`);
           const params = new URLSearchParams();
           params.set("library", library);
           params.set("filename", uploadName);
@@ -6833,33 +6834,66 @@
             if (formMeta.episode_title) params.set("episode_title", formMeta.episode_title);
           }
           const url = "/api/elements/upload?" + params.toString();
-          const res = await fetch(url, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/octet-stream",
-              "X-Filename": mediaHeaderFilename(uploadName),
-            },
-            body: file,
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok || data.ok === false) {
+          let lastErr = "";
+          let ok = false;
+          // One automatic retry — long TV batches often trip transient network blips.
+          for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+            try {
+              const res = await fetch(url, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                  "Content-Type": "application/octet-stream",
+                  "X-Filename": mediaHeaderFilename(uploadName),
+                },
+                body: file,
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok || data.ok === false) {
+                lastErr = data.error || ("HTTP " + res.status + " for " + uploadName);
+                if (res.status === 401 || res.status === 403) {
+                  // Auth lost mid-batch — stop so the user can re-login.
+                  markMediaQueue(library, i, "err");
+                  throw new Error(lastErr || "Session expired during upload — sign in and retry the remaining episodes");
+                }
+                if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * attempt));
+                continue;
+              }
+              ok = true;
+            } catch (e) {
+              lastErr = String(e.message || e);
+              if (/session expired|sign in/i.test(lastErr)) throw e;
+              if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * attempt));
+            }
+          }
+          if (!ok) {
             markMediaQueue(library, i, "err");
-            throw new Error(data.error || ("upload failed: " + uploadName));
+            failed.push(uploadName + (lastErr ? " (" + lastErr + ")" : ""));
+            showLog("Upload failed: " + uploadName + (lastErr ? " — " + lastErr : ""), true);
+            continue;
           }
           markMediaQueue(library, i, "ok");
           done += 1;
-          setMediaProgress(true, Math.round((done / files.length) * 100), `Uploaded ${done}/${files.length}`);
+          setMediaProgress(true, Math.round(((done + failed.length) / files.length) * 100), `Uploaded ${done}/${files.length}`);
         }
         elementsBusy = false;
-        setStatus(`Uploaded ${done} file(s). Sorting into Plex…`, "ok");
-        showLog(`Elements upload ${library}: ${done} file(s)${formMeta ? " (TMDB form)" : anyNested ? " (folder tree)" : ""}`, true);
+        if (!done && failed.length) {
+          throw new Error("All " + failed.length + " upload(s) failed. First: " + failed[0]);
+        }
+        const summary = failed.length
+          ? `Uploaded ${done}/${files.length}; ${failed.length} failed — re-upload the failed ones`
+          : `Uploaded ${done} file(s). Sorting into Plex…`;
+        setStatus(summary, failed.length ? "err" : "ok");
+        showLog(
+          `Elements upload ${library}: ${done} ok, ${failed.length} failed${formMeta ? " (TMDB form)" : anyNested ? " (folder tree)" : ""}`
+            + (failed.length ? "\nFailed:\n- " + failed.join("\n- ") : ""),
+          true
+        );
         try {
           await refreshElementsSettings();
         } catch (_) {}
         // Auto-run pipeline so uploads appear in Plex without a second click.
-        // Always attempt even if status refresh failed (that used to leave files in inbox).
-        await setElementsAction("pipeline");
+        if (done > 0) await setElementsAction("pipeline");
       } catch (e) {
         elementsBusy = false;
         const msg = String(e.message || e);
