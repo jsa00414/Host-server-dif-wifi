@@ -10093,6 +10093,24 @@ def _elements_sanitize_filename(name: str) -> str:
     return base
 
 
+def _elements_sanitize_relpath(name: str, *, allow_nested: bool = False) -> str:
+    """Sanitize a basename or Show/Season/… relative path for inbox upload."""
+    text = str(name or "").replace("\\", "/").replace("\x00", "").strip().lstrip("/")
+    if not text:
+        raise ValueError("invalid filename")
+    if not allow_nested:
+        return _elements_sanitize_filename(text)
+    parts: list[str] = []
+    for part in text.split("/"):
+        part = part.strip()
+        if not part or part in (".", ".."):
+            raise ValueError("invalid filename")
+        parts.append(_elements_sanitize_filename(part))
+    if not parts:
+        raise ValueError("invalid filename")
+    return "/".join(parts)
+
+
 def elements_upload_media(
     library: str,
     filename: str,
@@ -10165,11 +10183,12 @@ def elements_upload_media(
         raise ValueError(
             f"file too large ({nbytes} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
         )
-    name = _elements_sanitize_filename(filename)
-    rel_under_inbox = name
     plex_meta: dict = {}
     is_tv = kind in ("tvshows", "kids-tvshows")
     is_movie = kind in ("movies", "kids-movies")
+    # TV (and kids TV) may upload Show/Season/… trees from a folder picker/drop.
+    rel_under_inbox = _elements_sanitize_relpath(filename, allow_nested=is_tv)
+    name = Path(rel_under_inbox).name
     if is_movie and (full_form or show_name):
         if not _media_tmdb:
             raise RuntimeError("TMDB helper unavailable")
@@ -10211,8 +10230,10 @@ def elements_upload_media(
         yr = str(year or "").strip()
         sn = season
         en = episode
+        # Prefer relative path so Season NN folders inform bare E10.mp4 names.
+        guess_src = rel_under_inbox or name
         if sn is None or en is None:
-            gsn, gen = _media_tmdb.guess_season_episode(name)
+            gsn, gen = _media_tmdb.guess_season_episode(guess_src)
             # Bare E10.mp4 with season from the form: synthesize Season folder path.
             if (gsn <= 0 or gen <= 0) and sn is not None:
                 gsn2, gen2 = _media_tmdb.guess_season_episode(
@@ -10236,7 +10257,7 @@ def elements_upload_media(
             except Exception:
                 pass
         rel_under_inbox, name = _media_tmdb.build_upload_name_from_form(
-            filename,
+            guess_src,
             show_name=show,
             year=yr,
             season=int(sn) if sn is not None else None,

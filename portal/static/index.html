@@ -1828,7 +1828,7 @@
           <div class="media-drop has-tv-form" id="mediaDropTv" tabindex="0" role="button" aria-label="Upload TV shows">
             <div class="media-drop-hit" data-tv-hit="tvshows">
               <h3>TV Shows</h3>
-              <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
+              <p>Drop a show folder (Show/Season/…) or episodes, or use the full TMDB form.</p>
             </div>
             <button type="button" class="ghost tv-form-toggle-btn" id="mediaTvFormToggle" aria-pressed="false">Full TV show form</button>
             <div class="media-tv-form" id="mediaTvForm" data-library="tvshows">
@@ -1861,14 +1861,16 @@
             </div>
             <div class="media-drop-actions">
               <button type="button" class="primary" id="mediaUploadTvBtn">Choose TV files</button>
+              <button type="button" class="ghost" id="mediaUploadTvFolderBtn">Choose show folder</button>
             </div>
             <ul class="media-file-list" id="mediaTvQueue" aria-live="polite"></ul>
             <input type="file" id="mediaTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+            <input type="file" id="mediaTvFolderInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple webkitdirectory directory hidden />
           </div>
           <div class="media-drop has-tv-form" id="mediaDropKidsTv" tabindex="0" role="button" aria-label="Upload kids TV shows">
             <div class="media-drop-hit" data-tv-hit="kids-tvshows">
               <h3>Kids TV Shows</h3>
-              <p>Drop episodes here, or use the full TMDB form for Plex naming.</p>
+              <p>Drop a show folder (Show/Season/…) or episodes, or use the full TMDB form.</p>
             </div>
             <button type="button" class="ghost tv-form-toggle-btn" id="mediaKidsTvFormToggle" aria-pressed="false">Full TV show form</button>
             <div class="media-tv-form" id="mediaKidsTvForm" data-library="kids-tvshows">
@@ -1901,9 +1903,11 @@
             </div>
             <div class="media-drop-actions">
               <button type="button" class="primary" id="mediaUploadKidsTvBtn">Choose kids TV</button>
+              <button type="button" class="ghost" id="mediaUploadKidsTvFolderBtn">Choose show folder</button>
             </div>
             <ul class="media-file-list" id="mediaKidsTvQueue" aria-live="polite"></ul>
             <input type="file" id="mediaKidsTvInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple hidden />
+            <input type="file" id="mediaKidsTvFolderInput" accept="video/*,.mkv,.mp4,.avi,.m4v,.mov,.wmv,.ts,.m2ts" multiple webkitdirectory directory hidden />
           </div>
         </div>
 
@@ -5880,7 +5884,7 @@
       Array.from(files || []).forEach((file, idx) => {
         const li = document.createElement("li");
         li.dataset.idx = String(idx);
-        li.textContent = file.name;
+        li.textContent = mediaUploadRelPath(file) || file.name;
         ul.appendChild(li);
       });
     }
@@ -6091,6 +6095,7 @@
         preview: "mediaTvPreview",
         uploadBtn: "mediaTvFormUploadBtn",
         fileInput: "mediaTvInput",
+        folderInput: "mediaTvFolderInput",
       },
       "kids-tvshows": {
         toggle: "mediaKidsTvFormToggle",
@@ -6106,8 +6111,85 @@
         preview: "mediaKidsTvPreview",
         uploadBtn: "mediaKidsTvFormUploadBtn",
         fileInput: "mediaKidsTvInput",
+        folderInput: "mediaKidsTvFolderInput",
       },
     };
+    const MEDIA_VIDEO_EXT_RE = /\.(mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|mpg|mpeg|webm)$/i;
+    function isMediaVideoFile(file) {
+      if (!file) return false;
+      const type = String(file.type || "");
+      if (type.startsWith("video/")) return true;
+      return MEDIA_VIDEO_EXT_RE.test(String(file.name || ""));
+    }
+    function mediaUploadRelPath(file) {
+      if (!file) return "";
+      if (file.__uploadPath) return String(file.__uploadPath).replace(/\\/g, "/").replace(/^\/+/, "");
+      const rel = String(file.webkitRelativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+      if (rel && rel.includes("/")) return rel;
+      return String(file.name || "");
+    }
+    function filterMediaVideoFiles(fileList) {
+      return Array.from(fileList || []).filter(isMediaVideoFile);
+    }
+    function readDirectoryEntries(reader) {
+      return new Promise((resolve, reject) => {
+        const acc = [];
+        const readBatch = () => {
+          reader.readEntries((batch) => {
+            if (!batch || !batch.length) {
+              resolve(acc);
+              return;
+            }
+            acc.push(...batch);
+            readBatch();
+          }, reject);
+        };
+        readBatch();
+      });
+    }
+    function entryToFile(entry) {
+      return new Promise((resolve, reject) => entry.file(resolve, reject));
+    }
+    async function walkDirectoryEntry(entry, prefix, out) {
+      if (!entry) return;
+      if (entry.isFile) {
+        const file = await entryToFile(entry);
+        if (!isMediaVideoFile(file)) return;
+        const rel = prefix ? `${prefix}/${file.name}` : file.name;
+        try {
+          Object.defineProperty(file, "__uploadPath", { value: rel, configurable: true });
+        } catch (_) {
+          file.__uploadPath = rel;
+        }
+        out.push(file);
+        return;
+      }
+      if (!entry.isDirectory) return;
+      const nextPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const children = await readDirectoryEntries(entry.createReader());
+      for (const child of children) {
+        await walkDirectoryEntry(child, nextPrefix, out);
+      }
+    }
+    async function collectDroppedMediaFiles(dataTransfer, { allowFolders = false } = {}) {
+      const fallback = () => filterMediaVideoFiles(dataTransfer && dataTransfer.files);
+      if (!allowFolders || !dataTransfer || !dataTransfer.items || !dataTransfer.items.length) {
+        return fallback();
+      }
+      const entries = [];
+      for (let i = 0; i < dataTransfer.items.length; i++) {
+        const item = dataTransfer.items[i];
+        if (!item || item.kind !== "file") continue;
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry) entries.push(entry);
+      }
+      if (!entries.length) return fallback();
+      const out = [];
+      for (const entry of entries) {
+        await walkDirectoryEntry(entry, "", out);
+      }
+      return out.length ? out : fallback();
+    }
     const MOVIE_FORM_IDS = {
       movies: {
         toggle: "mediaMovieFormToggle",
@@ -6397,7 +6479,7 @@
       }
     }
 
-    function startTvFormUpload(library) {
+    function startTvFormUpload(library, { folder = false } = {}) {
       const els = tvFormEls(library);
       if (!els) return;
       if (els.toggle && els.toggle.getAttribute("aria-pressed") !== "true") {
@@ -6418,7 +6500,8 @@
         setStatus("Upload already in progress", "err");
         return;
       }
-      els.fileInput?.click();
+      if (folder && els.folderInput) els.folderInput.click();
+      else els.fileInput?.click();
     }
 
     function wireTvForm(library) {
@@ -6487,7 +6570,7 @@
       els.uploadBtn?.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        startTvFormUpload(library);
+        startTvFormUpload(library, { folder: true });
       });
     }
 
@@ -6684,7 +6767,10 @@
     }
 
     async function uploadElementsMedia(library, fileList) {
-      const files = Array.from(fileList || []);
+      const allowNested = library === "tvshows" || library === "kids-tvshows";
+      const files = allowNested
+        ? filterMediaVideoFiles(fileList)
+        : Array.from(fileList || []);
       if (!files.length || elementsBusy) return;
       let formMeta = null;
       try {
@@ -6699,19 +6785,20 @@
       try {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
+          const uploadName = allowNested ? mediaUploadRelPath(file) : file.name;
           markMediaQueue(library, i, "busy");
           const pct = Math.round((i / files.length) * 100);
-          const label = `Uploading ${file.name} (${i + 1}/${files.length})…`;
+          const label = `Uploading ${uploadName} (${i + 1}/${files.length})…`;
           renderElementsSettings(elementsLastData || { ok: true }, {
             busy: true,
             pendingAction: "upload",
             uploadLabel: label,
             uploadPct: pct,
           });
-          setStatus(`Uploading ${file.name} to Elements ${library}…`);
+          setStatus(`Uploading ${uploadName} to Elements ${library}…`);
           const params = new URLSearchParams();
           params.set("library", library);
-          params.set("filename", file.name);
+          params.set("filename", uploadName);
           if (formMeta) {
             params.set("full_form", "1");
             if (formMeta.show) params.set("show", formMeta.show);
@@ -6728,14 +6815,14 @@
             credentials: "same-origin",
             headers: {
               "Content-Type": "application/octet-stream",
-              "X-Filename": file.name,
+              "X-Filename": uploadName,
             },
             body: file,
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || data.ok === false) {
             markMediaQueue(library, i, "err");
-            throw new Error(data.error || ("upload failed: " + file.name));
+            throw new Error(data.error || ("upload failed: " + uploadName));
           }
           markMediaQueue(library, i, "ok");
           done += 1;
@@ -6760,11 +6847,18 @@
         setTimeout(() => { if (!elementsBusy) refreshElementsSettings(); }, 2500);
       }
     }
-    function wireMediaDrop(dropId, inputId, library) {
+    function wireMediaDrop(dropId, inputId, library, folderInputId) {
       const drop = document.getElementById(dropId);
       const input = document.getElementById(inputId);
+      const folderInput = folderInputId ? document.getElementById(folderInputId) : null;
       if (!drop || !input) return;
-      const openPicker = () => { if (!elementsBusy) input.click(); };
+      const allowFolders = library === "tvshows" || library === "kids-tvshows";
+      const openPicker = () => {
+        if (elementsBusy) return;
+        // Prefer folder picker for TV drop-zone clicks so Show/Season trees upload intact.
+        if (allowFolders && folderInput) folderInput.click();
+        else input.click();
+      };
       drop.addEventListener("click", (ev) => {
         if (ev.target.closest("button, input, a, label, select, textarea, .media-tv-form, .tv-search-results")) return;
         // When the full form is open, only the header hit-area opens the picker.
@@ -6791,12 +6885,25 @@
         });
       });
       drop.addEventListener("drop", (ev) => {
-        const files = ev.dataTransfer && ev.dataTransfer.files;
-        if (files && files.length) uploadElementsMedia(library, files);
+        collectDroppedMediaFiles(ev.dataTransfer, { allowFolders }).then((files) => {
+          if (files && files.length) uploadElementsMedia(library, files);
+          else if (allowFolders) setStatus("No video files found in the dropped folder", "err");
+        }).catch((e) => setStatus(String(e.message || e), "err"));
       });
       input.addEventListener("change", () => {
         uploadElementsMedia(library, input.files).finally(() => { input.value = ""; });
       });
+      if (folderInput) {
+        folderInput.addEventListener("change", () => {
+          const files = filterMediaVideoFiles(folderInput.files);
+          if (!files.length) {
+            setStatus("No video files found in that folder", "err");
+            folderInput.value = "";
+            return;
+          }
+          uploadElementsMedia(library, files).finally(() => { folderInput.value = ""; });
+        });
+      }
     }
 
 
@@ -6840,14 +6947,22 @@
       ev.stopPropagation();
       document.getElementById("mediaTvInput")?.click();
     });
+    document.getElementById("mediaUploadTvFolderBtn")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      document.getElementById("mediaTvFolderInput")?.click();
+    });
     document.getElementById("mediaUploadKidsTvBtn")?.addEventListener("click", (ev) => {
       ev.stopPropagation();
       document.getElementById("mediaKidsTvInput")?.click();
     });
+    document.getElementById("mediaUploadKidsTvFolderBtn")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      document.getElementById("mediaKidsTvFolderInput")?.click();
+    });
     wireMediaDrop("mediaDropMovies", "mediaMovieInput", "movies");
     wireMediaDrop("mediaDropKidsMovies", "mediaKidsMovieInput", "kids-movies");
-    wireMediaDrop("mediaDropTv", "mediaTvInput", "tvshows");
-    wireMediaDrop("mediaDropKidsTv", "mediaKidsTvInput", "kids-tvshows");
+    wireMediaDrop("mediaDropTv", "mediaTvInput", "tvshows", "mediaTvFolderInput");
+    wireMediaDrop("mediaDropKidsTv", "mediaKidsTvInput", "kids-tvshows", "mediaKidsTvFolderInput");
     wireMovieForm("movies");
     wireMovieForm("kids-movies");
     wireTvForm("tvshows");
