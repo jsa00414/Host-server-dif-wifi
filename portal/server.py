@@ -10256,14 +10256,23 @@ def elements_upload_media(
                     show = str((season_info.get("show") or {}).get("name") or show)
             except Exception:
                 pass
-        rel_under_inbox, name = _media_tmdb.build_upload_name_from_form(
-            guess_src,
-            show_name=show,
-            year=yr,
-            season=int(sn) if sn is not None else None,
-            episode=int(en) if en is not None else None,
-            episode_title=ep_title,
-        )
+        nested_src = "/" in str(guess_src)
+        try:
+            rel_under_inbox, name = _media_tmdb.build_upload_name_from_form(
+                guess_src,
+                show_name=show,
+                year=yr,
+                season=int(sn) if sn is not None else None,
+                episode=int(en) if en is not None else None,
+                episode_title=ep_title,
+            )
+        except ValueError:
+            # Folder uploads already carry Show/Season/… — keep that tree instead
+            # of failing when S/E cannot be parsed from a weird basename.
+            if nested_src and "/" in rel_under_inbox:
+                name = Path(rel_under_inbox).name
+            else:
+                raise
         # sanitize each path segment
         parts = []
         for part in rel_under_inbox.replace("\\", "/").split("/"):
@@ -21741,7 +21750,14 @@ document.getElementById('f').onsubmit = async (e) => {
                         f"file too large ({length} bytes; max {ELEMENTS_UPLOAD_MAX_BYTES})"
                     )
                 if not filename:
-                    filename = self.headers.get("X-Filename") or "upload.bin"
+                    raw_hdr = self.headers.get("X-Filename") or "upload.bin"
+                    # Frontend may percent-encode nested/unicode names for header safety.
+                    try:
+                        from urllib.parse import unquote
+
+                        filename = unquote(raw_hdr)
+                    except Exception:
+                        filename = raw_hdr
                 # Stream request body → Proxmox SSH; do not buffer multi-GB files.
                 self._json(
                     200,

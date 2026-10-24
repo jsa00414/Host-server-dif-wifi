@@ -427,7 +427,8 @@ def build_upload_name_from_form(
         sn, en = guess_season_episode(original_filename)
     if sn <= 0 or en <= 0:
         raise ValueError(
-            "Season and episode required (could not parse from filename)"
+            "Season and episode required (could not parse from filename). "
+            "Use a Show/Season folder upload, or set Season & Episode in the form."
         )
     rel = plex_episode_relpath(
         show_name=show_name,

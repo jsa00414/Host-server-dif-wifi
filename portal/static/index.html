@@ -6766,18 +6766,39 @@
       });
     }
 
+    function mediaHeaderFilename(name) {
+      // Keep X-Filename Latin-1-safe; nested paths and unicode live in the query string.
+      try {
+        return encodeURIComponent(String(name || "")).slice(0, 500);
+      } catch (_) {
+        return "upload.bin";
+      }
+    }
     async function uploadElementsMedia(library, fileList) {
       const allowNested = library === "tvshows" || library === "kids-tvshows";
       const files = allowNested
         ? filterMediaVideoFiles(fileList)
         : Array.from(fileList || []);
       if (!files.length || elementsBusy) return;
+      // Folder trees already have Show/Season/… — keep paths intact. TMDB form
+      // renaming is for flat episode files only (avoids "season & episode required").
+      const anyNested = allowNested && files.some((f) => mediaUploadRelPath(f).includes("/"));
       let formMeta = null;
       try {
         formMeta = collectMediaFormMeta(library);
       } catch (e) {
-        setStatus(String(e.message || e), "err");
-        return;
+        if (anyNested) {
+          formMeta = null;
+        } else {
+          setStatus(String(e.message || e), "err");
+          return;
+        }
+      }
+      if (anyNested) formMeta = null;
+      // Multi-file form uploads must guess S/E per file — a single episode select
+      // would map every file onto the same destination name.
+      if (formMeta && files.length > 1) {
+        formMeta = { ...formMeta, episode: "", episode_title: "" };
       }
       elementsBusy = true;
       let done = 0;
@@ -6786,6 +6807,7 @@
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const uploadName = allowNested ? mediaUploadRelPath(file) : file.name;
+          const nestedPath = allowNested && uploadName.includes("/");
           markMediaQueue(library, i, "busy");
           const pct = Math.round((i / files.length) * 100);
           const label = `Uploading ${uploadName} (${i + 1}/${files.length})…`;
@@ -6799,7 +6821,8 @@
           const params = new URLSearchParams();
           params.set("library", library);
           params.set("filename", uploadName);
-          if (formMeta) {
+          // Apply TMDB form only for flat files (not Show/Season trees).
+          if (formMeta && !nestedPath) {
             params.set("full_form", "1");
             if (formMeta.show) params.set("show", formMeta.show);
             if (formMeta.title) params.set("title", formMeta.title);
@@ -6815,7 +6838,7 @@
             credentials: "same-origin",
             headers: {
               "Content-Type": "application/octet-stream",
-              "X-Filename": uploadName,
+              "X-Filename": mediaHeaderFilename(uploadName),
             },
             body: file,
           });
@@ -6830,7 +6853,7 @@
         }
         elementsBusy = false;
         setStatus(`Uploaded ${done} file(s). Sorting into Plex…`, "ok");
-        showLog(`Elements upload ${library}: ${done} file(s)${formMeta ? " (TMDB form)" : ""}`, true);
+        showLog(`Elements upload ${library}: ${done} file(s)${formMeta ? " (TMDB form)" : anyNested ? " (folder tree)" : ""}`, true);
         await refreshElementsSettings();
         // Auto-run pipeline so uploads appear in Plex without a second click.
         await setElementsAction("pipeline");
