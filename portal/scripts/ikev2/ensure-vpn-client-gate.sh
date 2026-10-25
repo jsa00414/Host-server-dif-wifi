@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# Gate IKEv2 clients into the "trust circle":
-#   - Allowlisted WAN/VIP → AdGuard DNS + host INPUT (admin VIP path)
+# Gate VPN clients into the "trust circle":
+#   - Allowlisted IKEv2 WAN / OpenVPN CCD VIP → AdGuard (circle) DNS + host INPUT
 #   - Everyone else → internet OK, but DNS forced to guest resolver (no admin rewrites)
+#   - Flint OVPN VIP 10.9.0.2 is always circle (router upstream / MASQ path)
 #
 # Called from sm-ikev2-peer-acl.service after the Caddy sticky ACL sync.
 set -euo pipefail
 
 ALLOWLIST_FILE="${VPN_ALLOWLIST_FILE:-/opt/servermanager/panel/vpn-allowlist.json}"
 STICKY_FILE="${STICKY_VPN_IPS_FILE:-/opt/servermanager/panel/caddy-sticky-vpn-ips.txt}"
-GUEST_DNS="${VPN_GUEST_DNS:-1.1.1.1}"
+GUEST_DNS="${VPN_GUEST_DNS:-10.42.42.45}"
 IKEV2_POOL="${IKEV2_POOL:-10.10.0.0/24}"
 ADGUARD_DNS="${ADGUARD_DNS:-10.42.42.44}"
+OVPN_CCD_DIRS="${OVPN_CCD_DIRS:-/opt/openvpn/ccd /opt/openvpn/ccd-udp}"
+OVPN_FLINT_VIP="${OVPN_FLINT_VIP:-10.9.0.2}"
 
-export ALLOWLIST_FILE STICKY_FILE GUEST_DNS IKEV2_POOL ADGUARD_DNS
+export ALLOWLIST_FILE STICKY_FILE GUEST_DNS IKEV2_POOL ADGUARD_DNS OVPN_CCD_DIRS OVPN_FLINT_VIP
 
 python3 - <<'PY'
 import json
@@ -24,9 +27,15 @@ from pathlib import Path
 
 allow_path = Path(os.environ["ALLOWLIST_FILE"])
 sticky_path = Path(os.environ["STICKY_FILE"])
-guest_dns = os.environ.get("GUEST_DNS", "1.1.1.1").strip() or "1.1.1.1"
+guest_dns = os.environ.get("GUEST_DNS", "10.42.42.45").strip() or "10.42.42.45"
 pool = os.environ.get("IKEV2_POOL", "10.10.0.0/24")
 adguard = os.environ.get("ADGUARD_DNS", "10.42.42.44")
+flint_vip = os.environ.get("OVPN_FLINT_VIP", "10.9.0.2").strip() or "10.9.0.2"
+ccd_dirs = [
+    Path(p.strip())
+    for p in re.split(r"[\s,;]+", os.environ.get("OVPN_CCD_DIRS", "/opt/openvpn/ccd"))
+    if p.strip()
+]
 now = int(time.time())
 
 PRIVATE = [
@@ -280,8 +289,35 @@ def iptables_ok(cmd: list[str]) -> bool:
     return subprocess.run(cmd, capture_output=True).returncode == 0
 
 
+def load_ovpn_ccd_vips() -> set[str]:
+    """CCD ifconfig-push VIPs (excludes flint infra VIP and .0/.1/.255)."""
+    found: set[str] = set()
+    push_re = re.compile(
+        r"^\s*ifconfig-push\s+(\d{1,3}(?:\.\d{1,3}){3})\b", re.M
+    )
+    for d in ccd_dirs:
+        if not d.is_dir():
+            continue
+        try:
+            names = list(d.iterdir())
+        except Exception:
+            continue
+        for path in names:
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in push_re.finditer(text):
+                ip = m.group(1)
+                if is_openvpn_client_ipv4(ip):
+                    found.add(ip)
+    return found
+
+
 def ensure_guest_dns(vip: str, enable: bool) -> None:
-    """DNAT this IKEv2 VIP's DNS to guest resolver (bypass AdGuard admin rewrites)."""
+    """DNAT this VPN VIP's DNS to guest resolver (bypass AdGuard admin rewrites)."""
     comment = f"SM-VPN-GUEST-DNS-{vip}"
     for proto in ("udp", "tcp"):
         check = [
@@ -501,12 +537,41 @@ for s in sessions:
             }
         )
 
-# Drop guest DNAT for VIPs no longer connected
+# OpenVPN CCD: allowlisted /32s stay on circle AdGuard; others → guest DNS.
+# Flint VIP is infra-trusted (never guest). Blanket SM-OVPN-DNS still DNATs
+# tun0 → AdGuard; per-VIP guest rules inserted at PREROUTING:1 win first.
+ovpn_ccd_vips = load_ovpn_ccd_vips()
+ovpn_circle = set()
+ovpn_guest = set()
+for vip in sorted(ovpn_ccd_vips):
+    if vip == flint_vip:
+        ensure_guest_dns(vip, enable=False)
+        ovpn_circle.add(vip)
+        continue
+    trusted = vip in allowed_ips
+    ensure_guest_dns(vip, enable=not trusted)
+    if trusted:
+        ovpn_circle.add(vip)
+    else:
+        ovpn_guest.add(vip)
+        active_guest.add(vip)
+
+# Always keep flint on circle even if CCD parse missed it.
+ensure_guest_dns(flint_vip, enable=False)
+ovpn_circle.add(flint_vip)
+
+trusted_ike_vips = {s["vip"] for s in sessions if s["wan"] in allowed_ips}
+connected_ike_vips = {s["vip"] for s in sessions}
+# Drop guest DNAT for VIPs that are no longer guest-worthy (orphans).
 for vip in list_guest_dns_vips():
-    if vip not in active_guest and vip not in {s["vip"] for s in sessions if s["wan"] in allowed_ips}:
-        # still connected trusted → already disabled above; leftover orphans:
-        if vip not in {s["vip"] for s in sessions}:
-            ensure_guest_dns(vip, enable=False)
+    if vip in active_guest or vip in ovpn_guest:
+        continue
+    if vip in trusted_ike_vips or vip in ovpn_circle:
+        ensure_guest_dns(vip, enable=False)
+        continue
+    # leftover IKEv2 orphan (disconnected + untrusted): clear
+    if vip not in connected_ike_vips and vip not in ovpn_ccd_vips:
+        ensure_guest_dns(vip, enable=False)
 
 # Keep pending for currently interesting IPs (active or recent 7d),
 # and preserve LAN-offline pending rows seeded by the portal.
@@ -542,6 +607,8 @@ save_allowlist(data)
 
 print(
     f"gate: sessions={len(sessions)} trusted={sum(1 for s in sessions if s['wan'] in allowed_ips)} "
-    f"guest_dns={len(active_guest)} allowed={len(allowed_ips)} pending={len(data['pending'])}"
+    f"guest_dns={len(active_guest)} allowed={len(allowed_ips)} pending={len(data['pending'])} "
+    f"ovpn_circle={','.join(sorted(ovpn_circle)) or '(none)'} "
+    f"ovpn_guest={','.join(sorted(ovpn_guest)) or '(none)'}"
 )
 PY

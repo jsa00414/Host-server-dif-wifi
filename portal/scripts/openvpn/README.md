@@ -23,6 +23,13 @@ Caddy `@vpn_clients` trusts **only** the Flint OVPN VIP `10.9.0.2/32` from the
 VIP as an allowlisted `/32` if campus OpenVPN should reach portal. A blanket
 `10.9.0.0/24` previously let `windows.ovpn` bypass the Authenticator LAN circle.
 
+## Circle DNS vs guest DNS (OpenVPN)
+
+Server push + `SM-OVPN-DNS` default OVPN clients onto AdGuard (`10.42.42.44`).
+`ensure-vpn-client-gate.sh` then demotes **non-allowlisted** CCD VIPs to guest
+DNS (`10.42.42.45`). Allowlisted VIPs (e.g. `windows` `10.9.0.10`,
+`james-iphone` `10.9.0.3`) and Flint `10.9.0.2` stay on circle DNS.
+
 ## Speed tuning (~100Mbps target)
 
 `openvpn-speed-tune.sh` raises kernel TCP buffers (16MiB). `server.conf` sets

@@ -8,6 +8,8 @@
 set -euo pipefail
 
 CADDYFILE="${CADDYFILE:-/opt/truemail/Caddyfile}"
+# Host Caddyfile (outside docker). Keep @vpn_clients in sync when present.
+HOST_CADDYFILE="${HOST_CADDYFILE:-/etc/caddy/Caddyfile}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 STATE_DIR="${IKEV2_PEER_ACL_DIR:-/var/lib/servermanager}"
 STATE_FILE="${STATE_DIR}/ikev2-peer-ips.txt"
@@ -21,7 +23,7 @@ LAN_GATE_SCRIPT="${LAN_CIRCLE_FLINT_GATE_SCRIPT:-/opt/ikev2/ensure-lan-circle-fl
 # blocked on Flint pre-NAT for portal (see ensure-lan-circle-flint-gate.sh).
 BASE_CIDRS_DEFAULT="10.8.0.0/24 10.42.42.0/24 10.9.0.2/32 10.10.0.0/24 100.64.0.0/10 127.0.0.1/32 74.208.76.213/32 10.11.0.1/32"
 
-export CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE ALLOWLIST_FILE BASE_CIDRS_DEFAULT
+export CADDYFILE HOST_CADDYFILE PORTAL_ENV_FILE="$ENV_FILE" STATE_FILE STICKY_FILE ALLOWLIST_FILE BASE_CIDRS_DEFAULT
 
 mkdir -p "$STATE_DIR" "$(dirname "$STICKY_FILE")" "$(dirname "$ALLOWLIST_FILE")"
 
@@ -34,6 +36,7 @@ import time
 from pathlib import Path
 
 caddyfile = Path(os.environ.get("CADDYFILE", "/opt/truemail/Caddyfile"))
+host_caddyfile = Path(os.environ.get("HOST_CADDYFILE", "/etc/caddy/Caddyfile"))
 env_file = Path(os.environ.get("PORTAL_ENV_FILE", "/opt/wireguard/port-forward-ui.env"))
 state_file = Path(os.environ.get("STATE_FILE", "/var/lib/servermanager/ikev2-peer-ips.txt"))
 sticky_file = Path(
@@ -621,6 +624,22 @@ trusted_needed = sorted(
     | set(lan_ips)
     | set(ovpn_ips)
 )
+def _host_caddy_in_sync(cidrs_needed: list[str]) -> bool:
+    """True when host Caddyfile is absent, same as docker, or already has trusted /32s."""
+    if not host_caddyfile.is_file():
+        return True
+    try:
+        if host_caddyfile.resolve() == caddyfile.resolve():
+            return True
+    except Exception:
+        pass
+    try:
+        host_live = vpn_clients_cidrs_in_caddy(host_caddyfile.read_text())
+    except Exception:
+        return False
+    return all(f"{ip}/32" in host_live for ip in cidrs_needed)
+
+
 if prev == cur and caddyfile.is_file():
     text = caddyfile.read_text()
     live = vpn_clients_cidrs_in_caddy(text)
@@ -643,6 +662,7 @@ if prev == cur and caddyfile.is_file():
         and denied_gone
         and not deny_changed
         and not forbid_changed
+        and _host_caddy_in_sync(trusted_needed)
     ):
         unapproved = [ip for ip in peers if ip not in allowed_ips]
         if not unapproved or all(f"{ip}/32" not in live for ip in unapproved):
@@ -742,6 +762,28 @@ else:
     caddyfile.write_text(new_text)
     print(f"patched {n} Caddy @vpn_clients lines (plex keeps {PLEX_LAN_CIDR})")
 
+# Keep host /etc/caddy in sync when it is a separate file (not the docker bind).
+if (
+    host_caddyfile.is_file()
+    and host_caddyfile.resolve() != caddyfile.resolve()
+):
+    try:
+        host_text = host_caddyfile.read_text()
+        host_text, _ = ensure_denied_wan_blocks(host_text)
+        host_text, host_forbid = scrub_forbidden_responds(host_text)
+        host_new, host_n = _patch_vpn_clients(host_text, combined_s)
+        if host_n:
+            host_caddyfile.write_text(host_new)
+            print(
+                f"patched {host_n} host Caddy @vpn_clients lines ({host_caddyfile})"
+            )
+            if host_forbid:
+                print("scrubbed host Forbidden/HTML responds → abort")
+        else:
+            print(f"WARN: no @vpn_clients lines in {host_caddyfile}")
+    except Exception as exc:
+        print(f"WARN: host Caddy sync failed: {exc}")
+
 print("peers_seen:", ", ".join(peers) if peers else "(none)")
 print("trusted_sticky:", ", ".join(sticky_trusted) if sticky_trusted else "(none)")
 print("allowlisted:", ", ".join(sorted(allowed_ips)) if allowed_ips else "(none)")
@@ -769,6 +811,23 @@ if reload.returncode != 0:
     print("restarted truemail-caddy-1")
 else:
     print("caddy reloaded")
+# Best-effort reload of host caddy when it serves a separate Caddyfile.
+if (
+    host_caddyfile.is_file()
+    and host_caddyfile.resolve() != caddyfile.resolve()
+):
+    host_reload = subprocess.run(
+        ["caddy", "reload", "--config", str(host_caddyfile)],
+        capture_output=True,
+        text=True,
+    )
+    if host_reload.returncode == 0:
+        print("host caddy reloaded")
+    else:
+        print(
+            "host caddy reload skipped:",
+            (host_reload.stderr or host_reload.stdout or "")[:200],
+        )
 PY
 
 # Apply guest DNS + UFW circle gating for live IKEv2 sessions
