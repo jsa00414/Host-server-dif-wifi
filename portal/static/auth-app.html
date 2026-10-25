@@ -1525,11 +1525,16 @@
           allowed.forEach((row) => {
             const sealed = !!(row.sealed || row.hidden || row.source === "router");
             const isLan = row.kind === "lan" || String(row.ip || "").startsWith("192.168.8.");
+            const isOvpn = row.kind === "openvpn" || String(row.ip || "").startsWith("10.9.0.");
             const name = String(row.name || row.hostname || "").trim();
             const title = name || row.ip;
+            const presence =
+              !sealed && (isLan || isOvpn)
+                ? (row.online ? " · online" : " · offline")
+                : "";
             const detail = sealed
               ? `${esc(row.ip)} · sealed · always on`
-              : `${esc(row.ip)} · allowlisted${isLan ? " · LAN" : ""}${name ? "" : ` · ${esc(row.note || row.source || "—")}`}`;
+              : `${esc(row.ip)} · allowlisted${isLan ? " · LAN" : ""}${isOvpn && !isLan ? " · OpenVPN" : ""}${presence}${name ? "" : ` · ${esc(row.note || row.source || "—")}`}`;
             const actions = sealed
               ? `<div class="info">Cannot remove sealed router WAN</div>`
               : `<div class="row-actions">

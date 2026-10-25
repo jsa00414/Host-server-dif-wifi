@@ -4446,10 +4446,15 @@
               const sealed = !!(r.sealed || r.source === "router");
               const hiddenFromApps = !!(!sealed && r.hidden);
               const isLan = r.kind === "lan" || String(r.ip || "").startsWith("192.168.8.");
+              const isOvpn = r.kind === "openvpn" || String(r.ip || "").startsWith("10.9.0.");
               const name = deviceLabel(r);
+              const presence =
+                !sealed && (isLan || isOvpn)
+                  ? (r.online ? " · online" : " · offline")
+                  : "";
               const note = sealed
                 ? (r.note || "Flint router WAN (sealed)")
-                : `${isLan ? "LAN · " : ""}${r.note || r.source || "—"}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
+                : `${isLan ? "LAN · " : ""}${isOvpn && !isLan ? "OpenVPN · " : ""}${r.note || r.source || "—"}${presence}${hiddenFromApps ? " · hidden from Authenticator" : ""}`;
               const kid = String(r.key_id || "").trim();
               const keyCell = sealed
                 ? `<span class="sec-users">n/a</span>`

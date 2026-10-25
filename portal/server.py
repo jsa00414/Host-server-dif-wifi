@@ -11759,8 +11759,8 @@ def _circle_device_exit_target_ips(control_ip: str = "") -> list[str]:
     return out
 
 
-def _device_exit_candidate_ips_for_circle() -> list[dict]:
-    """Allowlisted circle devices (home LAN + OpenVPN CCD) for the Exit picker."""
+def _circle_live_online_ips() -> set[str]:
+    """IPs currently reachable as circle devices (LAN ARP/online + connected OVPN VIPs)."""
     online: set[str] = set()
     try:
         for d in (read_lan_devices().get("devices") or []):
@@ -11781,12 +11781,22 @@ def _device_exit_candidate_ips_for_circle() -> list[dict]:
         for row in st.get("routes") or []:
             if not isinstance(row, dict):
                 continue
-            ip = _normalize_vpn_ip(str(row.get("virtual") or ""))
+            raw_vip = str(row.get("virtual") or "").strip()
+            # Status may append "C" for client-owned routes (e.g. 192.168.8.163C).
+            if raw_vip.endswith("C") and raw_vip[:-1].replace(".", "").isdigit():
+                raw_vip = raw_vip[:-1]
+            ip = _normalize_vpn_ip(raw_vip)
             name = str(row.get("name") or "").strip().lower()
             if _is_openvpn_client_ipv4(ip) and name in connected_names:
                 online.add(ip)
     except Exception:
         pass
+    return online
+
+
+def _device_exit_candidate_ips_for_circle() -> list[dict]:
+    """Allowlisted circle devices (home LAN + OpenVPN CCD) for the Exit picker."""
+    online = _circle_live_online_ips()
     out: list[dict] = []
     for ip in sorted(_allowlisted_device_exit_ips()):
         if not (_is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip)):
@@ -14837,6 +14847,7 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
             item["auth_app_enrolled"] = True
         pending.append(item)
     allowed = _attach_circle_device_names(view.get("allowed") or [], names=names)
+    live_online = _circle_live_online_ips()
     # Surface crypto binding status (fingerprint only — never raw material beyond kid).
     enriched_allowed = []
     for row in allowed:
@@ -14854,6 +14865,9 @@ def build_vpn_allowlist_status(*, for_auth_app: bool = False) -> dict:
         else:
             item["key_bound"] = False
             item["key_id"] = ""
+        ip = _normalize_vpn_ip(item.get("ip", ""))
+        if _is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip):
+            item["online"] = ip in live_online
         enriched_allowed.append(item)
     allowed = enriched_allowed
     denied = _attach_circle_device_names(view.get("denied") or [], names=names)
