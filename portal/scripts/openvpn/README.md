@@ -15,21 +15,21 @@ Portal downloads (login required):
 On Flint: disable WireGuard, import OpenVPN, enable. Endpoint `74.208.76.213:443` TCP
 (sslh demux → OpenVPN on 8443).
 
-## LAN internet (school WAN)
+## LAN internet (VPN only)
 
-Flint OVPN is **site-to-site only** (portal / circle DNS). LAN clients must use
-the school WAN (`eth1` / `apclix0`), not OVPN as a full-tunnel exit.
+Home LAN (`192.168.8.0/24`) must exit **only through OpenVPN → VPS**
+(`route_policy` default `via=ovpnclient1`, mark `0xa000`, killswitch on).
+School WAN on Flint is for the router uplink that carries the tunnel — not for
+client internet (no campus leak).
 
-If phones/PCs on `192.168.8.0/24` suddenly have no internet while the router
-itself still pings, GL `route_policy` probably defaulted to `via=ovpnclient1`
-with `killswitch=1`. Heal with:
+VPS side: `ovpn-firewall.sh` MASQs `10.9.0.0/24` out `ens6` (`SM-OVPN-MASQ`).
+
+If LAN loses internet, check tunnel + VPS exit, then re-assert policy:
 
 ```bash
-sudo bash /opt/wireguard/port-forward-ui/scripts/openvpn/ensure-flint-lan-wan-internet.sh
+sudo bash /opt/wireguard/port-forward-ui/scripts/openvpn/ensure-flint-lan-vpn-internet.sh
+# on Flint: ping -I ovpnclient1 8.8.8.8
 ```
-
-That sets default `via=novpn`, disables killswitch, and keeps a firewall.user
-safety net so LAN marks `0x8000` (direct WAN).
 
 ## Portal trust circle
 
