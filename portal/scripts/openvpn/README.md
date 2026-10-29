@@ -15,6 +15,22 @@ Portal downloads (login required):
 On Flint: disable WireGuard, import OpenVPN, enable. Endpoint `74.208.76.213:443` TCP
 (sslh demux → OpenVPN on 8443).
 
+## LAN internet (school WAN)
+
+Flint OVPN is **site-to-site only** (portal / circle DNS). LAN clients must use
+the school WAN (`eth1` / `apclix0`), not OVPN as a full-tunnel exit.
+
+If phones/PCs on `192.168.8.0/24` suddenly have no internet while the router
+itself still pings, GL `route_policy` probably defaulted to `via=ovpnclient1`
+with `killswitch=1`. Heal with:
+
+```bash
+sudo bash /opt/wireguard/port-forward-ui/scripts/openvpn/ensure-flint-lan-wan-internet.sh
+```
+
+That sets default `via=novpn`, disables killswitch, and keeps a firewall.user
+safety net so LAN marks `0x8000` (direct WAN).
+
 ## Portal trust circle
 
 Caddy `@vpn_clients` trusts **only** the Flint OVPN VIP `10.9.0.2/32` from the
