@@ -8,6 +8,10 @@ GUEST_DNS="${GUEST_DNS:-${VPN_GUEST_DNS:-10.42.42.45}}"
 
 iptables -t nat -C POSTROUTING -s 10.9.0.0/24 -o ens6 -m comment --comment SM-OVPN-MASQ -j MASQUERADE 2>/dev/null \
   || iptables -t nat -A POSTROUTING -s 10.9.0.0/24 -o ens6 -m comment --comment SM-OVPN-MASQ -j MASQUERADE
+# Flint LAN sources preserved across OVPN (circle→Xray / guest→sing-box). MASQ
+# residual UDP/ICMP that is not TCP-REDIRECT'd into the proxies.
+iptables -t nat -C POSTROUTING -s 192.168.8.0/24 -o ens6 -m comment --comment SM-LAN-MASQ -j MASQUERADE 2>/dev/null \
+  || iptables -t nat -A POSTROUTING -s 192.168.8.0/24 -o ens6 -m comment --comment SM-LAN-MASQ -j MASQUERADE
 iptables -C FORWARD -s 10.9.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.9.0.0/24 -j ACCEPT
 iptables -C FORWARD -d 10.9.0.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.9.0.0/24 -j ACCEPT
 iptables -C FORWARD -d 192.168.8.0/24 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 192.168.8.0/24 -j ACCEPT

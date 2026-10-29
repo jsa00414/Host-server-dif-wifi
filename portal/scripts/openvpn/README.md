@@ -15,20 +15,22 @@ Portal downloads (login required):
 On Flint: disable WireGuard, import OpenVPN, enable. Endpoint `74.208.76.213:443` TCP
 (sslh demux → OpenVPN on 8443).
 
-## LAN internet (VPN only)
+## LAN internet (VPN only → Xray / sing-box)
 
-Home LAN (`192.168.8.0/24`) must exit **only through OpenVPN → VPS**
-(`route_policy` default `via=ovpnclient1`, mark `0xa000`, killswitch on).
-School WAN on Flint is for the router uplink that carries the tunnel — not for
-client internet (no campus leak).
+Home LAN (`192.168.8.0/24`) exits **only through OpenVPN → VPS**, then:
 
-VPS side: `ovpn-firewall.sh` MASQs `10.9.0.0/24` out `ens6` (`SM-OVPN-MASQ`).
+| Who | Exit |
+|---|---|
+| Circle (allowlisted / key-bound LAN) | **Xray** dokodemo `:18080` |
+| Guest / pending / unknown LAN | **sing-box** redirect `:18081` |
 
-If LAN loses internet, check tunnel + VPS exit, then re-assert policy:
+Flint `route_policy` stays `via=ovpnclient1` + killswitch (no school-WAN leak).
+LAN source IPs are preserved across OVPN (no blanket MASQ) so the VPS can
+split circle vs guest. Apply / refresh:
 
 ```bash
 sudo bash /opt/wireguard/port-forward-ui/scripts/openvpn/ensure-flint-lan-vpn-internet.sh
-# on Flint: ping -I ovpnclient1 8.8.8.8
+sudo bash /opt/wireguard/port-forward-ui/scripts/openvpn/ensure-lan-xray-singbox-split.sh
 ```
 
 ## Portal trust circle

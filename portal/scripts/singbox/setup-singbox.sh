@@ -12,6 +12,8 @@ SINGBOX_HOST="${SINGBOX_HOST:-vpn.vpstruelord.com}"
 SINGBOX_SNI="${SINGBOX_SNI:-www.microsoft.com}"
 SINGBOX_DEST_HOST="${SINGBOX_DEST_HOST:-${SINGBOX_SNI}}"
 SINGBOX_DEST_PORT="${SINGBOX_DEST_PORT:-443}"
+# Transparent redirect for Flint LAN guest users (iptables REDIRECT).
+SINGBOX_REDIR_PORT="${SINGBOX_REDIR_PORT:-18081}"
 GUEST_DNS="${VPN_GUEST_DNS:-${SINGBOX_GUEST_DNS:-10.42.42.45}}"
 CLIENTS_FILE="${SINGBOX_CLIENTS_FILE:-$SINGBOX_DIR/clients.json}"
 KEYS_FILE="${SINGBOX_KEYS_FILE:-$SINGBOX_DIR/reality.keys}"
@@ -95,7 +97,7 @@ PY
 
 write_config() {
   export SINGBOX_DIR SINGBOX_PORT SINGBOX_HOST SINGBOX_SNI SINGBOX_DEST_HOST SINGBOX_DEST_PORT
-  export GUEST_DNS CLIENTS_FILE KEYS_FILE CONFIG_FILE SINGBOX_BIN
+  export SINGBOX_REDIR_PORT GUEST_DNS CLIENTS_FILE KEYS_FILE CONFIG_FILE SINGBOX_BIN
   python3 - <<'PY'
 import json
 import os
@@ -125,6 +127,7 @@ for row in clients_raw.get("clients") or []:
     users.append({"name": name, "uuid": uuid})
 
 port = int(os.environ.get("SINGBOX_PORT", "8445"))
+redir_port = int(os.environ.get("SINGBOX_REDIR_PORT", "18081"))
 sni = os.environ.get("SINGBOX_SNI", "www.microsoft.com")
 dest_host = os.environ.get("SINGBOX_DEST_HOST", sni)
 dest_port = int(os.environ.get("SINGBOX_DEST_PORT", "443") or "443")
@@ -170,7 +173,13 @@ cfg = {
                     "short_id": [short_id],
                 },
             },
-        }
+        },
+        {
+            "type": "redirect",
+            "tag": "redir-lan-guest",
+            "listen": "127.0.0.1",
+            "listen_port": redir_port,
+        },
     ],
     "outbounds": [
         {"type": "direct", "tag": "direct"},
@@ -180,6 +189,7 @@ cfg = {
         "rules": [
             {"action": "sniff"},
             {"protocol": "dns", "action": "hijack-dns"},
+            {"inbound": ["redir-lan-guest"], "outbound": "direct"},
             {"ip_is_private": True, "outbound": "block"},
         ],
         "final": "direct",
@@ -194,7 +204,10 @@ subprocess.run(
     [os.environ["SINGBOX_BIN"], "check", "-c", os.environ["CONFIG_FILE"]],
     check=True,
 )
-print(f"wrote {os.environ['CONFIG_FILE']} users={len(users)} guest_dns={guest_dns}")
+print(
+    f"wrote {os.environ['CONFIG_FILE']} users={len(users)} "
+    f"guest_dns={guest_dns} redir={redir_port}"
+)
 PY
 }
 

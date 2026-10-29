@@ -10,6 +10,8 @@ XRAY_PORT="${XRAY_PORT:-8444}"
 XRAY_HOST="${XRAY_HOST:-vpn.vpstruelord.com}"
 XRAY_SNI="${XRAY_SNI:-www.microsoft.com}"
 XRAY_DEST="${XRAY_DEST:-www.microsoft.com:443}"
+# Transparent dokodemo for Flint LAN circle users (iptables REDIRECT).
+XRAY_DOKODEMO_PORT="${XRAY_DOKODEMO_PORT:-18080}"
 CLIENTS_FILE="${XRAY_CLIENTS_FILE:-$XRAY_DIR/clients.json}"
 KEYS_FILE="${XRAY_KEYS_FILE:-$XRAY_DIR/reality.keys}"
 CONFIG_FILE="${XRAY_CONFIG_FILE:-$XRAY_DIR/config.json}"
@@ -97,7 +99,8 @@ PY
 }
 
 write_config() {
-  export XRAY_DIR XRAY_PORT XRAY_HOST XRAY_SNI XRAY_DEST CLIENTS_FILE KEYS_FILE CONFIG_FILE XRAY_BIN
+  export XRAY_DIR XRAY_PORT XRAY_HOST XRAY_SNI XRAY_DEST XRAY_DOKODEMO_PORT
+  export CLIENTS_FILE KEYS_FILE CONFIG_FILE XRAY_BIN
   python3 - <<'PY'
 import json
 import os
@@ -127,6 +130,7 @@ for row in clients_raw.get("clients") or []:
     clients.append({"id": uuid, "email": name, "flow": ""})
 
 port = int(os.environ.get("XRAY_PORT", "8444"))
+dokodemo = int(os.environ.get("XRAY_DOKODEMO_PORT", "18080"))
 sni = os.environ.get("XRAY_SNI", "www.microsoft.com")
 dest = os.environ.get("XRAY_DEST", "www.microsoft.com:443")
 cfg = {
@@ -161,7 +165,21 @@ cfg = {
                 "enabled": True,
                 "destOverride": ["http", "tls", "quic"],
             },
-        }
+        },
+        {
+            "tag": "dokodemo-lan-circle",
+            "listen": "127.0.0.1",
+            "port": dokodemo,
+            "protocol": "dokodemo-door",
+            "settings": {
+                "network": "tcp",
+                "followRedirect": True,
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+            },
+        },
     ],
     "outbounds": [
         {"protocol": "freedom", "tag": "direct"},
@@ -170,13 +188,14 @@ cfg = {
     "routing": {
         "domainStrategy": "AsIs",
         "rules": [
+            {"type": "field", "inboundTag": ["dokodemo-lan-circle"], "outboundTag": "direct"},
             {"type": "field", "ip": ["geoip:private"], "outboundTag": "block"},
         ],
     },
 }
 Path(os.environ["CONFIG_FILE"]).write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 os.chmod(os.environ["CONFIG_FILE"], 0o600)
-print(f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)}")
+print(f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)} dokodemo={dokodemo}")
 PY
 }
 
