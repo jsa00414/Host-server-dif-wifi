@@ -1576,6 +1576,9 @@
     <button type="button" class="nav-btn" data-view="xray">
       <span class="nav-copy"><span>Xray</span></span>
     </button>
+    <button type="button" class="nav-btn" data-view="singbox">
+      <span class="nav-copy"><span>Sing-box</span></span>
+    </button>
     <div class="nav-label">DNS</div>
     <button type="button" class="nav-btn" data-view="dnsmap">
       <span class="nav-copy"><span>DNS Map</span></span>
@@ -2295,6 +2298,9 @@
       <section class="view embed-view" id="view-xray">
         <iframe class="embed-frame" id="frameXray" title="Xray (VLESS Reality)" src="about:blank" data-src="/xray.html" allow="clipboard-read; clipboard-write"></iframe>
       </section>
+      <section class="view embed-view" id="view-singbox">
+        <iframe class="embed-frame" id="frameSingbox" title="Sing-box (guest DNS)" src="about:blank" data-src="/singbox.html" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
 
       <section class="view" id="view-settings">
         <div class="page-head">
@@ -2538,15 +2544,17 @@
           <div class="panel">
             <div class="panel-head"><h3>VPN</h3></div>
             <div class="panel-body">
-              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens the themed wg-easy UI with portal SSO (<code>/wg-ui/</code>). <strong>OpenVPN</strong> / <strong>Xray</strong> issue circle client profiles (campus-friendly VLESS REALITY on :8444).</p>
+              <p class="hint" style="margin:0 0 10px"><strong>WireGuard</strong> opens the themed wg-easy UI with portal SSO (<code>/wg-ui/</code>). <strong>OpenVPN</strong> / <strong>Xray</strong> issue circle profiles (VLESS REALITY :8444). <strong>Sing-box</strong> is the guest-DNS tier (:8445, internet only).</p>
               <div class="settings-actions">
                 <button type="button" class="primary" data-go="wireguard">Open WireGuard</button>
                 <button type="button" class="ghost" data-go="openvpn">Open OpenVPN</button>
                 <button type="button" class="ghost" data-go="xray">Open Xray</button>
+                <button type="button" class="ghost" data-go="singbox">Open Sing-box</button>
                 <a class="ghost" href="/wg-ui/" target="_blank" rel="noopener">/wg-ui/</a>
                 <a class="ghost" href="https://vpn.vpstruelord.com/" target="_blank" rel="noopener">vpn.vpstruelord.com</a>
                 <a class="ghost" href="/openvpn.html" target="_blank" rel="noopener">openvpn.html</a>
                 <a class="ghost" href="/xray.html" target="_blank" rel="noopener">xray.html</a>
+                <a class="ghost" href="/singbox.html" target="_blank" rel="noopener">singbox.html</a>
               </div>
             </div>
           </div>
@@ -2590,6 +2598,7 @@
                     <option value="openvpn">OpenVPN</option>
                     <option value="windowsvpn">Windows VPN</option>
                     <option value="xray">Xray</option>
+                    <option value="singbox">Sing-box</option>
                     <option value="dnsmap">DNS Map</option>
                     <option value="adguard">AdGuard</option>
                     <option value="tailscale">Tailscale</option>
@@ -2974,6 +2983,10 @@
       }
       if (name === "xray") {
         const f = document.getElementById("frameXray");
+        if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
+      }
+      if (name === "singbox") {
+        const f = document.getElementById("frameSingbox");
         if (f && f.getAttribute("src") === "about:blank") f.src = f.dataset.src;
       }
       if (name === "buffalo") {

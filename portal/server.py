@@ -1983,6 +1983,36 @@ XRAY_SETUP_SCRIPT = Path(
         str(Path(__file__).resolve().parent / "scripts" / "xray" / "setup-xray.sh"),
     )
 )
+SINGBOX_DIR = Path(os.environ.get("SINGBOX_DIR", "/opt/singbox"))
+SINGBOX_BIN = Path(os.environ.get("SINGBOX_BIN", "/usr/local/bin/sing-box"))
+SINGBOX_CLIENTS_FILE = Path(
+    os.environ.get("SINGBOX_CLIENTS_FILE", str(SINGBOX_DIR / "clients.json"))
+)
+SINGBOX_KEYS_FILE = Path(
+    os.environ.get("SINGBOX_KEYS_FILE", str(SINGBOX_DIR / "reality.keys"))
+)
+SINGBOX_CONFIG_FILE = Path(
+    os.environ.get("SINGBOX_CONFIG_FILE", str(SINGBOX_DIR / "config.json"))
+)
+SINGBOX_PORT = int(os.environ.get("SINGBOX_PORT", "8445") or "8445")
+SINGBOX_HOST = (
+    os.environ.get("SINGBOX_HOST", "vpn.vpstruelord.com").strip() or "vpn.vpstruelord.com"
+)
+SINGBOX_SNI = (
+    os.environ.get("SINGBOX_SNI", "www.microsoft.com").strip() or "www.microsoft.com"
+)
+SINGBOX_GUEST_DNS = (
+    os.environ.get("SINGBOX_GUEST_DNS")
+    or os.environ.get("VPN_GUEST_DNS")
+    or "10.42.42.45"
+).strip() or "10.42.42.45"
+SINGBOX_SERVICE = os.environ.get("SINGBOX_SERVICE", "sm-singbox").strip() or "sm-singbox"
+SINGBOX_SETUP_SCRIPT = Path(
+    os.environ.get(
+        "SINGBOX_SETUP_SCRIPT",
+        str(Path(__file__).resolve().parent / "scripts" / "singbox" / "setup-singbox.sh"),
+    )
+)
 
 
 def build_ikev2_status() -> dict:
@@ -2449,6 +2479,270 @@ def sync_xray_clients_for_circle() -> dict:
         "ok": True,
         "created": created,
         "clients": list_xray_clients(),
+        "created_count": len(created),
+    }
+
+
+def _singbox_validate_name(name: str) -> str:
+    name_n = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(name or "").strip())[:64].strip("-._")
+    if not name_n:
+        raise ValueError("client name is required")
+    return name_n
+
+
+def _singbox_read_keys() -> dict:
+    if not SINGBOX_KEYS_FILE.is_file():
+        return {}
+    keys: dict[str, str] = {}
+    try:
+        for line in SINGBOX_KEYS_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            keys[k.strip()] = v.strip()
+    except Exception:
+        return {}
+    return keys
+
+
+def _singbox_read_clients() -> dict:
+    if not SINGBOX_CLIENTS_FILE.is_file():
+        return {"clients": []}
+    try:
+        data = json.loads(SINGBOX_CLIENTS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"clients": []}
+
+
+def _singbox_write_clients(data: dict) -> None:
+    SINGBOX_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SINGBOX_CLIENTS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(SINGBOX_CLIENTS_FILE)
+
+
+def _singbox_new_uuid() -> str:
+    if SINGBOX_BIN.is_file():
+        try:
+            proc = subprocess.run(
+                [str(SINGBOX_BIN), "generate", "uuid"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            uid = (proc.stdout or "").strip().splitlines()[0].strip() if proc.stdout else ""
+            if re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                uid,
+            ):
+                return uid
+        except Exception:
+            pass
+    return str(uuid.uuid4())
+
+
+def _singbox_rebuild_and_reload() -> None:
+    """Regenerate config.json from clients + keys and restart sm-singbox."""
+    script = SINGBOX_SETUP_SCRIPT
+    alt = Path("/opt/wireguard/port-forward-ui/scripts/singbox/setup-singbox.sh")
+    if not script.is_file() and alt.is_file():
+        script = alt
+    if script.is_file():
+        subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        return
+    raise RuntimeError("sing-box setup script missing — run scripts/singbox/setup-singbox.sh")
+
+
+def singbox_share_link(row: dict) -> str:
+    """Build a vless:// share URI for a guest sing-box client."""
+    keys = _singbox_read_keys()
+    uid = str(row.get("uuid") or "").strip()
+    name = str(row.get("name") or "guest").strip() or "guest"
+    pub = keys.get("public") or os.environ.get("SINGBOX_PUBLIC_KEY", "").strip()
+    short_id = keys.get("short_id") or ""
+    if not uid or not pub or not short_id:
+        return ""
+    from urllib.parse import quote
+
+    qs = (
+        f"encryption=none&flow=&security=reality&sni={quote(SINGBOX_SNI)}"
+        f"&fp=chrome&pbk={quote(pub)}&sid={quote(short_id)}&type=tcp&headerType=none"
+    )
+    return f"vless://{uid}@{SINGBOX_HOST}:{SINGBOX_PORT}?{qs}#{quote(name)}"
+
+
+def list_singbox_clients() -> list[dict]:
+    out = []
+    for row in _singbox_read_clients().get("clients") or []:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        item = {
+            "name": name,
+            "uuid": str(row.get("uuid") or ""),
+            "note": str(row.get("note") or ""),
+            "guest": bool(row.get("guest", True)),
+            "created_at": int(row.get("created_at") or 0),
+            "link": singbox_share_link(row),
+            "download": f"/api/singbox/clients/{name}/link",
+        }
+        out.append(item)
+    out.sort(key=lambda r: str(r.get("name") or "").lower())
+    return out
+
+
+def build_singbox_status() -> dict:
+    active = False
+    detail = ""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "is-active", SINGBOX_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        active = (proc.stdout or "").strip() == "active"
+        detail = (proc.stdout or proc.stderr or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+    keys = _singbox_read_keys()
+    clients = list_singbox_clients()
+    return {
+        "ok": True,
+        "service": SINGBOX_SERVICE,
+        "active": active,
+        "detail": detail,
+        "host": SINGBOX_HOST,
+        "port": SINGBOX_PORT,
+        "sni": SINGBOX_SNI,
+        "public_key": keys.get("public") or "",
+        "short_id": keys.get("short_id") or "",
+        "protocol": "vless+reality",
+        "client_count": len(clients),
+        "clients": clients,
+        "guest_dns": SINGBOX_GUEST_DNS,
+        "circle_dns": OVPN_DNS_ADGUARD,
+        "installed": SINGBOX_BIN.is_file() and SINGBOX_CONFIG_FILE.is_file(),
+        "hint": (
+            "Import the vless:// link in sing-box / v2rayN / Hiddify / Streisand. "
+            "Guest DNS only — private LAN is blocked. Circle users should use Xray."
+        ),
+    }
+
+
+def create_singbox_client(name: str, *, note: str = "", guest: bool = True) -> dict:
+    name_n = _singbox_validate_name(name)
+    data = _singbox_read_clients()
+    existing = {
+        str(c.get("name") or "").strip().lower()
+        for c in data.get("clients") or []
+        if isinstance(c, dict)
+    }
+    if name_n.lower() in existing:
+        raise ValueError(f"client {name_n} already exists")
+    row = {
+        "name": name_n,
+        "uuid": _singbox_new_uuid(),
+        "created_at": int(time.time()),
+        "note": str(note or "")[:120],
+        "guest": bool(guest),
+    }
+    data.setdefault("clients", []).append(row)
+    _singbox_write_clients(data)
+    _singbox_rebuild_and_reload()
+    return {
+        "ok": True,
+        "client": {**row, "link": singbox_share_link(row)},
+        "clients": list_singbox_clients(),
+    }
+
+
+def revoke_singbox_client(name: str) -> dict:
+    name_n = _singbox_validate_name(name)
+    data = _singbox_read_clients()
+    before = list(data.get("clients") or [])
+    kept = [
+        c
+        for c in before
+        if isinstance(c, dict) and str(c.get("name") or "").strip().lower() != name_n.lower()
+    ]
+    if len(kept) == len(before):
+        raise ValueError(f"client {name_n} not found")
+    data["clients"] = kept
+    _singbox_write_clients(data)
+    _singbox_rebuild_and_reload()
+    return {"ok": True, "revoked": name_n, "clients": list_singbox_clients()}
+
+
+def sync_singbox_clients_for_guests() -> dict:
+    """Ensure pending public WAN peers have a guest sing-box UUID.
+
+    Skips home LAN / OpenVPN VIPs (those already get guest DNS via tunnel gates).
+    """
+    data = _singbox_read_clients()
+    by_name = {
+        str(c.get("name") or "").strip().lower(): c
+        for c in (data.get("clients") or [])
+        if isinstance(c, dict) and str(c.get("name") or "").strip()
+    }
+    created: list[str] = []
+    try:
+        allow = _read_vpn_allowlist()
+    except Exception:
+        allow = {"pending": [], "attempts": []}
+    candidates: list[dict] = []
+    for row in list(allow.get("pending") or []) + list(allow.get("attempts") or []):
+        if isinstance(row, dict):
+            candidates.append(row)
+    seen_ips: set[str] = set()
+    for row in candidates:
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip or ip in seen_ips:
+            continue
+        if _is_home_lan_ipv4(ip) or _is_openvpn_client_ipv4(ip):
+            continue
+        if not _is_public_ipv4(ip):
+            continue
+        seen_ips.add(ip)
+        label = str(row.get("name") or row.get("hostname") or "").strip()
+        if not label:
+            label = f"guest-wan-{ip.replace('.', '-')}"
+        try:
+            name_n = _singbox_validate_name(label)
+        except ValueError:
+            name_n = _singbox_validate_name(f"guest-{ip.replace('.', '-')}")
+        if name_n.lower() in by_name:
+            continue
+        new_row = {
+            "name": name_n,
+            "uuid": _singbox_new_uuid(),
+            "created_at": int(time.time()),
+            "note": f"synced from guest pending {ip}",
+            "guest": True,
+            "guest_ip": ip,
+        }
+        data.setdefault("clients", []).append(new_row)
+        by_name[name_n.lower()] = new_row
+        created.append(name_n)
+    if created:
+        _singbox_write_clients(data)
+        _singbox_rebuild_and_reload()
+    return {
+        "ok": True,
+        "created": created,
+        "clients": list_singbox_clients(),
         "created_count": len(created),
     }
 
@@ -10766,6 +11060,11 @@ def build_portal_settings() -> dict:
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
         {"id": "xray-ui", "label": "Xray (VLESS Reality)", "url": f"https://{host}/xray.html"},
+        {
+            "id": "singbox-ui",
+            "label": "Sing-box (guest DNS)",
+            "url": f"https://{host}/singbox.html",
+        },
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {
             "id": "ovpn-phone",
@@ -20480,6 +20779,7 @@ class Handler(BaseHTTPRequestHandler):
                 "windows-vpn.html",
                 "openvpn.html",
                 "xray.html",
+                "singbox.html",
             ) and not self._is_authed():
                 self._unauthorized(api=False)
                 return
@@ -20644,6 +20944,8 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(STATIC_DIR / "windows-vpn.html", "text/html; charset=utf-8")
         if path in ("/xray.html", "/v2ray.html"):
             return self._serve_file(STATIC_DIR / "xray.html", "text/html; charset=utf-8")
+        if path in ("/singbox.html", "/sing-box.html"):
+            return self._serve_file(STATIC_DIR / "singbox.html", "text/html; charset=utf-8")
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
@@ -20938,6 +21240,58 @@ document.getElementById('f').onsubmit = async (e) => {
                         "host": XRAY_HOST,
                         "port": XRAY_PORT,
                         "sni": XRAY_SNI,
+                    },
+                )
+            except ValueError as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/singbox/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_singbox_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/singbox/clients":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, "clients": list_singbox_clients()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "clients": []})
+            return
+        if path.startswith("/api/singbox/clients/") and path.endswith("/link"):
+            if not self._require_auth(api=True):
+                return
+            name = path[len("/api/singbox/clients/") : -len("/link")].strip("/")
+            try:
+                name_n = _singbox_validate_name(name)
+                row = next(
+                    (
+                        c
+                        for c in (_singbox_read_clients().get("clients") or [])
+                        if isinstance(c, dict)
+                        and str(c.get("name") or "").strip().lower() == name_n.lower()
+                    ),
+                    None,
+                )
+                if not row:
+                    raise ValueError(f"client {name_n} not found")
+                link = singbox_share_link(row)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "name": name_n,
+                        "uuid": str(row.get("uuid") or ""),
+                        "link": link,
+                        "host": SINGBOX_HOST,
+                        "port": SINGBOX_PORT,
+                        "sni": SINGBOX_SNI,
+                        "guest_dns": SINGBOX_GUEST_DNS,
                     },
                 )
             except ValueError as exc:
@@ -22062,6 +22416,26 @@ document.getElementById('f').onsubmit = async (e) => {
                 name = str((payload or {}).get("name") or "").strip()
                 note = str((payload or {}).get("note") or "").strip()
                 result = create_xray_client(name, note=note, circle=True)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/singbox/clients":
+            try:
+                payload = self._read_json()
+                action = str((payload or {}).get("action") or "create").strip().lower()
+                if action in ("sync", "sync-guest", "sync_guest", "guest", "guests"):
+                    self._json(200, sync_singbox_clients_for_guests())
+                    return
+                if action in ("revoke", "delete", "remove"):
+                    name = str((payload or {}).get("name") or "").strip()
+                    self._json(200, revoke_singbox_client(name))
+                    return
+                name = str((payload or {}).get("name") or "").strip()
+                note = str((payload or {}).get("note") or "").strip()
+                result = create_singbox_client(name, note=note, guest=True)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
