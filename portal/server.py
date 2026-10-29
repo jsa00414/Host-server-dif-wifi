@@ -23,6 +23,7 @@ import syslog
 import tempfile
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1965,6 +1966,23 @@ IKEV2_USER = os.environ.get("IKEV2_USER", "windows").strip() or "windows"
 IKEV2_POOL = os.environ.get("IKEV2_POOL", "10.10.0.0/24").strip() or "10.10.0.0/24"
 IKEV2_DNS = os.environ.get("IKEV2_DNS", "10.9.0.1").strip() or "10.9.0.1"
 IKEV2_SERVICE = os.environ.get("IKEV2_SERVICE", "strongswan-starter").strip() or "strongswan-starter"
+XRAY_DIR = Path(os.environ.get("XRAY_DIR", "/opt/xray"))
+XRAY_BIN = Path(os.environ.get("XRAY_BIN", "/usr/local/bin/xray"))
+XRAY_CLIENTS_FILE = Path(
+    os.environ.get("XRAY_CLIENTS_FILE", str(XRAY_DIR / "clients.json"))
+)
+XRAY_KEYS_FILE = Path(os.environ.get("XRAY_KEYS_FILE", str(XRAY_DIR / "reality.keys")))
+XRAY_CONFIG_FILE = Path(os.environ.get("XRAY_CONFIG_FILE", str(XRAY_DIR / "config.json")))
+XRAY_PORT = int(os.environ.get("XRAY_PORT", "8444") or "8444")
+XRAY_HOST = os.environ.get("XRAY_HOST", "vpn.vpstruelord.com").strip() or "vpn.vpstruelord.com"
+XRAY_SNI = os.environ.get("XRAY_SNI", "www.microsoft.com").strip() or "www.microsoft.com"
+XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "sm-xray").strip() or "sm-xray"
+XRAY_SETUP_SCRIPT = Path(
+    os.environ.get(
+        "XRAY_SETUP_SCRIPT",
+        str(Path(__file__).resolve().parent / "scripts" / "xray" / "setup-xray.sh"),
+    )
+)
 
 
 def build_ikev2_status() -> dict:
@@ -2116,6 +2134,323 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
 if errorlevel 1 pause
 """
     return body.replace("\n", "\r\n").encode("ascii", errors="replace")
+
+
+def _xray_validate_name(name: str) -> str:
+    raw = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(name or "").strip()).strip("-._")
+    if not raw or len(raw) > 64:
+        raise ValueError("client name must be 1–64 chars [A-Za-z0-9._-]")
+    if raw.lower() in {"server", "default", "all"}:
+        raise ValueError("reserved client name")
+    return raw
+
+
+def _xray_read_keys() -> dict:
+    out = {"private": "", "public": "", "short_id": ""}
+    if not XRAY_KEYS_FILE.is_file():
+        return out
+    try:
+        for line in XRAY_KEYS_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            key = k.strip().lower()
+            if key in out:
+                out[key] = v.strip()
+    except Exception:
+        pass
+    env_pub = os.environ.get("XRAY_PUBLIC_KEY", "").strip()
+    if env_pub and not out.get("public"):
+        out["public"] = env_pub
+    return out
+
+
+def _xray_read_clients() -> dict:
+    data = {"clients": []}
+    if XRAY_CLIENTS_FILE.is_file():
+        try:
+            loaded = json.loads(XRAY_CLIENTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("clients"), list):
+                data["clients"] = [c for c in loaded["clients"] if isinstance(c, dict)]
+        except Exception:
+            pass
+    return data
+
+
+def _xray_write_clients(data: dict) -> None:
+    XRAY_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = XRAY_CLIENTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(XRAY_CLIENTS_FILE)
+    try:
+        os.chmod(XRAY_CLIENTS_FILE, 0o600)
+    except Exception:
+        pass
+
+
+def _xray_new_uuid() -> str:
+    if XRAY_BIN.is_file():
+        try:
+            proc = subprocess.run(
+                [str(XRAY_BIN), "uuid"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            uid = (proc.stdout or "").strip().splitlines()[0].strip() if proc.stdout else ""
+            if re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                uid,
+            ):
+                return uid
+        except Exception:
+            pass
+    return str(uuid.uuid4())
+
+
+def _xray_rebuild_and_reload() -> None:
+    """Regenerate config.json from clients + keys and restart sm-xray."""
+    script = XRAY_SETUP_SCRIPT
+    alt = Path("/opt/wireguard/port-forward-ui/scripts/xray/setup-xray.sh")
+    if not script.is_file() and alt.is_file():
+        script = alt
+    if script.is_file():
+        subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        return
+    # Minimal inline rebuild when setup script is missing.
+    keys = _xray_read_keys()
+    if not keys.get("private") or not keys.get("short_id"):
+        raise RuntimeError("Xray REALITY keys missing — run scripts/xray/setup-xray.sh")
+    clients = []
+    for row in _xray_read_clients().get("clients") or []:
+        uid = str(row.get("uuid") or "").strip()
+        name = _xray_validate_name(str(row.get("name") or "client"))
+        if uid:
+            clients.append({"id": uid, "email": name, "flow": ""})
+    cfg = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "tag": "vless-reality",
+                "listen": "0.0.0.0",
+                "port": XRAY_PORT,
+                "protocol": "vless",
+                "settings": {"clients": clients, "decryption": "none"},
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "show": False,
+                        "dest": f"{XRAY_SNI}:443",
+                        "serverNames": [XRAY_SNI],
+                        "privateKey": keys["private"],
+                        "shortIds": [keys["short_id"]],
+                    },
+                },
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]},
+            }
+        ],
+        "outbounds": [
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "block"},
+        ],
+    }
+    XRAY_DIR.mkdir(parents=True, exist_ok=True)
+    XRAY_CONFIG_FILE.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(
+        ["systemctl", "restart", XRAY_SERVICE],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def xray_share_link(row: dict) -> str:
+    """Build a vless:// share URI for a client row."""
+    keys = _xray_read_keys()
+    uid = str(row.get("uuid") or "").strip()
+    name = str(row.get("name") or "circle").strip() or "circle"
+    pub = keys.get("public") or os.environ.get("XRAY_PUBLIC_KEY", "").strip()
+    short_id = keys.get("short_id") or ""
+    if not uid or not pub or not short_id:
+        return ""
+    from urllib.parse import quote
+
+    qs = (
+        f"encryption=none&flow=&security=reality&sni={quote(XRAY_SNI)}"
+        f"&fp=chrome&pbk={quote(pub)}&sid={quote(short_id)}&type=tcp&headerType=none"
+    )
+    return f"vless://{uid}@{XRAY_HOST}:{XRAY_PORT}?{qs}#{quote(name)}"
+
+
+def list_xray_clients() -> list[dict]:
+    out = []
+    for row in _xray_read_clients().get("clients") or []:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        item = {
+            "name": name,
+            "uuid": str(row.get("uuid") or ""),
+            "note": str(row.get("note") or ""),
+            "circle": bool(row.get("circle")),
+            "created_at": int(row.get("created_at") or 0),
+            "link": xray_share_link(row),
+            "download": f"/api/xray/clients/{name}/link",
+        }
+        out.append(item)
+    out.sort(key=lambda r: str(r.get("name") or "").lower())
+    return out
+
+
+def build_xray_status() -> dict:
+    active = False
+    detail = ""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "is-active", XRAY_SERVICE],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        active = (proc.stdout or "").strip() == "active"
+        detail = (proc.stdout or proc.stderr or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+    keys = _xray_read_keys()
+    clients = list_xray_clients()
+    return {
+        "ok": True,
+        "service": XRAY_SERVICE,
+        "active": active,
+        "detail": detail,
+        "host": XRAY_HOST,
+        "port": XRAY_PORT,
+        "sni": XRAY_SNI,
+        "public_key": keys.get("public") or "",
+        "short_id": keys.get("short_id") or "",
+        "protocol": "vless+reality",
+        "client_count": len(clients),
+        "clients": clients,
+        "circle_dns": OVPN_DNS_ADGUARD,
+        "installed": XRAY_BIN.is_file() and XRAY_CONFIG_FILE.is_file(),
+        "hint": (
+            "Import the vless:// link in v2rayN / v2rayNG / Streisand / Hiddify. "
+            "Links are for trust-circle members (portal login required)."
+        ),
+    }
+
+
+def create_xray_client(name: str, *, note: str = "", circle: bool = True) -> dict:
+    name_n = _xray_validate_name(name)
+    data = _xray_read_clients()
+    existing = {
+        str(c.get("name") or "").strip().lower()
+        for c in data.get("clients") or []
+        if isinstance(c, dict)
+    }
+    if name_n.lower() in existing:
+        raise ValueError(f"client {name_n} already exists")
+    row = {
+        "name": name_n,
+        "uuid": _xray_new_uuid(),
+        "created_at": int(time.time()),
+        "note": str(note or "")[:120],
+        "circle": bool(circle),
+    }
+    data.setdefault("clients", []).append(row)
+    _xray_write_clients(data)
+    _xray_rebuild_and_reload()
+    return {"ok": True, "client": {**row, "link": xray_share_link(row)}, "clients": list_xray_clients()}
+
+
+def revoke_xray_client(name: str) -> dict:
+    name_n = _xray_validate_name(name)
+    data = _xray_read_clients()
+    before = list(data.get("clients") or [])
+    kept = [
+        c
+        for c in before
+        if isinstance(c, dict) and str(c.get("name") or "").strip().lower() != name_n.lower()
+    ]
+    if len(kept) == len(before):
+        raise ValueError(f"client {name_n} not found")
+    data["clients"] = kept
+    _xray_write_clients(data)
+    _xray_rebuild_and_reload()
+    return {"ok": True, "revoked": name_n, "clients": list_xray_clients()}
+
+
+def sync_xray_clients_for_circle() -> dict:
+    """Ensure every key-bound allowlisted circle device has an Xray UUID."""
+    data = _xray_read_clients()
+    by_name = {
+        str(c.get("name") or "").strip().lower(): c
+        for c in (data.get("clients") or [])
+        if isinstance(c, dict) and str(c.get("name") or "").strip()
+    }
+    created: list[str] = []
+    try:
+        allow = _read_vpn_allowlist()
+    except Exception:
+        allow = {"allowed": []}
+    for row in allow.get("allowed") or []:
+        if not isinstance(row, dict):
+            continue
+        ip = _normalize_vpn_ip(row.get("ip", ""))
+        if not ip:
+            continue
+        # Circle membership: sealed router or key-bound only.
+        sealed = bool(row.get("sealed")) or (
+            str(row.get("source") or "") == "router"
+            and "sealed" in str(row.get("note") or "").lower()
+        )
+        key_bound = bool(str(row.get("pubkey") or "").strip())
+        if not sealed and not key_bound:
+            continue
+        label = str(row.get("name") or row.get("hostname") or "").strip()
+        if not label:
+            if _is_openvpn_client_ipv4(ip):
+                label = f"ovpn-{ip.split('.')[-1]}"
+            elif _is_home_lan_ipv4(ip):
+                label = f"lan-{ip.split('.')[-1]}"
+            else:
+                label = f"wan-{ip.replace('.', '-')}"
+        try:
+            name_n = _xray_validate_name(label)
+        except ValueError:
+            name_n = _xray_validate_name(f"circle-{ip.replace('.', '-')}")
+        if name_n.lower() in by_name:
+            continue
+        new_row = {
+            "name": name_n,
+            "uuid": _xray_new_uuid(),
+            "created_at": int(time.time()),
+            "note": f"synced from circle {ip}",
+            "circle": True,
+            "circle_ip": ip,
+        }
+        data.setdefault("clients", []).append(new_row)
+        by_name[name_n.lower()] = new_row
+        created.append(name_n)
+    if created:
+        _xray_write_clients(data)
+        _xray_rebuild_and_reload()
+    return {
+        "ok": True,
+        "created": created,
+        "clients": list_xray_clients(),
+        "created_count": len(created),
+    }
 
 
 def parse_openvpn_status(text: str) -> dict:
@@ -10430,6 +10765,7 @@ def build_portal_settings() -> dict:
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
+        {"id": "xray-ui", "label": "Xray (VLESS Reality)", "url": f"https://{host}/xray.html"},
         {"id": "ovpn-flint", "label": "OpenVPN Flint (.ovpn)", "url": f"https://{host}/api/openvpn/flint"},
         {
             "id": "ovpn-phone",
@@ -20143,6 +20479,7 @@ class Handler(BaseHTTPRequestHandler):
                 "nas-windows.html",
                 "windows-vpn.html",
                 "openvpn.html",
+                "xray.html",
             ) and not self._is_authed():
                 self._unauthorized(api=False)
                 return
@@ -20305,6 +20642,8 @@ document.getElementById('f').onsubmit = async (e) => {
             return self._serve_file(STATIC_DIR / "openvpn.html", "text/html; charset=utf-8")
         if path in ("/windows-vpn.html", "/ikev2.html"):
             return self._serve_file(STATIC_DIR / "windows-vpn.html", "text/html; charset=utf-8")
+        if path in ("/xray.html", "/v2ray.html"):
+            return self._serve_file(STATIC_DIR / "xray.html", "text/html; charset=utf-8")
         if path in ("/nas-windows.html", "/nas-setup.html"):
             return self._serve_file(STATIC_DIR / "nas-windows.html", "text/html; charset=utf-8")
         if path == "/login.html":
@@ -20552,6 +20891,57 @@ document.getElementById('f').onsubmit = async (e) => {
                 return
             try:
                 self._json(200, build_openvpn_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/xray/status":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, build_xray_status())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/xray/clients":
+            if not self._require_auth(api=True):
+                return
+            try:
+                self._json(200, {"ok": True, "clients": list_xray_clients()})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc), "clients": []})
+            return
+        if path.startswith("/api/xray/clients/") and path.endswith("/link"):
+            if not self._require_auth(api=True):
+                return
+            name = path[len("/api/xray/clients/") : -len("/link")].strip("/")
+            try:
+                name_n = _xray_validate_name(name)
+                row = next(
+                    (
+                        c
+                        for c in (_xray_read_clients().get("clients") or [])
+                        if isinstance(c, dict)
+                        and str(c.get("name") or "").strip().lower() == name_n.lower()
+                    ),
+                    None,
+                )
+                if not row:
+                    raise ValueError(f"client {name_n} not found")
+                link = xray_share_link(row)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "name": name_n,
+                        "uuid": str(row.get("uuid") or ""),
+                        "link": link,
+                        "host": XRAY_HOST,
+                        "port": XRAY_PORT,
+                        "sni": XRAY_SNI,
+                    },
+                )
+            except ValueError as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
@@ -21652,6 +22042,26 @@ document.getElementById('f').onsubmit = async (e) => {
                 name = str((payload or {}).get("name") or "").strip()
                 redirect = bool((payload or {}).get("redirect_gateway", True))
                 result = create_openvpn_client(name, redirect_gateway=redirect)
+                self._json(200, result)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/xray/clients":
+            try:
+                payload = self._read_json()
+                action = str((payload or {}).get("action") or "create").strip().lower()
+                if action in ("sync", "sync-circle", "sync_circle", "circle"):
+                    self._json(200, sync_xray_clients_for_circle())
+                    return
+                if action in ("revoke", "delete", "remove"):
+                    name = str((payload or {}).get("name") or "").strip()
+                    self._json(200, revoke_xray_client(name))
+                    return
+                name = str((payload or {}).get("name") or "").strip()
+                note = str((payload or {}).get("note") or "").strip()
+                result = create_xray_client(name, note=note, circle=True)
                 self._json(200, result)
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})

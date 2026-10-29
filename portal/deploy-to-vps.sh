@@ -23,7 +23,7 @@ if [[ -n "${VPS_SSH_KEY_FILE:-}" && -f "${VPS_SSH_KEY_FILE}" ]]; then
 fi
 
 echo "Deploying portal to ${VPS}:${REMOTE_UI} …"
-ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static/truemailor ${REMOTE_UI}/sm ${REMOTE_UI}/scripts/nas ${REMOTE_UI}/scripts/truemail"
+ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static/truemailor ${REMOTE_UI}/sm ${REMOTE_UI}/scripts/nas ${REMOTE_UI}/scripts/truemail ${REMOTE_UI}/scripts/xray"
 scp "${SSH_OPTS[@]}" "$ROOT/server.py" "${VPS}:${REMOTE_UI}/server.py"
 scp "${SSH_OPTS[@]}" "$ROOT/media_tmdb.py" "${VPS}:${REMOTE_UI}/media_tmdb.py"
 scp "${SSH_OPTS[@]}" "$ROOT/sm/__init__.py" "$ROOT/sm/auth.py" "$ROOT/sm/nas.py" "$ROOT/sm/vpn_circle.py" "$ROOT/sm/twilio_sms.py" "${VPS}:${REMOTE_UI}/sm/"
@@ -31,6 +31,9 @@ scp "${SSH_OPTS[@]}" "$ROOT/static/index.html" "${VPS}:${REMOTE_UI}/static/index
 scp "${SSH_OPTS[@]}" "$ROOT/static/login.html" "${VPS}:${REMOTE_UI}/static/login.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/files.html" "${VPS}:${REMOTE_UI}/static/files.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/nas-windows.html" "${VPS}:${REMOTE_UI}/static/nas-windows.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/xray.html" "${VPS}:${REMOTE_UI}/static/xray.html"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/xray/setup-xray.sh" "$ROOT/scripts/xray/ensure-xray-config.sh" "$ROOT/scripts/xray/README.md" "${VPS}:${REMOTE_UI}/scripts/xray/"
+ssh "${SSH_OPTS[@]}" "$VPS" "chmod +x ${REMOTE_UI}/scripts/xray/*.sh"
 scp "${SSH_OPTS[@]}" "$ROOT/static/email-code-test.html" "${VPS}:${REMOTE_UI}/static/email-code-test.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/sms-code-test.html" "${VPS}:${REMOTE_UI}/static/sms-code-test.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/privacy.html" "${VPS}:${REMOTE_UI}/static/privacy.html"
