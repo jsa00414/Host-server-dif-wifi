@@ -1,0 +1,179 @@
+#!/bin/bash
+# sm-boot-heal — recover Truemailor / portal / VPN after reboot.
+set -euo pipefail
+LOG_TAG=sm-boot-heal
+log() { echo "[$LOG_TAG] $*"; logger -t "$LOG_TAG" "$*" 2>/dev/null || true; }
+
+CADDYFILE="${CADDYFILE_PATH:-/opt/truemail/Caddyfile}"
+CADDY_CTR="${CADDY_CONTAINER:-truemail-caddy-1}"
+MAIL_CTR="${MAILSERVER_CONTAINER:-truemail-mailserver-1}"
+
+wait_docker() {
+  local i
+  for i in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  log "docker not ready"
+  return 1
+}
+
+ensure_compose() {
+  local dir="$1"
+  if [[ -f "$dir/docker-compose.yml" ]]; then
+    log "compose up $dir"
+    (cd "$dir" && docker compose up -d --remove-orphans) || log "compose up failed in $dir"
+  fi
+}
+
+ensure_vpn_caddy_site() {
+  [[ -f "$CADDYFILE" ]] || { log "missing Caddyfile"; return 1; }
+  python3 - "$CADDYFILE" <<'PY'
+import re, sys, time
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+begin = "# BEGIN PORT-FORWARD-HOOKUPS"
+end = "# END PORT-FORWARD-HOOKUPS"
+b = text.find(begin)
+e = text.find(end)
+if b != -1 and e != -1 and e > b:
+    head, mid, tail = text[:b], text[b:e], text[e:]
+    mid2 = re.sub(
+        r"\nvpn\.vpstruelord\.com\s*\{.*?\n\}\n*",
+        "\n",
+        mid,
+        flags=re.S,
+    )
+    text = head + mid2 + tail
+
+durable_begin = "# BEGIN VPN-UI-SITE"
+durable_end = "# END VPN-UI-SITE"
+block = """# BEGIN VPN-UI-SITE
+vpn.vpstruelord.com {
+	encode gzip
+	@denied_wan client_ip 192.81.235.246/32
+	handle @denied_wan {
+		abort
+	}
+	handle {
+		reverse_proxy 172.18.0.1:5001 {
+			header_up Host {host}
+			header_up X-Forwarded-Host {host}
+			header_up X-Forwarded-Proto {scheme}
+			header_down -X-Frame-Options
+			header_down -Content-Security-Policy
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Content-Security-Policy "frame-ancestors *"
+	}
+}
+# END VPN-UI-SITE
+"""
+if durable_begin in text and durable_end in text:
+    db = text.find(durable_begin)
+    de = text.find(durable_end) + len(durable_end)
+    text2 = text[:db] + block.rstrip("\n") + text[de:]
+else:
+    marker = "# END PORT-FORWARD-HOOKUPS"
+    if marker in text:
+        text2 = text.replace(marker, marker + "\n\n" + block, 1)
+    else:
+        text2 = text.rstrip() + "\n\n" + block + "\n"
+
+orig = path.read_text()
+if text2 != orig:
+    bak = path.with_name(path.name + f".bak.boot-heal-{int(time.time())}")
+    bak.write_text(orig)
+    path.write_text(text2)
+    print("updated", path, "backup", bak)
+else:
+    print("vpn durable site already ok")
+PY
+}
+
+reload_caddy() {
+  if docker ps --format '{{.Names}}' | grep -qx "$CADDY_CTR"; then
+    if docker exec "$CADDY_CTR" caddy validate --config /etc/caddy/Caddyfile >/tmp/sm-caddy-validate.log 2>&1; then
+      docker exec "$CADDY_CTR" caddy reload --config /etc/caddy/Caddyfile >/tmp/sm-caddy-reload.log 2>&1 \
+        || docker restart "$CADDY_CTR" >/dev/null
+      log "caddy reloaded"
+    else
+      log "caddy validate failed; see /tmp/sm-caddy-validate.log"
+      return 1
+    fi
+  else
+    log "caddy container missing"
+    return 1
+  fi
+}
+
+heal_imaps() {
+  local ok=0 i
+  for i in $(seq 1 12); do
+    if timeout 4 openssl s_client -connect 127.0.0.1:993 -servername mail.truemailor.com </dev/null 2>/dev/null \
+      | grep -q "BEGIN CERTIFICATE"; then
+      ok=1
+      break
+    fi
+    sleep 3
+  done
+  if [[ "$ok" -eq 1 ]]; then
+    log "imaps ok"
+    return 0
+  fi
+  log "imaps unhealthy — restarting $MAIL_CTR"
+  docker restart "$MAIL_CTR" >/dev/null || true
+  sleep 12
+  if timeout 4 openssl s_client -connect 127.0.0.1:993 -servername mail.truemailor.com </dev/null 2>/dev/null \
+    | grep -q "BEGIN CERTIFICATE"; then
+    log "imaps recovered"
+  else
+    log "imaps still down after restart"
+    return 1
+  fi
+}
+
+main() {
+  log "start"
+  wait_docker
+  systemctl start docker >/dev/null 2>&1 || true
+
+  ensure_compose /opt/truemail
+  ensure_compose /opt/wireguard
+  if [[ -f /opt/dns/docker-compose.yml ]]; then
+    # AdGuard (.44) + guest-dns (.45) are required for Flint WiFi internet.
+    # Do not bind host 127.0.0.1:53 (conflicts with systemd-resolved).
+    (cd /opt/dns && docker compose up -d --no-deps pihole pihole-sso guest-dns adguard) || true
+    (cd /opt/dns && docker compose stop inject >/dev/null 2>&1 || true)
+  fi
+
+  systemctl start port-forward-ui >/dev/null 2>&1 || true
+  systemctl start openvpn-server-sm >/dev/null 2>&1 || true
+  systemctl start sslh-sm >/dev/null 2>&1 || true
+
+  # Docker raw PREROUTING otherwise drops tun0 -> 10.42.42.44/.45 (breaks LAN DNS).
+  if [[ -x /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh ]]; then
+    /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh >/dev/null 2>&1 || true
+  elif [[ -x /opt/openvpn/scripts/ovpn-firewall.sh ]]; then
+    /opt/openvpn/scripts/ovpn-firewall.sh >/dev/null 2>&1 || true
+  fi
+
+  ensure_vpn_caddy_site
+  reload_caddy || true
+  systemctl restart sslh-sm >/dev/null 2>&1 || true
+
+  heal_imaps || true
+
+  curl -sS -m 8 -o /dev/null -w "portal:%{http_code} " https://portal.vpstruelord.com/ || true
+  curl -sS -m 8 -o /dev/null -w "vpn:%{http_code} " https://vpn.vpstruelord.com/ || true
+  curl -sS -m 8 -o /dev/null -w "mail:%{http_code}\n" https://mail.truemailor.com/api/health || true
+  log "done"
+}
+
+main "$@"

@@ -1,0 +1,1816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#06110d" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#06110d" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#06110d" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="apple-mobile-web-app-title" content="SM Auth" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="sm-auth-layout" content="v33-circle-counts" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=33" />
+  <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
+  <title>SM Auth · iPhone</title>
+  <script>
+    /* Force-clear stale Authenticator SW/caches once so tab-bar layout can update. */
+    (function () {
+      var MARK = "sm.auth.sw.bust.v33";
+      try {
+        if (sessionStorage.getItem(MARK) === "1") return;
+      } catch (_) {}
+      if (!("serviceWorker" in navigator)) return;
+      var busted = false;
+      function reloadOnce() {
+        try { sessionStorage.setItem(MARK, "1"); } catch (_) {}
+        if (!busted) {
+          busted = true;
+          location.reload();
+        }
+      }
+      try {
+        /* Drop older bust markers so v31 always clears once. */
+        ["v28", "v29", "v30", "v31", "v32"].forEach(function (v) {
+          localStorage.removeItem("sm.auth.sw.bust." + v);
+        });
+      } catch (_) {}
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        return Promise.all(regs.map(function (r) { return r.unregister(); }));
+      }).then(function () {
+        if (!window.caches) return;
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        });
+      }).then(function () {
+        try {
+          if (localStorage.getItem(MARK) !== "done") {
+            localStorage.setItem(MARK, "done");
+            reloadOnce();
+          }
+        } catch (_) {}
+      }).catch(function () {});
+      navigator.serviceWorker.addEventListener("message", function (ev) {
+        if (ev && ev.data && ev.data.type === "SM_AUTH_FORCE_RELOAD") reloadOnce();
+      });
+      navigator.serviceWorker.addEventListener("controllerchange", function () {
+        reloadOnce();
+      });
+    })();
+  </script>
+  <style>
+
+    :root {
+      --bg0: #06110d;
+      --bg1: #0c1a15;
+      --ink: #e8f6ee;
+      --muted: #7f978a;
+      --line: rgba(148, 196, 170, 0.14);
+      --accent: #2fe39a;
+      --accent-dim: rgba(47, 227, 154, 0.14);
+      --blue: #6aa8e8;
+      --blue-dim: rgba(106, 168, 232, 0.16);
+      --danger: #ff7a7a;
+      --dock-h: 40px;
+      --sat: env(safe-area-inset-top, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+      --ease: cubic-bezier(.22, 1, .36, 1);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html {
+      background: var(--bg0);
+      color-scheme: dark;
+      height: 100%;
+      height: -webkit-fill-available;
+    }
+    html, body {
+      margin: 0;
+      width: 100%;
+      min-height: 100%;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+      height: 100%;
+      color: var(--ink);
+      font-family: "Sora", system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      overscroll-behavior: none;
+      -webkit-text-size-adjust: 100%;
+    }
+    body {
+      position: relative;
+      width: 100%;
+      margin: 0;
+      min-height: 100%;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background:
+        radial-gradient(90% 48% at 50% -8%, rgba(47,227,154,.18), transparent 58%),
+        radial-gradient(55% 35% at 100% 85%, rgba(106,168,232,.1), transparent 55%),
+        linear-gradient(180deg, #0a1712 0%, var(--bg0) 38%, #030807 100%);
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+      opacity: .55;
+    }
+
+    /* —— Header —— */
+    .app-header {
+      flex: 0 0 auto;
+      z-index: 5;
+      padding: calc(14px + var(--sat)) calc(18px + var(--sar)) 12px calc(18px + var(--sal));
+    }
+    body.is-unlocked .app-header {
+      padding-top: calc(10px + var(--sat));
+      padding-bottom: 10px;
+      border-bottom: 1px solid transparent;
+      background: linear-gradient(180deg, rgba(6,17,13,.92), rgba(6,17,13,.55));
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    body.tab-circle .app-header,
+    body.tab-network .app-header {
+      display: none !important;
+    }
+    .brand-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      align-items: center;
+      justify-items: center;
+      text-align: center;
+      position: relative;
+    }
+    body.is-unlocked .brand-row {
+      /* Keep brand centered; Lock floats top-right and does not shift it. */
+      padding-inline: 56px;
+    }
+    .mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 13px;
+      border: 1px solid rgba(47,227,154,.45);
+      background:
+        radial-gradient(circle at 32% 28%, rgba(170,255,210,.55), transparent 42%),
+        linear-gradient(155deg, rgba(47,227,154,.32), rgba(47,227,154,.05));
+      position: relative;
+      flex: 0 0 auto;
+      animation: markIn .7s var(--ease) both;
+    }
+    .mark::after {
+      content: "";
+      position: absolute;
+      inset: 11px;
+      border-radius: 50%;
+      border: 2px solid rgba(47,227,154,.95);
+      box-shadow: inset 0 0 0 4px rgba(6,17,13,.65);
+    }
+    body:not(.has-account) .mark,
+    body.has-account:not(.is-unlocked) .mark {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 6px;
+      border-radius: 20px;
+    }
+    body:not(.has-account) .mark::after,
+    body.has-account:not(.is-unlocked) .mark::after {
+      inset: 17px;
+      border-width: 2.5px;
+    }
+    body:not(.is-unlocked) .hdr-lock { display: none !important; }
+    .brand-text { min-width: 0; text-align: center; }
+    .brand {
+      margin: 0;
+      color: var(--accent);
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -.03em;
+      line-height: 1.1;
+      text-align: center;
+    }
+    body:not(.is-unlocked) .brand {
+      font-size: clamp(1.9rem, 8.5vw, 2.45rem);
+      letter-spacing: -.055em;
+      animation: riseIn .55s var(--ease) both;
+    }
+    .section-title {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: .74rem;
+      font-weight: 500;
+      letter-spacing: .02em;
+      text-align: center;
+    }
+    body:not(.is-unlocked) .section-title {
+      margin-top: 10px;
+      font-size: 1rem;
+      animation: riseIn .55s var(--ease) .08s both;
+    }
+    .hdr-lock {
+      appearance: none;
+      position: absolute;
+      top: 4px;
+      right: 0;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 13px;
+      font: inherit;
+      font-size: .7rem;
+      font-weight: 650;
+      cursor: pointer;
+      z-index: 2;
+    }
+
+    /* —— Main —— */
+    .app-main {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      padding-bottom: var(--dock-total, calc(var(--dock-h) + 8px));
+    }
+    .lock, .empty {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 12px;
+      padding: 24px calc(20px + var(--sar)) 28px calc(20px + var(--sal));
+      color: var(--muted);
+      animation: riseIn .5s var(--ease) both;
+    }
+    .lock .face {
+      width: 84px; height: 84px; border-radius: 26px;
+      border: 1px solid rgba(47,227,154,.4);
+      background:
+        radial-gradient(circle at 40% 28%, rgba(170,255,210,.35), transparent 52%),
+        rgba(47,227,154,.08);
+      display: grid; place-items: center;
+      font-size: 1.55rem; color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .lock h2 { margin: 0; color: var(--ink); font-size: 1.2rem; letter-spacing: -.02em; }
+    .lock p { margin: 0; max-width: 28rem; font-size: .88rem; line-height: 1.45; }
+    .pin-row { display: grid; gap: 8px; width: min(280px, 100%); }
+    .pin-row[hidden] { display: none !important; }
+    .pin-row input {
+      width: 100%; border-radius: 14px; border: 1px solid var(--line);
+      background: rgba(0,0,0,.3); color: var(--ink);
+      padding: 13px 14px; font: inherit; text-align: center; letter-spacing: .22em;
+    }
+    .workspace {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .workspace[hidden] { display: none !important; }
+
+    /* —— Code —— */
+    .code-stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: 20px calc(20px + var(--sar)) 16px calc(20px + var(--sal));
+      min-height: 0;
+      animation: riseIn .45s var(--ease) both;
+    }
+    body.tab-circle .code-stage,
+    body.tab-network .code-stage { display: none !important; }
+    .code-card {
+      width: min(420px, 100%);
+      padding: 28px 12px 8px;
+      text-align: center;
+      position: relative;
+    }
+    .code-card::before {
+      content: "";
+      position: absolute;
+      left: 50%; top: 42%;
+      width: min(280px, 78vw);
+      height: min(280px, 78vw);
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(47,227,154,.16), transparent 68%);
+      pointer-events: none;
+      z-index: 0;
+      animation: pulseGlow 3.6s ease-in-out infinite;
+    }
+    .code-label {
+      position: relative;
+      z-index: 1;
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: .68rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      font-weight: 650;
+    }
+    .code {
+      position: relative;
+      z-index: 1;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: clamp(3.15rem, 15.5vw, 4.25rem);
+      font-weight: 600;
+      letter-spacing: .22em;
+      margin: 0;
+      padding-left: .22em;
+      line-height: 1;
+      color: var(--ink);
+      text-shadow: 0 0 40px rgba(47,227,154,.18);
+    }
+    .bar {
+      position: relative;
+      z-index: 1;
+      margin: 26px auto 0;
+      width: min(188px, 58%);
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.07);
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block; height: 100%; width: 100%;
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--accent), #9bffd0);
+      transition: transform .2s linear;
+      box-shadow: 0 0 12px rgba(47,227,154,.45);
+    }
+    .code-actions {
+      display: grid;
+      width: min(280px, 100%);
+      gap: 10px;
+    }
+
+    /* —— Panels —— */
+    .panel {
+      display: none;
+      position: absolute;
+      inset: 0;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      padding: calc(12px + var(--sat)) calc(16px + var(--sar)) 14px calc(16px + var(--sal));
+      background:
+        linear-gradient(180deg, rgba(8,18,14,.97), rgba(5,12,10,.98));
+      animation: panelIn .35s var(--ease) both;
+    }
+    body.tab-circle #circlePane,
+    body.tab-network #networkPane {
+      display: flex !important;
+    }
+    .panel-head {
+      margin: 0 0 14px;
+      flex: 0 0 auto;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h3 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -.035em;
+    }
+    .panel-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.4;
+    }
+    .seg {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      margin: 0 0 12px;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+    .seg button {
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 11px 8px 12px;
+      font-size: .8rem;
+      position: relative;
+    }
+    .seg button .tab-count {
+      display: inline-block;
+      margin-left: 6px;
+      min-width: 1.25em;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: inherit;
+      font-size: .72em;
+      font-weight: 700;
+      letter-spacing: 0;
+      vertical-align: 1px;
+    }
+    .seg button[aria-selected="true"] .tab-count {
+      background: rgba(47,227,154,.22);
+      color: #d8ffe9;
+    }
+    .seg button[aria-selected="true"] {
+      background: transparent;
+      color: var(--ink);
+    }
+    .seg button[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      left: 18%; right: 18%;
+      bottom: -1px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+    .circle-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-bottom: 8px;
+    }
+    .circle-row {
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      padding: 14px 2px;
+      background: transparent;
+    }
+    .circle-row .ip {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .92rem;
+      word-break: break-all;
+    }
+    .circle-row .info {
+      color: var(--muted);
+      font-size: .7rem;
+      margin-top: 4px;
+    }
+    .circle-row .row-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .circle-empty {
+      color: var(--muted);
+      font-size: .8rem;
+      padding: 36px 10px;
+      text-align: center;
+    }
+    .panel-foot {
+      flex: 0 0 auto;
+      display: grid;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    body.circle-allowed .panel-foot .only-pending { display: none !important; }
+    .panel-foot input, .network-pane select, .network-pane input[type="text"] {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      color: var(--ink);
+      padding: 12px 14px;
+      font: inherit;
+      font-size: .84rem;
+    }
+    .net-control {
+      margin: 0 0 12px;
+      padding: 0 0 14px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      flex: 0 0 auto;
+    }
+    .net-control .label {
+      color: var(--muted);
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 6px;
+    }
+    .net-control .ip {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 1.12rem;
+      font-weight: 650;
+      word-break: break-all;
+      letter-spacing: -.01em;
+    }
+    .net-control .meta {
+      color: var(--muted);
+      font-size: .72rem;
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+    .device-row { display: grid; gap: 8px; margin-top: 12px; }
+    .device-row[hidden] { display: none; }
+    .net-choices {
+      display: grid;
+      gap: 0;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      flex: 1 1 auto;
+      min-height: 0;
+      padding-bottom: 8px;
+      align-content: start;
+    }
+    body.tab-network .panel-head p { display: none; }
+    .net-choices.busy { opacity: .55; pointer-events: none; }
+    button.choice {
+      appearance: none;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+      border-radius: 0;
+      padding: 16px 2px;
+      cursor: pointer;
+      transition: background .15s ease, padding .15s ease;
+    }
+    button.choice .title { display: block; font-weight: 700; margin-bottom: 3px; letter-spacing: -.015em; }
+    button.choice .hint { display: block; color: var(--muted); font-size: .72rem; line-height: 1.4; }
+    button.choice.active {
+      border-color: transparent;
+      border-bottom-color: var(--line);
+      background: linear-gradient(90deg, var(--accent-dim), transparent 70%);
+      padding-left: 10px;
+    }
+    button.choice.active.ts {
+      background: linear-gradient(90deg, var(--blue-dim), transparent 70%);
+    }
+    .net-choices > div { border-bottom: 1px solid var(--line); }
+    .net-choices > div > button.choice { border-bottom: 0; }
+    .net-choices > div > select {
+      margin: 0 2px 12px;
+      width: calc(100% - 4px);
+    }
+
+    /* —— Footer / dock: visual-viewport pinned, hug home indicator —— */
+    .app-footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      bottom: var(--vv-bottom, 0px);
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: #040a08;
+      width: 100%;
+      max-width: 100vw;
+      z-index: 100;
+    }
+    .app-nav {
+      display: none;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      margin: 0;
+      /* Keep only a few px under labels — do NOT add full safe-area here
+         (that left a ~100px dead band on iPhone). Background still
+         paints edge-to-edge via the fixed footer. */
+      padding: 2px calc(2px + var(--sar)) 6px calc(2px + var(--sal));
+      min-height: 0;
+      height: auto;
+      border-radius: 0;
+      background: #040a08;
+      border: 0;
+      border-top: 1px solid rgba(148,196,170,.14);
+      width: 100%;
+      align-items: end;
+    }
+        body.is-unlocked .app-nav { display: grid; }
+    .app-nav button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 10px;
+      padding: 4px 2px 1px;
+      font: inherit;
+      font-size: .6rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      display: grid;
+      gap: 1px;
+      justify-items: center;
+      align-content: end;
+      min-height: var(--dock-h);
+      max-height: var(--dock-h);
+      transition: color .18s ease, background .18s ease;
+      position: relative;
+    }
+    .app-nav button .glyph {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 1.5px solid currentColor;
+      opacity: .9;
+      position: relative;
+    }
+    .app-nav button[data-view="codes"] .glyph::after {
+      content: "···";
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      font-size: .55rem; letter-spacing: .1em;
+      text-transform: none;
+    }
+    .app-nav button[data-view="circle"] .glyph { border-radius: 50%; }
+    .app-nav button[data-view="network"] .glyph {
+      border-radius: 3px 3px 7px 7px;
+    }
+    .app-nav button[aria-selected="true"] {
+      color: #d8ffe9;
+      background: transparent;
+    }
+    .app-nav button[aria-selected="true"]::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 26%; right: 26%;
+      height: 2px;
+      border-radius: 0 0 2px 2px;
+      background: var(--accent);
+    }
+    .app-nav button[data-view="network"][aria-selected="true"] {
+      color: #dcebff;
+    }
+    .app-nav button[data-view="network"][aria-selected="true"]::before {
+      background: var(--blue);
+    }
+    .footer-actions {
+      display: none;
+      gap: 8px;
+      padding: 12px calc(16px + var(--sar)) calc(12px + var(--sab)) calc(16px + var(--sal));
+    }
+    body:not(.is-unlocked) .footer-actions.enroll { display: grid; }
+    body.is-unlocked .footer-actions,
+    body.is-unlocked .manual { display: none !important; }
+    button, .btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.035);
+      color: var(--ink);
+      border-radius: 12px;
+      padding: 13px 12px;
+      font: inherit;
+      font-size: .86rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent-dim);
+      border-color: rgba(47,227,154,.42);
+      color: #d4ffe9;
+    }
+    button.danger {
+      border-color: rgba(255,122,122,.35);
+      color: #ffb8b8;
+    }
+    button:disabled { opacity: .45; cursor: default; }
+    .manual {
+      display: none;
+      gap: 8px;
+      flex-direction: column;
+      padding: 0 calc(16px + var(--sar)) 14px calc(16px + var(--sal));
+    }
+    .manual.show { display: flex; }
+    .manual label { font-size: .74rem; color: var(--muted); }
+    .manual input {
+      width: 100%; border-radius: 12px; border: 1px solid var(--line);
+      background: rgba(0,0,0,.28); color: var(--ink);
+      padding: 12px 14px; font-family: "IBM Plex Mono", monospace;
+      font-size: .86rem; letter-spacing: .04em; text-transform: uppercase;
+    }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(var(--dock-total, calc(var(--dock-h) + 8px)) + 16px);
+      transform: translateX(-50%) translateY(8px);
+      background: #102019;
+      border: 1px solid rgba(47,227,154,.4);
+      color: var(--ink);
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: .8rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: .22s var(--ease);
+      z-index: 120;
+      max-width: calc(100% - 28px);
+    }
+    body:not(.is-unlocked) .toast {
+      bottom: calc(24px + var(--sab));
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    [hidden] { display: none !important; }
+
+    @keyframes riseIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes markIn {
+      from { opacity: 0; transform: scale(.88); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: .65; transform: translate(-50%, -50%) scale(1); }
+      50% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+
+  </style>
+</head>
+
+<body>
+  <header class="app-header">
+    <div class="brand-row">
+      <div class="mark" aria-hidden="true"></div>
+      <div class="brand-text">
+        <p class="brand">ServerManager</p>
+        <p class="section-title" id="sectionTitle">Authenticator</p>
+      </div>
+      <button type="button" class="hdr-lock" id="lockNowBtn" hidden>Lock</button>
+    </div>
+  </header>
+
+  <main class="app-main" id="stage">
+    <section class="lock" id="lockView" hidden>
+      <div class="face" aria-hidden="true">◉</div>
+      <h2 id="lockTitle">Face ID required</h2>
+      <p id="lockSub">Unlock with Face ID to see your ServerManager codes.</p>
+      <button type="button" class="primary" id="faceUnlockBtn" style="width:min(280px,100%)">Unlock with Face ID</button>
+      <button type="button" id="setupFaceBtn" style="width:min(280px,100%)" hidden>Set up Face ID</button>
+      <button type="button" id="usePinBtn" style="width:min(280px,100%)" hidden>Use PIN instead</button>
+      <div class="pin-row" id="pinRow" hidden>
+        <input id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="••••" />
+        <button type="button" class="primary" id="pinSubmitBtn">Unlock with PIN</button>
+      </div>
+    </section>
+
+    <div class="workspace" id="codePane" hidden>
+      <div class="code-stage" id="codeStage">
+        <div class="code-card">
+          <p class="code-label">One-time code</p>
+          <div class="code" id="codeView">------</div>
+          <div class="bar"><i id="tickBar"></i></div>
+        </div>
+        <div class="code-actions">
+          <button type="button" class="primary" id="copyBtn" hidden>Copy code</button>
+        </div>
+      </div>
+
+      <section class="panel" id="circlePane" hidden>
+        <div class="panel-head">
+          <h3>Circle</h3>
+          <p>Approve devices onto the home network, or move them back to pending.</p>
+        </div>
+        <div class="seg" role="tablist" aria-label="Circle lists">
+          <button type="button" id="circleTabPending" role="tab" aria-selected="true">Pending <span class="tab-count" id="circlePendingCount">0</span></button>
+          <button type="button" id="circleTabAllowed" role="tab" aria-selected="false">Allowed <span class="tab-count" id="circleAllowedCount">0</span></button>
+        </div>
+        <div class="circle-list" id="circleList"><div class="circle-empty">Open Circle to load the list.</div></div>
+        <div class="panel-foot">
+          <input class="only-pending" id="circleIpInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Approve WAN IP (e.g. 203.0.113.10)" />
+          <button type="button" class="primary only-pending" id="circleApproveBtn">Approve into circle</button>
+          <button type="button" class="only-pending" id="circleAuthorizeBtn">Authorize this network</button>
+          <button type="button" id="circleRefreshBtn">Refresh list</button>
+        </div>
+      </section>
+
+      <section class="panel network-pane" id="networkPane" hidden>
+        <div class="panel-head">
+          <h3>Exit</h3>
+          <p>Route one Circle device through Tailscale or Surfshark.</p>
+        </div>
+        <div class="net-control">
+          <div class="label">Controlling</div>
+          <div class="ip" id="netControlIp">…</div>
+          <div class="meta" id="netMeta"></div>
+          <div class="device-row" id="netDeviceRow" hidden>
+            <select id="netDevicePick" aria-label="This device IP"></select>
+            <input id="netDeviceManual" type="text" inputmode="decimal" autocomplete="off"
+              placeholder="or type 192.168.8.x" aria-label="Type this device LAN IP" />
+            <button type="button" class="primary" id="netUseDeviceBtn">Use this device IP</button>
+          </div>
+        </div>
+        <div class="net-choices" id="netChoices">
+          <button type="button" class="choice" data-provider="tailscale" id="netBtnTs">
+            <span class="title">Tailscale exit node</span>
+            <span class="hint">Route this IP via the active Tailscale exit node.</span>
+          </button>
+          <div>
+            <button type="button" class="choice" data-provider="surfshark" id="netBtnSs">
+              <span class="title">Surfshark</span>
+              <span class="hint">Route this IP through the Surfshark WireGuard tunnel.</span>
+            </button>
+            <select id="netSsServer" aria-label="Surfshark server" hidden></select>
+          </div>
+          <button type="button" class="choice" data-provider="direct" id="netBtnDirect">
+            <span class="title">Direct / default</span>
+            <span class="hint">Clear this device’s override (follow the normal exit).</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div class="empty" id="emptyView" hidden></div>
+  </main>
+
+  <footer class="app-footer">
+    <nav class="app-nav" id="tabBar" hidden aria-label="Authenticator sections">
+      <button type="button" id="navCode" data-view="codes" aria-selected="true"><span class="glyph" aria-hidden="true"></span>Code</button>
+      <button type="button" id="navCircle" data-view="circle" aria-selected="false"><span class="glyph" aria-hidden="true"></span>Circle</button>
+      <button type="button" id="navNetwork" data-view="network" aria-selected="false"><span class="glyph" aria-hidden="true"></span>Exit</button>
+    </nav>
+    <div class="footer-actions enroll" id="footerActions">
+      <button type="button" id="manualBtn" hidden>Enter secret</button>
+    </div>
+    <div class="manual" id="manualForm">
+      <label for="secretInput">Base32 secret from portal</label>
+      <input id="secretInput" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP…" />
+      <label for="accountInput">Account label (optional)</label>
+      <input id="accountInput" autocomplete="off" spellcheck="false" placeholder="portal@…" />
+      <button type="button" class="primary" id="saveManualBtn">Save on this iPhone</button>
+    </div>
+  </footer>
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/sm-circle-crypto.js"></script>
+  <script src="/static/sm-network-exit.js"></script>
+  <script>
+
+    const STORE_KEY = "sm.auth.totp.v1";
+    const FACE_KEY = "sm.auth.face.cred.v1";
+    const PIN_KEY = "sm.auth.pin.hash.v1";
+    const PERIOD = 30;
+    const DIGITS = 6;
+    const LOCK_AFTER_MS = 45_000;
+
+    const els = {
+      lockView: document.getElementById("lockView"),
+      lockTitle: document.getElementById("lockTitle"),
+      lockSub: document.getElementById("lockSub"),
+      codePane: document.getElementById("codePane"),
+      codeShell: document.getElementById("codePane"),
+      emptyView: document.getElementById("emptyView"),
+      codeView: document.getElementById("codeView"),
+      tickBar: document.getElementById("tickBar"),
+      copyBtn: document.getElementById("copyBtn"),
+      lockNowBtn: document.getElementById("lockNowBtn"),
+      manualBtn: document.getElementById("manualBtn"),
+      manualForm: document.getElementById("manualForm"),
+      secretInput: document.getElementById("secretInput"),
+      accountInput: document.getElementById("accountInput"),
+      saveManualBtn: document.getElementById("saveManualBtn"),
+      faceUnlockBtn: document.getElementById("faceUnlockBtn"),
+      setupFaceBtn: document.getElementById("setupFaceBtn"),
+      usePinBtn: document.getElementById("usePinBtn"),
+      pinRow: document.getElementById("pinRow"),
+      pinInput: document.getElementById("pinInput"),
+      pinSubmitBtn: document.getElementById("pinSubmitBtn"),
+      toast: document.getElementById("toast"),
+      circlePane: document.getElementById("circlePane"),
+      circleList: document.getElementById("circleList"),
+      circleAllowedCount: document.getElementById("circleAllowedCount"),
+      circlePendingCount: document.getElementById("circlePendingCount"),
+      circleIpInput: document.getElementById("circleIpInput"),
+      circleApproveBtn: document.getElementById("circleApproveBtn"),
+      circleAuthorizeBtn: document.getElementById("circleAuthorizeBtn"),
+      circleRefreshBtn: document.getElementById("circleRefreshBtn"),
+      circleTabPending: document.getElementById("circleTabPending"),
+      circleTabAllowed: document.getElementById("circleTabAllowed"),
+      tabBar: document.getElementById("tabBar"),
+      navCode: document.getElementById("navCode"),
+      navCircle: document.getElementById("navCircle"),
+      navNetwork: document.getElementById("navNetwork"),
+      sectionTitle: document.getElementById("sectionTitle"),
+      networkPane: document.getElementById("networkPane"),
+      codeStage: document.getElementById("codeStage"),
+      footerActions: document.getElementById("footerActions"),
+    };
+
+    let account = null;
+    let unlocked = false;
+    let networkOpen = false;
+    let networkExit = { open: async () => {}, refresh: async () => {} };
+    let toastTimer = null;
+    let idleTimer = null;
+    let busy = false;
+    let pinMode = false;
+    let circleData = null;
+    let circleLoading = false;
+    let circleOpen = false;
+    let circleView = "pending";
+    let enrollUnlocked = false;
+    let enrollStatusLoaded = false;
+
+
+    function currentView() {
+      if (networkOpen) return "network";
+      if (circleOpen) return "circle";
+      return "codes";
+    }
+
+    function syncPanelButtons() {
+      const view = currentView();
+      document.body.dataset.view = view;
+      const map = { codes: els.navCode, circle: els.navCircle, network: els.navNetwork };
+      Object.entries(map).forEach(([key, btn]) => {
+        if (!btn) return;
+        btn.setAttribute("aria-selected", view === key ? "true" : "false");
+      });
+      if (els.sectionTitle) {
+        els.sectionTitle.textContent =
+          view === "circle" ? "VPN circle"
+          : view === "network" ? "Network exit"
+          : "Authenticator";
+      }
+      if (els.copyBtn) els.copyBtn.hidden = !(unlocked && view === "codes");
+    }
+
+
+    function setPanelView(view) {
+      if (!unlocked) return;
+      const next = view === "circle" || view === "network" ? view : "codes";
+      circleOpen = next === "circle";
+      networkOpen = next === "network";
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      document.body.classList.toggle("tab-network", !!(account && unlocked && networkOpen));
+      if (!circleOpen) document.body.classList.remove("circle-allowed");
+      syncPanelButtons();
+      if (!(account && unlocked)) return;
+      els.copyBtn.hidden = circleOpen || networkOpen;
+      if (els.circlePane) els.circlePane.hidden = !circleOpen;
+      if (els.networkPane) els.networkPane.hidden = !networkOpen;
+      if (circleOpen) {
+        renderCircle();
+        if (!circleData && !circleLoading) fetchCircle();
+      }
+      if (networkOpen) networkExit.open();
+    }
+
+    function setCircleOpen(open) {
+      setPanelView(open ? "circle" : "codes");
+    }
+
+    function toast(msg) {
+      els.toast.textContent = msg;
+      els.toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+    }
+    if (window.SmNetworkExit) {
+      networkExit = SmNetworkExit.create({ toast: (msg) => toast(msg) });
+    }
+
+    function b64urlFromBuf(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function bufFromB64url(s) {
+      const pad = "=".repeat((4 - (s.length % 4)) % 4);
+      const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function randomBytes(n) {
+      const out = new Uint8Array(n);
+      crypto.getRandomValues(out);
+      return out;
+    }
+    function loadFaceCredId() {
+      return localStorage.getItem(FACE_KEY) || "";
+    }
+    function saveFaceCredId(id) {
+      localStorage.setItem(FACE_KEY, id);
+    }
+    async function faceAvailable() {
+      try {
+        if (!window.PublicKeyCredential) return false;
+        if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+          return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    async function enrollFaceId() {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32),
+          rp: { name: "ServerManager Auth", id: location.hostname },
+          user: {
+            id: randomBytes(16),
+            name: "sm-auth-iphone",
+            displayName: "SM Auth",
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+            residentKey: "preferred",
+          },
+          timeout: 90_000,
+        },
+      });
+      if (!cred || !cred.rawId) throw new Error("Face ID setup failed");
+      saveFaceCredId(b64urlFromBuf(cred.rawId));
+      return true;
+    }
+    async function verifyFaceId() {
+      const id = loadFaceCredId();
+      if (!id) throw new Error("Face ID is not set up yet");
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: randomBytes(32),
+          rpId: location.hostname,
+          allowCredentials: [{ type: "public-key", id: bufFromB64url(id) }],
+          userVerification: "required",
+          timeout: 90_000,
+        },
+      });
+      if (!assertion) throw new Error("Face ID cancelled");
+      return true;
+    }
+
+    async function hashPin(pin) {
+      const data = new TextEncoder().encode(`sm-auth-iphone:${pin}`);
+      const dig = await crypto.subtle.digest("SHA-256", data);
+      return Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    function loadPinHash() {
+      return localStorage.getItem(PIN_KEY) || "";
+    }
+
+    function loadAccount() {
+      try {
+        const data = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+        if (!data?.secret) return null;
+        return {
+          secret: String(data.secret).replace(/\s+/g, "").toUpperCase(),
+          issuer: String(data.issuer || "ServerManager"),
+          account: String(data.account || "portal"),
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+    function saveAccount(next) {
+      localStorage.setItem(STORE_KEY, JSON.stringify(next));
+      account = next;
+      unlocked = false;
+      pinMode = false;
+      render();
+    }
+    async function fetchEnrollStatus() {
+      try {
+        const res = await fetch("/api/auth-app/enroll-status", {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        enrollUnlocked = !!(data && (data.enroll_unlocked || data.device_enroll_unlocked));
+      } catch (_) {
+        enrollUnlocked = false;
+      }
+      enrollStatusLoaded = true;
+      render();
+      return enrollUnlocked;
+    }
+    function emptyCopy() {
+      if (enrollUnlocked) {
+        return "Enrollment unlocked — tap Enter secret and paste the Base32 secret from Security.";
+      }
+      return "";
+    }
+    function parseHash() {
+      const hash = (location.hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      const params = new URLSearchParams(hash);
+      const secret = (params.get("secret") || "").replace(/\s+/g, "").toUpperCase();
+      if (!secret) return null;
+      return {
+        secret,
+        issuer: params.get("issuer") || "ServerManager",
+        account: params.get("account") || "portal",
+      };
+    }
+    function b32Decode(secret) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = "";
+      for (const ch of String(secret || "").replace(/=+$/, "").toUpperCase()) {
+        const val = alphabet.indexOf(ch);
+        if (val < 0) continue;
+        bits += val.toString(2).padStart(5, "0");
+      }
+      const bytes = [];
+      for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+      return new Uint8Array(bytes);
+    }
+    async function hmacSha1(keyBytes, msgBytes) {
+      const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+      return new Uint8Array(await crypto.subtle.sign("HMAC", key, msgBytes));
+    }
+    async function totpAt(secret, forTime = Date.now() / 1000) {
+      const counter = Math.floor(forTime / PERIOD);
+      const msg = new Uint8Array(8);
+      let n = counter;
+      for (let i = 7; i >= 0; i--) { msg[i] = n & 0xff; n = Math.floor(n / 256); }
+      const digest = await hmacSha1(b32Decode(secret), msg);
+      const offset = digest[digest.length - 1] & 0x0f;
+      const codeInt =
+        ((digest[offset] & 0x7f) << 24) |
+        ((digest[offset + 1] & 0xff) << 16) |
+        ((digest[offset + 2] & 0xff) << 8) |
+        (digest[offset + 3] & 0xff);
+      return String(codeInt % 10 ** DIGITS).padStart(DIGITS, "0");
+    }
+    async function currentTotpCode() {
+      if (!account?.secret) throw new Error("No authenticator account");
+      return totpAt(account.secret);
+    }
+    async function detectHomeLanIp() {
+      // Best-effort local IPv4 via WebRTC host candidates (home Wi‑Fi 192.168.8.x).
+      return await new Promise((resolve) => {
+        let done = false;
+        const finish = (ip) => {
+          if (done) return;
+          done = true;
+          try { pc.close(); } catch (_) {}
+          resolve(ip || "");
+        };
+        let pc;
+        try {
+          pc = new RTCPeerConnection({ iceServers: [] });
+        } catch (_) {
+          resolve("");
+          return;
+        }
+        try { pc.createDataChannel("sm"); } catch (_) {}
+        pc.onicecandidate = (ev) => {
+          const cand = ev?.candidate?.candidate || "";
+          const m = cand.match(
+            /(?:^| )(\d{1,3}(?:\.\d{1,3}){3})(?: |\n|$)/
+          );
+          if (!m) return;
+          const ip = m[1];
+          if (/^192\.168\.8\.(?:[2-9]|\d{2}|1\d{2}|2[0-4]\d|25[0-4])$/.test(ip)) {
+            finish(ip);
+          }
+        };
+        pc.createOffer()
+          .then((offer) => pc.setLocalDescription(offer))
+          .catch(() => finish(""));
+        setTimeout(() => finish(""), 1600);
+      });
+    }
+    async function registerEnrolledDevice() {
+      if (!account?.secret || !unlocked) return;
+      try {
+        const lanIp = await detectHomeLanIp();
+        if (!lanIp) return;
+        if (!window.SmCircleCrypto) return;
+        const keyRow = await SmCircleCrypto.ensureKeyForIp(lanIp);
+        const code = await currentTotpCode();
+        const bodyObj = {
+          code,
+          lan_ip: lanIp,
+          platform: "iphone",
+          note: "iphone Authenticator",
+          pubkey: keyRow.publicKey,
+        };
+        const bodyText = JSON.stringify(bodyObj);
+        const proofHeaders = await SmCircleCrypto.circleHeaders(lanIp, {
+          method: "POST",
+          path: "/api/auth-app/register-device",
+          bodyText,
+        });
+        await fetch("/api/auth-app/register-device", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-SM-Totp": code,
+            "X-SM-Lan-Ip": lanIp,
+            "X-SM-Platform": "iphone",
+            ...proofHeaders,
+          },
+          body: bodyText,
+          cache: "no-store",
+        });
+      } catch (_) {}
+    }
+    async function fetchCircle() {
+      if (!account || !unlocked) return;
+      circleLoading = true;
+      try {
+        const code = await currentTotpCode();
+        const lanIp = await detectHomeLanIp();
+        const headers = { "X-SM-Totp": code, Accept: "application/json" };
+        if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+        // TOTP stays in headers only — never put codes in the URL/query string.
+        const res = await fetch("/api/auth-app/vpn-allowlist", {
+          headers,
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        circleData = data;
+        renderCircle();
+      } catch (err) {
+        if (els.circleList) {
+          els.circleList.innerHTML = `<div class="circle-empty">${String(err?.message || err)}</div>`;
+        }
+      } finally {
+        circleLoading = false;
+      }
+    }
+    
+    async function authorizeNetwork() {
+      if (!unlocked) { toast("Unlock first"); return; }
+      try {
+        if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
+        // Home WiFi (192.168.8.x): approve this device's LAN IP into the circle.
+        // Campus shared WAN cannot be leased/allowlisted — LAN approve is the path.
+        const lanIp = await detectHomeLanIp();
+        if (lanIp && String(lanIp).startsWith("192.168.8.")) {
+          await mutateCircle("approve", lanIp, "authorized network · this device");
+          return;
+        }
+        const code = await currentTotpCode();
+        const store = SmCircleCrypto.loadStore();
+        const ips = Object.keys(store || {});
+        if (!ips.length) {
+          throw new Error("No circle keys yet — Approve your device IP first, then try again");
+        }
+        let used = null;
+        let lastErr = null;
+        for (const ip of ips) {
+          try {
+            const proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
+              method: "POST",
+              path: "/api/auth-app/circle-lease",
+              bodyText: "",
+            });
+            const res = await fetch("/api/auth-app/circle-lease", {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "X-SM-Totp": code,
+                ...proofHeaders,
+              },
+              body: "",
+              cache: "no-store",
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+            used = ip;
+            toast(data.message || `Authorized ${ip}`);
+            break;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (!used) throw lastErr || new Error("No matching key for this network");
+        bumpIdle();
+      } catch (err) {
+        toast(String(err?.message || err));
+      }
+    }
+
+    async function mutateCircle(action, ip, note) {
+      if (!ip) {
+        toast("Enter a WAN IP");
+        return;
+      }
+      try {
+        if (!window.SmCircleCrypto) throw new Error("Circle crypto unavailable");
+        const code = await currentTotpCode();
+        const lanIp = await detectHomeLanIp();
+        // Approve needs a per-IP key bind. pending/revoke/deny are TOTP-only
+        // admin actions (any enrolled phone can demote IPs it did not approve).
+        const needsKey = action === "approve";
+        const bodyObj = { action, ip, note: note || "" };
+        let proofHeaders = {};
+        if (needsKey) {
+          const keyRow = await SmCircleCrypto.ensureKeyForIp(ip);
+          bodyObj.pubkey = keyRow.publicKey;
+        }
+        const bodyText = JSON.stringify(bodyObj);
+        if (needsKey) {
+          proofHeaders = await SmCircleCrypto.circleHeaders(ip, {
+            method: "POST",
+            path: "/api/auth-app/vpn-allowlist",
+            bodyText,
+          });
+        }
+        const headers = {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-SM-Totp": code,
+          "X-SM-Platform": "iphone",
+          ...proofHeaders,
+        };
+        if (lanIp) headers["X-SM-Lan-Ip"] = lanIp;
+        const res = await fetch("/api/auth-app/vpn-allowlist", {
+          method: "POST",
+          headers,
+          body: bodyText,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        circleData = data.vpn_allowlist || data;
+        renderCircle();
+        const labels = {
+          approve: "Approved + key-bound",
+          deny: "Denied",
+          revoke: "Removed",
+          pending: "Moved to pending",
+        };
+        toast(`${labels[action] || action} ${ip}`);
+        bumpIdle();
+      } catch (err) {
+        toast(String(err?.message || err));
+      }
+    }
+    function renderCircle() {
+      if (!els.circlePane) return;
+      if (!account || !unlocked || !circleOpen) {
+        els.circlePane.hidden = true;
+        document.body.classList.remove("circle-allowed");
+        return;
+      }
+      els.circlePane.hidden = false;
+      document.body.classList.toggle("circle-allowed", circleView === "allowed");
+      const allowed = circleData?.allowed || [];
+      const pending = circleData?.pending || [];
+      const attempts = circleData?.attempts || [];
+      els.circleAllowedCount.textContent = String(allowed.length);
+      els.circlePendingCount.textContent = String(pending.length);
+      if (els.circleTabPending) {
+        els.circleTabPending.setAttribute("aria-selected", circleView === "pending" ? "true" : "false");
+      }
+      if (els.circleTabAllowed) {
+        els.circleTabAllowed.setAttribute("aria-selected", circleView === "allowed" ? "true" : "false");
+      }
+      const blocks = [];
+      if (circleView === "allowed") {
+        if (!allowed.length) {
+          els.circleList.innerHTML = `<div class="circle-empty">No allowlisted IPs yet.</div>`;
+        } else {
+          allowed.forEach((row) => {
+            const sealed = !!(row.sealed || row.hidden || row.source === "router");
+            const isLan = row.kind === "lan" || String(row.ip || "").startsWith("192.168.8.");
+            const isOvpn = row.kind === "openvpn" || String(row.ip || "").startsWith("10.9.0.");
+            const name = String(row.name || row.hostname || "").trim();
+            const title = name || row.ip;
+            const presence =
+              !sealed && (isLan || isOvpn)
+                ? (row.online ? " · online" : " · offline")
+                : "";
+            const detail = sealed
+              ? `${esc(row.ip)} · sealed · always on`
+              : `${esc(row.ip)} · allowlisted${isLan ? " · LAN" : ""}${isOvpn && !isLan ? " · OpenVPN" : ""}${presence}${name ? "" : ` · ${esc(row.note || row.source || "—")}`}`;
+            const actions = sealed
+              ? `<div class="info">Cannot remove sealed router WAN</div>`
+              : `<div class="row-actions">
+              <button type="button" class="circle-pending" data-ip="${esc(row.ip)}">Move to pending</button>
+              <button type="button" class="danger circle-revoke" data-ip="${esc(row.ip)}">Remove</button>
+            </div>`;
+            blocks.push(`<div class="circle-row">
+              <div class="ip">${esc(title)}</div>
+              <div class="info">${detail}</div>
+              ${actions}
+            </div>`);
+          });
+          els.circleList.innerHTML = blocks.join("");
+        }
+      } else if (pending.length) {
+        pending.forEach((row) => {
+          const isLan = row.kind === "lan" || row.source === "lan-offline" || String(row.ip || "").startsWith("192.168.8.");
+          const authApp = !!(row.auth_app || row.auth_app_enrolled);
+          const name = String(row.name || row.hostname || "").trim();
+          const title = name || row.ip;
+          const detail = isLan
+            ? `${esc(row.ip)} · ${esc(row.status || "pending")} · LAN${authApp ? " · Authenticator enrolled" : ""}${row.key_bound ? " · key-bound" : ""}${row.online ? " · online" : " · offline"}`
+            : `${esc(row.ip)} · ${esc(row.status || "pending")} · VIP ${esc(row.vip || "—")} · ${esc(row.count || 1)} hits`;
+          blocks.push(`<div class="circle-row">
+            <div class="ip">${esc(title)}</div>
+            <div class="info">${detail}</div>
+            <div class="row-actions">
+              <button type="button" class="primary circle-approve" data-ip="${esc(row.ip)}">Approve</button>
+              <button type="button" class="danger circle-deny" data-ip="${esc(row.ip)}">Deny</button>
+            </div>
+          </div>`);
+        });
+        els.circleList.innerHTML = blocks.join("");
+      } else {
+        const recent = attempts.slice(0, 4).map((a) =>
+          `<div class="circle-row"><div class="ip">${esc(a.ip)}${a.key_bound ? " · 🔑 " + esc((a.key_id || "").slice(0, 8)) : ""}</div><div class="info">recent · VIP ${esc(a.vip || "—")} · guest DNS</div>
+           <div class="row-actions"><button type="button" class="primary circle-approve" data-ip="${esc(a.ip)}">Approve</button>
+           <button type="button" class="danger circle-deny" data-ip="${esc(a.ip)}">Deny</button></div></div>`
+        ).join("");
+        els.circleList.innerHTML = recent || `<div class="circle-empty">No pending WAN or LAN devices.</div>`;
+      }
+      els.circleList.querySelectorAll(".circle-approve").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("approve", btn.dataset.ip || ""));
+      });
+      els.circleList.querySelectorAll(".circle-deny").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("deny", btn.dataset.ip || ""));
+      });
+      els.circleList.querySelectorAll(".circle-revoke").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("revoke", btn.dataset.ip || ""));
+      });
+      els.circleList.querySelectorAll(".circle-pending").forEach((btn) => {
+        btn.onclick = () => withBusy(() => mutateCircle("pending", btn.dataset.ip || "", "moved to pending"));
+      });
+    }
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    function remaining() {
+      return PERIOD - ((Date.now() / 1000) % PERIOD);
+    }
+    async function tick() {
+      if (!account || !unlocked) {
+        els.codeView.textContent = "------";
+        return;
+      }
+      try {
+        els.codeView.textContent = await totpAt(account.secret);
+        els.tickBar.style.transform = `scaleX(${remaining() / PERIOD})`;
+      } catch (_) {
+        els.codeView.textContent = "------";
+      }
+    }
+    function bumpIdle() {
+      clearTimeout(idleTimer);
+      if (!unlocked || !account) return;
+      idleTimer = setTimeout(() => lockNow("Locked after inactivity"), LOCK_AFTER_MS);
+    }
+    function lockNow(msg) {
+      unlocked = false;
+      pinMode = false;
+      circleData = null;
+      circleOpen = false;
+      networkOpen = false;
+      document.body.classList.remove("tab-circle", "tab-network", "circle-allowed");
+      syncPanelButtons();
+      els.codeView.textContent = "------";
+      els.pinInput.value = "";
+      if (els.circlePane) els.circlePane.hidden = true;
+      if (els.networkPane) els.networkPane.hidden = true;
+      clearTimeout(idleTimer);
+      render();
+      if (msg) toast(msg);
+    }
+    function render() {
+      const hasFace = !!loadFaceCredId();
+      const hasPin = !!loadPinHash();
+      document.body.classList.toggle("is-unlocked", !!(account && unlocked));
+      document.body.classList.toggle("tab-circle", !!(account && unlocked && circleOpen));
+      document.body.classList.toggle("tab-network", !!(account && unlocked && networkOpen));
+      if (!account) {
+        els.lockView.hidden = true;
+        els.codePane.hidden = true;
+        const copy = emptyCopy();
+        els.emptyView.textContent = copy;
+        els.emptyView.hidden = !copy;
+        els.copyBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        if (els.manualBtn) els.manualBtn.hidden = !(enrollStatusLoaded && enrollUnlocked);
+        if (!enrollUnlocked && els.manualForm) els.manualForm.classList.remove("show");
+        if (els.tabBar) els.tabBar.hidden = true;
+        if (els.networkPane) els.networkPane.hidden = true;
+        els.codeView.textContent = "------";
+        return;
+      }
+      els.emptyView.hidden = true;
+      if (!unlocked) {
+        els.lockView.hidden = false;
+        els.codePane.hidden = true;
+        els.copyBtn.hidden = true;
+        els.lockNowBtn.hidden = true;
+        if (els.manualBtn) els.manualBtn.hidden = true;
+        if (els.manualForm) els.manualForm.classList.remove("show");
+        if (els.tabBar) els.tabBar.hidden = true;
+        if (els.networkPane) els.networkPane.hidden = true;
+        if (pinMode && hasPin) {
+          els.lockTitle.textContent = "Enter PIN";
+          els.lockSub.textContent = "Unlock with your app PIN.";
+          els.faceUnlockBtn.hidden = true;
+          els.setupFaceBtn.hidden = true;
+          els.usePinBtn.hidden = true;
+          els.pinRow.hidden = false;
+          setTimeout(() => els.pinInput.focus(), 40);
+        } else {
+          els.lockTitle.textContent = "Face ID required";
+          els.lockSub.textContent = hasFace
+            ? "Unlock with Face ID to see your ServerManager codes."
+            : "Set up Face ID once (uses Apple Passkey), then unlock with Face ID.";
+          els.faceUnlockBtn.hidden = !hasFace;
+          els.setupFaceBtn.hidden = hasFace;
+          els.setupFaceBtn.textContent = "Set up Face ID";
+          els.usePinBtn.hidden = !hasPin;
+          els.pinRow.hidden = true;
+        }
+      } else {
+        els.lockView.hidden = true;
+        els.codePane.hidden = false;
+        els.copyBtn.hidden = circleOpen || networkOpen;
+        els.lockNowBtn.hidden = false;
+        if (els.manualBtn) els.manualBtn.hidden = true;
+        if (els.manualForm) els.manualForm.classList.remove("show");
+        if (els.tabBar) els.tabBar.hidden = false;
+        syncPanelButtons();
+        if (els.circlePane) els.circlePane.hidden = !circleOpen;
+        if (els.networkPane) els.networkPane.hidden = !networkOpen;
+        tick();
+        bumpIdle();
+        renderCircle();
+        if (circleOpen && !circleData && !circleLoading) fetchCircle();
+      }
+    }
+
+    async function withBusy(fn) {
+      if (busy) return;
+      busy = true;
+      try { await fn(); }
+      finally { busy = false; }
+    }
+
+    els.faceUnlockBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        await verifyFaceId();
+        unlocked = true;
+        pinMode = false;
+        render();
+        registerEnrolledDevice();
+        toast("Unlocked");
+      } catch (err) {
+        unlocked = false;
+        render();
+        toast(String(err?.message || err || "Face ID failed"));
+      }
+    }));
+    els.setupFaceBtn.addEventListener("click", () => withBusy(async () => {
+      try {
+        if (!(await faceAvailable())) {
+          toast("Face ID not available in this browser");
+          return;
+        }
+        await enrollFaceId();
+        unlocked = true;
+        pinMode = false;
+        render();
+        registerEnrolledDevice();
+        toast("Face ID enabled");
+      } catch (err) {
+        toast(String(err?.message || err || "Face ID setup cancelled"));
+      }
+    }));
+    els.usePinBtn.addEventListener("click", () => {
+      pinMode = true;
+      els.pinInput.value = "";
+      render();
+    });
+    els.pinSubmitBtn.addEventListener("click", () => withBusy(async () => {
+      const pin = String(els.pinInput.value || "").replace(/\D+/g, "");
+      if (pin.length < 4) {
+        toast("Enter your PIN");
+        return;
+      }
+      const hashed = await hashPin(pin);
+      if (hashed !== loadPinHash()) {
+        els.pinInput.value = "";
+        toast("Incorrect PIN");
+        els.pinInput.focus();
+        return;
+      }
+      unlocked = true;
+      pinMode = false;
+      els.pinInput.value = "";
+      render();
+      registerEnrolledDevice();
+      toast("Unlocked");
+    }));
+    els.pinInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        els.pinSubmitBtn.click();
+      }
+    });
+    els.lockNowBtn.addEventListener("click", () => lockNow("Locked"));
+    els.navCode?.addEventListener("click", () => {
+      if (!unlocked) return;
+      setPanelView("codes");
+      bumpIdle();
+    });
+    els.navCircle?.addEventListener("click", () => {
+      if (!unlocked) return;
+      setPanelView("circle");
+      bumpIdle();
+    });
+    els.navNetwork?.addEventListener("click", () => {
+      if (!unlocked) return;
+      setPanelView("network");
+      bumpIdle();
+    });
+    els.circleTabPending?.addEventListener("click", () => {
+      circleView = "pending";
+      renderCircle();
+      bumpIdle();
+    });
+    els.circleTabAllowed?.addEventListener("click", () => {
+      circleView = "allowed";
+      renderCircle();
+      bumpIdle();
+    });
+    els.circleRefreshBtn?.addEventListener("click", () => withBusy(async () => {
+      await fetchCircle();
+      toast(circleLoading ? "Loading…" : "Refreshed");
+      bumpIdle();
+    }));
+    els.circleAuthorizeBtn?.addEventListener("click", () => withBusy(() => authorizeNetwork()));
+    els.circleApproveBtn?.addEventListener("click", () => withBusy(async () => {
+      const ip = String(els.circleIpInput?.value || "").trim();
+      await mutateCircle("approve", ip, "manual from iPhone auth app");
+      if (els.circleIpInput) els.circleIpInput.value = "";
+    }));
+    els.copyBtn.addEventListener("click", async () => {
+      if (!unlocked || circleOpen || networkOpen) return;
+      const code = els.codeView.textContent || "";
+      if (!/^\d{6}$/.test(code)) return;
+      try { await navigator.clipboard.writeText(code); toast("Copied"); }
+      catch (_) { toast(code); }
+      bumpIdle();
+    });
+
+    els.manualBtn?.addEventListener("click", () => {
+      if (account || !enrollUnlocked) return;
+      els.manualForm?.classList.toggle("show");
+      if (els.manualForm?.classList.contains("show")) els.secretInput?.focus();
+    });
+    els.saveManualBtn?.addEventListener("click", () => {
+      if (!enrollUnlocked) {
+        toast("Enrollment is locked on the VPS");
+        els.manualForm?.classList.remove("show");
+        return;
+      }
+      const secret = (els.secretInput?.value || "").replace(/\s+/g, "").toUpperCase();
+      if (secret.length < 16) {
+        toast("Secret looks too short");
+        return;
+      }
+      saveAccount({
+        secret,
+        issuer: "ServerManager",
+        account: (els.accountInput?.value || "portal").trim() || "portal",
+      });
+      if (els.secretInput) els.secretInput.value = "";
+      els.manualForm?.classList.remove("show");
+      toast(loadFaceCredId() ? "Saved on this iPhone" : "Saved — set up Face ID");
+      history.replaceState(null, "", location.pathname);
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && unlocked) lockNow();
+    });
+    window.addEventListener("pagehide", () => {
+      if (unlocked) lockNow();
+    });
+    window.addEventListener("blur", () => {
+      if (unlocked) lockNow();
+    });
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => {
+      document.addEventListener(ev, bumpIdle, { passive: true });
+    });
+
+    (async () => {
+      await fetchEnrollStatus();
+      const fromHash = parseHash();
+      if (fromHash) {
+        if (!enrollUnlocked) {
+          history.replaceState(null, "", location.pathname);
+          account = loadAccount();
+          unlocked = false;
+          render();
+          toast("Enrollment is locked — unlock new devices in Security first");
+        } else {
+          saveAccount(fromHash);
+          history.replaceState(null, "", location.pathname);
+          toast(loadFaceCredId() ? "Account saved" : "Account saved — set up Face ID");
+        }
+      } else {
+        account = loadAccount();
+        unlocked = false;
+        render();
+      }
+      setInterval(() => {
+        fetchEnrollStatus();
+      }, 15000);
+    })();
+    setInterval(tick, 250);
+    /* Pin tab dock to the visible viewport bottom (iOS fixed-gap fix). */
+    (function pinAuthDock() {
+      var footer = document.querySelector(".app-footer");
+      if (!footer) return;
+      var sync = function () {
+        var lift = 0;
+        var vv = window.visualViewport;
+        if (vv) {
+          lift = Math.max(0, window.innerHeight - vv.offsetTop - vv.height);
+        }
+        document.documentElement.style.setProperty("--vv-bottom", lift ? lift + "px" : "0px");
+        footer.style.bottom = lift ? lift + "px" : "0px";
+        var h = Math.ceil(footer.getBoundingClientRect().height || 48);
+        document.documentElement.style.setProperty("--dock-total", h + "px");
+      };
+      sync();
+      requestAnimationFrame(sync);
+      window.addEventListener("resize", sync);
+      window.addEventListener("orientationchange", sync);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", sync);
+        window.visualViewport.addEventListener("scroll", sync);
+      }
+      setTimeout(sync, 50);
+      setTimeout(sync, 300);
+    })();
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker
+        .register("/static/auth-app-iphone-sw.js?v=33")
+        .then((reg) => reg.update())
+        .catch(() => {});
+    }
+  
+  </script>
+</body>
+</html>

@@ -146,7 +146,7 @@
     }
     async function api(path) {
       const res = await fetch(path, { credentials: "same-origin" });
-      if (res.status === 401) { location.href = "/login.html"; throw new Error("unauthorized"); }
+      if (res.status === 401) { location.href = "/"; throw new Error("unauthorized"); }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
       return data;

@@ -28,3 +28,17 @@ No private CA install is required.
 | Pool | `10.10.0.0/24` |
 | DNS | `10.9.0.1` → AdGuard → Pi-hole |
 | Server cert | Let's Encrypt RSA (`ikev2-portal-rsa`) |
+
+## Flint LAN → portal (HTTP/2 abort fix)
+
+Home LAN egress shares campus WAN `192.81.235.246`, which Caddy hard-denies with
+`abort` (Chrome shows `ERR_HTTP2_PROTOCOL_ERROR`). GL.iNet also forces the VPS
+public IP via WAN so OpenVPN does not loop.
+
+`ensure-flint-portal-via-ovpn.sh` (timer `sm-flint-portal-via-ovpn.timer`) rewrites
+Flint DNS for `portal`/`router` to VIP `10.11.0.1` and routes that VIP over
+`ovpnclient1`, so LAN browsers hit Caddy as `10.9.0.2`.
+
+```bash
+bash /opt/ikev2/ensure-flint-portal-via-ovpn.sh
+```

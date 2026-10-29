@@ -273,7 +273,7 @@
         ...opts,
       });
       if (res.status === 401) {
-        try { window.top.location.href = "/login.html"; } catch (e) { location.href = "/login.html"; }
+        try { window.top.location.href = "/"; } catch (e) { location.href = "/"; }
         throw new Error("Not signed in");
       }
       const data = await res.json().catch(() => ({}));

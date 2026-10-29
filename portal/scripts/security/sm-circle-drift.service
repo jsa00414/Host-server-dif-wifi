@@ -1,0 +1,8 @@
+[Unit]
+Description=ServerManager trust-circle drift check
+After=network-online.target port-forward-ui.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/wireguard/port-forward-ui.env
+ExecStart=/opt/wireguard/port-forward-ui/scripts/security/check-circle-drift.sh
