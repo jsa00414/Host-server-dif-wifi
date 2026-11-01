@@ -6105,6 +6105,20 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\t}")
             lines.append("\t\t}")
             lines.append("\t}")
+            # Grafana lives only under portal /grafana/ (same-origin iframe).
+            # Proxy via Caddy→sm-grafana so Prometheus queries/WebSockets work;
+            # the Python panel proxy is a :5002 fallback only.
+            lines.append(f"\t@grafana path {GRAFANA_UI_PREFIX} {GRAFANA_UI_PREFIX}/*")
+            lines.append("\thandle @grafana {")
+            lines.append(f"\t\treverse_proxy {GRAFANA_HOST}:{GRAFANA_PORT} {{")
+            lines.append("\t\t\theader_up Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Host {host}")
+            lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
+            lines.append(f"\t\t\theader_up X-Forwarded-Prefix {GRAFANA_UI_PREFIX}")
+            lines.append("\t\t\theader_down -X-Frame-Options")
+            lines.append("\t\t\theader_down -Content-Security-Policy")
+            lines.append("\t\t}")
+            lines.append("\t}")
             lines.append("\thandle {")
             lines.append("\t\tencode gzip")
             if _hookup_is_access_gated(r):
@@ -20823,27 +20837,31 @@ def proxy_grafana_request(handler: "Handler", method: str) -> None:
     payload = handler.rfile.read(length) if length > 0 else None
 
     headers: dict[str, str] = {}
-    for key in (
-        "Accept",
-        "Accept-Language",
-        "Content-Type",
-        "X-Requested-With",
-        "Referer",
-        "Origin",
-    ):
-        val = handler.headers.get(key)
-        if val:
-            headers[key] = val
-    cookie = handler.headers.get("Cookie")
-    if cookie:
-        kept = []
-        for part in cookie.split(";"):
-            name = part.strip().split("=", 1)[0].strip()
-            # Keep Grafana cookies; drop the portal session cookie.
-            if name and name != COOKIE_NAME:
-                kept.append(part.strip())
-        if kept:
-            headers["Cookie"] = "; ".join(kept)
+    # Forward browser/Grafana headers so /api/ds/query and similar keep working.
+    skip_req = {
+        "host",
+        "content-length",
+        "connection",
+        "transfer-encoding",
+        "accept-encoding",
+    }
+    for key, val in handler.headers.items():
+        if not val:
+            continue
+        low = key.lower()
+        if low in skip_req:
+            continue
+        if low == "cookie":
+            kept = []
+            for part in val.split(";"):
+                name = part.strip().split("=", 1)[0].strip()
+                # Keep Grafana cookies; drop the portal session cookie.
+                if name and name != COOKIE_NAME:
+                    kept.append(part.strip())
+            if kept:
+                headers["Cookie"] = "; ".join(kept)
+            continue
+        headers[key] = val
     headers["Host"] = urlparse(GRAFANA_UPSTREAM).netloc
     headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-GrafanaProxy/1.0"
     headers["Accept-Encoding"] = "identity"

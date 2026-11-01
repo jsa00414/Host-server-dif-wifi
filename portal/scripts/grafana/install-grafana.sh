@@ -8,8 +8,11 @@ PORT="${GRAFANA_PORT:-3016}"
 DOMAIN="${GF_DOMAIN:-portal.vpstruelord.com}"
 ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}/grafana/}"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$DEST/prometheus"
 cp -f "$ROOT/docker-compose.yml" "$DEST/docker-compose.yml"
+if [[ -f "$ROOT/prometheus.yml" ]]; then
+  cp -f "$ROOT/prometheus.yml" "$DEST/prometheus/prometheus.yml"
+fi
 
 ENV_FILE="$DEST/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
