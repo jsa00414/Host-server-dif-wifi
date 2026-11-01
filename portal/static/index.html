@@ -2132,7 +2132,7 @@
       </section>
 
       <section class="view embed-view" id="view-grafana">
-        <iframe class="embed-frame" id="frameGrafana" title="Grafana" src="about:blank" data-src="https://grafana.vpstruelord.com/" allow="clipboard-read; clipboard-write"></iframe>
+        <iframe class="embed-frame" id="frameGrafana" title="Grafana" src="about:blank" data-src="/grafana/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view embed-view" id="view-files">
@@ -2811,13 +2811,15 @@
       const frame = document.getElementById("frameGrafana");
       if (!frame) return;
       if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      const fallback = frame.dataset.src || "https://grafana.vpstruelord.com/";
+      const fallback = frame.dataset.src || "/grafana/";
       try {
         frame.dataset.authed = "0";
         if (force) frame.src = "about:blank";
         const data = await api("/api/grafana-sso");
         const url = (data && data.url) || fallback;
-        frame.src = url + (String(url).includes("?") ? "&" : "?") + "_sm=" + Date.now();
+        // Always stay same-origin under /grafana/ — never open the public hostname.
+        const embedUrl = String(url).startsWith("/grafana") ? url : fallback;
+        frame.src = embedUrl + (String(embedUrl).includes("?") ? "&" : "?") + "_sm=" + Date.now();
         frame.dataset.authed = "1";
       } catch (e) {
         frame.src = fallback;

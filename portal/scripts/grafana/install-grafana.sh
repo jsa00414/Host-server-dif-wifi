@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DEST="${GRAFANA_DIR:-/opt/grafana}"
 PORT="${GRAFANA_PORT:-3016}"
-DOMAIN="${GF_DOMAIN:-grafana.vpstruelord.com}"
-ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}}"
+DOMAIN="${GF_DOMAIN:-portal.vpstruelord.com}"
+ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}/grafana/}"
 
 mkdir -p "$DEST"
 cp -f "$ROOT/docker-compose.yml" "$DEST/docker-compose.yml"

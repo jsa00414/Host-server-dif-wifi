@@ -1849,6 +1849,10 @@ GRAFANA_PUBLIC_HOST = (
     os.environ.get("GRAFANA_PUBLIC_HOST", "grafana.vpstruelord.com").strip()
     or "grafana.vpstruelord.com"
 )
+# Same-origin portal embed (Grafana is not served on its public hostname anymore).
+GRAFANA_UI_PREFIX = (
+    os.environ.get("GRAFANA_UI_PREFIX", "/grafana").rstrip("/") or "/grafana"
+)
 NETWORK_PUBLIC_HOST = (
     os.environ.get("NETWORK_PUBLIC_HOST", "network.vpstruelord.com").strip()
     or "network.vpstruelord.com"
@@ -1871,7 +1875,7 @@ GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3000") or "3000")
 # Host-local upstream for portal SSO (compose publishes 127.0.0.1:3016 only).
 GRAFANA_UPSTREAM = os.environ.get(
     "GRAFANA_UPSTREAM", "http://127.0.0.1:3016"
-).rstrip("/") or "http://127.0.0.1:3016"
+).rstrip("/").rstrip("/") or "http://127.0.0.1:3016"
 GRAFANA_ENV_FILE = Path(
     os.environ.get("GRAFANA_ENV_FILE", "/opt/grafana/.env")
 )
@@ -5027,7 +5031,7 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee grafana.vpstruelord.com is present (Grafana on VPS)."""
+    """Guarantee grafana.* exists only as a redirect to the portal embed."""
     out = [dict(r) for r in (rules or [])]
     domain = GRAFANA_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
@@ -5040,6 +5044,9 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
                     "target_host": GRAFANA_HOST,
                     "target_port": GRAFANA_PORT,
                     "name": rule.get("name") or "grafana",
+                    # Standalone hostname is retired; portal /grafana/ is the only UI.
+                    "vpn_only": False,
+                    "circle_only": False,
                 }
             )
             return out
@@ -5053,10 +5060,28 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
                 "name": "grafana",
                 "external": False,
                 "vpn_only": False,
+                "circle_only": False,
             }
         )
     )
     return out
+
+
+def _grafana_hookup_site_lines(rule: dict) -> list[str]:
+    """grafana.* only redirects into the portal — no direct Grafana UI."""
+    public = GRAFANA_PUBLIC_HOST
+    portal = (PORTAL_HOST or "portal.vpstruelord.com").strip() or "portal.vpstruelord.com"
+    return [
+        f"{public} {{",
+        f"\tredir https://{portal}/ 302",
+        "\theader {",
+        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+        "\t\tX-Content-Type-Options nosniff",
+        "\t\tReferrer-Policy strict-origin-when-cross-origin",
+        "\t}",
+        "}",
+        "",
+    ]
 
 
 def keys_public_base() -> str:
@@ -5985,6 +6010,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             continue
         if domain == PLEX_PUBLIC_HOST.lower():
             lines.extend(_plex_hookup_site_lines(r))
+            continue
+        if domain == GRAFANA_PUBLIC_HOST.lower():
+            lines.extend(_grafana_hookup_site_lines(r))
             continue
         lines.append(f"{domain} {{")
         # Portal proxies multi-GB NAS media under /nas-files/rpc/* — skip gzip
@@ -8141,7 +8169,7 @@ def _grafana_cookie_domain() -> str:
 
 
 def grafana_sso_login() -> dict:
-    """Log into Grafana and return session cookies for the portal iframe SSO."""
+    """Log into Grafana and return session cookies for the portal /grafana/ embed."""
     global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
     # Reload in case install-grafana.sh rotated the password after panel start.
     GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
@@ -8150,7 +8178,11 @@ def grafana_sso_login() -> dict:
     if not password:
         raise RuntimeError("Grafana admin password missing (/opt/grafana/.env)")
 
-    url = f"{GRAFANA_UPSTREAM}/login"
+    # Prefer subpath login (portal-only embed); fall back to root for older configs.
+    login_urls = (
+        f"{GRAFANA_UPSTREAM}{GRAFANA_UI_PREFIX}/login",
+        f"{GRAFANA_UPSTREAM}/login",
+    )
     payload = {"user": user, "password": password}
     headers = {
         "User-Agent": "ServerManager-GrafanaSso/1.0",
@@ -8158,24 +8190,34 @@ def grafana_sso_login() -> dict:
         "Content-Type": "application/json",
         "Accept-Encoding": "identity",
     }
-    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    try:
-        with urlopen(req, timeout=20) as resp:
-            raw = resp.read()
-            status = int(getattr(resp, "status", 200) or 200)
-            set_cookies: list[str] = []
-            if hasattr(resp.headers, "get_all"):
-                set_cookies = resp.headers.get_all("Set-Cookie") or []
-            elif resp.headers.get("Set-Cookie"):
-                set_cookies = [resp.headers.get("Set-Cookie")]
-    except HTTPError as exc:
-        raw = exc.read() if hasattr(exc, "read") else b""
-        text = raw.decode("utf-8", errors="replace") if raw else str(exc)
-        raise RuntimeError(
-            f"Grafana login failed ({getattr(exc, 'code', '?')}): {text[:300]}"
-        ) from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"Grafana login failed: {exc}") from exc
+    raw = b""
+    status = 0
+    set_cookies: list[str] = []
+    last_err = ""
+    for url in login_urls:
+        req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with urlopen(req, timeout=20) as resp:
+                raw = resp.read()
+                status = int(getattr(resp, "status", 200) or 200)
+                set_cookies = []
+                if hasattr(resp.headers, "get_all"):
+                    set_cookies = resp.headers.get_all("Set-Cookie") or []
+                elif resp.headers.get("Set-Cookie"):
+                    set_cookies = [resp.headers.get("Set-Cookie")]
+            last_err = ""
+            break
+        except HTTPError as exc:
+            raw = exc.read() if hasattr(exc, "read") else b""
+            text = raw.decode("utf-8", errors="replace") if raw else str(exc)
+            last_err = f"Grafana login failed ({getattr(exc, 'code', '?')}): {text[:300]}"
+            if int(getattr(exc, "code", 0) or 0) not in (404, 301, 302):
+                raise RuntimeError(last_err) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            last_err = f"Grafana login failed: {exc}"
+            raise RuntimeError(last_err) from exc
+    if last_err and not set_cookies:
+        raise RuntimeError(last_err)
 
     text = raw.decode("utf-8", errors="replace") if raw else ""
     try:
@@ -8214,26 +8256,27 @@ def grafana_sso_login() -> dict:
         "cookie": session,
         "expiry": expiry,
         "max_age": max_age,
-        "url": f"https://{GRAFANA_PUBLIC_HOST}/",
+        "url": f"{GRAFANA_UI_PREFIX}/",
     }
 
 
 def _grafana_sso_cookie_headers(data: dict) -> list[str]:
-    """Set Grafana session cookies on .vpstruelord.com for the iframe embed."""
+    """Set Grafana session cookies under /grafana/ for the portal iframe embed."""
     val = str(data.get("cookie") or "").strip()
     if not val:
         return []
     max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
     expiry = str(data.get("expiry") or "").strip()
-    domain = _grafana_cookie_domain()
-    dom = f"; Domain={domain}" if domain else ""
-    # SameSite=None; Secure required for cross-subdomain iframe embeds.
+    path = f"{GRAFANA_UI_PREFIX}/"
+    # Same-origin portal iframe — Lax is enough (no cross-site subdomain hop).
     out = [
-        f"{GRAFANA_COOKIE}={val}; Path=/{dom}; Max-Age={max_age}; HttpOnly; Secure; SameSite=None",
+        f"{GRAFANA_COOKIE}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
+        f"{GRAFANA_COOKIE_EXPIRY}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
+        f"{GRAFANA_COOKIE}={val}; Path={path}; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax",
     ]
     if expiry:
         out.append(
-            f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path=/{dom}; Max-Age={max_age}; Secure; SameSite=None"
+            f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path={path}; Max-Age={max_age}; Secure; SameSite=Lax"
         )
     return out
 
@@ -11113,6 +11156,7 @@ def build_portal_settings() -> dict:
         "wg_easy_user": WG_EASY_SSO_USER,
         "wg_easy_sso_configured": bool(WG_EASY_SSO_PASS),
         "wg_ui_prefix": WG_UI_PREFIX,
+        "grafana_ui_prefix": GRAFANA_UI_PREFIX,
         "nas_files_prefix": NAS_FILES_PREFIX,
         "buffalo_prefix": BUFFALO_PREFIX,
         "env_file": str(PORTAL_ENV_PATH),
@@ -20711,6 +20755,155 @@ def proxy_wg_ui_request(handler: "Handler", method: str) -> None:
         handler.wfile.write(body)
 
 
+def _grafana_rewrite_location(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    portal = (PORTAL_HOST or "portal.vpstruelord.com").strip().lower()
+    public = (GRAFANA_PUBLIC_HOST or "").strip().lower()
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        parsed = None
+    if parsed and parsed.scheme and parsed.netloc:
+        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        if host in {public, portal, "127.0.0.1", "localhost"}:
+            path = parsed.path or "/"
+            if not path.startswith(GRAFANA_UI_PREFIX):
+                path = GRAFANA_UI_PREFIX + (path if path.startswith("/") else "/" + path)
+            return path + (("?" + parsed.query) if parsed.query else "")
+        return raw
+    if raw.startswith("/"):
+        if raw == GRAFANA_UI_PREFIX or raw.startswith(GRAFANA_UI_PREFIX + "/"):
+            return raw
+        return GRAFANA_UI_PREFIX + raw
+    return raw
+
+
+def _grafana_rewrite_set_cookie(cookie: str) -> str:
+    parts = [p.strip() for p in str(cookie or "").split(";") if p.strip()]
+    if not parts:
+        return ""
+    out: list[str] = []
+    saw_path = False
+    for i, part in enumerate(parts):
+        if i == 0:
+            out.append(part)
+            continue
+        low = part.lower()
+        if low.startswith("path="):
+            out.append(f"Path={GRAFANA_UI_PREFIX}/")
+            saw_path = True
+        elif low.startswith("domain="):
+            # Drop Domain so the cookie stays host-only on the portal.
+            continue
+        elif low.startswith("samesite="):
+            out.append("SameSite=Lax")
+        else:
+            out.append(part)
+    if not saw_path:
+        out.append(f"Path={GRAFANA_UI_PREFIX}/")
+    if not any(p.lower() == "secure" for p in out):
+        out.append("Secure")
+    return "; ".join(out)
+
+
+def proxy_grafana_request(handler: "Handler", method: str) -> None:
+    """Same-origin reverse proxy to Grafana under /grafana/ (portal-only UI)."""
+    parsed = urlparse(handler.path)
+    path = parsed.path or GRAFANA_UI_PREFIX
+    if path == GRAFANA_UI_PREFIX:
+        path = GRAFANA_UI_PREFIX + "/"
+    # Grafana is configured with serve_from_sub_path + root_url .../grafana/
+    upstream = GRAFANA_UPSTREAM + path
+    if parsed.query:
+        upstream = upstream + "?" + parsed.query
+
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    payload = handler.rfile.read(length) if length > 0 else None
+
+    headers: dict[str, str] = {}
+    for key in (
+        "Accept",
+        "Accept-Language",
+        "Content-Type",
+        "X-Requested-With",
+        "Referer",
+        "Origin",
+    ):
+        val = handler.headers.get(key)
+        if val:
+            headers[key] = val
+    cookie = handler.headers.get("Cookie")
+    if cookie:
+        kept = []
+        for part in cookie.split(";"):
+            name = part.strip().split("=", 1)[0].strip()
+            # Keep Grafana cookies; drop the portal session cookie.
+            if name and name != COOKIE_NAME:
+                kept.append(part.strip())
+        if kept:
+            headers["Cookie"] = "; ".join(kept)
+    headers["Host"] = urlparse(GRAFANA_UPSTREAM).netloc
+    headers["User-Agent"] = handler.headers.get("User-Agent") or "ServerManager-GrafanaProxy/1.0"
+    headers["Accept-Encoding"] = "identity"
+    headers["X-Forwarded-Proto"] = "https"
+    headers["X-Forwarded-Host"] = handler.headers.get("Host") or PORTAL_HOST
+    headers["X-Forwarded-Prefix"] = GRAFANA_UI_PREFIX
+
+    req = Request(upstream, data=payload, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=90) as resp:
+            body = resp.read()
+            status = getattr(resp, "status", 200) or 200
+            upstream_headers = {k: v for k, v in resp.headers.items()}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie")]
+    except HTTPError as exc:
+        body = exc.read() if hasattr(exc, "read") else b""
+        status = int(getattr(exc, "code", 502) or 502)
+        upstream_headers = {k: v for k, v in (exc.headers.items() if exc.headers else [])}
+        set_cookies = []
+        if exc.headers and hasattr(exc.headers, "get_all"):
+            set_cookies = exc.headers.get_all("Set-Cookie") or []
+        elif exc.headers and exc.headers.get("Set-Cookie"):
+            set_cookies = [exc.headers.get("Set-Cookie")]
+    except (URLError, TimeoutError, OSError) as exc:
+        handler._json(502, {"error": f"grafana proxy failed: {exc}"})
+        return
+
+    handler.send_response(status)
+    skip = {
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "content-encoding",
+        "x-frame-options",
+        "content-security-policy",
+        "set-cookie",
+    }
+    for key, value in upstream_headers.items():
+        low = key.lower()
+        if low in skip:
+            continue
+        if low == "location":
+            handler.send_header(key, _grafana_rewrite_location(value))
+        else:
+            handler.send_header(key, value)
+    for cookie in set_cookies or []:
+        if cookie:
+            handler.send_header("Set-Cookie", _grafana_rewrite_set_cookie(cookie))
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+    handler.end_headers()
+    if method.upper() != "HEAD":
+        handler.wfile.write(body)
+
+
 try:
     import media_tmdb as _media_tmdb
 except Exception:
@@ -21723,7 +21916,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 safe = {
                     "ok": True,
                     "user": data.get("user"),
-                    "url": data.get("url") or f"https://{GRAFANA_PUBLIC_HOST}/",
+                    "url": data.get("url") or f"{GRAFANA_UI_PREFIX}/",
                 }
                 self._json(200, safe, extra_cookies=_grafana_sso_cookie_headers(data))
             except Exception as exc:
@@ -21990,6 +22183,8 @@ document.getElementById('f').onsubmit = async (e) => {
             return proxy_nas_files_request(self, "GET")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
             return proxy_wg_ui_request(self, "GET")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            return proxy_grafana_request(self, "GET")
         self._json(404, {"error": "not found"})
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -22024,6 +22219,8 @@ document.getElementById('f').onsubmit = async (e) => {
             return proxy_buffalo_request(self, "HEAD")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
             return proxy_wg_ui_request(self, "HEAD")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            return proxy_grafana_request(self, "HEAD")
         self.send_response(404)
         self.end_headers()
 
@@ -23023,6 +23220,8 @@ document.getElementById('f').onsubmit = async (e) => {
             return proxy_nas_files_request(self, "POST")
         if path == WG_UI_PREFIX or path.startswith(WG_UI_PREFIX + "/"):
             return proxy_wg_ui_request(self, "POST")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            return proxy_grafana_request(self, "POST")
         self._json(404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
@@ -23031,6 +23230,10 @@ document.getElementById('f').onsubmit = async (e) => {
             if not self._require_auth(api=False):
                 return
             return proxy_wg_ui_request(self, "PUT")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_grafana_request(self, "PUT")
         if not self._require_auth(api=True):
             return
         if path == "/api/lan-aliases":
@@ -23132,6 +23335,10 @@ document.getElementById('f').onsubmit = async (e) => {
             if not self._require_auth(api=False):
                 return
             return proxy_wg_ui_request(self, "DELETE")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_grafana_request(self, "DELETE")
         if not self._require_auth(api=True):
             return
         if path.startswith("/api/openvpn/clients/"):
@@ -23151,6 +23358,10 @@ document.getElementById('f').onsubmit = async (e) => {
             if not self._require_auth(api=False):
                 return
             return proxy_wg_ui_request(self, "PATCH")
+        if path == GRAFANA_UI_PREFIX or path.startswith(GRAFANA_UI_PREFIX + "/"):
+            if not self._require_auth(api=False):
+                return
+            return proxy_grafana_request(self, "PATCH")
         self._json(404, {"error": "not found"})
 
     def _serve_file(self, path: Path, content_type: str) -> None:
