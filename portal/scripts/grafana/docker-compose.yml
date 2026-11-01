@@ -19,6 +19,8 @@ services:
       GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
       GF_AUTH_PROXY_SYNC_TTL: "60"
+      # Issue a real Grafana session cookie so auth-tokens/rotate stops 401-looping.
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "true"
       GF_AUTH_PROXY_WHITELIST: "127.0.0.1, 172.16.0.0/12, 10.0.0.0/8"
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/servermanager-overview.json

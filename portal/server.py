@@ -6118,9 +6118,9 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
-            lines.append(f"\t\t\theader_up X-Forwarded-Prefix {GRAFANA_UI_PREFIX}")
-            # X-WEBAUTH-USER is copied from forward_auth — do not header_up a
-            # placeholder here (Caddy leaves it literal and breaks Auth Proxy).
+            # Do NOT send X-Forwarded-Prefix — with serve_from_sub_path it
+            # double-prefixes (/grafana/grafana/…) and the UI redirect-loops.
+            # X-WEBAUTH-USER is copied from forward_auth (do not header_up a placeholder).
             lines.append("\t\t\theader_down -X-Frame-Options")
             lines.append("\t\t\theader_down -Content-Security-Policy")
             lines.append("\t\t}")
@@ -8205,6 +8205,8 @@ def grafana_sso_login() -> dict:
     GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
     user = (GRAFANA_SSO_USER or AUTH_USER or "admin").strip() or "admin"
     # Auth-proxy mode: portal session is enough; Caddy injects X-WEBAUTH-USER.
+    # Land on /login so enable_login_token mints grafana_session (needed for
+    # auth-tokens/rotate); Grafana then 302s to /grafana/.
     if _as_bool(os.environ.get("GRAFANA_AUTH_PROXY", "1")):
         return {
             "ok": True,
@@ -8212,7 +8214,7 @@ def grafana_sso_login() -> dict:
             "cookie": "",
             "expiry": "",
             "max_age": "0",
-            "url": f"{GRAFANA_UI_PREFIX}/",
+            "url": f"{GRAFANA_UI_PREFIX}/login",
             "mode": "auth_proxy",
         }
 
@@ -20903,7 +20905,7 @@ def proxy_grafana_request(handler: "Handler", method: str) -> None:
     headers["Accept-Encoding"] = "identity"
     headers["X-Forwarded-Proto"] = "https"
     headers["X-Forwarded-Host"] = handler.headers.get("Host") or PORTAL_HOST
-    headers["X-Forwarded-Prefix"] = GRAFANA_UI_PREFIX
+    # Never set X-Forwarded-Prefix — doubles /grafana with serve_from_sub_path.
     # Portal-session Auth Proxy SSO (fallback when not going through Caddy).
     proxy_user = grafana_auth_proxy_user(handler)
     if proxy_user:
