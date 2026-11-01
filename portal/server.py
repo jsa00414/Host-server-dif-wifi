@@ -11734,8 +11734,75 @@ def build_vps_status() -> dict:
     except Exception as exc:
         ts = {"ok": False, "enabled": False, "error": str(exc)}
 
+    # OpenVPN live clients (Flint site-to-site + named remotes like windows).
+    ovpn_server_ok = _svc_active(OVPN_SERVICE)
+    ovpn_clients: dict[str, str] = {}
+    try:
+        ovpn_parsed = parse_openvpn_status(
+            OVPN_STATUS_LOG.read_text(encoding="utf-8", errors="replace")
+            if OVPN_STATUS_LOG.is_file()
+            else ""
+        )
+        for row in ovpn_parsed.get("routes") or []:
+            name = str(row.get("name") or "").strip().lower()
+            vip = str(row.get("virtual") or "").strip()
+            if not name or not vip or "/" in vip:
+                continue
+            ovpn_clients[name] = vip
+        for row in ovpn_parsed.get("clients") or []:
+            name = str(row.get("name") or "").strip().lower()
+            if name and name not in ovpn_clients:
+                ovpn_clients[name] = ""
+    except Exception:
+        ovpn_clients = {}
+
+    flint_vip = ovpn_clients.get("flint") or OVPN_FLINT_VPN_IP
+    flint_up = "flint" in ovpn_clients
+    windows_vip = ovpn_clients.get("windows") or ""
+    windows_up = "windows" in ovpn_clients
+    xray_ok = _svc_active(XRAY_SERVICE)
+    singbox_ok = _svc_active(SINGBOX_SERVICE)
+    unbound_ok = _docker_running("sm-unbound")
+
     services = [
         {"id": "panel", "label": "Portal panel", "ok": True, "detail": "running"},
+        {
+            "id": "flint-ovpn",
+            "label": "Flint OVPN",
+            "ok": flint_up and ovpn_server_ok,
+            "detail": f"{flint_vip} · home LAN" if flint_up else "offline",
+        },
+        {
+            "id": "windows-ovpn",
+            "label": "windows OVPN",
+            "ok": windows_up,
+            "detail": (windows_vip or "connected") if windows_up else "offline",
+            "required": False,
+        },
+        {
+            "id": "unbound",
+            "label": "Unbound",
+            "ok": unbound_ok,
+            "detail": "healthy · recursive DNS" if unbound_ok else "offline · recursive DNS",
+        },
+        {
+            "id": "xray",
+            "label": "Xray",
+            "ok": xray_ok,
+            "detail": f":{XRAY_PORT} · circle" if xray_ok else "offline",
+        },
+        {
+            "id": "singbox",
+            "label": "sing-box",
+            "ok": singbox_ok,
+            "detail": f":{SINGBOX_PORT} · guest" if singbox_ok else "offline",
+        },
+        {
+            "id": "openvpn",
+            "label": "OpenVPN",
+            "ok": ovpn_server_ok,
+            "detail": f"{OVPN_LISTEN} · {len(ovpn_clients)} client(s)",
+        },
         {"id": "sslh", "label": "HTTPS mux", "ok": _svc_active("sslh-sm.service"), "detail": ":443 -> Caddy"},
         {"id": "caddy", "label": "Caddy", "ok": _docker_running("truemail-caddy-1"), "detail": "HTTPS proxy"},
         {"id": "wireguard", "label": "WireGuard", "ok": _docker_running("wg-easy"), "detail": "wg-easy"},
@@ -11746,8 +11813,8 @@ def build_vps_status() -> dict:
             "detail": (ts.get("state") or ("on" if ts.get("enabled") else "off")),
         },
         {"id": "adguard", "label": "AdGuard", "ok": _docker_running("sm-adguard"), "detail": "DNS filter"},
+        {"id": "guest-dns", "label": "Guest DNS", "ok": _docker_running("sm-guest-dns"), "detail": "10.42.42.45"},
         {"id": "pihole", "label": "Pi-hole", "ok": _docker_running("sm-pihole"), "detail": "DNS filter"},
-        {"id": "unbound", "label": "Unbound", "ok": _docker_running("sm-unbound"), "detail": "recursive DNS"},
         {"id": "coredns", "label": "CoreDNS", "ok": _docker_running("wg-portal-dns"), "detail": "VPN DNS"},
     ]
 
@@ -11756,7 +11823,7 @@ def build_vps_status() -> dict:
     load_ok = load1 < max(1.0, cores * 1.5)
     mem_ok = mem_pct < 90
     disk_ok = disk_pct < 90
-    services_ok = all(s["ok"] for s in services)
+    services_ok = all(s["ok"] for s in services if s.get("required", True))
     overall_ok = load_ok and mem_ok and disk_ok and services_ok
 
     portal_host = PORTAL_HOST or "portal.vpstruelord.com"
