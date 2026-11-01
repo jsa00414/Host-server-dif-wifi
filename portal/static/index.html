@@ -2815,12 +2815,15 @@
       try {
         frame.dataset.authed = "0";
         if (force) frame.src = "about:blank";
+        // Portal SSO: auth-proxy via Caddy forward_auth, with password-cookie fallback.
         const data = await api("/api/grafana-sso");
         const url = (data && data.url) || fallback;
-        // Always stay same-origin under /grafana/ — never open the public hostname.
         const embedUrl = String(url).startsWith("/grafana") ? url : fallback;
         frame.src = embedUrl + (String(embedUrl).includes("?") ? "&" : "?") + "_sm=" + Date.now();
         frame.dataset.authed = "1";
+        if (data && data.mode) {
+          setStatus(`Grafana SSO (${data.mode})`, "ok");
+        }
       } catch (e) {
         frame.src = fallback;
         frame.dataset.authed = "0";

@@ -6106,15 +6106,21 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t}")
             lines.append("\t}")
             # Grafana lives only under portal /grafana/ (same-origin iframe).
-            # Proxy via Caddy→sm-grafana so Prometheus queries/WebSockets work;
-            # the Python panel proxy is a :5002 fallback only.
+            # forward_auth checks the portal session, then Caddy injects
+            # X-WEBAUTH-USER so Grafana Auth Proxy SSO signs the user in.
             lines.append(f"\t@grafana path {GRAFANA_UI_PREFIX} {GRAFANA_UI_PREFIX}/*")
             lines.append("\thandle @grafana {")
+            lines.append(f"\t\tforward_auth {DOCKER_HOST_GW}:5002 {{")
+            lines.append("\t\t\turi /api/grafana-auth-check")
+            lines.append("\t\t\tcopy_headers X-WEBAUTH-USER")
+            lines.append("\t\t}")
             lines.append(f"\t\treverse_proxy {GRAFANA_HOST}:{GRAFANA_PORT} {{")
             lines.append("\t\t\theader_up Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Host {host}")
             lines.append("\t\t\theader_up X-Forwarded-Proto {scheme}")
             lines.append(f"\t\t\theader_up X-Forwarded-Prefix {GRAFANA_UI_PREFIX}")
+            # X-WEBAUTH-USER is copied from forward_auth — do not header_up a
+            # placeholder here (Caddy leaves it literal and breaks Auth Proxy).
             lines.append("\t\t\theader_down -X-Frame-Options")
             lines.append("\t\t\theader_down -Content-Security-Policy")
             lines.append("\t\t}")
@@ -8182,12 +8188,34 @@ def _grafana_cookie_domain() -> str:
     return ""
 
 
+def grafana_auth_proxy_user(handler: "Handler") -> str:
+    """Portal username for Grafana Auth Proxy (X-WEBAUTH-USER)."""
+    if not session_valid(parse_session_cookie(handler.headers.get("Cookie"))):
+        return ""
+    return (AUTH_USER or "admin").strip() or "admin"
+
+
 def grafana_sso_login() -> dict:
-    """Log into Grafana and return session cookies for the portal /grafana/ embed."""
+    """Prepare Grafana embed SSO.
+
+    Preferred path: Grafana Auth Proxy (Caddy forward_auth + X-WEBAUTH-USER).
+    Fallback: password login cookie for older Grafana configs.
+    """
     global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
-    # Reload in case install-grafana.sh rotated the password after panel start.
     GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
-    user = (GRAFANA_SSO_USER or "admin").strip() or "admin"
+    user = (GRAFANA_SSO_USER or AUTH_USER or "admin").strip() or "admin"
+    # Auth-proxy mode: portal session is enough; Caddy injects X-WEBAUTH-USER.
+    if _as_bool(os.environ.get("GRAFANA_AUTH_PROXY", "1")):
+        return {
+            "ok": True,
+            "user": user,
+            "cookie": "",
+            "expiry": "",
+            "max_age": "0",
+            "url": f"{GRAFANA_UI_PREFIX}/",
+            "mode": "auth_proxy",
+        }
+
     password = (GRAFANA_SSO_PASS or "").strip()
     if not password:
         raise RuntimeError("Grafana admin password missing (/opt/grafana/.env)")
@@ -8240,9 +8268,6 @@ def grafana_sso_login() -> dict:
         body = {}
     if status >= 400:
         raise RuntimeError(f"Grafana login failed ({status}): {text[:300]}")
-    if isinstance(body, dict) and body.get("message") and "Logged in" not in str(body.get("message")):
-        # Some versions return messageId on failure with 200 — treat unknown as error if no cookie.
-        pass
 
     session = ""
     expiry = ""
@@ -8271,18 +8296,18 @@ def grafana_sso_login() -> dict:
         "expiry": expiry,
         "max_age": max_age,
         "url": f"{GRAFANA_UI_PREFIX}/",
+        "mode": "password",
     }
 
 
 def _grafana_sso_cookie_headers(data: dict) -> list[str]:
-    """Set Grafana session cookies under /grafana/ for the portal iframe embed."""
+    """Set Grafana session cookies under /grafana/ (password-SSO fallback only)."""
     val = str(data.get("cookie") or "").strip()
     if not val:
         return []
     max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
     expiry = str(data.get("expiry") or "").strip()
     path = f"{GRAFANA_UI_PREFIX}/"
-    # Same-origin portal iframe — Lax is enough (no cross-site subdomain hop).
     out = [
         f"{GRAFANA_COOKIE}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
         f"{GRAFANA_COOKIE_EXPIRY}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
@@ -11171,6 +11196,7 @@ def build_portal_settings() -> dict:
         "wg_easy_sso_configured": bool(WG_EASY_SSO_PASS),
         "wg_ui_prefix": WG_UI_PREFIX,
         "grafana_ui_prefix": GRAFANA_UI_PREFIX,
+        "grafana_sso_configured": True,
         "nas_files_prefix": NAS_FILES_PREFIX,
         "buffalo_prefix": BUFFALO_PREFIX,
         "env_file": str(PORTAL_ENV_PATH),
@@ -12995,6 +13021,16 @@ def session_valid(token: str | None) -> bool:
     now = time.time()
     with _sessions_lock:
         _purge_sessions(now)
+        exp = _sessions.get(token)
+        if exp and exp > now:
+            return True
+    # Soft-reload from disk so forward_auth / multi-process can see sessions
+    # written by another worker (or a just-restarted panel).
+    try:
+        _load_sessions()
+    except Exception:
+        return False
+    with _sessions_lock:
         exp = _sessions.get(token)
         return bool(exp and exp > now)
 
@@ -20868,6 +20904,10 @@ def proxy_grafana_request(handler: "Handler", method: str) -> None:
     headers["X-Forwarded-Proto"] = "https"
     headers["X-Forwarded-Host"] = handler.headers.get("Host") or PORTAL_HOST
     headers["X-Forwarded-Prefix"] = GRAFANA_UI_PREFIX
+    # Portal-session Auth Proxy SSO (fallback when not going through Caddy).
+    proxy_user = grafana_auth_proxy_user(handler)
+    if proxy_user:
+        headers["X-WEBAUTH-USER"] = proxy_user
 
     req = Request(upstream, data=payload, headers=headers, method=method)
     try:
@@ -21043,6 +21083,8 @@ class Handler(BaseHTTPRequestHandler):
             "/download/ServerManagerAuthenticator.exe",
             "/static/sm-circle-crypto.js",
             "/static/sm-network-exit.js",
+            # Caddy forward_auth for Grafana SSO (returns 401 itself when logged out).
+            "/api/grafana-auth-check",
         ) or path.startswith("/static/auth-app"):
             pass  # public (/, /login.html serve the sign-in page when logged out)
         elif path.startswith("/static/"):
@@ -21926,6 +21968,24 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/grafana-auth-check":
+            # Used by Caddy forward_auth. Must stay outside _require_auth so Caddy
+            # receives a clean 401 (not an HTML login redirect).
+            user = grafana_auth_proxy_user(self)
+            if not user:
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b"unauthorized")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-WEBAUTH-USER", user)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if path == "/api/grafana-sso":
             if not self._require_auth(api=True):
                 return
@@ -21935,6 +21995,7 @@ document.getElementById('f').onsubmit = async (e) => {
                     "ok": True,
                     "user": data.get("user"),
                     "url": data.get("url") or f"{GRAFANA_UI_PREFIX}/",
+                    "mode": data.get("mode") or "auth_proxy",
                 }
                 self._json(200, safe, extra_cookies=_grafana_sso_cookie_headers(data))
             except Exception as exc:

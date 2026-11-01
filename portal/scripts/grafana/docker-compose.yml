@@ -14,6 +14,13 @@ services:
       GF_SECURITY_COOKIE_SAMESITE: lax
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Portal SSO: Caddy forward_auth → X-WEBAUTH-USER (see /api/grafana-auth-check)
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_SYNC_TTL: "60"
+      GF_AUTH_PROXY_WHITELIST: "127.0.0.1, 172.16.0.0/12, 10.0.0.0/8"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/servermanager-overview.json
     ports:
       - "127.0.0.1:3016:3000"
