@@ -15,7 +15,21 @@ fail=0
 
 if ! dig_ok "$UNBOUND_IP"; then
   log "unbound@$UNBOUND_IP dead — restarting sm-unbound"
-  docker restart sm-unbound >/dev/null
+  if ! docker inspect sm-unbound >/dev/null 2>&1; then
+    log "sm-unbound missing — recreating from /opt/dns compose"
+    # pihole-sso sometimes steals 172.30.0.2 when unbound is gone; move it first.
+    if docker inspect sm-pihole-sso >/dev/null 2>&1; then
+      docker stop sm-pihole-sso >/dev/null 2>&1 || true
+      docker network disconnect dns_sm_dns sm-pihole-sso >/dev/null 2>&1 || true
+      docker network connect --ip 172.30.0.6 dns_sm_dns sm-pihole-sso >/dev/null 2>&1 || true
+      docker start sm-pihole-sso >/dev/null 2>&1 || true
+    fi
+    if [[ -f /opt/dns/docker-compose.yml ]]; then
+      docker compose -f /opt/dns/docker-compose.yml up -d unbound >/dev/null 2>&1 || true
+    fi
+  else
+    docker restart sm-unbound >/dev/null
+  fi
   sleep 4
   dig_ok "$UNBOUND_IP" && log "unbound recovered" || log "unbound still bad"
   docker restart sm-pihole >/dev/null || true
