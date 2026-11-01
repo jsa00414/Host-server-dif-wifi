@@ -6106,6 +6106,16 @@ def serialize_hookups_caddy(rules: list[dict]) -> str:
             lines.append("\t\t}")
             lines.append("\t}")
             # Grafana lives only under portal /grafana/ (same-origin iframe).
+            # Collapse accidental /grafana/grafana/… nests (old X-Forwarded-Prefix
+            # clients / SPA history) before Auth Proxy + reverse_proxy.
+            prefix_re = re.escape(GRAFANA_UI_PREFIX)
+            lines.append(
+                f"\t@grafana_nested path_regexp grafana_nested "
+                f"^{prefix_re}(?:{prefix_re})+(/.*)?$"
+            )
+            lines.append(
+                f"\tredir @grafana_nested {GRAFANA_UI_PREFIX}{{re.grafana_nested.1}}"
+            )
             # forward_auth checks the portal session, then Caddy injects
             # X-WEBAUTH-USER so Grafana Auth Proxy SSO signs the user in.
             lines.append(f"\t@grafana path {GRAFANA_UI_PREFIX} {GRAFANA_UI_PREFIX}/*")
@@ -8195,6 +8205,84 @@ def grafana_auth_proxy_user(handler: "Handler") -> str:
     return (AUTH_USER or "admin").strip() or "admin"
 
 
+def _grafana_parse_session_cookies(set_cookies: list[str]) -> tuple[str, str, str]:
+    """Extract grafana_session / expiry / max-age from Set-Cookie headers."""
+    session = ""
+    expiry = ""
+    max_age = "2592000"
+    for raw_c in set_cookies:
+        if not raw_c:
+            continue
+        first = raw_c.split(";", 1)[0].strip()
+        name, _, val = first.partition("=")
+        lname = name.strip().lower()
+        if lname == GRAFANA_COOKIE.lower():
+            session = val
+            for part in raw_c.split(";")[1:]:
+                low = part.strip().lower()
+                if low.startswith("max-age="):
+                    max_age = part.strip().split("=", 1)[1].strip() or max_age
+        elif lname == GRAFANA_COOKIE_EXPIRY.lower():
+            expiry = val
+    return session, expiry, max_age
+
+
+def _grafana_mint_auth_proxy_session(user: str) -> dict:
+    """GET Grafana /login with X-WEBAUTH-USER to mint enable_login_token cookies."""
+    parsed = urlparse(GRAFANA_UPSTREAM)
+    host = parsed.hostname or "127.0.0.1"
+    port = int(parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80))
+    path = f"{GRAFANA_UI_PREFIX}/login"
+    headers = {
+        "User-Agent": "ServerManager-GrafanaSso/1.0",
+        "Accept": "text/html,application/json",
+        "X-WEBAUTH-USER": user,
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": PORTAL_HOST,
+        "Connection": "close",
+    }
+    try:
+        if (parsed.scheme or "").lower() == "https":
+            conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+                host, port, timeout=20
+            )
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=20)
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        status = int(resp.status)
+        set_cookies: list[str] = []
+        if hasattr(resp.headers, "get_all"):
+            set_cookies = list(resp.headers.get_all("Set-Cookie") or [])
+        elif resp.headers.get("Set-Cookie"):
+            set_cookies = [resp.headers.get("Set-Cookie")]
+        # Drain body so the connection can close cleanly.
+        try:
+            resp.read()
+        except Exception:
+            pass
+        conn.close()
+    except (OSError, http.client.HTTPException) as exc:
+        raise RuntimeError(f"Grafana auth-proxy mint failed: {exc}") from exc
+
+    if status not in (200, 301, 302, 303, 307, 308):
+        raise RuntimeError(f"Grafana auth-proxy mint failed (HTTP {status})")
+    session, expiry, max_age = _grafana_parse_session_cookies(set_cookies)
+    if not session:
+        raise RuntimeError(
+            f"Grafana auth-proxy mint returned no grafana_session (HTTP {status})"
+        )
+    return {
+        "ok": True,
+        "user": user,
+        "cookie": session,
+        "expiry": expiry,
+        "max_age": max_age,
+        "url": f"{GRAFANA_UI_PREFIX}/",
+        "mode": "auth_proxy",
+    }
+
+
 def grafana_sso_login() -> dict:
     """Prepare Grafana embed SSO.
 
@@ -8204,19 +8292,22 @@ def grafana_sso_login() -> dict:
     global GRAFANA_SSO_USER, GRAFANA_SSO_PASS
     GRAFANA_SSO_USER, GRAFANA_SSO_PASS = _load_grafana_admin()
     user = (GRAFANA_SSO_USER or AUTH_USER or "admin").strip() or "admin"
-    # Auth-proxy mode: portal session is enough; Caddy injects X-WEBAUTH-USER.
-    # Land on /login so enable_login_token mints grafana_session (needed for
-    # auth-tokens/rotate); Grafana then 302s to /grafana/.
+    # Auth-proxy: mint grafana_session server-side so the iframe loads /grafana/
+    # directly (no /login flash) and auth-tokens/rotate stops 401-looping.
     if _as_bool(os.environ.get("GRAFANA_AUTH_PROXY", "1")):
-        return {
-            "ok": True,
-            "user": user,
-            "cookie": "",
-            "expiry": "",
-            "max_age": "0",
-            "url": f"{GRAFANA_UI_PREFIX}/login",
-            "mode": "auth_proxy",
-        }
+        try:
+            return _grafana_mint_auth_proxy_session(user)
+        except Exception:
+            return {
+                "ok": True,
+                "user": user,
+                "cookie": "",
+                "expiry": "",
+                "max_age": "0",
+                "url": f"{GRAFANA_UI_PREFIX}/login",
+                "mode": "auth_proxy_login",
+                "clear_cookies": True,
+            }
 
     password = (GRAFANA_SSO_PASS or "").strip()
     if not password:
@@ -8264,30 +8355,10 @@ def grafana_sso_login() -> dict:
         raise RuntimeError(last_err)
 
     text = raw.decode("utf-8", errors="replace") if raw else ""
-    try:
-        body = json.loads(text) if text else {}
-    except Exception:
-        body = {}
     if status >= 400:
         raise RuntimeError(f"Grafana login failed ({status}): {text[:300]}")
 
-    session = ""
-    expiry = ""
-    max_age = "2592000"
-    for raw_c in set_cookies:
-        if not raw_c:
-            continue
-        first = raw_c.split(";", 1)[0].strip()
-        name, _, val = first.partition("=")
-        lname = name.strip().lower()
-        if lname == GRAFANA_COOKIE.lower():
-            session = val
-            for part in raw_c.split(";")[1:]:
-                low = part.strip().lower()
-                if low.startswith("max-age="):
-                    max_age = part.strip().split("=", 1)[1].strip() or max_age
-        elif lname == GRAFANA_COOKIE_EXPIRY.lower():
-            expiry = val
+    session, expiry, max_age = _grafana_parse_session_cookies(set_cookies)
     if not session:
         raise RuntimeError("Grafana login succeeded but no grafana_session cookie returned")
 
@@ -8302,19 +8373,31 @@ def grafana_sso_login() -> dict:
     }
 
 
+def _grafana_clear_session_cookie_headers() -> list[str]:
+    """Expire grafana_session on every Path Grafana may have used."""
+    paths = [GRAFANA_UI_PREFIX, f"{GRAFANA_UI_PREFIX}/", "/"]
+    out: list[str] = []
+    for path in paths:
+        out.append(f"{GRAFANA_COOKIE}=; Path={path}; SameSite=Lax; Secure; Max-Age=0")
+        out.append(
+            f"{GRAFANA_COOKIE_EXPIRY}=; Path={path}; SameSite=Lax; Secure; Max-Age=0"
+        )
+    return out
+
+
 def _grafana_sso_cookie_headers(data: dict) -> list[str]:
-    """Set Grafana session cookies under /grafana/ (password-SSO fallback only)."""
+    """Clear stale Grafana cookies, then set a fresh session when minted."""
+    out = _grafana_clear_session_cookie_headers()
     val = str(data.get("cookie") or "").strip()
     if not val:
-        return []
+        return out
     max_age = str(data.get("max_age") or "2592000").strip() or "2592000"
     expiry = str(data.get("expiry") or "").strip()
-    path = f"{GRAFANA_UI_PREFIX}/"
-    out = [
-        f"{GRAFANA_COOKIE}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
-        f"{GRAFANA_COOKIE_EXPIRY}=; Path=/; SameSite=Lax; Secure; Max-Age=0",
-        f"{GRAFANA_COOKIE}={val}; Path={path}; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax",
-    ]
+    # Grafana itself sets Path=/grafana (no trailing slash) — match that.
+    path = GRAFANA_UI_PREFIX
+    out.append(
+        f"{GRAFANA_COOKIE}={val}; Path={path}; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax"
+    )
     if expiry:
         out.append(
             f"{GRAFANA_COOKIE_EXPIRY}={expiry}; Path={path}; Max-Age={max_age}; Secure; SameSite=Lax"

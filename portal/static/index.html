@@ -2132,7 +2132,7 @@
       </section>
 
       <section class="view embed-view" id="view-grafana">
-        <iframe class="embed-frame" id="frameGrafana" title="Grafana" src="about:blank" data-src="/grafana/login" allow="clipboard-read; clipboard-write"></iframe>
+        <iframe class="embed-frame" id="frameGrafana" title="Grafana" src="about:blank" data-src="/grafana/" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="view embed-view" id="view-files">
@@ -2810,17 +2810,24 @@
     async function loadGrafanaFrame(force) {
       const frame = document.getElementById("frameGrafana");
       if (!frame) return;
-      if (!force && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
-      // /login mints grafana_session under Auth Proxy (enable_login_token), then 302 → /grafana/.
-      // Avoid /grafana/?… alone — stale session cookies make auth-tokens/rotate 401-loop.
-      const fallback = "/grafana/login";
+      // Same-origin iframe: detect leftover /grafana/grafana/… SPA loops.
+      let nested = false;
+      try {
+        const path = frame.contentWindow && frame.contentWindow.location && frame.contentWindow.location.pathname;
+        nested = !!(path && /\/grafana(\/grafana)+/.test(String(path)));
+      } catch (e) { nested = false; }
+      if (!force && !nested && frame.dataset.authed === "1" && frame.getAttribute("src") !== "about:blank") return;
+      // SSO mints grafana_session on the parent, then we load a clean /grafana/.
+      const fallback = "/grafana/";
       try {
         frame.dataset.authed = "0";
-        if (force) frame.src = "about:blank";
-        // Portal SSO: auth-proxy via Caddy forward_auth (sm_session → X-WEBAUTH-USER).
+        // Always tear down first so a nested history URL cannot keep blinking.
+        frame.src = "about:blank";
         const data = await api("/api/grafana-sso");
-        const url = (data && data.url) || fallback;
-        frame.src = String(url).startsWith("/grafana") ? url : fallback;
+        let url = (data && data.url) || fallback;
+        url = String(url);
+        if (!url.startsWith("/grafana") || /\/grafana(\/grafana)+/.test(url)) url = fallback;
+        frame.src = url;
         frame.dataset.authed = "1";
       } catch (e) {
         frame.src = fallback;
