@@ -51,15 +51,20 @@ fi
   fi
   if [ "$REDIRECT" = "1" ] || [ "$REDIRECT" = "true" ] || [ "$REDIRECT" = "yes" ]; then
     echo "redirect-gateway def1 bypass-dhcp"
-    # Prefer VPN DNS (AdGuard on wg) so keys/portal resolve while public DNS
-    # is blocked (campus). Server also pushes this; keep profile in sync.
+    # Prefer VPN DNS (AdGuard) so portal/admin resolve to lo VIP 10.11.0.1
+    # (public A is excluded from the tunnel → campus @denied_wan abort).
     echo "dhcp-option DNS 10.42.42.44"
-    # CoreDNS hosts map for managed *.vpstruelord.com names
-    echo "dhcp-option DNS 10.42.42.42"
+    # Windows: keep Chrome/DoH from bypassing AdGuard (public A → denied_wan).
+    if [ "$NAME" = "windows" ] || [ "$NAME" = "james-iphone" ]; then
+      echo "block-outside-dns"
+    fi
   fi
   echo "route 192.168.8.0 255.255.255.0 vpn_gateway"
   echo "route 10.8.0.0 255.255.255.0 vpn_gateway"
   echo "route 10.42.42.0 255.255.255.0 vpn_gateway"
+  # Portal/admin split-DNS VIP (AdGuard → 10.11.0.1); keep on tunnel even if
+  # redirect-gateway is cleared by the client OS.
+  echo "route 10.11.0.1 255.255.255.255 vpn_gateway"
   echo "<ca>"
   cat "$PKI/ca.crt"
   echo "</ca>"

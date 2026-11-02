@@ -1,3 +1,7 @@
 # Windows PC full-tunnel client — VIP in circle DNS (AdGuard 10.42.42.44)
 # when allowlisted. Do not reuse 10.9.0.2 (flint only).
 ifconfig-push 10.9.0.10 255.255.255.0
+# Push portal/admin VIP so HTTPS stays inside the tunnel (public VPS IP is
+# excluded by OpenVPN's host route → campus WAN → Caddy @denied_wan abort).
+push "route 10.11.0.1 255.255.255.255"
+push "dhcp-option DNS 10.42.42.44"

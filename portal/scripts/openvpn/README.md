@@ -48,6 +48,11 @@ Server push + `SM-OVPN-DNS` default OVPN clients onto AdGuard (`10.42.42.44`).
 DNS (`10.42.42.45`). Allowlisted VIPs (e.g. `windows` `10.9.0.10`,
 `james-iphone` `10.9.0.3`) and Flint `10.9.0.2` stay on circle DNS.
 
+AdGuard rewrites `portal.vpstruelord.com` (and other admin names) to lo VIP
+`10.11.0.1` via `ensure-vpn-split-dns.sh`. OpenVPN clients exclude the VPS
+public IP from the tunnel (host route for `remote`), so a public A record
+would hit Caddy as campus WAN and get `@denied_wan` aborted.
+
 ## Speed tuning (~100Mbps target)
 
 `openvpn-speed-tune.sh` raises kernel TCP buffers (16MiB). `server.conf` sets
