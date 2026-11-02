@@ -1,0 +1,14 @@
+{
+  "name": "newsletter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Newsletter site for vpstruelord",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
