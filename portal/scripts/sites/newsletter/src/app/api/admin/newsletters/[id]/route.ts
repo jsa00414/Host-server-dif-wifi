@@ -7,6 +7,7 @@ import {
   saveNewsletter,
   savePdf,
 } from "@/lib/storage";
+import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import type { NewsletterSection } from "@/lib/types";
 
@@ -43,12 +44,18 @@ export async function PUT(request: Request, { params }: Params) {
       }))
     : existing.sections;
 
+  const designId =
+    typeof body.designId === "string" && isDesignId(body.designId)
+      ? body.designId
+      : existing.designId || DEFAULT_DESIGN_ID;
+
   const newsletter = {
     ...existing,
     title,
     subtitle: String(body.subtitle || "").trim(),
     issueDate: String(body.issueDate || existing.issueDate),
     sections,
+    designId,
     slideshowToken:
       existing.slideshowToken || randomBytes(18).toString("base64url"),
     published: Boolean(body.published),

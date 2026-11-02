@@ -7,6 +7,7 @@ import {
   savePdf,
 } from "@/lib/storage";
 import { buildNewsletterPdf } from "@/lib/pdf";
+import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
 import type { Newsletter, NewsletterSection } from "@/lib/types";
 
 function slideshowToken() {
@@ -39,12 +40,18 @@ export async function POST(request: Request) {
       }))
     : [];
 
+  const designId =
+    typeof body.designId === "string" && isDesignId(body.designId)
+      ? body.designId
+      : DEFAULT_DESIGN_ID;
+
   const newsletter: Newsletter = {
     id: randomUUID(),
     title,
     subtitle: String(body.subtitle || "").trim(),
     issueDate: String(body.issueDate || now.slice(0, 10)),
     sections,
+    designId,
     slideshowToken: slideshowToken(),
     published: body.published === undefined ? true : Boolean(body.published),
     createdAt: now,

@@ -24,6 +24,8 @@ export type Newsletter = {
   issueDate: string;
   subtitle: string;
   sections: NewsletterSection[];
+  /** Premade colorful PDF design id from NEWSLETTER_DESIGNS. */
+  designId: string;
   /** Secret token for the hidden digital slideshow (QR on PDF). */
   slideshowToken: string;
   createdAt: string;

@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
+import { getDesign } from "@/lib/designs";
 import { listNewsletters } from "@/lib/storage";
 import { DeleteNewsletterButton } from "./DeleteNewsletterButton";
 
@@ -34,11 +35,21 @@ export default async function AdminNewslettersPage() {
               >
                 <div>
                   <p className="text-sm font-bold text-[var(--sky-deep)]">
-                    {n.issueDate} · {n.published ? "Published" : "Draft"}
+                    {n.issueDate} · {n.published ? "Published" : "Draft"} ·{" "}
+                    {getDesign(n.designId).name}
                   </p>
                   <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
                     {n.title}
                   </h2>
+                  <div className="mt-2 flex gap-1">
+                    {getDesign(n.designId).swatches.map((color) => (
+                      <span
+                        key={color}
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ background: color }}
+                      />
+                    ))}
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Link
