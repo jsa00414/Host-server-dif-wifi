@@ -273,4 +273,4 @@ else
   echo "CF_API_TOKEN/CF_ZONE_ID missing — set DNS for ${DOMAIN} manually to ${VPS_IP}"
 fi
 
-echo "Done. https://${DOMAIN}/  (gate /admin/login → create class + 2FA; PDF QR → /s/<token>)"
+echo "Done. https://${DOMAIN}/  (admin password login; family /gate 2FA; PDF QR → /s/<token>)"

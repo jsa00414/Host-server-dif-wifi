@@ -17,11 +17,7 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
   );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [code, setCode] = useState("");
-  const [created, setCreated] = useState<{
-    admin: QrBundle;
-    viewer: QrBundle;
-  } | null>(null);
+  const [created, setCreated] = useState<{ viewer: QrBundle } | null>(null);
 
   async function onCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -40,7 +36,7 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
       setError(data.error || "Could not create admin login.");
       return;
     }
-    setCreated({ admin: data.admin, viewer: data.viewer });
+    setCreated({ viewer: data.viewer });
     setMode("login");
   }
 
@@ -55,7 +51,6 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
       body: JSON.stringify({
         mode: "login",
         password: form.get("password"),
-        code,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -73,46 +68,24 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
     return (
       <div className="space-y-6">
         <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-          Admin login created. Scan the admin QR into your authenticator, then
-          sign in below.
+          Admin login created. Share the family gate QR with families, then sign
+          in with your password.
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-2xl border border-sky-100 bg-white p-4 text-center">
-            <h2 className="font-[family-name:var(--font-display)] text-lg font-semibold">
-              Admin QR
-            </h2>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={created.admin.qrDataUrl}
-              alt="Admin authenticator QR"
-              className="mx-auto mt-2"
-            />
-            <p className="mt-2 break-all text-xs text-[var(--ink-soft)]">
-              {created.admin.secret}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-sky-100 bg-white p-4 text-center">
-            <h2 className="font-[family-name:var(--font-display)] text-lg font-semibold">
-              Family gate QR
-            </h2>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={created.viewer.qrDataUrl}
-              alt="Family authenticator QR"
-              className="mx-auto mt-2"
-            />
-            <p className="mt-2 break-all text-xs text-[var(--ink-soft)]">
-              {created.viewer.secret}
-            </p>
-          </div>
+        <div className="rounded-2xl border border-sky-100 bg-white p-4 text-center">
+          <h2 className="font-[family-name:var(--font-display)] text-lg font-semibold">
+            Family gate QR
+          </h2>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={created.viewer.qrDataUrl}
+            alt="Family authenticator QR"
+            className="mx-auto mt-2"
+          />
+          <p className="mt-2 break-all text-xs text-[var(--ink-soft)]">
+            {created.viewer.secret}
+          </p>
         </div>
-        <LoginFields
-          code={code}
-          setCode={setCode}
-          error={error}
-          loading={loading}
-          onSubmit={onLogin}
-        />
+        <LoginFields error={error} loading={loading} onSubmit={onLogin} />
       </div>
     );
   }
@@ -201,13 +174,7 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
 
   return (
     <div className="space-y-4">
-      <LoginFields
-        code={code}
-        setCode={setCode}
-        error={error}
-        loading={loading}
-        onSubmit={onLogin}
-      />
+      <LoginFields error={error} loading={loading} onSubmit={onLogin} />
       {needsCreate ? (
         <button
           type="button"
@@ -227,14 +194,10 @@ export function AdminLoginClient({ needsCreate }: { needsCreate: boolean }) {
 }
 
 function LoginFields({
-  code,
-  setCode,
   error,
   loading,
   onSubmit,
 }: {
-  code: string;
-  setCode: (v: string) => void;
   error: string;
   loading: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
@@ -250,25 +213,6 @@ function LoginFields({
           name="password"
           type="password"
           className="input-field"
-          required
-        />
-      </div>
-      <div>
-        <label htmlFor="code" className="mb-2 block text-sm font-bold">
-          Authenticator code
-        </label>
-        <input
-          id="code"
-          name="code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          placeholder="000000"
-          value={code}
-          onChange={(e) =>
-            setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
-          }
-          className="input-field text-center font-[family-name:var(--font-display)] text-3xl tracking-[0.35em]"
           required
         />
       </div>

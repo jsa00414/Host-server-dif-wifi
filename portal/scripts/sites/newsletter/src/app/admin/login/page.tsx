@@ -19,7 +19,7 @@ export default async function AdminLoginPage() {
         <p className="mt-2 text-sm text-[var(--ink-soft)]">
           {needsCreate
             ? "Set up your class website and teacher account in one step."
-            : "Use your password and authenticator code."}
+            : "Use your admin password to continue."}
         </p>
         <div className="mt-6">
           <AdminLoginClient needsCreate={needsCreate} />

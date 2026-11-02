@@ -5,7 +5,7 @@ Gated second-grade class site served at
 
 ## Features
 
-- **Admin login** at `/admin/login` — first visit creates the class + password + 2FA QR; later visits sign in
+- **Admin login** at `/admin/login` — first visit creates the class + password; later visits sign in with password only
 - **Family gate** at `/gate` — shared authenticator QR unlocks the main site
 - **PDF newsletters** with a **bottom-right QR** that opens the hidden slideshow at `/s/<secret-token>` (not in site nav)
 

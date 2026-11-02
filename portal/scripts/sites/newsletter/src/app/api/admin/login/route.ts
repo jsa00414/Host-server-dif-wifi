@@ -6,7 +6,6 @@ import {
   buildOtpAuthUri,
   createTotpSecret,
   totpQrDataUrl,
-  verifyTotp,
 } from "@/lib/totp";
 import type { SiteConfig } from "@/lib/types";
 
@@ -63,6 +62,7 @@ export async function POST(request: Request) {
       ).trim(),
       setupComplete: true,
       adminPasswordHash: await bcrypt.hash(password, 12),
+      // Kept for schema compatibility; admin sign-in is password-only.
       adminTotpSecret: createTotpSecret(),
       viewerTotpSecret: createTotpSecret(),
       createdAt: new Date().toISOString(),
@@ -70,11 +70,6 @@ export async function POST(request: Request) {
 
     await saveConfig(config);
 
-    const adminUri = buildOtpAuthUri({
-      secret: config.adminTotpSecret,
-      label: `${config.className} Admin`,
-      issuer: config.schoolName,
-    });
     const viewerUri = buildOtpAuthUri({
       secret: config.viewerTotpSecret,
       label: `${config.className} Families`,
@@ -84,11 +79,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       created: true,
-      admin: {
-        secret: config.adminTotpSecret,
-        uri: adminUri,
-        qrDataUrl: await totpQrDataUrl(adminUri),
-      },
       viewer: {
         secret: config.viewerTotpSecret,
         uri: viewerUri,
@@ -104,14 +94,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const { password, code } = body as { password?: string; code?: string };
+  const { password } = body as { password?: string };
   const passwordOk =
     !!password && (await bcrypt.compare(password, existing.adminPasswordHash));
-  const codeOk = !!code && verifyTotp(existing.adminTotpSecret, code);
 
-  if (!passwordOk || !codeOk) {
+  if (!passwordOk) {
     return NextResponse.json(
-      { error: "Password or authenticator code is incorrect." },
+      { error: "Password is incorrect." },
       { status: 401 },
     );
   }

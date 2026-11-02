@@ -12,7 +12,7 @@ export default function AccessPage() {
             ← Admin home
           </Link>
           <h1 className="mt-2 font-[family-name:var(--font-display)] text-3xl font-semibold">
-            2FA access codes
+            Family 2FA access
           </h1>
         </div>
       </header>
