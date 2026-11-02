@@ -13,8 +13,9 @@ import {
 } from "@/lib/designs";
 import {
   TONE_FILL,
-  TONE_HEADING,
+  designToneCss,
   letterColorCss,
+  pagePatternStyle,
   rgbCss,
 } from "@/lib/editorTheme";
 import { nextZIndex, reorderLayer, sortLayers } from "@/lib/layers";
@@ -667,25 +668,42 @@ export function NewsletterEditor({
                           : "border-white/10 hover:border-white/25"
                       }`}
                     >
-                      <div className="bg-white p-1.5">
+                      <div
+                        className="relative p-1.5"
+                        style={{ background: design.swatches[3] || "#fff" }}
+                      >
                         <div
-                          className="mb-1 h-2 rounded-full"
+                          className="mb-1 flex h-5 items-center justify-center rounded-md text-[8px] font-black tracking-wide text-white"
                           style={{ background: design.swatches[0] }}
-                        />
+                        >
+                          NEWS
+                        </div>
                         <div className="grid grid-cols-2 gap-1">
                           <div
-                            className="h-7 rounded"
+                            className="h-8 rounded-md border border-black/5"
                             style={{ background: design.swatches[1] }}
                           />
                           <div
-                            className="h-7 rounded"
+                            className="h-8 rounded-md border border-black/5"
                             style={{ background: design.swatches[2] }}
                           />
+                        </div>
+                        <div className="mt-1 flex gap-0.5">
+                          {design.swatches.map((c) => (
+                            <span
+                              key={c}
+                              className="h-1.5 flex-1 rounded-full"
+                              style={{ background: c }}
+                            />
+                          ))}
                         </div>
                       </div>
                       <div className="px-2 py-1.5">
                         <p className="text-[11px] font-bold text-white">
                           {design.name}
+                        </p>
+                        <p className="truncate text-[10px] text-[#8090a3]">
+                          {design.tagline}
                         </p>
                       </div>
                     </button>
@@ -893,27 +911,47 @@ export function NewsletterEditor({
               >
                 <div
                   className="canva-page relative overflow-hidden rounded-sm"
-                  style={{ background: rgbCss(selectedDesign.pageBg) }}
+                  style={pagePatternStyle(selectedDesign)}
                   onClick={() => setSelection({ kind: "page" })}
                 >
-                  <div className="pointer-events-none absolute right-4 top-3 flex gap-1">
-                    {letterColors.slice(0, 7).map((c, i) => (
-                      <span
-                        key={i}
-                        className="h-3.5 w-3.5 rounded-full"
-                        style={{ background: c }}
-                      />
-                    ))}
-                  </div>
-                  <div className="pointer-events-none absolute left-6 top-5 text-lg text-yellow-400">
-                    ★
-                  </div>
-                  <div className="pointer-events-none absolute left-14 top-10 text-sm text-sky-400">
-                    ★
+                  {/* Decorative accents by design */}
+                  <div className="pointer-events-none absolute right-5 top-4 z-[1]">
+                    {selectedDesign.decorations === "sun" ? (
+                      <span className="text-4xl">☀️</span>
+                    ) : selectedDesign.decorations === "daisy" ||
+                      selectedDesign.decorations === "gingham" ? (
+                      <span className="text-3xl">🌼</span>
+                    ) : selectedDesign.decorations === "rainbow" ||
+                      selectedDesign.decorations === "boho-rainbow" ? (
+                      <span className="text-4xl">🌈</span>
+                    ) : selectedDesign.decorations === "hearts" ? (
+                      <span className="text-3xl">💕</span>
+                    ) : selectedDesign.decorations === "paperclip" ? (
+                      <span className="text-3xl">📎</span>
+                    ) : selectedDesign.decorations === "spots" ? (
+                      <div className="flex gap-1">
+                        {[0, 1, 2, 3].map((i) => (
+                          <span
+                            key={i}
+                            className="h-2.5 w-2.5 rounded-full bg-neutral-900"
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex gap-1">
+                        {letterColors.slice(0, 6).map((c, i) => (
+                          <span
+                            key={i}
+                            className="h-3 w-3 rounded-full"
+                            style={{ background: c }}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div
-                    className="canva-selectable px-8 pb-3 pt-8"
+                    className="canva-selectable relative z-[1] px-8 pb-3 pt-7"
                     data-selected={selection.kind === "header"}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -921,33 +959,100 @@ export function NewsletterEditor({
                       setLeftTab("text");
                     }}
                   >
-                    <input
-                      className="canva-editable font-[Georgia,Times,serif] text-[34px] italic leading-none text-neutral-900"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder="Classroom"
-                    />
-                    <div className="mt-2 flex flex-wrap gap-[2px] font-black tracking-wide">
-                      {"NEWSLETTER".split("").map((ch, i) => (
-                        <span
-                          key={`${ch}-${i}`}
-                          className="text-[34px] leading-none"
-                          style={{ color: letterColors[i % letterColors.length] }}
+                    {selectedDesign.headerStyle === "chunky-bar" ||
+                    selectedDesign.headerStyle === "spots-band" ? (
+                      <div
+                        className={`mb-3 rounded-xl px-4 py-5 text-center ${
+                          selectedDesign.headerStyle === "spots-band"
+                            ? "bg-[radial-gradient(circle,_#fff_2px,_transparent_2.5px)] bg-[length:16px_16px]"
+                            : ""
+                        }`}
+                        style={{
+                          backgroundColor: rgbCss(selectedDesign.bannerBar),
+                          color: rgbCss(selectedDesign.bannerText),
+                        }}
+                      >
+                        <input
+                          className="canva-editable text-center text-[26px] font-black uppercase tracking-wide"
+                          style={{ color: rgbCss(selectedDesign.bannerText) }}
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="Classroom"
+                        />
+                        <p className="mt-1 text-xs font-extrabold tracking-[0.2em] opacity-90">
+                          NEWSLETTER
+                        </p>
+                      </div>
+                    ) : selectedDesign.headerStyle === "ink-banner" ? (
+                      <div className="mb-3 rounded border-2 border-neutral-900 px-4 py-4 text-center">
+                        <input
+                          className="canva-editable text-center text-[24px] font-black uppercase tracking-wide text-neutral-900"
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="Classroom"
+                        />
+                        <p className="mt-1 border-t border-dashed border-neutral-400 pt-2 text-xs font-bold tracking-widest text-neutral-700">
+                          CLASSROOM NEWSLETTER
+                        </p>
+                      </div>
+                    ) : selectedDesign.headerStyle === "boho" ? (
+                      <>
+                        <input
+                          className="canva-editable font-[Georgia,Times,serif] text-[32px] italic leading-none"
+                          style={{ color: rgbCss(selectedDesign.scriptColor) }}
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="Classroom"
+                        />
+                        <p
+                          className="mt-2 text-lg font-black tracking-wide"
+                          style={{ color: rgbCss(selectedDesign.bannerBar) }}
                         >
-                          {ch}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="mt-2 text-[11px] text-neutral-500">
+                          OUR CLASS NEWS
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <input
+                          className="canva-editable font-[Georgia,Times,serif] text-[34px] italic leading-none"
+                          style={{ color: rgbCss(selectedDesign.scriptColor) }}
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="Classroom"
+                        />
+                        <div className="mt-2 flex flex-wrap gap-[2px] font-black tracking-wide">
+                          {"NEWSLETTER".split("").map((ch, i) => (
+                            <span
+                              key={`${ch}-${i}`}
+                              className="text-[34px] leading-none"
+                              style={{
+                                color: letterColors[i % letterColors.length],
+                              }}
+                            >
+                              {ch}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    <p className="mt-2 text-[11px]" style={{ color: rgbCss(selectedDesign.muted) }}>
                       {classInfo.className} · {classInfo.grade} · Room{" "}
                       {classInfo.room} · {issueDate}
                     </p>
                     <div
-                      className="mt-4 flex items-center justify-center rounded-md px-3 py-2 text-center text-xs font-extrabold tracking-wide text-white"
-                      style={{ background: rgbCss(selectedDesign.bannerBar) }}
+                      className={`mt-4 flex items-center justify-center px-3 py-2 text-center text-xs font-extrabold tracking-wide ${
+                        selectedDesign.headerStyle === "soft-pill"
+                          ? "rounded-full"
+                          : "rounded-md"
+                      }`}
+                      style={{
+                        background: rgbCss(selectedDesign.bannerBar),
+                        color: rgbCss(selectedDesign.bannerText),
+                      }}
                     >
                       <input
-                        className="canva-editable text-center text-xs font-extrabold uppercase tracking-wide text-white placeholder:text-white/70"
+                        className="canva-editable text-center text-xs font-extrabold uppercase tracking-wide placeholder:opacity-70"
+                        style={{ color: rgbCss(selectedDesign.bannerText) }}
                         value={bannerLabel}
                         onChange={(e) => setBannerLabel(e.target.value)}
                         placeholder="CLASS NEWS"
@@ -955,18 +1060,39 @@ export function NewsletterEditor({
                     </div>
                   </div>
 
-                  <div className="space-y-3 px-8 pb-24 pt-2">
+                  <div className="relative z-[1] space-y-3 px-8 pb-24 pt-2">
                     {rows.map((row) => (
                       <div
                         key={row.map((r) => r.id).join("-")}
                         className={`grid gap-3 ${row.length === 2 ? "grid-cols-2" : "grid-cols-1"}`}
                       >
                         {row.map((section) => {
-                          const tone = section.tone || "blue";
+                          const toneKey = section.tone || "blue";
+                          const tone = designToneCss(selectedDesign, toneKey);
                           const variant = section.variant || "card";
                           const selected =
                             selection.kind === "block" &&
                             selection.id === section.id;
+                          const cardStyle = selectedDesign.cardStyle;
+                          const cardBoxStyle =
+                            cardStyle === "outlined" || cardStyle === "dashed"
+                              ? {
+                                  background: "#fff",
+                                  border: `${cardStyle === "dashed" ? "1.5px dashed" : "2.5px solid"} ${tone.border}`,
+                                }
+                              : cardStyle === "ink"
+                                ? {
+                                    background: "#fff",
+                                    border: "2px solid #111",
+                                    boxShadow: "inset 0 0 0 1px #111",
+                                  }
+                                : cardStyle === "top-strip"
+                                  ? {
+                                      background: tone.fill,
+                                      borderTop: `10px solid ${tone.bar}`,
+                                    }
+                                  : { background: tone.fill };
+
                           if (variant === "banner") {
                             return (
                               <div
@@ -996,9 +1122,7 @@ export function NewsletterEditor({
                                 ) : null}
                                 <div
                                   className="rounded-md px-2 py-2 text-white"
-                                  style={{
-                                    background: rgbCss(selectedDesign.bannerBar),
-                                  }}
+                                  style={{ background: tone.bar }}
                                 >
                                   <input
                                     className="canva-editable text-center text-[11px] font-extrabold uppercase tracking-wide text-white"
@@ -1012,10 +1136,11 @@ export function NewsletterEditor({
                                 </div>
                                 <div
                                   className="rounded-xl p-3"
-                                  style={{ background: TONE_FILL[tone] }}
+                                  style={cardBoxStyle}
                                 >
                                   <textarea
-                                    className="canva-editable min-h-16 text-[12px] leading-relaxed text-neutral-700"
+                                    className="canva-editable min-h-16 text-[12px] leading-relaxed"
+                                    style={{ color: tone.body }}
                                     value={section.body}
                                     onChange={(e) =>
                                       updateSection(section.id, {
@@ -1032,7 +1157,7 @@ export function NewsletterEditor({
                               key={section.id}
                               className="canva-selectable relative rounded-2xl p-3"
                               data-selected={selected}
-                              style={{ background: TONE_FILL[tone] }}
+                              style={cardBoxStyle}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelection({ kind: "block", id: section.id });
@@ -1053,7 +1178,7 @@ export function NewsletterEditor({
                               ) : null}
                               <input
                                 className="canva-editable text-[13px] font-extrabold uppercase tracking-wide"
-                                style={{ color: TONE_HEADING[tone] }}
+                                style={{ color: tone.heading }}
                                 value={section.heading}
                                 onChange={(e) =>
                                   updateSection(section.id, {
@@ -1062,7 +1187,8 @@ export function NewsletterEditor({
                                 }
                               />
                               <textarea
-                                className="canva-editable mt-1 min-h-24 whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-700"
+                                className="canva-editable mt-1 min-h-24 whitespace-pre-wrap text-[12px] leading-relaxed"
+                                style={{ color: tone.body }}
                                 value={section.body}
                                 onChange={(e) =>
                                   updateSection(section.id, {
@@ -1080,7 +1206,13 @@ export function NewsletterEditor({
                               ) : null}
                               {variant === "learning" ? (
                                 <div className="pointer-events-none absolute bottom-2 right-3 text-2xl">
-                                  🌈
+                                  {selectedDesign.decorations === "hearts"
+                                    ? "💕"
+                                    : selectedDesign.decorations === "daisy"
+                                      ? "🌼"
+                                      : selectedDesign.decorations === "ink"
+                                        ? "★"
+                                        : "🌈"}
                                 </div>
                               ) : null}
                             </div>
