@@ -8,6 +8,8 @@ import {
   savePdf,
 } from "@/lib/storage";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { normalizeLayers } from "@/lib/layers";
+import { materializeNewsletterImages } from "@/lib/materializeImages";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import { normalizeSections } from "@/lib/sections";
 
@@ -55,6 +57,9 @@ export async function PUT(request: Request, { params }: Params) {
     sections: Array.isArray(body.sections)
       ? normalizeSections(body.sections)
       : existing.sections,
+    layers: Array.isArray(body.layers)
+      ? normalizeLayers(body.layers)
+      : existing.layers || [],
     designId,
     slideshowToken:
       existing.slideshowToken || randomBytes(18).toString("base64url"),
@@ -63,7 +68,8 @@ export async function PUT(request: Request, { params }: Params) {
   };
 
   await saveNewsletter(newsletter);
-  const pdf = await buildNewsletterPdf(newsletter, config, request);
+  const forPdf = await materializeNewsletterImages(newsletter);
+  const pdf = await buildNewsletterPdf(forPdf, config, request);
   await savePdf(newsletter.id, pdf);
 
   return NextResponse.json({ id: newsletter.id, newsletter });

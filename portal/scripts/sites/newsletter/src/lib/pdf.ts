@@ -1,8 +1,11 @@
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 import { getDesign, type NewsletterDesign, type TonePalette } from "./designs";
+import { resolvePdfImage } from "./imageData";
+import { sortLayers } from "./layers";
 import type {
   Newsletter,
+  NewsletterLayer,
   NewsletterSection,
   SectionTone,
   SiteConfig,
@@ -233,7 +236,8 @@ function measureBlock(
     (section.heading || "Update").toUpperCase(),
     inner,
   );
-  return 18 + headingLines.length * 14 + bodyLines.length * 13 + pad * 2;
+  const imageH = section.imageSrc ? Math.min(110, inner * 0.45) + 8 : 0;
+  return 18 + headingLines.length * 14 + bodyLines.length * 13 + pad * 2 + imageH;
 }
 
 function drawBlock(
@@ -287,13 +291,95 @@ function drawBlock(
   const bodyLines = doc.splitTextToSize(section.body || "", width - pad * 2);
   const headingHeight =
     doc.splitTextToSize(heading, width - pad * 2).length * 14;
-  doc.text(bodyLines, x + pad, y + pad + 18 + headingHeight);
+  const textY = y + pad + 18 + headingHeight;
+  doc.text(bodyLines, x + pad, textY);
 
   if (showRainbow && (variant === "learning" || index === 2)) {
     drawRainbow(doc, x + width - 48, y + height - 18);
   }
 
   return height + 12;
+}
+
+async function drawSectionImage(
+  doc: jsPDF,
+  section: NewsletterSection,
+  x: number,
+  y: number,
+  width: number,
+  pad: number,
+  baseUrl?: string,
+) {
+  if (!section.imageSrc) return;
+  const img = await resolvePdfImage(section.imageSrc, baseUrl);
+  if (!img) return;
+  const headingLines = doc.splitTextToSize(
+    (section.heading || "UPDATE").toUpperCase(),
+    width - pad * 2,
+  );
+  const bodyLines = doc.splitTextToSize(section.body || "", width - pad * 2);
+  const top =
+    y +
+    pad +
+    18 +
+    headingLines.length * 14 +
+    bodyLines.length * 13 +
+    6;
+  const maxW = width - pad * 2;
+  const maxH = Math.min(110, maxW * 0.45);
+  try {
+    doc.addImage(img.dataUrl, img.format, x + pad, top, maxW, maxH);
+  } catch {
+    /* ignore bad image */
+  }
+}
+
+type JsPdfGfx = jsPDF & {
+  GState?: new (opts: { opacity: number }) => unknown;
+  setGState?: (state: unknown) => void;
+};
+
+async function drawLayers(
+  doc: jsPDF,
+  layers: NewsletterLayer[] | undefined,
+  pageWidth: number,
+  pageHeight: number,
+  baseUrl?: string,
+) {
+  const gfx = doc as JsPdfGfx;
+  for (const layer of sortLayers(layers || [])) {
+    const img = await resolvePdfImage(layer.src, baseUrl);
+    if (!img) continue;
+    const w = (layer.width / 100) * pageWidth;
+    const h = (layer.height / 100) * pageHeight;
+    const x = (layer.x / 100) * pageWidth;
+    const y = (layer.y / 100) * pageHeight;
+    try {
+      if (gfx.GState && gfx.setGState && layer.opacity < 1) {
+        gfx.setGState(new gfx.GState({ opacity: layer.opacity }));
+      }
+      doc.addImage(
+        img.dataUrl,
+        img.format,
+        x,
+        y,
+        w,
+        h,
+        undefined,
+        "FAST",
+        layer.rotation || 0,
+      );
+      if (gfx.GState && gfx.setGState && layer.opacity < 1) {
+        gfx.setGState(new gfx.GState({ opacity: 1 }));
+      }
+    } catch {
+      try {
+        doc.addImage(img.dataUrl, img.format, x, y, w, h);
+      } catch {
+        /* skip unreadable image */
+      }
+    }
+  }
 }
 
 async function stampFooterAndQr(
@@ -344,6 +430,18 @@ async function stampFooterAndQr(
   }
 }
 
+function requestOrigin(request?: Request): string | undefined {
+  if (!request) {
+    if (typeof window !== "undefined") return window.location.origin;
+    return undefined;
+  }
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function buildNewsletterPdf(
   newsletter: Newsletter,
   config: SiteConfig,
@@ -358,6 +456,7 @@ export async function buildNewsletterPdf(
   const contentWidth = pageWidth - margin * 2;
   const half = (contentWidth - gap) / 2;
   const bottomSafe = 100;
+  const baseUrl = requestOrigin(request);
 
   rgb(doc, design.pageBg, "fill");
   doc.rect(0, 0, pageWidth, pageHeight, "F");
@@ -381,7 +480,11 @@ export async function buildNewsletterPdf(
         doc.rect(0, 0, pageWidth, pageHeight, "F");
         y = 48;
       }
-      y += drawBlock(doc, design, section, i, margin, y, contentWidth, true);
+      const blockY = y;
+      y += drawBlock(doc, design, section, i, margin, blockY, contentWidth, true);
+      if (section.variant !== "banner") {
+        await drawSectionImage(doc, section, margin, blockY, contentWidth, 12, baseUrl);
+      }
       i += 1;
       continue;
     }
@@ -398,11 +501,17 @@ export async function buildNewsletterPdf(
       doc.rect(0, 0, pageWidth, pageHeight, "F");
       y = 48;
     }
-    drawBlock(doc, design, left, i, margin, y, half, false);
-    drawBlock(doc, design, right, i + 1, margin + half + gap, y, half, true);
+    const leftY = y;
+    drawBlock(doc, design, left, i, margin, leftY, half, false);
+    await drawSectionImage(doc, left, margin, leftY, half, 12, baseUrl);
+    drawBlock(doc, design, right, i + 1, margin + half + gap, leftY, half, true);
+    await drawSectionImage(doc, right, margin + half + gap, leftY, half, 12, baseUrl);
     y += rowH;
     i += 2;
   }
+
+  // Free photo layers above content; footer/QR stamped afterward so QR stays readable.
+  await drawLayers(doc, newsletter.layers, pageWidth, pageHeight, baseUrl);
 
   await stampFooterAndQr(
     doc,

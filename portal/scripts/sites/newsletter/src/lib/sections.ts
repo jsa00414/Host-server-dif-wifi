@@ -51,6 +51,7 @@ export function normalizeSections(raw: unknown): NewsletterSection[] {
       s.variant,
       index === 0 ? "banner" : "card",
     );
+    const imageSrc = String(s.imageSrc || "").trim();
     return {
       id: s.id || randomUUID(),
       heading: String(s.heading || "").trim(),
@@ -61,6 +62,7 @@ export function normalizeSections(raw: unknown): NewsletterSection[] {
         s.width,
         variant === "banner" || index === 0 || index === 3 ? "full" : "half",
       ),
+      ...(imageSrc ? { imageSrc } : {}),
     };
   });
 }

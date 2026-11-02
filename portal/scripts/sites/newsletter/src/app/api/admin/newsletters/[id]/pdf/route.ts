@@ -7,6 +7,7 @@ import {
   saveNewsletter,
   savePdf,
 } from "@/lib/storage";
+import { materializeNewsletterImages } from "@/lib/materializeImages";
 import { buildNewsletterPdf } from "@/lib/pdf";
 
 type Params = { params: Promise<{ id: string }> };
@@ -28,7 +29,8 @@ export async function GET(request: Request, { params }: Params) {
   }
 
   // Always rebuild so QR points at current host/token
-  const bytes = await buildNewsletterPdf(newsletter, config, request);
+  const forPdf = await materializeNewsletterImages(newsletter);
+  const bytes = await buildNewsletterPdf(forPdf, config, request);
   await savePdf(id, bytes);
   const pdf = await readPdf(id);
 

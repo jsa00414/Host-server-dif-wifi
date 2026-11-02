@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DEFAULT_DESIGN_ID,
@@ -17,11 +17,12 @@ import {
   letterColorCss,
   rgbCss,
 } from "@/lib/editorTheme";
+import { nextZIndex, reorderLayer, sortLayers } from "@/lib/layers";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import type {
   Newsletter,
+  NewsletterLayer,
   NewsletterSection,
-  SectionTone,
   SectionVariant,
   SectionWidth,
   SiteConfig,
@@ -32,12 +33,34 @@ type ClassInfo = Pick<
   "className" | "teacherName" | "schoolName" | "grade" | "room"
 >;
 
-type LeftTab = "templates" | "elements" | "text";
+type LeftTab = "templates" | "elements" | "photos" | "text";
 type Selection =
   | { kind: "page" }
   | { kind: "header" }
   | { kind: "footer" }
-  | { kind: "block"; id: string };
+  | { kind: "block"; id: string }
+  | { kind: "layer"; id: string };
+
+type DragState =
+  | {
+      mode: "move";
+      id: string;
+      startX: number;
+      startY: number;
+      origX: number;
+      origY: number;
+    }
+  | {
+      mode: "resize";
+      id: string;
+      startX: number;
+      startY: number;
+      origW: number;
+      origH: number;
+    };
+
+const PAGE_W = 612;
+const PAGE_H = 792;
 
 function blankSection(
   partial?: Partial<NewsletterSection>,
@@ -76,6 +99,10 @@ function pairRows(sections: NewsletterSection[]) {
   return rows;
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
 export function NewsletterEditor({
   initial,
   classInfo,
@@ -84,6 +111,7 @@ export function NewsletterEditor({
   classInfo: ClassInfo;
 }) {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [leftTab, setLeftTab] = useState<LeftTab>("templates");
   const [selection, setSelection] = useState<Selection>({ kind: "page" });
   const [zoom, setZoom] = useState(0.82);
@@ -118,6 +146,11 @@ export function NewsletterEditor({
         }))
       : sectionsFromStarter(DEFAULT_DESIGN_ID),
   );
+  const [layers, setLayers] = useState<NewsletterLayer[]>(
+    initial?.layers || [],
+  );
+  const [uploading, setUploading] = useState(false);
+  const [drag, setDrag] = useState<DragState | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -130,10 +163,15 @@ export function NewsletterEditor({
     [selectedDesign],
   );
   const rows = useMemo(() => pairRows(sections), [sections]);
+  const sortedLayers = useMemo(() => sortLayers(layers), [layers]);
 
   const selectedBlock =
     selection.kind === "block"
       ? sections.find((s) => s.id === selection.id) || null
+      : null;
+  const selectedLayer =
+    selection.kind === "layer"
+      ? layers.find((l) => l.id === selection.id) || null
       : null;
 
   const draft = useMemo(
@@ -145,6 +183,7 @@ export function NewsletterEditor({
       footerNote,
       issueDate,
       sections,
+      layers,
       designId,
       slideshowToken: initial?.slideshowToken || "preview-token",
       createdAt: initial?.createdAt || new Date().toISOString(),
@@ -161,6 +200,7 @@ export function NewsletterEditor({
       footerNote,
       issueDate,
       sections,
+      layers,
       designId,
       published,
     ],
@@ -209,6 +249,12 @@ export function NewsletterEditor({
     );
   }
 
+  function updateLayer(id: string, patch: Partial<NewsletterLayer>) {
+    setLayers((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+    );
+  }
+
   function moveSection(id: string, dir: -1 | 1) {
     setSections((prev) => {
       const index = prev.findIndex((s) => s.id === id);
@@ -229,6 +275,11 @@ export function NewsletterEditor({
     setSelection({ kind: "page" });
   }
 
+  function removeLayer(id: string) {
+    setLayers((prev) => prev.filter((l) => l.id !== id));
+    setSelection({ kind: "page" });
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -241,13 +292,60 @@ export function NewsletterEditor({
       ) {
         return;
       }
-      if (selection.kind !== "block") return;
-      e.preventDefault();
-      removeSection(selection.id);
+      if (selection.kind === "block") {
+        e.preventDefault();
+        removeSection(selection.id);
+      } else if (selection.kind === "layer") {
+        e.preventDefault();
+        removeLayer(selection.id);
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selection]);
+
+  useEffect(() => {
+    if (!drag) return;
+    const active = drag;
+    function onMove(e: PointerEvent) {
+      const dx = ((e.clientX - active.startX) / zoom / PAGE_W) * 100;
+      const dy = ((e.clientY - active.startY) / zoom / PAGE_H) * 100;
+      if (active.mode === "move") {
+        setLayers((prev) =>
+          prev.map((l) =>
+            l.id === active.id
+              ? {
+                  ...l,
+                  x: clamp(active.origX + dx, 0, 92),
+                  y: clamp(active.origY + dy, 0, 92),
+                }
+              : l,
+          ),
+        );
+      } else {
+        setLayers((prev) =>
+          prev.map((l) =>
+            l.id === active.id
+              ? {
+                  ...l,
+                  width: clamp(active.origW + dx, 8, 100 - l.x),
+                  height: clamp(active.origH + dy, 8, 100 - l.y),
+                }
+              : l,
+          ),
+        );
+      }
+    }
+    function onUp() {
+      setDrag(null);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [drag, zoom]);
 
   function applyDesign(nextId: string, loadStarter: boolean) {
     setDesignId(nextId);
@@ -280,6 +378,68 @@ export function NewsletterEditor({
     setLeftTab("elements");
   }
 
+  async function uploadPhoto(file: File) {
+    setUploading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/admin/uploads", {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Could not upload photo.");
+        return;
+      }
+      const layer: NewsletterLayer = {
+        id: crypto.randomUUID(),
+        type: "image",
+        name: (file.name || "Photo").replace(/\.[^.]+$/, "").slice(0, 40) || "Photo",
+        src: data.url as string,
+        x: 12 + (layers.length % 4) * 6,
+        y: 28 + (layers.length % 3) * 8,
+        width: 28,
+        height: 22,
+        rotation: 0,
+        opacity: 1,
+        zIndex: nextZIndex(layers),
+      };
+      setLayers((prev) => [...prev, layer]);
+      setSelection({ kind: "layer", id: layer.id });
+      setLeftTab("photos");
+    } catch {
+      setError("Could not upload photo.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function attachPhotoToBlock(file: File, blockId: string) {
+    setUploading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/admin/uploads", {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Could not upload photo.");
+        return;
+      }
+      updateSection(blockId, { imageSrc: data.url as string });
+    } catch {
+      setError("Could not upload photo.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function save() {
     setSaving(true);
     setError("");
@@ -293,6 +453,7 @@ export function NewsletterEditor({
       published,
       designId,
       sections,
+      layers,
     };
     const res = await fetch(
       initial?.id
@@ -339,7 +500,6 @@ export function NewsletterEditor({
 
   return (
     <div className="canva-shell flex flex-col">
-      {/* Top bar */}
       <header className="canva-topbar flex items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-3">
           <Link
@@ -413,6 +573,16 @@ export function NewsletterEditor({
               Delete block
             </button>
           ) : null}
+          {selection.kind === "layer" ? (
+            <button
+              type="button"
+              onClick={() => removeLayer(selection.id)}
+              className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-500/30"
+              title="Delete selected photo (Del)"
+            >
+              Delete photo
+            </button>
+          ) : null}
           {initial?.id ? (
             <button
               type="button"
@@ -435,15 +605,15 @@ export function NewsletterEditor({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* Icon rail */}
         <nav className="canva-rail flex flex-col items-center gap-2 py-3">
           {(
             [
-              ["templates", "Design"],
-              ["elements", "Elements"],
-              ["text", "Text"],
+              ["templates", "Design", "▦"],
+              ["elements", "Elements", "＋"],
+              ["photos", "Photos", "▣"],
+              ["text", "Text", "T"],
             ] as const
-          ).map(([id, label]) => (
+          ).map(([id, label, icon]) => (
             <button
               key={id}
               type="button"
@@ -454,15 +624,12 @@ export function NewsletterEditor({
                   : "text-[#8fa0b3] hover:bg-white/5 hover:text-white"
               }`}
             >
-              <span className="text-lg leading-none">
-                {id === "templates" ? "▦" : id === "elements" ? "＋" : "T"}
-              </span>
+              <span className="text-lg leading-none">{icon}</span>
               {label}
             </button>
           ))}
         </nav>
 
-        {/* Left panel */}
         <aside className="canva-panel flex min-h-0 flex-col overflow-hidden">
           <div className="border-b border-white/10 px-4 py-3">
             <p className="text-sm font-bold text-white">
@@ -470,14 +637,18 @@ export function NewsletterEditor({
                 ? "Templates"
                 : leftTab === "elements"
                   ? "Elements"
-                  : "Text & page"}
+                  : leftTab === "photos"
+                    ? "Photos"
+                    : "Text & page"}
             </p>
             <p className="mt-0.5 text-[11px] text-[#8090a3]">
               {leftTab === "templates"
                 ? "Click a design to restyle the page"
                 : leftTab === "elements"
                   ? "Add colorful blocks to the canvas"
-                  : "Edit title, banner, and footer"}
+                  : leftTab === "photos"
+                    ? "Upload photos and stack them on the page"
+                    : "Edit title, banner, and footer"}
             </p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -572,6 +743,78 @@ export function NewsletterEditor({
               </div>
             ) : null}
 
+            {leftTab === "photos" ? (
+              <div className="space-y-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadPhoto(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full rounded-xl border border-dashed border-violet-400/50 bg-violet-600/20 px-3 py-4 text-sm font-bold text-violet-100 hover:bg-violet-600/30 disabled:opacity-60"
+                >
+                  {uploading ? "Uploading…" : "Upload photo"}
+                </button>
+                <p className="text-[11px] leading-relaxed text-[#8090a3]">
+                  Photos sit on the page as free layers. Drag to move, use the
+                  corner to resize, and set stacking order in properties.
+                </p>
+                {sortedLayers.length ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                      Layers (top = front)
+                    </p>
+                    {[...sortedLayers].reverse().map((layer) => {
+                      const active =
+                        selection.kind === "layer" &&
+                        selection.id === layer.id;
+                      return (
+                        <button
+                          key={layer.id}
+                          type="button"
+                          onClick={() =>
+                            setSelection({ kind: "layer", id: layer.id })
+                          }
+                          className={`flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left ${
+                            active
+                              ? "border-violet-400 bg-violet-600/20"
+                              : "border-white/10 bg-white/5 hover:bg-white/10"
+                          }`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={layer.src}
+                            alt=""
+                            className="h-10 w-10 rounded-md object-cover"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-bold text-white">
+                              {layer.name}
+                            </span>
+                            <span className="block text-[10px] text-[#8090a3]">
+                              z {layer.zIndex}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="rounded-xl bg-white/5 px-3 py-3 text-xs text-[#9fb0c3]">
+                    No photos yet — upload one to place it on the newsletter.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
             {leftTab === "text" ? (
               <div className="space-y-3">
                 <label className="block text-[11px] font-bold text-[#9fb0c3]">
@@ -631,7 +874,6 @@ export function NewsletterEditor({
           </div>
         </aside>
 
-        {/* Center stage */}
         <main
           className="canva-stage min-w-0 flex-1 overflow-auto"
           onClick={() => setSelection({ kind: "page" })}
@@ -654,7 +896,6 @@ export function NewsletterEditor({
                   style={{ background: rgbCss(selectedDesign.pageBg) }}
                   onClick={() => setSelection({ kind: "page" })}
                 >
-                  {/* decorations */}
                   <div className="pointer-events-none absolute right-4 top-3 flex gap-1">
                     {letterColors.slice(0, 7).map((c, i) => (
                       <span
@@ -671,7 +912,6 @@ export function NewsletterEditor({
                     ★
                   </div>
 
-                  {/* Header */}
                   <div
                     className="canva-selectable px-8 pb-3 pt-8"
                     data-selected={selection.kind === "header"}
@@ -715,7 +955,6 @@ export function NewsletterEditor({
                     </div>
                   </div>
 
-                  {/* Blocks */}
                   <div className="space-y-3 px-8 pb-24 pt-2">
                     {rows.map((row) => (
                       <div
@@ -831,6 +1070,14 @@ export function NewsletterEditor({
                                   })
                                 }
                               />
+                              {section.imageSrc ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={section.imageSrc}
+                                  alt=""
+                                  className="mt-2 max-h-28 w-full rounded-lg object-cover"
+                                />
+                              ) : null}
                               {variant === "learning" ? (
                                 <div className="pointer-events-none absolute bottom-2 right-3 text-2xl">
                                   🌈
@@ -843,7 +1090,92 @@ export function NewsletterEditor({
                     ))}
                   </div>
 
-                  {/* Footer */}
+                  {/* Free photo layers */}
+                  {sortedLayers.map((layer) => {
+                    const selected =
+                      selection.kind === "layer" && selection.id === layer.id;
+                    return (
+                      <div
+                        key={layer.id}
+                        className="absolute cursor-move"
+                        style={{
+                          left: `${layer.x}%`,
+                          top: `${layer.y}%`,
+                          width: `${layer.width}%`,
+                          height: `${layer.height}%`,
+                          zIndex: 20 + layer.zIndex,
+                          opacity: layer.opacity,
+                          transform: layer.rotation
+                            ? `rotate(${layer.rotation}deg)`
+                            : undefined,
+                          outline: selected
+                            ? "2px solid #8b5cf6"
+                            : "2px solid transparent",
+                          boxShadow: selected
+                            ? "0 0 0 4px rgba(139, 92, 246, 0.25)"
+                            : undefined,
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelection({ kind: "layer", id: layer.id });
+                          setLeftTab("photos");
+                        }}
+                        onPointerDown={(e) => {
+                          if ((e.target as HTMLElement).dataset.resize) return;
+                          e.stopPropagation();
+                          e.preventDefault();
+                          setSelection({ kind: "layer", id: layer.id });
+                          setDrag({
+                            mode: "move",
+                            id: layer.id,
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            origX: layer.x,
+                            origY: layer.y,
+                          });
+                        }}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={layer.src}
+                          alt={layer.name}
+                          className="h-full w-full rounded-sm object-cover pointer-events-none select-none"
+                          draggable={false}
+                        />
+                        {selected ? (
+                          <>
+                            <button
+                              type="button"
+                              className="absolute -right-2 -top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeLayer(layer.id);
+                              }}
+                            >
+                              Delete
+                            </button>
+                            <span
+                              data-resize="1"
+                              className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-se-resize rounded-sm border-2 border-white bg-violet-500"
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setDrag({
+                                  mode: "resize",
+                                  id: layer.id,
+                                  startX: e.clientX,
+                                  startY: e.clientY,
+                                  origW: layer.width,
+                                  origH: layer.height,
+                                });
+                              }}
+                            />
+                          </>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
                   <div
                     className="canva-selectable absolute bottom-3 left-8 right-24"
                     data-selected={selection.kind === "footer"}
@@ -865,7 +1197,7 @@ export function NewsletterEditor({
                       />
                     </div>
                   </div>
-                  <div className="absolute bottom-3 right-6 flex h-16 w-16 items-center justify-center rounded-md border-2 border-dashed border-neutral-300 bg-white text-[9px] font-bold text-neutral-400">
+                  <div className="absolute bottom-3 right-6 z-[100] flex h-16 w-16 items-center justify-center rounded-md border-2 border-dashed border-neutral-300 bg-white text-[9px] font-bold text-neutral-400">
                     QR
                   </div>
                 </div>
@@ -874,33 +1206,38 @@ export function NewsletterEditor({
           </div>
         </main>
 
-        {/* Right properties */}
         <aside className="canva-props flex min-h-0 flex-col overflow-hidden">
           <div className="border-b border-white/10 px-4 py-3">
             <p className="text-sm font-bold text-white">
               {selection.kind === "block"
                 ? "Block properties"
-                : selection.kind === "header"
-                  ? "Header properties"
-                  : selection.kind === "footer"
-                    ? "Footer properties"
-                    : "Page properties"}
+                : selection.kind === "layer"
+                  ? "Photo layer"
+                  : selection.kind === "header"
+                    ? "Header properties"
+                    : selection.kind === "footer"
+                      ? "Footer properties"
+                      : "Page properties"}
             </p>
             <p className="mt-0.5 text-[11px] text-[#8090a3]">
-              Click anything on the canvas to edit it
+              {selection.kind === "layer"
+                ? "Move, resize, and set layering"
+                : "Click anything on the canvas to edit it"}
             </p>
           </div>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {selection.kind === "page" ? (
               <>
                 <p className="text-xs leading-relaxed text-[#9fb0c3]">
-                  Use the left sidebar for templates and elements. Zoom and
-                  switch to PDF view from the top bar.
+                  Use Photos to upload classroom pictures, then drag them on the
+                  page and choose which sits in front.
                 </p>
                 <div className="rounded-xl bg-white/5 p-3 text-xs text-[#c5d0dc]">
                   Design: <strong>{selectedDesign.name}</strong>
                   <br />
                   Blocks: {sections.length}
+                  <br />
+                  Photos: {layers.length}
                 </div>
               </>
             ) : null}
@@ -909,6 +1246,126 @@ export function NewsletterEditor({
               <p className="text-xs text-[#9fb0c3]">
                 Edit directly on the canvas, or use the Text panel on the left.
               </p>
+            ) : null}
+
+            {selectedLayer ? (
+              <>
+                <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                  Name
+                  <input
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-3 py-2 text-sm text-white"
+                    value={selectedLayer.name}
+                    onChange={(e) =>
+                      updateLayer(selectedLayer.id, { name: e.target.value })
+                    }
+                  />
+                </label>
+
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                    Layering
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ["front", "Bring front"],
+                        ["forward", "Forward"],
+                        ["backward", "Backward"],
+                        ["back", "Send back"],
+                      ] as const
+                    ).map(([action, label]) => (
+                      <button
+                        key={action}
+                        type="button"
+                        className="canva-chip canva-chip-idle"
+                        onClick={() =>
+                          setLayers((prev) =>
+                            reorderLayer(prev, selectedLayer.id, action),
+                          )
+                        }
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] text-[#8090a3]">
+                    Current order: {selectedLayer.zIndex} of {layers.length}
+                  </p>
+                </div>
+
+                <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                  Opacity ({Math.round(selectedLayer.opacity * 100)}%)
+                  <input
+                    type="range"
+                    min={10}
+                    max={100}
+                    value={Math.round(selectedLayer.opacity * 100)}
+                    className="mt-2 w-full"
+                    onChange={(e) =>
+                      updateLayer(selectedLayer.id, {
+                        opacity: Number(e.target.value) / 100,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                  Rotation ({selectedLayer.rotation}°)
+                  <input
+                    type="range"
+                    min={-45}
+                    max={45}
+                    value={selectedLayer.rotation}
+                    className="mt-2 w-full"
+                    onChange={(e) =>
+                      updateLayer(selectedLayer.id, {
+                        rotation: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    Width %
+                    <input
+                      type="number"
+                      min={8}
+                      max={100}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedLayer.width)}
+                      onChange={(e) =>
+                        updateLayer(selectedLayer.id, {
+                          width: clamp(Number(e.target.value) || 8, 8, 100),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    Height %
+                    <input
+                      type="number"
+                      min={8}
+                      max={100}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedLayer.height)}
+                      onChange={(e) =>
+                        updateLayer(selectedLayer.id, {
+                          height: clamp(Number(e.target.value) || 8, 8, 100),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+
+                <button
+                  type="button"
+                  className="canva-chip bg-red-500/20 text-red-200"
+                  onClick={() => removeLayer(selectedLayer.id)}
+                >
+                  Delete photo
+                </button>
+              </>
             ) : null}
 
             {selectedBlock ? (
@@ -994,6 +1451,51 @@ export function NewsletterEditor({
                     ))}
                   </div>
                 </div>
+
+                {selectedBlock.variant !== "banner" ? (
+                  <div>
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                      Block photo
+                    </p>
+                    {selectedBlock.imageSrc ? (
+                      <div className="space-y-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={selectedBlock.imageSrc}
+                          alt=""
+                          className="h-24 w-full rounded-lg object-cover"
+                        />
+                        <button
+                          type="button"
+                          className="canva-chip canva-chip-idle"
+                          onClick={() =>
+                            updateSection(selectedBlock.id, {
+                              imageSrc: undefined,
+                            })
+                          }
+                        >
+                          Remove photo
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/20 px-3 py-3 text-xs font-bold text-[#9fb0c3] hover:bg-white/5">
+                        {uploading ? "Uploading…" : "Add photo to block"}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          className="hidden"
+                          disabled={uploading}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file)
+                              void attachPhotoToBlock(file, selectedBlock.id);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                ) : null}
 
                 <div className="flex flex-wrap gap-2">
                   <button

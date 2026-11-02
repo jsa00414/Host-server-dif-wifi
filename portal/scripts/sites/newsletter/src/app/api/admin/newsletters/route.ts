@@ -8,6 +8,8 @@ import {
 } from "@/lib/storage";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { normalizeLayers } from "@/lib/layers";
+import { materializeNewsletterImages } from "@/lib/materializeImages";
 import { normalizeSections } from "@/lib/sections";
 import type { Newsletter } from "@/lib/types";
 
@@ -46,6 +48,7 @@ export async function POST(request: Request) {
     footerNote: String(body.footerNote || "").trim(),
     issueDate: String(body.issueDate || now.slice(0, 10)),
     sections: normalizeSections(body.sections),
+    layers: normalizeLayers(body.layers),
     designId,
     slideshowToken: slideshowToken(),
     published: body.published === undefined ? true : Boolean(body.published),
@@ -54,7 +57,8 @@ export async function POST(request: Request) {
   };
 
   await saveNewsletter(newsletter);
-  const pdf = await buildNewsletterPdf(newsletter, config, request);
+  const forPdf = await materializeNewsletterImages(newsletter);
+  const pdf = await buildNewsletterPdf(forPdf, config, request);
   await savePdf(newsletter.id, pdf);
 
   return NextResponse.json({ id: newsletter.id, newsletter });

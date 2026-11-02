@@ -36,6 +36,26 @@ export type NewsletterSection = {
   tone?: SectionTone;
   /** full-width banner/row or half-width column card */
   width?: SectionWidth;
+  /** Optional photo inside the block (media URL or data URL) */
+  imageSrc?: string;
+};
+
+/** Free-positioned canvas layer (photos/stickers), Canva-style. */
+export type NewsletterLayer = {
+  id: string;
+  type: "image";
+  name: string;
+  /** /api/media/<id> or data URL */
+  src: string;
+  /** Position/size as percent of letter page (0–100) */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  opacity: number;
+  /** Higher draws on top */
+  zIndex: number;
 };
 
 export type Newsletter = {
@@ -48,6 +68,8 @@ export type Newsletter = {
   /** Footer contact line under the green bar */
   footerNote?: string;
   sections: NewsletterSection[];
+  /** Photo / decoration layers with stacking order */
+  layers?: NewsletterLayer[];
   /** Premade colorful PDF design id from NEWSLETTER_DESIGNS. */
   designId: string;
   /** Secret token for the hidden digital slideshow (QR on PDF). */
