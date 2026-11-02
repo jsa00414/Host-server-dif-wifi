@@ -8,7 +8,8 @@ import {
 } from "@/lib/storage";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
-import type { Newsletter, NewsletterSection } from "@/lib/types";
+import { normalizeSections } from "@/lib/sections";
+import type { Newsletter } from "@/lib/types";
 
 function slideshowToken() {
   return randomBytes(18).toString("base64url");
@@ -32,14 +33,6 @@ export async function POST(request: Request) {
   }
 
   const now = new Date().toISOString();
-  const sections: NewsletterSection[] = Array.isArray(body.sections)
-    ? body.sections.map((s: NewsletterSection) => ({
-        id: s.id || randomUUID(),
-        heading: String(s.heading || "").trim(),
-        body: String(s.body || "").trim(),
-      }))
-    : [];
-
   const designId =
     typeof body.designId === "string" && isDesignId(body.designId)
       ? body.designId
@@ -49,8 +42,10 @@ export async function POST(request: Request) {
     id: randomUUID(),
     title,
     subtitle: String(body.subtitle || "").trim(),
+    bannerLabel: String(body.bannerLabel || "").trim(),
+    footerNote: String(body.footerNote || "").trim(),
     issueDate: String(body.issueDate || now.slice(0, 10)),
-    sections,
+    sections: normalizeSections(body.sections),
     designId,
     slideshowToken: slideshowToken(),
     published: body.published === undefined ? true : Boolean(body.published),

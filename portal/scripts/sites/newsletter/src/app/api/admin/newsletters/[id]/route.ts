@@ -9,7 +9,7 @@ import {
 } from "@/lib/storage";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
 import { buildNewsletterPdf } from "@/lib/pdf";
-import type { NewsletterSection } from "@/lib/types";
+import { normalizeSections } from "@/lib/sections";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -36,14 +36,6 @@ export async function PUT(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }
 
-  const sections: NewsletterSection[] = Array.isArray(body.sections)
-    ? body.sections.map((s: NewsletterSection) => ({
-        id: s.id,
-        heading: String(s.heading || "").trim(),
-        body: String(s.body || "").trim(),
-      }))
-    : existing.sections;
-
   const designId =
     typeof body.designId === "string" && isDesignId(body.designId)
       ? body.designId
@@ -53,8 +45,16 @@ export async function PUT(request: Request, { params }: Params) {
     ...existing,
     title,
     subtitle: String(body.subtitle || "").trim(),
+    bannerLabel: String(
+      body.bannerLabel !== undefined ? body.bannerLabel : existing.bannerLabel || "",
+    ).trim(),
+    footerNote: String(
+      body.footerNote !== undefined ? body.footerNote : existing.footerNote || "",
+    ).trim(),
     issueDate: String(body.issueDate || existing.issueDate),
-    sections,
+    sections: Array.isArray(body.sections)
+      ? normalizeSections(body.sections)
+      : existing.sections,
     designId,
     slideshowToken:
       existing.slideshowToken || randomBytes(18).toString("base64url"),

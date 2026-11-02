@@ -1,70 +1,179 @@
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
-import { getDesign, type NewsletterDesign } from "./designs";
-import type { Newsletter, NewsletterSection, SiteConfig } from "./types";
+import { getDesign, type NewsletterDesign, type TonePalette } from "./designs";
+import type {
+  Newsletter,
+  NewsletterSection,
+  SectionTone,
+  SiteConfig,
+} from "./types";
 import { slideshowUrl } from "./url";
 
 type RGB = [number, number, number];
 
+const DEFAULT_TONES: SectionTone[] = ["green", "blue", "orange", "pink"];
+
+function rgb(doc: jsPDF, color: RGB, mode: "fill" | "draw" | "text") {
+  if (mode === "fill") doc.setFillColor(...color);
+  else if (mode === "draw") doc.setDrawColor(...color);
+  else doc.setTextColor(...color);
+}
+
+function toneFor(
+  design: NewsletterDesign,
+  section: NewsletterSection,
+  index: number,
+): TonePalette {
+  const key = section.tone || DEFAULT_TONES[index % DEFAULT_TONES.length];
+  return design.tones[key];
+}
+
 function formatIssueDate(issueDate: string) {
   return new Date(issueDate + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
   });
 }
 
-function blockColors(design: NewsletterDesign, index: number): RGB {
-  const palette = [
-    design.colors.accent,
-    design.colors.accent2,
-    design.colors.accent3,
-    design.colors.headerBg,
-  ];
-  return palette[index % palette.length];
+function drawStar(
+  doc: jsPDF,
+  cx: number,
+  cy: number,
+  r: number,
+  color: RGB,
+) {
+  rgb(doc, color, "fill");
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i < 5; i += 1) {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
+    pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+    const b = a + Math.PI / 5;
+    pts.push([cx + Math.cos(b) * r * 0.42, cy + Math.sin(b) * r * 0.42]);
+  }
+  // jsPDF triangle fan approximation with small filled triangles
+  for (let i = 0; i < pts.length; i += 1) {
+    const n = (i + 1) % pts.length;
+    doc.triangle(cx, cy, pts[i][0], pts[i][1], pts[n][0], pts[n][1], "F");
+  }
 }
 
-function drawPageBackground(
+function drawBunting(doc: jsPDF, pageWidth: number, colors: RGB[]) {
+  const startX = pageWidth - 210;
+  const startY = 28;
+  doc.setDrawColor(120, 120, 120);
+  doc.setLineWidth(0.8);
+  doc.line(startX, startY, pageWidth - 28, startY + 8);
+  for (let i = 0; i < 7; i += 1) {
+    const x = startX + i * 24;
+    const y = startY + i * 1.1;
+    rgb(doc, colors[i % colors.length], "fill");
+    doc.circle(x, y + 10, 7, "F");
+  }
+}
+
+function drawPencil(doc: jsPDF, x: number, y: number, scale = 1) {
+  const w = 8 * scale;
+  const h = 22 * scale;
+  doc.setFillColor(255, 214, 102);
+  doc.roundedRect(x, y, w, h, 1, 1, "F");
+  doc.setFillColor(255, 180, 80);
+  doc.triangle(x, y, x + w, y, x + w / 2, y - 8 * scale, "F");
+  doc.setFillColor(80, 80, 80);
+  doc.triangle(
+    x + w * 0.28,
+    y - 3 * scale,
+    x + w * 0.72,
+    y - 3 * scale,
+    x + w / 2,
+    y - 8 * scale,
+    "F",
+  );
+  doc.setFillColor(80, 180, 220);
+  doc.rect(x, y + h - 5 * scale, w, 5 * scale, "F");
+}
+
+function drawRainbow(doc: jsPDF, x: number, y: number) {
+  const bands: RGB[] = [
+    [255, 99, 99],
+    [255, 170, 60],
+    [255, 220, 70],
+    [90, 200, 110],
+    [80, 160, 230],
+    [150, 110, 220],
+  ];
+  bands.forEach((c, i) => {
+    doc.setDrawColor(...c);
+    doc.setLineWidth(4);
+    doc.circle(x, y, 34 - i * 4.2, "S");
+  });
+  // mask lower half with a white semi by covering
+  doc.setFillColor(255, 255, 255);
+  doc.rect(x - 40, y, 80, 44, "F");
+  doc.setFillColor(255, 210, 70);
+  doc.circle(x + 28, y + 6, 8, "F");
+}
+
+function drawDecorations(
   doc: jsPDF,
   design: NewsletterDesign,
   pageWidth: number,
-  pageHeight: number,
 ) {
-  const c = design.colors;
-  doc.setFillColor(...c.pageBg);
-  doc.rect(0, 0, pageWidth, pageHeight, "F");
-
-  if (design.layout === "playful") {
-    const dots: Array<[number, number, RGB]> = [
-      [36, 40, c.accent],
-      [90, 70, c.accent2],
-      [160, 36, c.accent3],
-      [pageWidth - 50, 55, c.accent],
-      [pageWidth - 110, 28, c.accent2],
-      [48, pageHeight - 120, c.accent3],
-      [120, pageHeight - 90, c.accent],
-    ];
-    for (const [x, y, color] of dots) {
-      doc.setFillColor(...color);
-      doc.circle(x, y, 7, "F");
-    }
+  const colors = design.letterColors;
+  if (
+    design.decorations === "stars-bunting" ||
+    design.decorations === "storytime" ||
+    design.decorations === "space" ||
+    design.decorations === "playground"
+  ) {
+    drawStar(doc, 48, 34, 8, colors[0]);
+    drawStar(doc, 78, 58, 6, colors[2]);
+    drawStar(doc, 120, 28, 5, colors[4]);
+    drawStar(doc, pageWidth - 250, 52, 6, colors[1]);
+    drawBunting(doc, pageWidth, colors);
   }
-
-  if (design.layout === "stripes") {
-    doc.setFillColor(...c.accent);
-    doc.rect(0, 0, 18, pageHeight, "F");
-    doc.setFillColor(...c.accent2);
-    doc.rect(18, 0, 10, pageHeight, "F");
-    doc.setFillColor(...c.accent3);
-    doc.rect(28, 0, 6, pageHeight, "F");
+  if (design.decorations === "crayons" || design.decorations === "candy") {
+    drawPencil(doc, pageWidth - 70, 36, 1.1);
+    drawPencil(doc, pageWidth - 54, 40, 0.95);
+    drawStar(doc, 40, 40, 7, colors[0]);
   }
+  if (design.decorations === "garden" || design.decorations === "harvest") {
+    drawStar(doc, 42, 36, 7, colors[1]);
+    rgb(doc, colors[0], "fill");
+    doc.circle(pageWidth - 56, 46, 10, "F");
+    rgb(doc, colors[2], "fill");
+    doc.circle(pageWidth - 40, 58, 7, "F");
+  }
+  if (design.decorations === "aqua") {
+    rgb(doc, colors[0], "fill");
+    doc.ellipse(pageWidth - 60, 50, 16, 8, "F");
+    rgb(doc, colors[2], "fill");
+    doc.ellipse(pageWidth - 90, 62, 12, 6, "F");
+  }
+  if (design.decorations === "sticky") {
+    rgb(doc, colors[0], "fill");
+    doc.roundedRect(pageWidth - 78, 28, 36, 36, 3, 3, "F");
+    rgb(doc, colors[2], "fill");
+    doc.roundedRect(pageWidth - 52, 44, 32, 32, 3, 3, "F");
+  }
+}
 
-  if (design.layout === "sidebar") {
-    doc.setFillColor(...c.headerBg2);
-    doc.rect(0, 0, 120, pageHeight, "F");
-    doc.setFillColor(...c.accent);
-    doc.rect(120, 0, 10, pageHeight, "F");
+function drawMulticolorTitle(
+  doc: jsPDF,
+  text: string,
+  x: number,
+  y: number,
+  colors: RGB[],
+) {
+  const word = text.toUpperCase();
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(34);
+  let cursor = x;
+  for (let i = 0; i < word.length; i += 1) {
+    const ch = word[i];
+    rgb(doc, colors[i % colors.length], "text");
+    doc.text(ch, cursor, y);
+    cursor += doc.getTextWidth(ch) + 1.5;
   }
 }
 
@@ -76,139 +185,58 @@ function drawHeader(
   pageWidth: number,
   margin: number,
 ) {
-  const c = design.colors;
-  const contentWidth = pageWidth - margin * 2;
+  drawDecorations(doc, design, pageWidth);
 
-  if (design.layout === "sidebar") {
-    doc.setTextColor(...c.onHeader);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text(config.className, 24, 48, { maxWidth: 84 });
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.text(config.grade, 24, 70, { maxWidth: 84 });
-    doc.text(`Room ${config.room}`, 24, 86, { maxWidth: 84 });
-    doc.text(config.teacherName, 24, 110, { maxWidth: 84 });
+  // Script-style class label
+  rgb(doc, design.scriptColor, "text");
+  doc.setFont("times", "italic");
+  doc.setFontSize(28);
+  const script = newsletter.title?.trim() || config.className || "Classroom";
+  doc.text(script, margin, 58);
 
-    doc.setFillColor(...c.headerBg);
-    doc.roundedRect(150, 36, pageWidth - 174, 92, 14, 14, "F");
-    doc.setTextColor(...c.text);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.text(newsletter.title, 168, 72, { maxWidth: pageWidth - 210 });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(11);
-    doc.setTextColor(...c.muted);
-    doc.text(
-      [newsletter.subtitle, formatIssueDate(newsletter.issueDate)]
-        .filter(Boolean)
-        .join("  ·  "),
-      168,
-      98,
-      { maxWidth: pageWidth - 210 },
-    );
-    return 150;
-  }
-
-  if (design.layout === "wave" || design.layout === "ribbon") {
-    doc.setFillColor(...c.headerBg);
-    doc.rect(0, 0, pageWidth, 128, "F");
-    doc.setFillColor(...c.headerBg2);
-    doc.ellipse(pageWidth * 0.2, 128, pageWidth * 0.35, 28, "F");
-    doc.setFillColor(...c.accent);
-    doc.ellipse(pageWidth * 0.75, 128, pageWidth * 0.3, 22, "F");
-  } else if (design.layout === "magazine") {
-    doc.setFillColor(...c.headerBg);
-    doc.rect(0, 0, pageWidth * 0.62, 130, "F");
-    doc.setFillColor(...c.headerBg2);
-    doc.rect(pageWidth * 0.62, 0, pageWidth * 0.38, 130, "F");
-    doc.setFillColor(...c.accent);
-    doc.rect(0, 130, pageWidth, 10, "F");
-  } else if (design.layout === "cards") {
-    doc.setFillColor(...c.headerBg);
-    doc.rect(0, 0, pageWidth, 48, "F");
-    doc.setFillColor(...c.accent);
-    doc.rect(0, 48, pageWidth, 18, "F");
-    doc.setFillColor(...c.headerBg2);
-    doc.rect(0, 66, pageWidth, 48, "F");
-  } else if (design.layout === "stripes") {
-    doc.setFillColor(...c.headerBg);
-    doc.roundedRect(margin, 28, contentWidth, 100, 12, 12, "F");
-    doc.setFillColor(...c.accent);
-    doc.roundedRect(margin, 116, contentWidth, 10, 4, 4, "F");
-  } else if (design.layout === "grid") {
-    doc.setFillColor(...c.headerBg);
-    doc.roundedRect(margin, 28, contentWidth, 108, 16, 16, "F");
-    doc.setFillColor(...c.accent2);
-    doc.roundedRect(margin + 12, 40, 64, 84, 10, 10, "F");
-  } else if (design.layout === "playful") {
-    doc.setFillColor(...c.headerBg);
-    doc.roundedRect(margin, 28, contentWidth, 108, 24, 24, "F");
-    doc.setFillColor(...c.accent2);
-    doc.circle(pageWidth - margin - 28, 48, 18, "F");
-    doc.setFillColor(...c.accent);
-    doc.circle(pageWidth - margin - 58, 86, 12, "F");
-  } else if (design.layout === "blocks") {
-    doc.setFillColor(...c.headerBg);
-    doc.rect(0, 0, pageWidth, 118, "F");
-    const band = contentWidth / 4;
-    const colors = [c.accent, c.accent2, c.accent3, c.headerBg2];
-    colors.forEach((color, i) => {
-      doc.setFillColor(...color);
-      doc.rect(margin + i * band, 118, band, 12, "F");
-    });
-  } else {
-    // banner default
-    doc.setFillColor(...c.headerBg);
-    doc.rect(0, 0, pageWidth, 110, "F");
-    doc.setFillColor(...c.accent);
-    doc.rect(0, 110, pageWidth, 8, "F");
-  }
-
-  const textX =
-    design.layout === "grid" ? margin + 92 : margin + (design.layout === "stripes" ? 16 : 0);
-  const titleY =
-    design.layout === "cards" ? 98 : design.layout === "grid" ? 78 : 64;
-  const metaY = titleY + 26;
-
-  doc.setTextColor(...c.onHeader);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  const labelX = design.layout === "stripes" || design.layout === "grid" || design.layout === "playful"
-    ? textX
-    : margin;
-  doc.text(`${config.className} · ${config.grade}`, labelX, design.layout === "cards" ? 30 : 36, {
-    maxWidth: contentWidth - 40,
-  });
-
-  doc.setFontSize(22);
-  doc.text(newsletter.title, labelX, titleY, {
-    maxWidth: contentWidth - (design.layout === "grid" ? 100 : 24),
-  });
+  drawMulticolorTitle(doc, "Newsletter", margin, 96, design.letterColors);
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  const meta = [
-    newsletter.subtitle,
-    formatIssueDate(newsletter.issueDate),
-    `Teacher: ${config.teacherName}`,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
-  doc.text(meta, labelX, metaY, {
-    maxWidth: contentWidth - (design.layout === "grid" ? 100 : 24),
-  });
+  doc.setFontSize(10);
+  rgb(doc, design.muted, "text");
+  doc.text(
+    `${config.className} · ${config.grade} · Room ${config.room} · ${formatIssueDate(newsletter.issueDate)}`,
+    margin,
+    116,
+  );
 
-  if (design.layout === "wave" || design.layout === "ribbon") return 168;
-  if (design.layout === "magazine") return 160;
-  if (design.layout === "cards") return 140;
-  if (design.layout === "stripes" || design.layout === "grid" || design.layout === "playful")
-    return 158;
-  if (design.layout === "blocks") return 150;
-  return 148;
+  // Banner bar with pencils
+  const label =
+    (newsletter.bannerLabel || newsletter.subtitle || "CLASS NEWS").toUpperCase();
+  const barY = 130;
+  rgb(doc, design.bannerBar, "fill");
+  doc.roundedRect(margin, barY, pageWidth - margin * 2, 28, 6, 6, "F");
+  drawPencil(doc, margin + 10, barY + 4, 0.85);
+  drawPencil(doc, pageWidth - margin - 28, barY + 4, 0.85);
+  rgb(doc, design.bannerText, "text");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text(label, pageWidth / 2, barY + 18, { align: "center" });
+
+  return barY + 44;
 }
 
-function drawSection(
+function measureBlock(
+  doc: jsPDF,
+  section: NewsletterSection,
+  width: number,
+  pad: number,
+) {
+  const inner = width - pad * 2;
+  const bodyLines = doc.splitTextToSize(section.body || "", inner);
+  const headingLines = doc.splitTextToSize(
+    (section.heading || "Update").toUpperCase(),
+    inner,
+  );
+  return 18 + headingLines.length * 14 + bodyLines.length * 13 + pad * 2;
+}
+
+function drawBlock(
   doc: jsPDF,
   design: NewsletterDesign,
   section: NewsletterSection,
@@ -216,62 +244,59 @@ function drawSection(
   x: number,
   y: number,
   width: number,
-): number {
-  const c = design.colors;
-  const accent = blockColors(design, index);
-  const pad = design.layout === "blocks" || design.layout === "cards" || design.layout === "grid" ? 14 : 0;
-  const innerX = x + pad;
-  const innerW = width - pad * 2;
-  const bodyLines = doc.splitTextToSize(section.body || "", innerW);
-  const headingHeight = 22;
-  const bodyHeight = Math.max(bodyLines.length, 1) * 14;
-  const blockHeight =
-    headingHeight +
-    bodyHeight +
-    (pad ? 28 : 24) +
-    (design.layout === "magazine" ? 8 : 0);
+  showRainbow: boolean,
+) {
+  const tone = toneFor(design, section, index);
+  const pad = 12;
+  const variant = section.variant || (index === 0 ? "banner" : "card");
+  const height = measureBlock(doc, section, width, pad);
 
-  if (design.layout === "blocks" || design.layout === "cards" || design.layout === "grid") {
-    doc.setFillColor(...c.sectionBg);
-    doc.roundedRect(x, y, width, blockHeight, 12, 12, "F");
-    doc.setFillColor(...accent);
-    doc.roundedRect(x, y, 8, blockHeight, 4, 4, "F");
-  } else if (design.layout === "magazine") {
-    doc.setFillColor(...accent);
-    doc.rect(x, y, width, 4, "F");
-  } else if (design.layout === "playful") {
-    doc.setFillColor(...accent);
-    doc.circle(x + 8, y + 8, 7, "F");
-  } else {
-    doc.setFillColor(...accent);
-    doc.circle(x + 4, y + 4, 4, "F");
+  if (variant === "banner") {
+    rgb(doc, tone.bar, "fill");
+    doc.roundedRect(x, y, width, 24, 5, 5, "F");
+    drawPencil(doc, x + 8, y + 3, 0.75);
+    drawPencil(doc, x + width - 24, y + 3, 0.75);
+    rgb(doc, [255, 255, 255], "text");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text((section.heading || "CLASS NEWS").toUpperCase(), x + width / 2, y + 16, {
+      align: "center",
+    });
+    rgb(doc, tone.fill, "fill");
+    doc.roundedRect(x, y + 28, width, height - 20, 10, 10, "F");
+    rgb(doc, tone.body, "text");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    const lines = doc.splitTextToSize(section.body || "", width - pad * 2);
+    doc.text(lines, x + pad, y + 48);
+    return height + 14;
   }
 
-  const textStart =
-    design.layout === "blocks" || design.layout === "cards" || design.layout === "grid"
-      ? innerX + 8
-      : design.layout === "playful"
-        ? x + 22
-        : x + 16;
+  rgb(doc, tone.fill, "fill");
+  doc.roundedRect(x, y, width, height, 14, 14, "F");
 
+  rgb(doc, tone.heading, "text");
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.setTextColor(...c.text);
-  doc.text(section.heading || "Update", textStart, y + (pad ? 22 : 8), {
-    maxWidth: innerW - 8,
-  });
+  doc.setFontSize(13);
+  const heading = (section.heading || "UPDATE").toUpperCase();
+  doc.text(heading, x + pad, y + pad + 12, { maxWidth: width - pad * 2 });
 
+  rgb(doc, tone.body, "text");
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  doc.setTextColor(...c.muted);
-  doc.text(bodyLines, textStart, y + (pad ? 42 : headingHeight), {
-    maxWidth: innerW - 8,
-  });
+  doc.setFontSize(10);
+  const bodyLines = doc.splitTextToSize(section.body || "", width - pad * 2);
+  const headingHeight =
+    doc.splitTextToSize(heading, width - pad * 2).length * 14;
+  doc.text(bodyLines, x + pad, y + pad + 18 + headingHeight);
 
-  return blockHeight + (design.layout === "grid" ? 14 : 12);
+  if (showRainbow && (variant === "learning" || index === 2)) {
+    drawRainbow(doc, x + width - 48, y + height - 18);
+  }
+
+  return height + 12;
 }
 
-async function stampQrAndFooter(
+async function stampFooterAndQr(
   doc: jsPDF,
   design: NewsletterDesign,
   newsletter: Newsletter,
@@ -280,49 +305,42 @@ async function stampQrAndFooter(
   pageWidth: number,
   pageHeight: number,
   margin: number,
-  contentLeft: number,
 ) {
-  const qrSize = 72;
+  const qrSize = 64;
   const slideLink = slideshowUrl(newsletter.slideshowToken || "preview", request);
   const qrDataUrl = await QRCode.toDataURL(slideLink, {
     errorCorrectionLevel: "M",
     margin: 1,
-    width: 240,
-    color: {
-      dark: design.colors.qrDark,
-      light: design.colors.qrLight,
-    },
+    width: 220,
+    color: { dark: design.qrDark, light: design.qrLight },
   });
 
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i += 1) {
     doc.setPage(i);
-    const qrX = pageWidth - margin - qrSize;
-    const qrY = pageHeight - margin - qrSize - 12;
-
-    doc.setFillColor(255, 255, 255);
-    doc.roundedRect(qrX - 6, qrY - 6, qrSize + 12, qrSize + 28, 8, 8, "F");
-    doc.setDrawColor(...design.colors.accent);
-    doc.setLineWidth(1.5);
-    doc.roundedRect(qrX - 6, qrY - 6, qrSize + 12, qrSize + 28, 8, 8, "S");
-    doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.setTextColor(...design.colors.muted);
-    doc.text("Digital slideshow", qrX + qrSize / 2, qrY + qrSize + 12, {
-      align: "center",
-    });
-
+    const footerY = pageHeight - 52;
+    rgb(doc, design.footerBar, "fill");
+    doc.roundedRect(margin, footerY, pageWidth - margin * 2 - qrSize - 18, 30, 8, 8, "F");
+    rgb(doc, design.footerText, "text");
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    doc.setTextColor(...design.colors.muted);
-    doc.text(
-      `${config.schoolName} · Room ${config.room} · ${getDesign(newsletter.designId).name}`,
-      contentLeft,
-      pageHeight - 28,
-      { maxWidth: pageWidth - contentLeft - margin - qrSize - 24 },
-    );
+    const footer =
+      newsletter.footerNote ||
+      `Contact: ${config.teacherName} · ${config.schoolName} · Room ${config.room}`;
+    doc.text(footer, margin + 12, footerY + 18, {
+      maxWidth: pageWidth - margin * 2 - qrSize - 40,
+    });
+
+    const qrX = pageWidth - margin - qrSize;
+    const qrY = pageHeight - margin - qrSize - 4;
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(qrX - 4, qrY - 4, qrSize + 8, qrSize + 18, 6, 6, "F");
+    doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
+    doc.setFontSize(7);
+    rgb(doc, design.muted, "text");
+    doc.text("Slideshow", qrX + qrSize / 2, qrY + qrSize + 9, {
+      align: "center",
+    });
   }
 }
 
@@ -335,71 +353,58 @@ export async function buildNewsletterPdf(
   const doc = new jsPDF({ unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = design.layout === "stripes" ? 56 : 48;
-  const contentLeft = design.layout === "sidebar" ? 150 : margin;
-  const contentWidth = pageWidth - contentLeft - margin;
-  const bottomSafe = 110;
+  const margin = 40;
+  const gap = 14;
+  const contentWidth = pageWidth - margin * 2;
+  const half = (contentWidth - gap) / 2;
+  const bottomSafe = 100;
 
-  drawPageBackground(doc, design, pageWidth, pageHeight);
+  rgb(doc, design.pageBg, "fill");
+  doc.rect(0, 0, pageWidth, pageHeight, "F");
+
   let y = drawHeader(doc, design, newsletter, config, pageWidth, margin);
 
-  const sections = newsletter.sections.filter(
+  const sections = (newsletter.sections || []).filter(
     (s) => s.heading.trim() || s.body.trim(),
   );
 
-  if (design.layout === "grid") {
-    // 2-column organized cards
-    let col = 0;
-    let rowY = y;
-    let rowMax = 0;
-    const gap = 14;
-    const colW = (contentWidth - gap) / 2;
-    for (let i = 0; i < sections.length; i += 1) {
-      const section = sections[i];
-      const probe = doc.splitTextToSize(section.body || "", colW - 36);
-      const est = 22 + Math.max(probe.length, 1) * 14 + 42;
-      if (rowY + est > pageHeight - bottomSafe) {
-        doc.addPage();
-        drawPageBackground(doc, design, pageWidth, pageHeight);
-        rowY = 56;
-        col = 0;
-        rowMax = 0;
-      }
-      const x = contentLeft + col * (colW + gap);
-      const h = drawSection(doc, design, section, i, x, rowY, colW);
-      rowMax = Math.max(rowMax, h);
-      col += 1;
-      if (col > 1) {
-        rowY += rowMax;
-        col = 0;
-        rowMax = 0;
-      }
-    }
-    if (col === 1) y = rowY + rowMax;
-    else y = rowY;
-  } else {
-    for (let i = 0; i < sections.length; i += 1) {
-      const section = sections[i];
-      const probeWidth =
-        design.layout === "blocks" || design.layout === "cards"
-          ? contentWidth - 28
-          : contentWidth - 16;
-      const probe = doc.splitTextToSize(section.body || "", probeWidth);
-      const est =
-        22 +
-        Math.max(probe.length, 1) * 14 +
-        (design.layout === "blocks" || design.layout === "cards" ? 42 : 28);
+  let i = 0;
+  while (i < sections.length) {
+    const section = sections[i];
+    const widthMode = section.width || (section.variant === "banner" ? "full" : i === 0 ? "full" : "half");
 
-      if (y + est > pageHeight - bottomSafe) {
+    if (widthMode === "full" || !sections[i + 1] || sections[i + 1].width === "full" || sections[i + 1].variant === "banner") {
+      const h = measureBlock(doc, section, contentWidth, 12) + (section.variant === "banner" ? 14 : 12);
+      if (y + h > pageHeight - bottomSafe) {
         doc.addPage();
-        drawPageBackground(doc, design, pageWidth, pageHeight);
-        y = 56;
+        rgb(doc, design.pageBg, "fill");
+        doc.rect(0, 0, pageWidth, pageHeight, "F");
+        y = 48;
       }
-      y += drawSection(doc, design, section, i, contentLeft, y, contentWidth);
+      y += drawBlock(doc, design, section, i, margin, y, contentWidth, true);
+      i += 1;
+      continue;
     }
+
+    // pair two half-width cards side by side
+    const left = section;
+    const right = sections[i + 1];
+    const leftH = measureBlock(doc, left, half, 12) + 12;
+    const rightH = measureBlock(doc, right, half, 12) + 12;
+    const rowH = Math.max(leftH, rightH);
+    if (y + rowH > pageHeight - bottomSafe) {
+      doc.addPage();
+      rgb(doc, design.pageBg, "fill");
+      doc.rect(0, 0, pageWidth, pageHeight, "F");
+      y = 48;
+    }
+    drawBlock(doc, design, left, i, margin, y, half, false);
+    drawBlock(doc, design, right, i + 1, margin + half + gap, y, half, true);
+    y += rowH;
+    i += 2;
   }
 
-  await stampQrAndFooter(
+  await stampFooterAndQr(
     doc,
     design,
     newsletter,
@@ -408,9 +413,7 @@ export async function buildNewsletterPdf(
     pageWidth,
     pageHeight,
     margin,
-    contentLeft,
   );
 
-  const arrayBuffer = doc.output("arraybuffer");
-  return new Uint8Array(arrayBuffer);
+  return new Uint8Array(doc.output("arraybuffer"));
 }

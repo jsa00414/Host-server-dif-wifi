@@ -19,12 +19,12 @@ export default async function NewNewsletterPage() {
           ← Newsletters
         </Link>
         <h1 className="mt-2 font-[family-name:var(--font-display)] text-3xl font-semibold">
-          PDF newsletter editor
+          Classroom PDF editor
         </h1>
         <p className="mt-2 max-w-3xl text-sm text-[var(--ink-soft)]">
-          Choose a colorful premade design, organize your sections, and preview
-          the PDF before saving. The bottom-right QR still opens the hidden
-          slideshow.
+          Build a colorful modular newsletter like the classroom sample —
+          pastel blocks, banners, events, and learning cards with a live PDF
+          preview. The bottom-right QR still opens the hidden slideshow.
         </p>
       </header>
       <main className="mx-auto max-w-7xl px-5 pb-16">

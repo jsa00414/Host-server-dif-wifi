@@ -5,16 +5,32 @@ import { useRouter } from "next/navigation";
 import {
   DEFAULT_DESIGN_ID,
   NEWSLETTER_DESIGNS,
+  SECTION_TONES,
+  SECTION_VARIANTS,
   getDesign,
+  sectionsFromStarter,
 } from "@/lib/designs";
 import { buildNewsletterPdf } from "@/lib/pdf";
-import type { Newsletter, NewsletterSection, SiteConfig } from "@/lib/types";
+import type {
+  Newsletter,
+  NewsletterSection,
+  SectionTone,
+  SectionVariant,
+  SectionWidth,
+  SiteConfig,
+} from "@/lib/types";
 
-function blankSection(): NewsletterSection {
+function blankSection(
+  partial?: Partial<NewsletterSection>,
+): NewsletterSection {
   return {
     id: crypto.randomUUID(),
     heading: "",
     body: "",
+    variant: "card",
+    tone: "blue",
+    width: "half",
+    ...partial,
   };
 }
 
@@ -22,6 +38,17 @@ type ClassInfo = Pick<
   SiteConfig,
   "className" | "teacherName" | "schoolName" | "grade" | "room"
 >;
+
+const TONE_HEX: Record<SectionTone, string> = {
+  green: "#D2EFC6",
+  blue: "#C9E6F5",
+  pink: "#FAD6E0",
+  orange: "#FFE0BC",
+  yellow: "#FFF4B4",
+  lavender: "#E6DCFA",
+  coral: "#FFD6CD",
+  mint: "#CDF2E6",
+};
 
 export function NewsletterEditor({
   initial,
@@ -31,8 +58,18 @@ export function NewsletterEditor({
   classInfo: ClassInfo;
 }) {
   const router = useRouter();
-  const [title, setTitle] = useState(initial?.title || "");
+  const [title, setTitle] = useState(
+    initial?.title || classInfo.className || "Classroom",
+  );
   const [subtitle, setSubtitle] = useState(initial?.subtitle || "");
+  const [bannerLabel, setBannerLabel] = useState(
+    initial?.bannerLabel ||
+      `${new Date().toLocaleString("en-US", { month: "long" }).toUpperCase()} CLASS NEWS`,
+  );
+  const [footerNote, setFooterNote] = useState(
+    initial?.footerNote ||
+      `Questions? Email ${classInfo.teacherName.replace(/\s+/g, ".").toLowerCase()}@school.org · Room ${classInfo.room}`,
+  );
   const [issueDate, setIssueDate] = useState(
     initial?.issueDate || new Date().toISOString().slice(0, 10),
   );
@@ -41,7 +78,14 @@ export function NewsletterEditor({
     initial?.designId || DEFAULT_DESIGN_ID,
   );
   const [sections, setSections] = useState<NewsletterSection[]>(
-    initial?.sections?.length ? initial.sections : [blankSection()],
+    initial?.sections?.length
+      ? initial.sections.map((s, i) => ({
+          variant: s.variant || (i === 0 ? "banner" : "card"),
+          tone: s.tone || SECTION_TONES[i % SECTION_TONES.length],
+          width: s.width || (i === 0 || i === 3 ? "full" : "half"),
+          ...s,
+        }))
+      : sectionsFromStarter(DEFAULT_DESIGN_ID),
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -54,8 +98,10 @@ export function NewsletterEditor({
   const draft = useMemo(
     () => ({
       id: initial?.id || "preview",
-      title: title || "Untitled newsletter",
+      title: title || "Classroom",
       subtitle,
+      bannerLabel,
+      footerNote,
       issueDate,
       sections,
       designId,
@@ -70,6 +116,8 @@ export function NewsletterEditor({
       initial?.createdAt,
       title,
       subtitle,
+      bannerLabel,
+      footerNote,
       issueDate,
       sections,
       designId,
@@ -111,7 +159,7 @@ export function NewsletterEditor({
       } finally {
         if (!cancelled) setPreviewBusy(false);
       }
-    }, 350);
+    }, 280);
 
     return () => {
       cancelled = true;
@@ -138,6 +186,20 @@ export function NewsletterEditor({
     });
   }
 
+  function applyDesign(nextId: string, loadStarter: boolean) {
+    setDesignId(nextId);
+    if (loadStarter) {
+      setSections(sectionsFromStarter(nextId));
+      const design = getDesign(nextId);
+      if (!initial?.bannerLabel) {
+        setBannerLabel(
+          `${new Date().toLocaleString("en-US", { month: "long" }).toUpperCase()} CLASS NEWS`,
+        );
+      }
+      if (!title) setTitle(classInfo.className || design.name);
+    }
+  }
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -146,6 +208,8 @@ export function NewsletterEditor({
       id: initial?.id,
       title,
       subtitle,
+      bannerLabel,
+      footerNote,
       issueDate,
       published,
       designId,
@@ -177,15 +241,15 @@ export function NewsletterEditor({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="font-[family-name:var(--font-display)] text-2xl font-semibold">
-              Premade PDF designs
+              Classroom PDF designs
             </h2>
             <p className="mt-1 text-sm text-[var(--ink-soft)]">
-              Pick one of 10 colorful layouts. The live preview updates as you
-              edit.
+              Pick a colorful modular template — pastel blocks, banners, and
+              decorations like the sample newsletter.
             </p>
           </div>
           <p className="rounded-full bg-white/80 px-4 py-2 text-sm font-bold text-[var(--sky-deep)] shadow-sm">
-            Selected: {selectedDesign.name}
+            {selectedDesign.name}
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -195,33 +259,36 @@ export function NewsletterEditor({
               <button
                 key={design.id}
                 type="button"
-                onClick={() => setDesignId(design.id)}
-                className={`group overflow-hidden rounded-2xl border text-left transition ${
+                onClick={() => applyDesign(design.id, !initial)}
+                className={`overflow-hidden rounded-2xl border text-left transition ${
                   active
-                    ? "border-[var(--sky-deep)] shadow-[0_12px_28px_rgba(47,126,160,0.28)] ring-2 ring-[var(--sky-deep)]"
-                    : "border-white/70 bg-white/70 hover:-translate-y-0.5 hover:shadow-lg"
+                    ? "border-[var(--sky-deep)] ring-2 ring-[var(--sky-deep)] shadow-lg"
+                    : "border-white/80 bg-white/80 hover:-translate-y-0.5 hover:shadow-md"
                 }`}
               >
-                <div
-                  className="h-16 w-full"
-                  style={{
-                    background: `linear-gradient(135deg, ${design.swatches[0]}, ${design.swatches[1]} 45%, ${design.swatches[2]})`,
-                  }}
-                />
-                <div className="space-y-2 p-3">
-                  <div className="flex gap-1">
-                    {design.swatches.map((color) => (
-                      <span
-                        key={color}
-                        className="h-3 w-3 rounded-full border border-black/5"
-                        style={{ background: color }}
-                      />
-                    ))}
+                <div className="relative h-20 p-2" style={{ background: "#fff" }}>
+                  <div
+                    className="absolute inset-x-2 top-2 h-3 rounded-full"
+                    style={{ background: design.swatches[0] }}
+                  />
+                  <div className="mt-5 grid grid-cols-2 gap-1">
+                    <div
+                      className="h-8 rounded-md"
+                      style={{ background: design.swatches[1] }}
+                    />
+                    <div
+                      className="h-8 rounded-md"
+                      style={{ background: design.swatches[2] }}
+                    />
+                    <div
+                      className="col-span-2 h-5 rounded-md"
+                      style={{ background: design.swatches[3] }}
+                    />
                   </div>
-                  <p className="text-sm font-extrabold text-[var(--ink)]">
-                    {design.name}
-                  </p>
-                  <p className="text-xs leading-snug text-[var(--ink-soft)]">
+                </div>
+                <div className="space-y-1 p-3">
+                  <p className="text-sm font-extrabold">{design.name}</p>
+                  <p className="text-[11px] leading-snug text-[var(--ink-soft)]">
                     {design.tagline}
                   </p>
                 </div>
@@ -229,32 +296,34 @@ export function NewsletterEditor({
             );
           })}
         </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => applyDesign(designId, true)}
+          >
+            Load starter blocks for this design
+          </button>
+        </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
-        <section className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(340px,0.95fr)]">
+        <section className="space-y-5">
           <div className="paper-card space-y-4 rounded-3xl p-6">
             <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
-              Newsletter details
+              Header & footer
             </h2>
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-bold">Title</label>
+              <div>
+                <label className="mb-2 block text-sm font-bold">
+                  Script title (top)
+                </label>
                 <input
                   className="input-field"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="March Family Newsletter"
+                  placeholder="Classroom"
                   required
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-bold">Subtitle</label>
-                <input
-                  className="input-field"
-                  value={subtitle}
-                  onChange={(e) => setSubtitle(e.target.value)}
-                  placeholder="Reading week & spring science"
                 />
               </div>
               <div>
@@ -265,6 +334,39 @@ export function NewsletterEditor({
                   value={issueDate}
                   onChange={(e) => setIssueDate(e.target.value)}
                   required
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-bold">
+                  Green banner label
+                </label>
+                <input
+                  className="input-field"
+                  value={bannerLabel}
+                  onChange={(e) => setBannerLabel(e.target.value)}
+                  placeholder="AUGUST CLASS NEWS"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-bold">
+                  Short subtitle (optional)
+                </label>
+                <input
+                  className="input-field"
+                  value={subtitle}
+                  onChange={(e) => setSubtitle(e.target.value)}
+                  placeholder="Welcome back families"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-bold">
+                  Footer contact line
+                </label>
+                <input
+                  className="input-field"
+                  value={footerNote}
+                  onChange={(e) => setFooterNote(e.target.value)}
+                  placeholder="Questions? teacher@school.org"
                 />
               </div>
             </div>
@@ -280,34 +382,64 @@ export function NewsletterEditor({
           </div>
 
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
-                Sections
+                Content blocks
               </h2>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setSections((s) => [...s, blankSection()])}
-              >
-                Add section
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() =>
+                    setSections((s) => [
+                      ...s,
+                      blankSection({
+                        variant: "card",
+                        tone: "blue",
+                        width: "half",
+                        heading: "New block",
+                      }),
+                    ])
+                  }
+                >
+                  Add card
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() =>
+                    setSections((s) => [
+                      ...s,
+                      blankSection({
+                        variant: "banner",
+                        tone: "green",
+                        width: "full",
+                        heading: "Class news",
+                      }),
+                    ])
+                  }
+                >
+                  Add banner
+                </button>
+              </div>
             </div>
+
             {sections.map((section, index) => (
               <div
                 key={section.id}
-                className="paper-card space-y-3 rounded-2xl p-5"
+                className="space-y-3 rounded-3xl border border-black/5 p-5 shadow-sm"
                 style={{
-                  borderLeft: `6px solid ${selectedDesign.swatches[index % 4]}`,
+                  background: TONE_HEX[section.tone || "blue"],
                 }}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm font-bold text-[var(--ink-soft)]">
-                    Section {index + 1}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-extrabold uppercase tracking-wide text-black/60">
+                    Block {index + 1}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      className="rounded-lg px-2 py-1 text-xs font-bold text-[var(--sky-deep)] hover:bg-sky-50"
+                      className="rounded-lg bg-white/70 px-2 py-1 text-xs font-bold"
                       onClick={() => moveSection(section.id, -1)}
                       disabled={index === 0}
                     >
@@ -315,7 +447,7 @@ export function NewsletterEditor({
                     </button>
                     <button
                       type="button"
-                      className="rounded-lg px-2 py-1 text-xs font-bold text-[var(--sky-deep)] hover:bg-sky-50"
+                      className="rounded-lg bg-white/70 px-2 py-1 text-xs font-bold"
                       onClick={() => moveSection(section.id, 1)}
                       disabled={index === sections.length - 1}
                     >
@@ -324,7 +456,7 @@ export function NewsletterEditor({
                     {sections.length > 1 ? (
                       <button
                         type="button"
-                        className="text-sm font-bold text-[var(--coral)]"
+                        className="rounded-lg bg-white/70 px-2 py-1 text-xs font-bold text-[var(--coral)]"
                         onClick={() =>
                           setSections((prev) =>
                             prev.filter((s) => s.id !== section.id),
@@ -336,8 +468,67 @@ export function NewsletterEditor({
                     ) : null}
                   </div>
                 </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="text-xs font-bold">
+                    Style
+                    <select
+                      className="input-field mt-1"
+                      value={section.variant || "card"}
+                      onChange={(e) =>
+                        updateSection(section.id, {
+                          variant: e.target.value as SectionVariant,
+                          width:
+                            e.target.value === "banner"
+                              ? "full"
+                              : section.width || "half",
+                        })
+                      }
+                    >
+                      {SECTION_VARIANTS.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-bold">
+                    Color
+                    <select
+                      className="input-field mt-1"
+                      value={section.tone || "blue"}
+                      onChange={(e) =>
+                        updateSection(section.id, {
+                          tone: e.target.value as SectionTone,
+                        })
+                      }
+                    >
+                      {SECTION_TONES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-bold">
+                    Width
+                    <select
+                      className="input-field mt-1"
+                      value={section.width || "half"}
+                      onChange={(e) =>
+                        updateSection(section.id, {
+                          width: e.target.value as SectionWidth,
+                        })
+                      }
+                    >
+                      <option value="full">Full width</option>
+                      <option value="half">Half (side-by-side)</option>
+                    </select>
+                  </label>
+                </div>
+
                 <input
-                  className="input-field"
+                  className="input-field bg-white/90"
                   placeholder="Heading"
                   value={section.heading}
                   onChange={(e) =>
@@ -346,8 +537,8 @@ export function NewsletterEditor({
                   required
                 />
                 <textarea
-                  className="input-field min-h-28"
-                  placeholder="What should families know?"
+                  className="input-field min-h-28 bg-white/90"
+                  placeholder="Write the block text. Use new lines for event lists."
                   value={section.body}
                   onChange={(e) =>
                     updateSection(section.id, { body: e.target.value })
@@ -384,7 +575,7 @@ export function NewsletterEditor({
           </div>
         </section>
 
-        <aside className="xl:sticky xl:top-6 xl:self-start">
+        <aside className="xl:sticky xl:top-4 xl:self-start">
           <div className="paper-card overflow-hidden rounded-3xl">
             <div className="flex items-center justify-between gap-3 border-b border-sky-100 px-5 py-4">
               <div>
@@ -392,7 +583,7 @@ export function NewsletterEditor({
                   Live PDF preview
                 </h2>
                 <p className="text-xs text-[var(--ink-soft)]">
-                  {selectedDesign.name} · QR stays bottom-right
+                  {selectedDesign.name} · QR bottom-right for slideshow
                 </p>
               </div>
               <span
@@ -405,7 +596,7 @@ export function NewsletterEditor({
                 {previewBusy ? "Updating…" : "Ready"}
               </span>
             </div>
-            <div className="bg-[#d9e7ef] p-3 sm:p-4">
+            <div className="bg-[#e7eef3] p-3 sm:p-4">
               {previewError ? (
                 <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                   {previewError}
@@ -414,10 +605,10 @@ export function NewsletterEditor({
                 <iframe
                   title="Newsletter PDF preview"
                   src={previewUrl}
-                  className="h-[72vh] w-full rounded-xl bg-white shadow-inner"
+                  className="h-[78vh] w-full rounded-xl bg-white shadow-inner"
                 />
               ) : (
-                <div className="flex h-[72vh] items-center justify-center rounded-xl bg-white/70 text-sm font-bold text-[var(--ink-soft)]">
+                <div className="flex h-[78vh] items-center justify-center rounded-xl bg-white/70 text-sm font-bold text-[var(--ink-soft)]">
                   Building preview…
                 </div>
               )}
