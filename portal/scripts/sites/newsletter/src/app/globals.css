@@ -105,3 +105,92 @@ body {
 .btn-accent {
   @apply inline-flex items-center justify-center rounded-xl bg-[var(--coral)] px-5 py-3 font-semibold text-white transition hover:brightness-105 focus:outline-none focus:ring-4 focus:ring-[rgba(224,122,95,0.3)];
 }
+
+/* Canva-style editor shell */
+.canva-shell {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #0f1720;
+  color: #e8eef4;
+}
+
+.canva-topbar {
+  height: 56px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #151c26;
+}
+
+.canva-rail {
+  width: 72px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: #121821;
+}
+
+.canva-panel {
+  width: 300px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: #171e29;
+}
+
+.canva-props {
+  width: 300px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: #171e29;
+}
+
+.canva-stage {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(75, 163, 195, 0.12), transparent 28%),
+    linear-gradient(180deg, #1a222e 0%, #141b25 100%);
+}
+
+.canva-page {
+  width: 612px;
+  min-height: 792px;
+  background: #fff;
+  color: #222;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.canva-selectable {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.canva-selectable[data-selected="true"] {
+  outline-color: #8b5cf6;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2);
+}
+
+.canva-editable {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.canva-editable:focus {
+  background: rgba(139, 92, 246, 0.06);
+  border-radius: 6px;
+}
+
+.canva-chip {
+  @apply rounded-lg px-3 py-2 text-left text-xs font-semibold transition;
+}
+
+.canva-chip-active {
+  background: rgba(139, 92, 246, 0.28);
+  color: #fff;
+}
+
+.canva-chip-idle {
+  background: rgba(255, 255, 255, 0.04);
+  color: #c5d0dc;
+}
+
+.canva-chip-idle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
