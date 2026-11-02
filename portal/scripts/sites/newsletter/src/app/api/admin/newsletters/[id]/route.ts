@@ -8,6 +8,7 @@ import {
   savePdf,
 } from "@/lib/storage";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { normalizePageBackground } from "@/lib/backgrounds";
 import { normalizeLayers } from "@/lib/layers";
 import { materializeNewsletterImages } from "@/lib/materializeImages";
 import { buildNewsletterPdf } from "@/lib/pdf";
@@ -60,6 +61,10 @@ export async function PUT(request: Request, { params }: Params) {
     layers: Array.isArray(body.layers)
       ? normalizeLayers(body.layers)
       : existing.layers || [],
+    pageBackground:
+      body.pageBackground !== undefined
+        ? normalizePageBackground(body.pageBackground)
+        : existing.pageBackground,
     designId,
     slideshowToken:
       existing.slideshowToken || randomBytes(18).toString("base64url"),

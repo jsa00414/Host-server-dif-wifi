@@ -40,13 +40,19 @@ export type NewsletterSection = {
   imageSrc?: string;
 };
 
-/** Free-positioned canvas layer (photos/stickers), Canva-style. */
-export type NewsletterLayer = {
+export type ShapeKind =
+  | "rect"
+  | "rounded"
+  | "circle"
+  | "ellipse"
+  | "triangle"
+  | "star"
+  | "heart"
+  | "line";
+
+type LayerBase = {
   id: string;
-  type: "image";
   name: string;
-  /** /api/media/<id> or data URL */
-  src: string;
   /** Position/size as percent of letter page (0–100) */
   x: number;
   y: number;
@@ -56,6 +62,33 @@ export type NewsletterLayer = {
   opacity: number;
   /** Higher draws on top */
   zIndex: number;
+};
+
+export type ImageLayer = LayerBase & {
+  type: "image";
+  /** /api/media/<id> or data URL */
+  src: string;
+};
+
+export type ShapeLayer = LayerBase & {
+  type: "shape";
+  shape: ShapeKind;
+  /** Fill color hex */
+  fill: string;
+  /** Stroke color hex */
+  stroke: string;
+  strokeWidth: number;
+};
+
+/** Free-positioned canvas layer (photos or shapes), Canva-style. */
+export type NewsletterLayer = ImageLayer | ShapeLayer;
+
+/** Optional page background override (falls back to design defaults). */
+export type PageBackground = {
+  /** Solid page color hex, e.g. #FFF8F0 */
+  color?: string;
+  /** Pattern id from PAGE_BACKGROUNDS */
+  pattern?: string;
 };
 
 export type Newsletter = {
@@ -68,8 +101,10 @@ export type Newsletter = {
   /** Footer contact line under the green bar */
   footerNote?: string;
   sections: NewsletterSection[];
-  /** Photo / decoration layers with stacking order */
+  /** Photo / shape layers with stacking order */
   layers?: NewsletterLayer[];
+  /** Optional background override on top of the template */
+  pageBackground?: PageBackground;
   /** Premade colorful PDF design id from NEWSLETTER_DESIGNS. */
   designId: string;
   /** Secret token for the hidden digital slideshow (QR on PDF). */

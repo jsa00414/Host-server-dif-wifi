@@ -14,10 +14,13 @@ export async function materializeNewsletterImages(
   newsletter: Newsletter,
 ): Promise<Newsletter> {
   const layers: NewsletterLayer[] = await Promise.all(
-    (newsletter.layers || []).map(async (layer) => ({
-      ...layer,
-      src: await toDataUrl(layer.src),
-    })),
+    (newsletter.layers || []).map(async (layer) => {
+      if (layer.type !== "image") return layer;
+      return {
+        ...layer,
+        src: await toDataUrl(layer.src),
+      };
+    }),
   );
   const sections: NewsletterSection[] = await Promise.all(
     (newsletter.sections || []).map(async (section) => {

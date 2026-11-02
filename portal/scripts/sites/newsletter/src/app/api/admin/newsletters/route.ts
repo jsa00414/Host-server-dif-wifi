@@ -8,6 +8,7 @@ import {
 } from "@/lib/storage";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { normalizePageBackground } from "@/lib/backgrounds";
 import { normalizeLayers } from "@/lib/layers";
 import { materializeNewsletterImages } from "@/lib/materializeImages";
 import { normalizeSections } from "@/lib/sections";
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
     issueDate: String(body.issueDate || now.slice(0, 10)),
     sections: normalizeSections(body.sections),
     layers: normalizeLayers(body.layers),
+    pageBackground: normalizePageBackground(body.pageBackground),
     designId,
     slideshowToken: slideshowToken(),
     published: body.published === undefined ? true : Boolean(body.published),

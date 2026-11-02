@@ -1,5 +1,10 @@
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
+import {
+  hexToRgb,
+  resolveBackground,
+  type ExtendedPattern,
+} from "./backgrounds";
 import { getDesign, type NewsletterDesign, type TonePalette } from "./designs";
 import { resolvePdfImage } from "./imageData";
 import { sortLayers } from "./layers";
@@ -8,6 +13,7 @@ import type {
   NewsletterLayer,
   NewsletterSection,
   SectionTone,
+  ShapeLayer,
   SiteConfig,
 } from "./types";
 import { slideshowUrl } from "./url";
@@ -169,18 +175,31 @@ function drawPaperclip(doc: jsPDF, x: number, y: number) {
   doc.roundedRect(x + 3, y + 4, 4, 14, 2, 2, "S");
 }
 
-function drawPagePattern(
+function paintPageBackground(
   doc: jsPDF,
   design: NewsletterDesign,
+  newsletter: Newsletter,
   pageWidth: number,
   pageHeight: number,
 ) {
-  if (design.pagePattern === "none") return;
-  if (design.pagePattern === "dots" || design.pagePattern === "spots") {
-    const step = design.pagePattern === "spots" ? 28 : 22;
-    const r = design.pagePattern === "spots" ? 2.2 : 1.1;
-    const color: RGB =
-      design.pagePattern === "spots" ? [25, 25, 25] : [210, 210, 215];
+  const bg = resolveBackground(design, newsletter.pageBackground);
+  rgb(doc, hexToRgb(bg.color), "fill");
+  doc.rect(0, 0, pageWidth, pageHeight, "F");
+  drawPagePattern(doc, design, bg.pattern, pageWidth, pageHeight);
+}
+
+function drawPagePattern(
+  doc: jsPDF,
+  design: NewsletterDesign,
+  pattern: ExtendedPattern,
+  pageWidth: number,
+  pageHeight: number,
+) {
+  if (pattern === "none" || pattern === "solid") return;
+  if (pattern === "dots" || pattern === "spots") {
+    const step = pattern === "spots" ? 28 : 22;
+    const r = pattern === "spots" ? 2.2 : 1.1;
+    const color: RGB = pattern === "spots" ? [25, 25, 25] : [210, 210, 215];
     rgb(doc, color, "fill");
     for (let y = 18; y < pageHeight - 20; y += step) {
       for (let x = 18; x < pageWidth - 12; x += step) {
@@ -189,7 +208,7 @@ function drawPagePattern(
       }
     }
   }
-  if (design.pagePattern === "gingham") {
+  if (pattern === "gingham") {
     const step = 18;
     doc.setFillColor(247, 220, 232);
     for (let x = 0; x < pageWidth; x += step * 2) {
@@ -199,11 +218,8 @@ function drawPagePattern(
     for (let y = 0; y < pageHeight; y += step * 2) {
       doc.rect(0, y, pageWidth, step, "F");
     }
-    // soften with white overlay wash
-    doc.setFillColor(255, 255, 255);
-    // jsPDF doesn't support opacity easily; redraw content area wash lightly via small skip
   }
-  if (design.pagePattern === "confetti") {
+  if (pattern === "confetti") {
     const colors = design.letterColors;
     for (let i = 0; i < 48; i += 1) {
       const x = 24 + ((i * 73) % (pageWidth - 48));
@@ -213,6 +229,113 @@ function drawPagePattern(
       else if (i % 3 === 1) doc.rect(x, y, 4, 2.2, "F");
       else doc.triangle(x, y, x + 4, y, x + 2, y + 4, "F");
     }
+  }
+  if (pattern === "stripes") {
+    doc.setFillColor(100, 160, 230);
+    for (let y = 0; y < pageHeight; y += 20) {
+      doc.rect(0, y, pageWidth, 8, "F");
+    }
+  }
+  if (pattern === "grid") {
+    doc.setDrawColor(160, 195, 230);
+    doc.setLineWidth(0.6);
+    for (let x = 24; x < pageWidth; x += 24) doc.line(x, 0, x, pageHeight);
+    for (let y = 24; y < pageHeight; y += 24) doc.line(0, y, pageWidth, y);
+  }
+  if (pattern === "stars") {
+    const colors = design.letterColors;
+    for (let i = 0; i < 30; i += 1) {
+      const x = 30 + ((i * 89) % (pageWidth - 60));
+      const y = 30 + ((i * 67) % (pageHeight - 60));
+      drawStar(doc, x, y, 3 + (i % 3), colors[i % colors.length]);
+    }
+  }
+  if (pattern === "hearts") {
+    for (let i = 0; i < 24; i += 1) {
+      const x = 36 + ((i * 97) % (pageWidth - 72));
+      const y = 36 + ((i * 71) % (pageHeight - 72));
+      drawHeart(doc, x, y, 5, [255, 143, 171]);
+    }
+  }
+  if (pattern === "clouds") {
+    doc.setFillColor(255, 255, 255);
+    for (let i = 0; i < 10; i += 1) {
+      const x = 40 + ((i * 110) % (pageWidth - 80));
+      const y = 40 + ((i * 95) % (pageHeight - 100));
+      doc.ellipse(x, y, 28, 14, "F");
+      doc.ellipse(x + 18, y + 2, 20, 12, "F");
+      doc.ellipse(x - 16, y + 3, 16, 10, "F");
+    }
+  }
+  if (pattern === "waves") {
+    doc.setDrawColor(64, 192, 220);
+    doc.setLineWidth(1.4);
+    for (let row = 0; row < pageHeight; row += 28) {
+      for (let x = 0; x < pageWidth; x += 40) {
+        doc.line(x, row + 8, x + 20, row);
+        doc.line(x + 20, row, x + 40, row + 8);
+      }
+    }
+  }
+  if (pattern === "diagonal") {
+    doc.setDrawColor(255, 180, 120);
+    doc.setLineWidth(6);
+    for (let i = -pageHeight; i < pageWidth + pageHeight; i += 28) {
+      doc.line(i, 0, i + pageHeight, pageHeight);
+    }
+  }
+}
+
+function drawShapeLayer(
+  doc: jsPDF,
+  layer: ShapeLayer,
+  pageWidth: number,
+  pageHeight: number,
+) {
+  const w = (layer.width / 100) * pageWidth;
+  const h = (layer.height / 100) * pageHeight;
+  const x = (layer.x / 100) * pageWidth;
+  const y = (layer.y / 100) * pageHeight;
+  const fill = hexToRgb(layer.fill);
+  const stroke = hexToRgb(layer.stroke);
+  const mode = layer.strokeWidth > 0 ? "FD" : "F";
+  rgb(doc, fill, "fill");
+  if (layer.strokeWidth > 0) {
+    rgb(doc, stroke, "draw");
+    doc.setLineWidth(Math.max(0.5, layer.strokeWidth));
+  }
+
+  if (layer.shape === "line") {
+    rgb(doc, fill, "draw");
+    doc.setLineWidth(Math.max(1, h));
+    doc.line(x, y + h / 2, x + w, y + h / 2);
+    return;
+  }
+  if (layer.shape === "circle") {
+    const r = Math.min(w, h) / 2;
+    doc.circle(x + w / 2, y + h / 2, r, mode);
+    return;
+  }
+  if (layer.shape === "ellipse") {
+    doc.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, mode);
+    return;
+  }
+  if (layer.shape === "rounded" || layer.shape === "rect") {
+    const radius = layer.shape === "rounded" ? Math.min(12, w / 5, h / 5) : 0;
+    if (radius > 0) doc.roundedRect(x, y, w, h, radius, radius, mode);
+    else doc.rect(x, y, w, h, mode);
+    return;
+  }
+  if (layer.shape === "triangle") {
+    doc.triangle(x + w / 2, y, x + w, y + h, x, y + h, mode);
+    return;
+  }
+  if (layer.shape === "star") {
+    drawStar(doc, x + w / 2, y + h / 2, Math.min(w, h) / 2, fill);
+    return;
+  }
+  if (layer.shape === "heart") {
+    drawHeart(doc, x + w / 2, y + h * 0.35, Math.min(w, h) * 0.45, fill);
   }
 }
 
@@ -663,8 +786,6 @@ async function drawLayers(
 ) {
   const gfx = doc as JsPdfGfx;
   for (const layer of sortLayers(layers || [])) {
-    const img = await resolvePdfImage(layer.src, baseUrl);
-    if (!img) continue;
     const w = (layer.width / 100) * pageWidth;
     const h = (layer.height / 100) * pageHeight;
     const x = (layer.x / 100) * pageWidth;
@@ -673,26 +794,33 @@ async function drawLayers(
       if (gfx.GState && gfx.setGState && layer.opacity < 1) {
         gfx.setGState(new gfx.GState({ opacity: layer.opacity }));
       }
-      doc.addImage(
-        img.dataUrl,
-        img.format,
-        x,
-        y,
-        w,
-        h,
-        undefined,
-        "FAST",
-        layer.rotation || 0,
-      );
+      if (layer.type === "shape") {
+        drawShapeLayer(doc, layer, pageWidth, pageHeight);
+      } else {
+        const img = await resolvePdfImage(layer.src, baseUrl);
+        if (img) {
+          try {
+            doc.addImage(
+              img.dataUrl,
+              img.format,
+              x,
+              y,
+              w,
+              h,
+              undefined,
+              "FAST",
+              layer.rotation || 0,
+            );
+          } catch {
+            doc.addImage(img.dataUrl, img.format, x, y, w, h);
+          }
+        }
+      }
       if (gfx.GState && gfx.setGState && layer.opacity < 1) {
         gfx.setGState(new gfx.GState({ opacity: 1 }));
       }
     } catch {
-      try {
-        doc.addImage(img.dataUrl, img.format, x, y, w, h);
-      } catch {
-        /* skip unreadable image */
-      }
+      /* skip bad layer */
     }
   }
 }
@@ -773,9 +901,7 @@ export async function buildNewsletterPdf(
   const bottomSafe = 100;
   const baseUrl = requestOrigin(request);
 
-  rgb(doc, design.pageBg, "fill");
-  doc.rect(0, 0, pageWidth, pageHeight, "F");
-  drawPagePattern(doc, design, pageWidth, pageHeight);
+  paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
 
   let y = drawHeader(doc, design, newsletter, config, pageWidth, margin);
 
@@ -792,9 +918,7 @@ export async function buildNewsletterPdf(
       const h = measureBlock(doc, section, contentWidth, 12) + (section.variant === "banner" ? 14 : 12);
       if (y + h > pageHeight - bottomSafe) {
         doc.addPage();
-        rgb(doc, design.pageBg, "fill");
-        doc.rect(0, 0, pageWidth, pageHeight, "F");
-        drawPagePattern(doc, design, pageWidth, pageHeight);
+        paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
         y = 48;
       }
       const blockY = y;
@@ -813,9 +937,7 @@ export async function buildNewsletterPdf(
     const rowH = Math.max(leftH, rightH);
     if (y + rowH > pageHeight - bottomSafe) {
       doc.addPage();
-      rgb(doc, design.pageBg, "fill");
-      doc.rect(0, 0, pageWidth, pageHeight, "F");
-      drawPagePattern(doc, design, pageWidth, pageHeight);
+      paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
       y = 48;
     }
     const leftY = y;

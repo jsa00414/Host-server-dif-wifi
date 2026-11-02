@@ -12,20 +12,31 @@ import {
   sectionsFromStarter,
 } from "@/lib/designs";
 import {
+  PAGE_BACKGROUNDS,
+  SHAPE_PALETTE,
+  backgroundCss,
+} from "@/lib/backgrounds";
+import {
   TONE_FILL,
   designToneCss,
   letterColorCss,
-  pagePatternStyle,
   rgbCss,
 } from "@/lib/editorTheme";
-import { nextZIndex, reorderLayer, sortLayers } from "@/lib/layers";
+import {
+  createShapeLayer,
+  nextZIndex,
+  reorderLayer,
+  sortLayers,
+} from "@/lib/layers";
 import { buildNewsletterPdf } from "@/lib/pdf";
 import type {
   Newsletter,
   NewsletterLayer,
   NewsletterSection,
+  PageBackground,
   SectionVariant,
   SectionWidth,
+  ShapeKind,
   SiteConfig,
 } from "@/lib/types";
 
@@ -34,7 +45,24 @@ type ClassInfo = Pick<
   "className" | "teacherName" | "schoolName" | "grade" | "room"
 >;
 
-type LeftTab = "templates" | "elements" | "photos" | "text";
+type LeftTab =
+  | "templates"
+  | "elements"
+  | "photos"
+  | "shapes"
+  | "background"
+  | "text";
+
+const SHAPE_OPTIONS: Array<{ id: ShapeKind; label: string; preview: string }> = [
+  { id: "rounded", label: "Rounded", preview: "▢" },
+  { id: "rect", label: "Square", preview: "■" },
+  { id: "circle", label: "Circle", preview: "●" },
+  { id: "ellipse", label: "Oval", preview: "⬭" },
+  { id: "triangle", label: "Triangle", preview: "▲" },
+  { id: "star", label: "Star", preview: "★" },
+  { id: "heart", label: "Heart", preview: "♥" },
+  { id: "line", label: "Line", preview: "━" },
+];
 type Selection =
   | { kind: "page" }
   | { kind: "header" }
@@ -150,6 +178,10 @@ export function NewsletterEditor({
   const [layers, setLayers] = useState<NewsletterLayer[]>(
     initial?.layers || [],
   );
+  const [pageBackground, setPageBackground] = useState<PageBackground | undefined>(
+    initial?.pageBackground,
+  );
+  const [shapeFill, setShapeFill] = useState(SHAPE_PALETTE[5]);
   const [uploading, setUploading] = useState(false);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [error, setError] = useState("");
@@ -185,6 +217,7 @@ export function NewsletterEditor({
       issueDate,
       sections,
       layers,
+      pageBackground,
       designId,
       slideshowToken: initial?.slideshowToken || "preview-token",
       createdAt: initial?.createdAt || new Date().toISOString(),
@@ -202,6 +235,7 @@ export function NewsletterEditor({
       issueDate,
       sections,
       layers,
+      pageBackground,
       designId,
       published,
     ],
@@ -250,9 +284,11 @@ export function NewsletterEditor({
     );
   }
 
-  function updateLayer(id: string, patch: Partial<NewsletterLayer>) {
+  function updateLayer(id: string, patch: Record<string, unknown>) {
     setLayers((prev) =>
-      prev.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+      prev.map((l) =>
+        l.id === id ? ({ ...l, ...patch } as NewsletterLayer) : l,
+      ),
     );
   }
 
@@ -351,7 +387,15 @@ export function NewsletterEditor({
   function applyDesign(nextId: string, loadStarter: boolean) {
     setDesignId(nextId);
     if (loadStarter) setSections(sectionsFromStarter(nextId));
+    setPageBackground(undefined);
     setLeftTab("templates");
+  }
+
+  function addShape(shape: ShapeKind) {
+    const layer = createShapeLayer(shape, layers, shapeFill);
+    setLayers((prev) => [...prev, layer]);
+    setSelection({ kind: "layer", id: layer.id });
+    setLeftTab("shapes");
   }
 
   function addElement(variant: SectionVariant) {
@@ -455,6 +499,7 @@ export function NewsletterEditor({
       designId,
       sections,
       layers,
+      pageBackground,
     };
     const res = await fetch(
       initial?.id
@@ -579,9 +624,9 @@ export function NewsletterEditor({
               type="button"
               onClick={() => removeLayer(selection.id)}
               className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-500/30"
-              title="Delete selected photo (Del)"
+              title="Delete selected layer (Del)"
             >
-              Delete photo
+              Delete layer
             </button>
           ) : null}
           {initial?.id ? (
@@ -612,6 +657,8 @@ export function NewsletterEditor({
               ["templates", "Design", "▦"],
               ["elements", "Elements", "＋"],
               ["photos", "Photos", "▣"],
+              ["shapes", "Shapes", "◇"],
+              ["background", "Backgrd", "▤"],
               ["text", "Text", "T"],
             ] as const
           ).map(([id, label, icon]) => (
@@ -640,7 +687,11 @@ export function NewsletterEditor({
                   ? "Elements"
                   : leftTab === "photos"
                     ? "Photos"
-                    : "Text & page"}
+                    : leftTab === "shapes"
+                      ? "Shapes"
+                      : leftTab === "background"
+                        ? "Backgrounds"
+                        : "Text & page"}
             </p>
             <p className="mt-0.5 text-[11px] text-[#8090a3]">
               {leftTab === "templates"
@@ -649,7 +700,11 @@ export function NewsletterEditor({
                   ? "Add colorful blocks to the canvas"
                   : leftTab === "photos"
                     ? "Upload photos and stack them on the page"
-                    : "Edit title, banner, and footer"}
+                    : leftTab === "shapes"
+                      ? "Add rectangles, stars, hearts, and more"
+                      : leftTab === "background"
+                        ? "Pick a solid color or patterned page"
+                        : "Edit title, banner, and footer"}
             </p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -785,51 +840,206 @@ export function NewsletterEditor({
                   Photos sit on the page as free layers. Drag to move, use the
                   corner to resize, and set stacking order in properties.
                 </p>
-                {sortedLayers.length ? (
+                {sortedLayers.some((l) => l.type === "image") ? (
                   <div className="space-y-2">
                     <p className="text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
-                      Layers (top = front)
+                      Photos (top = front)
                     </p>
-                    {[...sortedLayers].reverse().map((layer) => {
-                      const active =
-                        selection.kind === "layer" &&
-                        selection.id === layer.id;
-                      return (
-                        <button
-                          key={layer.id}
-                          type="button"
-                          onClick={() =>
-                            setSelection({ kind: "layer", id: layer.id })
-                          }
-                          className={`flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left ${
-                            active
-                              ? "border-violet-400 bg-violet-600/20"
-                              : "border-white/10 bg-white/5 hover:bg-white/10"
-                          }`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={layer.src}
-                            alt=""
-                            className="h-10 w-10 rounded-md object-cover"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-xs font-bold text-white">
-                              {layer.name}
+                    {[...sortedLayers]
+                      .reverse()
+                      .filter((l) => l.type === "image")
+                      .map((layer) => {
+                        const active =
+                          selection.kind === "layer" &&
+                          selection.id === layer.id;
+                        return (
+                          <button
+                            key={layer.id}
+                            type="button"
+                            onClick={() =>
+                              setSelection({ kind: "layer", id: layer.id })
+                            }
+                            className={`flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left ${
+                              active
+                                ? "border-violet-400 bg-violet-600/20"
+                                : "border-white/10 bg-white/5 hover:bg-white/10"
+                            }`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={layer.src}
+                              alt=""
+                              className="h-10 w-10 rounded-md object-cover"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-bold text-white">
+                                {layer.name}
+                              </span>
+                              <span className="block text-[10px] text-[#8090a3]">
+                                z {layer.zIndex}
+                              </span>
                             </span>
-                            <span className="block text-[10px] text-[#8090a3]">
-                              z {layer.zIndex}
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    })}
+                          </button>
+                        );
+                      })}
                   </div>
                 ) : (
                   <p className="rounded-xl bg-white/5 px-3 py-3 text-xs text-[#9fb0c3]">
                     No photos yet — upload one to place it on the newsletter.
                   </p>
                 )}
+              </div>
+            ) : null}
+
+            {leftTab === "shapes" ? (
+              <div className="space-y-3">
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                    Fill color
+                  </p>
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {SHAPE_PALETTE.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        title={c}
+                        onClick={() => setShapeFill(c)}
+                        className={`h-7 rounded-md border-2 ${
+                          shapeFill === c
+                            ? "border-violet-400"
+                            : "border-transparent"
+                        }`}
+                        style={{ background: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {SHAPE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => addShape(opt.id)}
+                      className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
+                    >
+                      <span
+                        className="flex h-9 w-9 items-center justify-center rounded-lg text-lg"
+                        style={{
+                          background:
+                            opt.id === "line" ? "transparent" : shapeFill,
+                          color: opt.id === "line" ? shapeFill : "#fff",
+                          border:
+                            opt.id === "line"
+                              ? `3px solid ${shapeFill}`
+                              : "none",
+                        }}
+                      >
+                        {opt.preview}
+                      </span>
+                      <span className="text-xs font-bold text-white">
+                        {opt.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {sortedLayers.some((l) => l.type === "shape") ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                      Shape layers
+                    </p>
+                    {[...sortedLayers]
+                      .reverse()
+                      .filter((l) => l.type === "shape")
+                      .map((layer) => {
+                        const active =
+                          selection.kind === "layer" &&
+                          selection.id === layer.id;
+                        return (
+                          <button
+                            key={layer.id}
+                            type="button"
+                            onClick={() =>
+                              setSelection({ kind: "layer", id: layer.id })
+                            }
+                            className={`flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left ${
+                              active
+                                ? "border-violet-400 bg-violet-600/20"
+                                : "border-white/10 bg-white/5 hover:bg-white/10"
+                            }`}
+                          >
+                            <span
+                              className="h-8 w-8 rounded-md"
+                              style={{ background: layer.fill }}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-bold text-white">
+                                {layer.name}
+                              </span>
+                              <span className="block text-[10px] text-[#8090a3]">
+                                {layer.shape} · z {layer.zIndex}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {leftTab === "background" ? (
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  className="w-full rounded-xl border border-dashed border-white/20 px-3 py-2 text-xs font-bold text-[#9fb0c3] hover:bg-white/5"
+                  onClick={() => setPageBackground(undefined)}
+                >
+                  Use template default background
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  {PAGE_BACKGROUNDS.map((bg) => {
+                    const active =
+                      pageBackground?.pattern === bg.pattern &&
+                      (pageBackground?.color === bg.color ||
+                        (!pageBackground?.color && bg.pattern === "solid"));
+                    const isActive =
+                      active ||
+                      (bg.id.startsWith("solid-") &&
+                        pageBackground?.color === bg.color &&
+                        (pageBackground?.pattern === "solid" ||
+                          pageBackground?.pattern === bg.pattern));
+                    return (
+                      <button
+                        key={bg.id}
+                        type="button"
+                        onClick={() =>
+                          setPageBackground({
+                            color: bg.color,
+                            pattern: bg.pattern,
+                          })
+                        }
+                        className={`overflow-hidden rounded-xl border text-left ${
+                          isActive
+                            ? "border-violet-400 ring-2 ring-violet-500/40"
+                            : "border-white/10 hover:border-white/25"
+                        }`}
+                      >
+                        <div
+                          className="h-14"
+                          style={backgroundCss(selectedDesign, {
+                            color: bg.color,
+                            pattern: bg.pattern,
+                          })}
+                        />
+                        <div className="px-2 py-1.5">
+                          <p className="text-[11px] font-bold text-white">
+                            {bg.name}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
@@ -911,7 +1121,7 @@ export function NewsletterEditor({
               >
                 <div
                   className="canva-page relative overflow-hidden rounded-sm"
-                  style={pagePatternStyle(selectedDesign)}
+                  style={backgroundCss(selectedDesign, pageBackground)}
                   onClick={() => setSelection({ kind: "page" })}
                 >
                   {/* Decorative accents by design */}
@@ -1222,10 +1432,75 @@ export function NewsletterEditor({
                     ))}
                   </div>
 
-                  {/* Free photo layers */}
+                  {/* Free photo + shape layers */}
                   {sortedLayers.map((layer) => {
                     const selected =
                       selection.kind === "layer" && selection.id === layer.id;
+                    const shapeStyle =
+                      layer.type === "shape"
+                        ? layer.shape === "circle"
+                          ? {
+                              background: layer.fill,
+                              borderRadius: "9999px",
+                              border:
+                                layer.strokeWidth > 0
+                                  ? `${layer.strokeWidth}px solid ${layer.stroke}`
+                                  : undefined,
+                            }
+                          : layer.shape === "ellipse"
+                            ? {
+                                background: layer.fill,
+                                borderRadius: "50%",
+                                border:
+                                  layer.strokeWidth > 0
+                                    ? `${layer.strokeWidth}px solid ${layer.stroke}`
+                                    : undefined,
+                              }
+                            : layer.shape === "rounded"
+                              ? {
+                                  background: layer.fill,
+                                  borderRadius: "18px",
+                                  border:
+                                    layer.strokeWidth > 0
+                                      ? `${layer.strokeWidth}px solid ${layer.stroke}`
+                                      : undefined,
+                                }
+                              : layer.shape === "rect"
+                                ? {
+                                    background: layer.fill,
+                                    border:
+                                      layer.strokeWidth > 0
+                                        ? `${layer.strokeWidth}px solid ${layer.stroke}`
+                                        : undefined,
+                                  }
+                                : layer.shape === "triangle"
+                                  ? {
+                                      background: layer.fill,
+                                      clipPath: "polygon(50% 0%, 100% 100%, 0% 100%)",
+                                    }
+                                  : layer.shape === "star"
+                                    ? {
+                                        background: layer.fill,
+                                        clipPath:
+                                          "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
+                                      }
+                                    : layer.shape === "heart"
+                                      ? {
+                                          color: layer.fill,
+                                          fontSize: "min(18vw, 72px)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          lineHeight: 1,
+                                        }
+                                      : layer.shape === "line"
+                                        ? {
+                                            background: layer.fill,
+                                            borderRadius: "9999px",
+                                            height: "100%",
+                                          }
+                                        : { background: layer.fill }
+                        : undefined;
                     return (
                       <div
                         key={layer.id}
@@ -1250,7 +1525,7 @@ export function NewsletterEditor({
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelection({ kind: "layer", id: layer.id });
-                          setLeftTab("photos");
+                          setLeftTab(layer.type === "shape" ? "shapes" : "photos");
                         }}
                         onPointerDown={(e) => {
                           if ((e.target as HTMLElement).dataset.resize) return;
@@ -1267,13 +1542,27 @@ export function NewsletterEditor({
                           });
                         }}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={layer.src}
-                          alt={layer.name}
-                          className="h-full w-full rounded-sm object-cover pointer-events-none select-none"
-                          draggable={false}
-                        />
+                        {layer.type === "image" ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={layer.src}
+                            alt={layer.name}
+                            className="pointer-events-none h-full w-full select-none rounded-sm object-cover"
+                            draggable={false}
+                          />
+                        ) : layer.shape === "heart" ? (
+                          <div
+                            className="pointer-events-none flex h-full w-full select-none items-center justify-center"
+                            style={shapeStyle}
+                          >
+                            ♥
+                          </div>
+                        ) : (
+                          <div
+                            className="pointer-events-none h-full w-full"
+                            style={shapeStyle}
+                          />
+                        )}
                         {selected ? (
                           <>
                             <button
@@ -1344,7 +1633,9 @@ export function NewsletterEditor({
               {selection.kind === "block"
                 ? "Block properties"
                 : selection.kind === "layer"
-                  ? "Photo layer"
+                  ? selectedLayer?.type === "shape"
+                    ? "Shape layer"
+                    : "Photo layer"
                   : selection.kind === "header"
                     ? "Header properties"
                     : selection.kind === "footer"
@@ -1361,15 +1652,20 @@ export function NewsletterEditor({
             {selection.kind === "page" ? (
               <>
                 <p className="text-xs leading-relaxed text-[#9fb0c3]">
-                  Use Photos to upload classroom pictures, then drag them on the
-                  page and choose which sits in front.
+                  Add Photos and Shapes, then stack them. Use Backgrounds to
+                  change the page color or pattern.
                 </p>
                 <div className="rounded-xl bg-white/5 p-3 text-xs text-[#c5d0dc]">
                   Design: <strong>{selectedDesign.name}</strong>
                   <br />
                   Blocks: {sections.length}
                   <br />
-                  Photos: {layers.length}
+                  Photos: {layers.filter((l) => l.type === "image").length}
+                  <br />
+                  Shapes: {layers.filter((l) => l.type === "shape").length}
+                  <br />
+                  Background:{" "}
+                  {pageBackground?.pattern || selectedDesign.pagePattern || "default"}
                 </div>
               </>
             ) : null}
@@ -1392,6 +1688,31 @@ export function NewsletterEditor({
                     }
                   />
                 </label>
+
+                {selectedLayer.type === "shape" ? (
+                  <div>
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                      Shape color
+                    </p>
+                    <div className="grid grid-cols-6 gap-1.5">
+                      {SHAPE_PALETTE.map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() =>
+                            updateLayer(selectedLayer.id, { fill: c })
+                          }
+                          className={`h-7 rounded-md border-2 ${
+                            selectedLayer.fill === c
+                              ? "border-violet-400"
+                              : "border-transparent"
+                          }`}
+                          style={{ background: c }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div>
                   <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
@@ -1495,7 +1816,7 @@ export function NewsletterEditor({
                   className="canva-chip bg-red-500/20 text-red-200"
                   onClick={() => removeLayer(selectedLayer.id)}
                 >
-                  Delete photo
+                  Delete layer
                 </button>
               </>
             ) : null}
