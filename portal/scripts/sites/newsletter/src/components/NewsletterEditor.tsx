@@ -120,6 +120,7 @@ export function NewsletterEditor({
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
 
@@ -228,6 +229,26 @@ export function NewsletterEditor({
     setSelection({ kind: "page" });
   }
 
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (selection.kind !== "block") return;
+      e.preventDefault();
+      removeSection(selection.id);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selection]);
+
   function applyDesign(nextId: string, loadStarter: boolean) {
     setDesignId(nextId);
     if (loadStarter) setSections(sectionsFromStarter(nextId));
@@ -290,6 +311,29 @@ export function NewsletterEditor({
       return;
     }
     router.push(`/admin/newsletters/${data.id}`);
+    router.refresh();
+  }
+
+  async function deleteNewsletter() {
+    if (!initial?.id) return;
+    if (
+      !window.confirm(
+        "Delete this newsletter and its PDF? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    setError("");
+    const res = await fetch(`/api/admin/newsletters/${initial.id}`, {
+      method: "DELETE",
+    });
+    setDeleting(false);
+    if (!res.ok) {
+      setError("Could not delete newsletter.");
+      return;
+    }
+    router.push("/admin/newsletters");
     router.refresh();
   }
 
@@ -358,6 +402,26 @@ export function NewsletterEditor({
             >
               Slideshow
             </a>
+          ) : null}
+          {selection.kind === "block" ? (
+            <button
+              type="button"
+              onClick={() => removeSection(selection.id)}
+              className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-500/30"
+              title="Delete selected block (Del)"
+            >
+              Delete block
+            </button>
+          ) : null}
+          {initial?.id ? (
+            <button
+              type="button"
+              onClick={() => void deleteNewsletter()}
+              disabled={deleting}
+              className="rounded-lg bg-red-600/90 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500 disabled:opacity-60"
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </button>
           ) : null}
           <button
             type="button"
@@ -668,7 +732,7 @@ export function NewsletterEditor({
                             return (
                               <div
                                 key={section.id}
-                                className="canva-selectable space-y-2"
+                                className="canva-selectable relative space-y-2"
                                 data-selected={selected}
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -678,6 +742,19 @@ export function NewsletterEditor({
                                   });
                                 }}
                               >
+                                {selected ? (
+                                  <button
+                                    type="button"
+                                    className="absolute -right-2 -top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      removeSection(section.id);
+                                    }}
+                                    title="Delete block"
+                                  >
+                                    Delete
+                                  </button>
+                                ) : null}
                                 <div
                                   className="rounded-md px-2 py-2 text-white"
                                   style={{
@@ -722,6 +799,19 @@ export function NewsletterEditor({
                                 setSelection({ kind: "block", id: section.id });
                               }}
                             >
+                              {selected ? (
+                                <button
+                                  type="button"
+                                  className="absolute -right-2 -top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeSection(section.id);
+                                  }}
+                                  title="Delete block"
+                                >
+                                  Delete
+                                </button>
+                              ) : null}
                               <input
                                 className="canva-editable text-[13px] font-extrabold uppercase tracking-wide"
                                 style={{ color: TONE_HEADING[tone] }}

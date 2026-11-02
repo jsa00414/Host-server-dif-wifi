@@ -20,7 +20,7 @@ export function DeleteNewsletterButton({ id }: { id: string }) {
       type="button"
       onClick={onDelete}
       disabled={busy}
-      className="rounded-xl px-5 py-3 font-semibold text-[var(--coral)] transition hover:bg-red-50"
+      className="rounded-xl border border-red-200 bg-red-50 px-5 py-3 font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
     >
       {busy ? "Deleting…" : "Delete"}
     </button>
