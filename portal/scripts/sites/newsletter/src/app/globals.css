@@ -146,11 +146,14 @@ body {
 }
 
 .canva-page {
+  position: relative;
   width: 612px;
+  height: 792px;
   min-height: 792px;
   background: #fff;
   color: #222;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
 
 .canva-selectable {
@@ -175,6 +178,16 @@ body {
 .canva-editable:focus {
   background: rgba(139, 92, 246, 0.06);
   border-radius: 6px;
+}
+
+/* Auto-growing text — never show an inner scrollbar */
+.canva-autogrow {
+  display: block;
+  overflow: hidden !important;
+  overflow-y: hidden !important;
+  resize: none !important;
+  min-height: 24px;
+  field-sizing: content;
 }
 
 .canva-chip {

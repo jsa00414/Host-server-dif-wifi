@@ -34,8 +34,21 @@ export type NewsletterSection = {
   variant?: SectionVariant;
   /** Pastel block color */
   tone?: SectionTone;
-  /** full-width banner/row or half-width column card */
+  /**
+   * Legacy flow hint (full/half). Free-canvas editors still use this when
+   * assigning default frames for older newsletters.
+   */
   width?: SectionWidth;
+  /** Free-canvas X position as percent of letter page (0–100) */
+  x?: number;
+  /** Free-canvas Y position as percent of letter page (0–100) */
+  y?: number;
+  /** Free-canvas box width as percent of letter page (0–100) */
+  boxW?: number;
+  /** Free-canvas box height as percent of letter page (0–100) */
+  boxH?: number;
+  /** Stacking order (shared space with photo/shape layers) */
+  zIndex?: number;
   /** Optional photo inside the block (media URL or data URL) */
   imageSrc?: string;
 };

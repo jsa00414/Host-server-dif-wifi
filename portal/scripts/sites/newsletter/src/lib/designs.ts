@@ -621,7 +621,7 @@ export function sectionsFromStarter(
   designId?: string | null,
 ): NewsletterSection[] {
   const design = getDesign(designId);
-  return design.starterSections.map((s) => ({
+  const base = design.starterSections.map((s) => ({
     id: crypto.randomUUID(),
     heading: s.heading,
     body: s.body,
@@ -629,6 +629,34 @@ export function sectionsFromStarter(
     tone: s.tone,
     width: s.width,
   }));
+  // ensureSectionFrames lives in sections.ts — inline defaults to avoid cycle
+  let y = 22;
+  let z = 1;
+  const out: NewsletterSection[] = [];
+  let i = 0;
+  while (i < base.length) {
+    const cur = base[i];
+    const next = base[i + 1];
+    const pair =
+      cur.width === "half" &&
+      next &&
+      next.width === "half" &&
+      next.variant !== "banner";
+    if (pair) {
+      const h =
+        cur.variant === "learning" || next.variant === "learning" ? 22 : 18;
+      out.push({ ...cur, x: 6.5, y, boxW: 42, boxH: h, zIndex: z++ });
+      out.push({ ...next, x: 51.5, y, boxW: 42, boxH: h, zIndex: z++ });
+      y += h + 2.5;
+      i += 2;
+    } else {
+      const h = cur.variant === "banner" ? 16 : 14;
+      out.push({ ...cur, x: 6.5, y, boxW: 87, boxH: h, zIndex: z++ });
+      y += h + 2.5;
+      i += 1;
+    }
+  }
+  return out;
 }
 
 export const SECTION_TONES: SectionTone[] = [

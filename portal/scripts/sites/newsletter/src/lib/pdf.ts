@@ -8,6 +8,7 @@ import {
 import { getDesign, type NewsletterDesign, type TonePalette } from "./designs";
 import { resolvePdfImage } from "./imageData";
 import { sortLayers } from "./layers";
+import { ensureSectionFrames } from "./sections";
 import type {
   Newsletter,
   NewsletterLayer,
@@ -668,6 +669,16 @@ function drawCardShell(
   doc.roundedRect(x, y, width, height, 14, 14, "F");
 }
 
+function clipLines(lines: string[], maxLines: number) {
+  if (maxLines <= 0) return [] as string[];
+  if (lines.length <= maxLines) return lines;
+  const clipped = lines.slice(0, maxLines);
+  const last = clipped[clipped.length - 1] || "";
+  clipped[clipped.length - 1] =
+    last.length > 3 ? `${last.slice(0, Math.max(0, last.length - 1))}…` : "…";
+  return clipped;
+}
+
 function drawBlock(
   doc: jsPDF,
   design: NewsletterDesign,
@@ -677,15 +688,22 @@ function drawBlock(
   y: number,
   width: number,
   showRainbow: boolean,
+  fixedHeight?: number,
 ) {
   const tone = toneFor(design, section, index);
   const pad = 12;
   const variant = section.variant || (index === 0 ? "banner" : "card");
-  const height = measureBlock(doc, section, width, pad);
+  const height =
+    fixedHeight && fixedHeight > 0
+      ? fixedHeight
+      : measureBlock(doc, section, width, pad);
 
   if (variant === "banner") {
+    const barH = 24;
+    const bodyBoxY = y + barH + 4;
+    const bodyBoxH = Math.max(28, height - barH - 4);
     rgb(doc, tone.bar, "fill");
-    doc.roundedRect(x, y, width, 24, 5, 5, "F");
+    doc.roundedRect(x, y, width, barH, 5, 5, "F");
     if (design.decorations === "crayons" || design.headerStyle === "rainbow-letters") {
       drawPencil(doc, x + 8, y + 3, 0.75);
       drawPencil(doc, x + width - 24, y + 3, 0.75);
@@ -697,13 +715,14 @@ function drawBlock(
     doc.text((section.heading || "CLASS NEWS").toUpperCase(), x + width / 2, y + 16, {
       align: "center",
     });
-    drawCardShell(doc, design, tone, x, y + 28, width, height - 20);
+    drawCardShell(doc, design, tone, x, bodyBoxY, width, bodyBoxH);
     rgb(doc, tone.body, "text");
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
     const lines = doc.splitTextToSize(section.body || "", width - pad * 2);
-    doc.text(lines, x + pad, y + 48);
-    return height + 14;
+    const maxLines = Math.max(1, Math.floor((bodyBoxH - pad * 2) / 13));
+    doc.text(clipLines(lines, maxLines), x + pad, bodyBoxY + pad + 10);
+    return (fixedHeight ? height : height + 14);
   }
 
   drawCardShell(doc, design, tone, x, y, width, height);
@@ -722,7 +741,10 @@ function drawBlock(
   const headingHeight =
     doc.splitTextToSize(heading, width - pad * 2).length * 14;
   const textY = textTop + 6 + headingHeight;
-  doc.text(bodyLines, x + pad, textY);
+  const imageReserve = section.imageSrc ? Math.min(110, (width - pad * 2) * 0.45) + 8 : 0;
+  const available = y + height - pad - imageReserve - textY;
+  const maxLines = Math.max(1, Math.floor(available / 13));
+  doc.text(clipLines(bodyLines, maxLines), x + pad, textY);
 
   if (showRainbow && (variant === "learning" || index === 2)) {
     if (design.decorations === "rainbow" || design.decorations === "boho-rainbow") {
@@ -736,7 +758,7 @@ function drawBlock(
     }
   }
 
-  return height + 12;
+  return fixedHeight ? height : height + 12;
 }
 
 async function drawSectionImage(
@@ -895,58 +917,43 @@ export async function buildNewsletterPdf(
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 40;
-  const gap = 14;
-  const contentWidth = pageWidth - margin * 2;
-  const half = (contentWidth - gap) / 2;
-  const bottomSafe = 100;
   const baseUrl = requestOrigin(request);
 
   paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
 
-  let y = drawHeader(doc, design, newsletter, config, pageWidth, margin);
+  drawHeader(doc, design, newsletter, config, pageWidth, margin);
 
-  const sections = (newsletter.sections || []).filter(
-    (s) => s.heading.trim() || s.body.trim(),
+  const sections = ensureSectionFrames(
+    (newsletter.sections || []).filter(
+      (s) => s.heading.trim() || s.body.trim() || s.imageSrc,
+    ),
   );
 
-  let i = 0;
-  while (i < sections.length) {
-    const section = sections[i];
-    const widthMode = section.width || (section.variant === "banner" ? "full" : i === 0 ? "full" : "half");
-
-    if (widthMode === "full" || !sections[i + 1] || sections[i + 1].width === "full" || sections[i + 1].variant === "banner") {
-      const h = measureBlock(doc, section, contentWidth, 12) + (section.variant === "banner" ? 14 : 12);
-      if (y + h > pageHeight - bottomSafe) {
-        doc.addPage();
-        paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
-        y = 48;
-      }
-      const blockY = y;
-      y += drawBlock(doc, design, section, i, margin, blockY, contentWidth, true);
-      if (section.variant !== "banner") {
-        await drawSectionImage(doc, section, margin, blockY, contentWidth, 12, baseUrl);
-      }
-      i += 1;
-      continue;
+  // Free-canvas layout: every text box is drawn at its x/y/boxW/boxH frame.
+  const byZ = [...sections].sort(
+    (a, b) => (a.zIndex || 0) - (b.zIndex || 0),
+  );
+  for (let i = 0; i < byZ.length; i += 1) {
+    const section = byZ[i];
+    const originalIndex = sections.findIndex((s) => s.id === section.id);
+    const x = ((section.x || 6.5) / 100) * pageWidth;
+    const y = ((section.y || 22) / 100) * pageHeight;
+    const w = ((section.boxW || 87) / 100) * pageWidth;
+    const h = ((section.boxH || 16) / 100) * pageHeight;
+    drawBlock(
+      doc,
+      design,
+      section,
+      originalIndex < 0 ? i : originalIndex,
+      x,
+      y,
+      w,
+      true,
+      h,
+    );
+    if (section.variant !== "banner" && section.imageSrc) {
+      await drawSectionImage(doc, section, x, y, w, 12, baseUrl);
     }
-
-    const left = section;
-    const right = sections[i + 1];
-    const leftH = measureBlock(doc, left, half, 12) + 12;
-    const rightH = measureBlock(doc, right, half, 12) + 12;
-    const rowH = Math.max(leftH, rightH);
-    if (y + rowH > pageHeight - bottomSafe) {
-      doc.addPage();
-      paintPageBackground(doc, design, newsletter, pageWidth, pageHeight);
-      y = 48;
-    }
-    const leftY = y;
-    drawBlock(doc, design, left, i, margin, leftY, half, false);
-    await drawSectionImage(doc, left, margin, leftY, half, 12, baseUrl);
-    drawBlock(doc, design, right, i + 1, margin + half + gap, leftY, half, true);
-    await drawSectionImage(doc, right, margin + half + gap, leftY, half, 12, baseUrl);
-    y += rowH;
-    i += 2;
   }
 
   await drawLayers(doc, newsletter.layers, pageWidth, pageHeight, baseUrl);

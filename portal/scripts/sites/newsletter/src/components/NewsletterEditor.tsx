@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   DEFAULT_DESIGN_ID,
@@ -24,11 +30,14 @@ import {
 } from "@/lib/editorTheme";
 import {
   createShapeLayer,
-  nextZIndex,
   reorderLayer,
   sortLayers,
 } from "@/lib/layers";
 import { buildNewsletterPdf } from "@/lib/pdf";
+import {
+  ensureSectionFrames,
+  nextSectionZIndex,
+} from "@/lib/sections";
 import type {
   Newsletter,
   NewsletterLayer,
@@ -70,9 +79,12 @@ type Selection =
   | { kind: "block"; id: string }
   | { kind: "layer"; id: string };
 
+type DragTarget = "layer" | "section";
+
 type DragState =
   | {
       mode: "move";
+      target: DragTarget;
       id: string;
       startX: number;
       startY: number;
@@ -81,6 +93,7 @@ type DragState =
     }
   | {
       mode: "resize";
+      target: DragTarget;
       id: string;
       startX: number;
       startY: number;
@@ -101,35 +114,57 @@ function blankSection(
     variant: "card",
     tone: "blue",
     width: "half",
+    x: 28,
+    y: 36,
+    boxW: 42,
+    boxH: 18,
+    zIndex: 1,
     ...partial,
   };
 }
 
-function pairRows(sections: NewsletterSection[]) {
-  const rows: Array<NewsletterSection[]> = [];
-  let i = 0;
-  while (i < sections.length) {
-    const cur = sections[i];
-    const width = cur.width || (cur.variant === "banner" ? "full" : "half");
-    const next = sections[i + 1];
-    if (
-      width === "half" &&
-      next &&
-      (next.width || "half") === "half" &&
-      next.variant !== "banner"
-    ) {
-      rows.push([cur, next]);
-      i += 2;
-    } else {
-      rows.push([cur]);
-      i += 1;
-    }
-  }
-  return rows;
-}
-
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
+}
+
+/** Textarea that grows with content — never shows an inner scrollbar. */
+function AutoGrowTextarea({
+  value,
+  onChange,
+  className,
+  style,
+  onContentHeight,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+  style?: CSSProperties;
+  onContentHeight?: (px: number) => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const next = Math.max(24, el.scrollHeight);
+    el.style.height = `${next}px`;
+    onContentHeight?.(next);
+    // Only remeasure when text changes — callback identity must not loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      className={`canva-editable canva-autogrow ${className || ""}`}
+      style={style}
+      value={value}
+      rows={1}
+      onChange={(e) => onChange(e.target.value)}
+      onPointerDown={(e) => e.stopPropagation()}
+    />
+  );
 }
 
 export function NewsletterEditor({
@@ -165,15 +200,17 @@ export function NewsletterEditor({
   const [designId, setDesignId] = useState(
     initial?.designId || DEFAULT_DESIGN_ID,
   );
-  const [sections, setSections] = useState<NewsletterSection[]>(
-    initial?.sections?.length
-      ? initial.sections.map((s, i) => ({
-          variant: s.variant || (i === 0 ? "banner" : "card"),
-          tone: s.tone || SECTION_TONES[i % SECTION_TONES.length],
-          width: s.width || (i === 0 || i === 3 ? "full" : "half"),
-          ...s,
-        }))
-      : sectionsFromStarter(DEFAULT_DESIGN_ID),
+  const [sections, setSections] = useState<NewsletterSection[]>(() =>
+    ensureSectionFrames(
+      initial?.sections?.length
+        ? initial.sections.map((s, i) => ({
+            variant: s.variant || (i === 0 ? "banner" : "card"),
+            tone: s.tone || SECTION_TONES[i % SECTION_TONES.length],
+            width: s.width || (i === 0 || i === 3 ? "full" : "half"),
+            ...s,
+          }))
+        : sectionsFromStarter(DEFAULT_DESIGN_ID),
+    ),
   );
   const [layers, setLayers] = useState<NewsletterLayer[]>(
     initial?.layers || [],
@@ -195,7 +232,11 @@ export function NewsletterEditor({
     () => letterColorCss(selectedDesign),
     [selectedDesign],
   );
-  const rows = useMemo(() => pairRows(sections), [sections]);
+  const sortedSections = useMemo(
+    () =>
+      [...sections].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)),
+    [sections],
+  );
   const sortedLayers = useMemo(() => sortLayers(layers), [layers]);
 
   const selectedBlock =
@@ -347,6 +388,34 @@ export function NewsletterEditor({
     function onMove(e: PointerEvent) {
       const dx = ((e.clientX - active.startX) / zoom / PAGE_W) * 100;
       const dy = ((e.clientY - active.startY) / zoom / PAGE_H) * 100;
+      if (active.target === "section") {
+        if (active.mode === "move") {
+          setSections((prev) =>
+            prev.map((s) =>
+              s.id === active.id
+                ? {
+                    ...s,
+                    x: clamp(active.origX + dx, 0, 92),
+                    y: clamp(active.origY + dy, 0, 92),
+                  }
+                : s,
+            ),
+          );
+        } else {
+          setSections((prev) =>
+            prev.map((s) =>
+              s.id === active.id
+                ? {
+                    ...s,
+                    boxW: clamp(active.origW + dx, 12, 100 - (s.x || 0)),
+                    boxH: clamp(active.origH + dy, 8, 100 - (s.y || 0)),
+                  }
+                : s,
+            ),
+          );
+        }
+        return;
+      }
       if (active.mode === "move") {
         setLayers((prev) =>
           prev.map((l) =>
@@ -393,12 +462,14 @@ export function NewsletterEditor({
 
   function addShape(shape: ShapeKind) {
     const layer = createShapeLayer(shape, layers, shapeFill);
+    layer.zIndex = nextSectionZIndex(sections, layers);
     setLayers((prev) => [...prev, layer]);
     setSelection({ kind: "layer", id: layer.id });
     setLeftTab("shapes");
   }
 
   function addElement(variant: SectionVariant) {
+    const count = sections.length;
     const section = blankSection({
       variant,
       tone: variant === "banner" ? "green" : variant === "learning" ? "orange" : "blue",
@@ -417,6 +488,11 @@ export function NewsletterEditor({
           : variant === "learning"
             ? "READING: …\nMATH: …\nSCIENCE: …\nART: …"
             : "Add your family update here.",
+      x: variant === "banner" ? 6.5 : 12 + (count % 3) * 8,
+      y: variant === "banner" ? 22 : 30 + (count % 4) * 6,
+      boxW: variant === "banner" ? 87 : 42,
+      boxH: variant === "banner" ? 16 : variant === "learning" ? 22 : 18,
+      zIndex: nextSectionZIndex(sections, layers),
     });
     setSections((prev) => [...prev, section]);
     setSelection({ kind: "block", id: section.id });
@@ -449,7 +525,7 @@ export function NewsletterEditor({
         height: 22,
         rotation: 0,
         opacity: 1,
-        zIndex: nextZIndex(layers),
+        zIndex: nextSectionZIndex(sections, layers),
       };
       setLayers((prev) => [...prev, layer]);
       setSelection({ kind: "layer", id: layer.id });
@@ -1270,167 +1346,213 @@ export function NewsletterEditor({
                     </div>
                   </div>
 
-                  <div className="relative z-[1] space-y-3 px-8 pb-24 pt-2">
-                    {rows.map((row) => (
-                      <div
-                        key={row.map((r) => r.id).join("-")}
-                        className={`grid gap-3 ${row.length === 2 ? "grid-cols-2" : "grid-cols-1"}`}
-                      >
-                        {row.map((section) => {
-                          const toneKey = section.tone || "blue";
-                          const tone = designToneCss(selectedDesign, toneKey);
-                          const variant = section.variant || "card";
-                          const selected =
-                            selection.kind === "block" &&
-                            selection.id === section.id;
-                          const cardStyle = selectedDesign.cardStyle;
-                          const cardBoxStyle =
-                            cardStyle === "outlined" || cardStyle === "dashed"
-                              ? {
-                                  background: "#fff",
-                                  border: `${cardStyle === "dashed" ? "1.5px dashed" : "2.5px solid"} ${tone.border}`,
-                                }
-                              : cardStyle === "ink"
-                                ? {
-                                    background: "#fff",
-                                    border: "2px solid #111",
-                                    boxShadow: "inset 0 0 0 1px #111",
-                                  }
-                                : cardStyle === "top-strip"
-                                  ? {
-                                      background: tone.fill,
-                                      borderTop: `10px solid ${tone.bar}`,
-                                    }
-                                  : { background: tone.fill };
-
-                          if (variant === "banner") {
-                            return (
-                              <div
-                                key={section.id}
-                                className="canva-selectable relative space-y-2"
-                                data-selected={selected}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelection({
-                                    kind: "block",
-                                    id: section.id,
-                                  });
-                                }}
-                              >
-                                {selected ? (
-                                  <button
-                                    type="button"
-                                    className="absolute -right-2 -top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      removeSection(section.id);
-                                    }}
-                                    title="Delete block"
-                                  >
-                                    Delete
-                                  </button>
-                                ) : null}
-                                <div
-                                  className="rounded-md px-2 py-2 text-white"
-                                  style={{ background: tone.bar }}
-                                >
-                                  <input
-                                    className="canva-editable text-center text-[11px] font-extrabold uppercase tracking-wide text-white"
-                                    value={section.heading}
-                                    onChange={(e) =>
-                                      updateSection(section.id, {
-                                        heading: e.target.value,
-                                      })
-                                    }
-                                  />
-                                </div>
-                                <div
-                                  className="rounded-xl p-3"
-                                  style={cardBoxStyle}
-                                >
-                                  <textarea
-                                    className="canva-editable min-h-16 text-[12px] leading-relaxed"
-                                    style={{ color: tone.body }}
-                                    value={section.body}
-                                    onChange={(e) =>
-                                      updateSection(section.id, {
-                                        body: e.target.value,
-                                      })
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            );
+                  {/* Free-position text boxes (Canva-style) */}
+                  {sortedSections.map((section) => {
+                    const toneKey = section.tone || "blue";
+                    const tone = designToneCss(selectedDesign, toneKey);
+                    const variant = section.variant || "card";
+                    const selected =
+                      selection.kind === "block" && selection.id === section.id;
+                    const cardStyle = selectedDesign.cardStyle;
+                    const cardBoxStyle: CSSProperties =
+                      cardStyle === "outlined" || cardStyle === "dashed"
+                        ? {
+                            background: "#fff",
+                            border: `${cardStyle === "dashed" ? "1.5px dashed" : "2.5px solid"} ${tone.border}`,
                           }
-                          return (
-                            <div
-                              key={section.id}
-                              className="canva-selectable relative rounded-2xl p-3"
-                              data-selected={selected}
-                              style={cardBoxStyle}
+                        : cardStyle === "ink"
+                          ? {
+                              background: "#fff",
+                              border: "2px solid #111",
+                              boxShadow: "inset 0 0 0 1px #111",
+                            }
+                          : cardStyle === "top-strip"
+                            ? {
+                                background: tone.fill,
+                                borderTop: `10px solid ${tone.bar}`,
+                              }
+                            : { background: tone.fill };
+
+                    const growBoxToFit = (contentPx: number) => {
+                      const neededPct = (contentPx / PAGE_H) * 100 + 4;
+                      const current = section.boxH || 16;
+                      if (neededPct > current + 0.4) {
+                        updateSection(section.id, {
+                          boxH: clamp(neededPct, 8, 100 - (section.y || 0)),
+                        });
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={section.id}
+                        className="absolute cursor-move overflow-hidden rounded-2xl"
+                        style={{
+                          left: `${section.x ?? 6.5}%`,
+                          top: `${section.y ?? 22}%`,
+                          width: `${section.boxW ?? 42}%`,
+                          height: `${section.boxH ?? 16}%`,
+                          zIndex: 10 + (section.zIndex || 1),
+                          outline: selected
+                            ? "2px solid #8b5cf6"
+                            : "2px solid transparent",
+                          boxShadow: selected
+                            ? "0 0 0 4px rgba(139, 92, 246, 0.25)"
+                            : undefined,
+                          ...cardBoxStyle,
+                          ...(variant === "banner"
+                            ? { background: "transparent", border: "none" }
+                            : null),
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelection({ kind: "block", id: section.id });
+                          setLeftTab("elements");
+                        }}
+                        onPointerDown={(e) => {
+                          if ((e.target as HTMLElement).dataset.resize) return;
+                          const tag = (e.target as HTMLElement).tagName;
+                          if (
+                            tag === "INPUT" ||
+                            tag === "TEXTAREA" ||
+                            tag === "BUTTON"
+                          ) {
+                            return;
+                          }
+                          e.stopPropagation();
+                          e.preventDefault();
+                          setSelection({ kind: "block", id: section.id });
+                          setDrag({
+                            mode: "move",
+                            target: "section",
+                            id: section.id,
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            origX: section.x ?? 6.5,
+                            origY: section.y ?? 22,
+                          });
+                        }}
+                      >
+                        {selected ? (
+                          <>
+                            <button
+                              type="button"
+                              className="absolute -right-2 -top-2 z-20 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelection({ kind: "block", id: section.id });
+                                removeSection(section.id);
                               }}
+                              title="Delete block"
                             >
-                              {selected ? (
-                                <button
-                                  type="button"
-                                  className="absolute -right-2 -top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg hover:bg-red-500"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    removeSection(section.id);
-                                  }}
-                                  title="Delete block"
-                                >
-                                  Delete
-                                </button>
-                              ) : null}
+                              Delete
+                            </button>
+                            <span
+                              data-resize="1"
+                              className="absolute -bottom-1.5 -right-1.5 z-20 h-3.5 w-3.5 cursor-se-resize rounded-sm border-2 border-white bg-violet-500"
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setDrag({
+                                  mode: "resize",
+                                  target: "section",
+                                  id: section.id,
+                                  startX: e.clientX,
+                                  startY: e.clientY,
+                                  origW: section.boxW ?? 42,
+                                  origH: section.boxH ?? 16,
+                                });
+                              }}
+                            />
+                          </>
+                        ) : null}
+
+                        {variant === "banner" ? (
+                          <div className="flex h-full flex-col gap-1.5 overflow-hidden p-0">
+                            <div
+                              className="rounded-md px-2 py-1.5 text-white"
+                              style={{ background: tone.bar }}
+                            >
                               <input
-                                className="canva-editable text-[13px] font-extrabold uppercase tracking-wide"
-                                style={{ color: tone.heading }}
+                                className="canva-editable text-center text-[11px] font-extrabold uppercase tracking-wide text-white"
                                 value={section.heading}
                                 onChange={(e) =>
                                   updateSection(section.id, {
                                     heading: e.target.value,
                                   })
                                 }
+                                onPointerDown={(e) => e.stopPropagation()}
                               />
-                              <textarea
-                                className="canva-editable mt-1 min-h-24 whitespace-pre-wrap text-[12px] leading-relaxed"
+                            </div>
+                            <div
+                              className="min-h-0 flex-1 overflow-hidden rounded-xl p-2"
+                              style={cardBoxStyle}
+                            >
+                              <AutoGrowTextarea
+                                className="whitespace-pre-wrap text-[12px] leading-relaxed"
                                 style={{ color: tone.body }}
                                 value={section.body}
-                                onChange={(e) =>
-                                  updateSection(section.id, {
-                                    body: e.target.value,
-                                  })
+                                onChange={(body) =>
+                                  updateSection(section.id, { body })
+                                }
+                                onContentHeight={(px) =>
+                                  growBoxToFit(px + 36)
                                 }
                               />
-                              {section.imageSrc ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={section.imageSrc}
-                                  alt=""
-                                  className="mt-2 max-h-28 w-full rounded-lg object-cover"
-                                />
-                              ) : null}
-                              {variant === "learning" ? (
-                                <div className="pointer-events-none absolute bottom-2 right-3 text-2xl">
-                                  {selectedDesign.decorations === "hearts"
-                                    ? "💕"
-                                    : selectedDesign.decorations === "daisy"
-                                      ? "🌼"
-                                      : selectedDesign.decorations === "ink"
-                                        ? "★"
-                                        : "🌈"}
-                                </div>
-                              ) : null}
                             </div>
-                          );
-                        })}
+                          </div>
+                        ) : (
+                          <div className="flex h-full flex-col overflow-hidden p-3">
+                            <input
+                              className="canva-editable shrink-0 text-[13px] font-extrabold uppercase tracking-wide"
+                              style={{ color: tone.heading }}
+                              value={section.heading}
+                              onChange={(e) =>
+                                updateSection(section.id, {
+                                  heading: e.target.value,
+                                })
+                              }
+                              onPointerDown={(e) => e.stopPropagation()}
+                            />
+                            <div className="min-h-0 flex-1 overflow-hidden">
+                              <AutoGrowTextarea
+                                className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed"
+                                style={{ color: tone.body }}
+                                value={section.body}
+                                onChange={(body) =>
+                                  updateSection(section.id, { body })
+                                }
+                                onContentHeight={(px) =>
+                                  growBoxToFit(
+                                    px + 40 + (section.imageSrc ? 80 : 0),
+                                  )
+                                }
+                              />
+                            </div>
+                            {section.imageSrc ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={section.imageSrc}
+                                alt=""
+                                className="mt-2 max-h-20 w-full shrink-0 rounded-lg object-cover"
+                                draggable={false}
+                              />
+                            ) : null}
+                            {variant === "learning" ? (
+                              <div className="pointer-events-none absolute bottom-2 right-3 text-2xl">
+                                {selectedDesign.decorations === "hearts"
+                                  ? "💕"
+                                  : selectedDesign.decorations === "daisy"
+                                    ? "🌼"
+                                    : selectedDesign.decorations === "ink"
+                                      ? "★"
+                                      : "🌈"}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })}
 
                   {/* Free photo + shape layers */}
                   {sortedLayers.map((layer) => {
@@ -1534,6 +1656,7 @@ export function NewsletterEditor({
                           setSelection({ kind: "layer", id: layer.id });
                           setDrag({
                             mode: "move",
+                            target: "layer",
                             id: layer.id,
                             startX: e.clientX,
                             startY: e.clientY,
@@ -1583,6 +1706,7 @@ export function NewsletterEditor({
                                 e.preventDefault();
                                 setDrag({
                                   mode: "resize",
+                                  target: "layer",
                                   id: layer.id,
                                   startX: e.clientX,
                                   startY: e.clientY,
@@ -1643,8 +1767,8 @@ export function NewsletterEditor({
                       : "Page properties"}
             </p>
             <p className="mt-0.5 text-[11px] text-[#8090a3]">
-              {selection.kind === "layer"
-                ? "Move, resize, and set layering"
+              {selection.kind === "layer" || selection.kind === "block"
+                ? "Drag to move · corner handle to resize · no text scroll"
                 : "Click anything on the canvas to edit it"}
             </p>
           </div>
@@ -1652,8 +1776,8 @@ export function NewsletterEditor({
             {selection.kind === "page" ? (
               <>
                 <p className="text-xs leading-relaxed text-[#9fb0c3]">
-                  Add Photos and Shapes, then stack them. Use Backgrounds to
-                  change the page color or pattern.
+                  Drag text boxes, photos, and shapes freely like Canva. Text
+                  boxes grow with content — no scrollbars inside cards.
                 </p>
                 <div className="rounded-xl bg-white/5 p-3 text-xs text-[#c5d0dc]">
                   Design: <strong>{selectedDesign.name}</strong>
@@ -1874,35 +1998,71 @@ export function NewsletterEditor({
                   </div>
                 </div>
 
-                <div>
-                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
-                    Width
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        ["full", "Full"],
-                        ["half", "Half"],
-                      ] as const
-                    ).map(([id, label]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className={`canva-chip ${
-                          (selectedBlock.width || "half") === id
-                            ? "canva-chip-active"
-                            : "canva-chip-idle"
-                        }`}
-                        onClick={() =>
-                          updateSection(selectedBlock.id, {
-                            width: id as SectionWidth,
-                          })
-                        }
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    X %
+                    <input
+                      type="number"
+                      min={0}
+                      max={92}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedBlock.x ?? 0)}
+                      onChange={(e) =>
+                        updateSection(selectedBlock.id, {
+                          x: clamp(Number(e.target.value) || 0, 0, 92),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    Y %
+                    <input
+                      type="number"
+                      min={0}
+                      max={92}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedBlock.y ?? 0)}
+                      onChange={(e) =>
+                        updateSection(selectedBlock.id, {
+                          y: clamp(Number(e.target.value) || 0, 0, 92),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    Width %
+                    <input
+                      type="number"
+                      min={12}
+                      max={100}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedBlock.boxW ?? 42)}
+                      onChange={(e) =>
+                        updateSection(selectedBlock.id, {
+                          boxW: clamp(Number(e.target.value) || 12, 12, 100),
+                          width:
+                            (Number(e.target.value) || 12) >= 70
+                              ? ("full" as SectionWidth)
+                              : ("half" as SectionWidth),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="block text-[11px] font-bold text-[#9fb0c3]">
+                    Height %
+                    <input
+                      type="number"
+                      min={8}
+                      max={90}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f1520] px-2 py-1.5 text-sm text-white"
+                      value={Math.round(selectedBlock.boxH ?? 16)}
+                      onChange={(e) =>
+                        updateSection(selectedBlock.id, {
+                          boxH: clamp(Number(e.target.value) || 8, 8, 90),
+                        })
+                      }
+                    />
+                  </label>
                 </div>
 
                 {selectedBlock.variant !== "banner" ? (
@@ -1950,29 +2110,55 @@ export function NewsletterEditor({
                   </div>
                 ) : null}
 
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="canva-chip canva-chip-idle"
-                    onClick={() => moveSection(selectedBlock.id, -1)}
-                  >
-                    Move up
-                  </button>
-                  <button
-                    type="button"
-                    className="canva-chip canva-chip-idle"
-                    onClick={() => moveSection(selectedBlock.id, 1)}
-                  >
-                    Move down
-                  </button>
-                  <button
-                    type="button"
-                    className="canva-chip bg-red-500/20 text-red-200"
-                    onClick={() => removeSection(selectedBlock.id)}
-                  >
-                    Delete
-                  </button>
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#8090a3]">
+                    Layering
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      className="canva-chip canva-chip-idle"
+                      onClick={() =>
+                        updateSection(selectedBlock.id, {
+                          zIndex: nextSectionZIndex(sections, layers),
+                        })
+                      }
+                    >
+                      Bring front
+                    </button>
+                    <button
+                      type="button"
+                      className="canva-chip canva-chip-idle"
+                      onClick={() =>
+                        updateSection(selectedBlock.id, { zIndex: 1 })
+                      }
+                    >
+                      Send back
+                    </button>
+                    <button
+                      type="button"
+                      className="canva-chip canva-chip-idle"
+                      onClick={() => moveSection(selectedBlock.id, -1)}
+                    >
+                      Earlier in list
+                    </button>
+                    <button
+                      type="button"
+                      className="canva-chip canva-chip-idle"
+                      onClick={() => moveSection(selectedBlock.id, 1)}
+                    >
+                      Later in list
+                    </button>
+                  </div>
                 </div>
+
+                <button
+                  type="button"
+                  className="canva-chip bg-red-500/20 text-red-200"
+                  onClick={() => removeSection(selectedBlock.id)}
+                >
+                  Delete block
+                </button>
               </>
             ) : null}
 
