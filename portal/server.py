@@ -7379,6 +7379,7 @@ def save_ts_portal_state(data: dict) -> None:
 
 
 def _probe_dns(server: str, name: str = "example.com") -> bool:
+    """Return True when dig @server resolves name to at least one A record."""
     try:
         proc = subprocess.run(
             ["dig", "+time=2", "+tries=1", "+short", f"@{server}", name, "A"],
@@ -7386,7 +7387,17 @@ def _probe_dns(server: str, name: str = "example.com") -> bool:
             text=True,
             timeout=6,
         )
-        return proc.returncode == 0 and bool((proc.stdout or "").strip())
+        if proc.returncode != 0:
+            return False
+        # dig sometimes prints errors on stdout; only count dotted-quad answers.
+        for line in (proc.stdout or "").splitlines():
+            tok = line.strip()
+            if not tok or tok.startswith(";") or " " in tok:
+                continue
+            parts = tok.split(".")
+            if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                return True
+        return False
     except Exception:
         return False
 
@@ -7394,33 +7405,60 @@ def _probe_dns(server: str, name: str = "example.com") -> bool:
 def build_dns_map() -> dict:
     ts = tailscale_status()
     ss = surfshark_status()
-    ag = _probe_dns("127.0.0.1")
+    # AdGuard listens on the circle VIP — not 127.0.0.1 (that probe was always red).
+    ag_addr = OVPN_DNS_ADGUARD or "10.42.42.44"
+    guest_addr = SINGBOX_GUEST_DNS or "10.42.42.45"
+    ag = _probe_dns(ag_addr)
+    guest = _probe_dns(guest_addr)
     pi = _probe_dns("172.30.0.4")
     un = _probe_dns("172.30.0.2")
     coredns = _probe_dns("10.42.42.42") or _probe_dns("10.8.0.1")
+    vip_dns = _probe_dns("10.11.0.1")
     exit_filter = bool(ts.get("exit_dns_filter"))
     run_exit = bool(ts.get("run_exit_node"))
     ss_exit = bool(ss.get("exit_dns_filter"))
     ss_vpn = bool(ss.get("custom_exit_node"))
     paths = [
         {
-            "title": "WireGuard / portal DNS",
+            "title": "OpenVPN / home LAN (circle)",
             "nodes": [
-                {"label": "Client", "detail": "DNS 10.8.0.1", "ok": None},
-                {"label": "CoreDNS", "detail": "portal names", "ok": coredns},
-                {"label": "AdGuard", "detail": "10.42.42.44", "ok": ag},
+                {"label": "Client", "detail": "OVPN / Flint LAN", "ok": None},
+                {"label": "AdGuard", "detail": ag_addr, "ok": ag},
                 {"label": "Pi-hole", "detail": "172.30.0.4", "ok": pi},
                 {"label": "Unbound", "detail": "recursive", "ok": un},
                 {"label": "Internet", "ok": None},
             ],
-            "note": "Used by WireGuard peers (phone / Flint tunnel DNS).",
+            "note": "Allowlisted Circle devices and Flint LAN circle DNS.",
+        },
+        {
+            "title": "OpenVPN / LAN guest DNS",
+            "nodes": [
+                {"label": "Guest client", "detail": "pending / unknown", "ok": None},
+                {"label": "Guest DNS", "detail": guest_addr, "ok": guest},
+                {"label": "Upstream filter", "detail": "no admin rewrites", "ok": guest},
+                {"label": "Internet", "ok": None},
+            ],
+            "note": "Non-circle OVPN/LAN clients (and sing-box guest path).",
+        },
+        {
+            "title": "WireGuard / portal DNS",
+            "nodes": [
+                {"label": "Client", "detail": "DNS 10.8.0.1", "ok": None},
+                {"label": "CoreDNS", "detail": "10.42.42.42 / 10.8.0.1", "ok": coredns},
+                {"label": "VIP DNS", "detail": "10.11.0.1", "ok": vip_dns},
+                {"label": "AdGuard", "detail": ag_addr, "ok": ag},
+                {"label": "Pi-hole", "detail": "172.30.0.4", "ok": pi},
+                {"label": "Unbound", "detail": "recursive", "ok": un},
+                {"label": "Internet", "ok": None},
+            ],
+            "note": "Used by WireGuard peers (phone / tunnel DNS) and portal name rewrites.",
         },
         {
             "title": "Surfshark exit DNS (pass 2)",
             "nodes": [
                 {"label": "WG / Flint client", "detail": "leaked :53", "ok": None},
-                {"label": "DNS redirect", "detail": "→ AdGuard", "ok": ss_exit if ss_vpn else None},
-                {"label": "AdGuard", "ok": ag if ss_vpn else None},
+                {"label": "DNS redirect", "detail": f"→ {ag_addr}", "ok": ss_exit if ss_vpn else None},
+                {"label": "AdGuard", "detail": ag_addr, "ok": ag if ss_vpn else None},
                 {"label": "Pi-hole", "ok": pi if ss_vpn else None},
                 {"label": "Unbound", "ok": un if ss_vpn else None},
                 {"label": "Surfshark tunnel", "detail": ss.get("server") or "—", "ok": ss_vpn},
@@ -7436,7 +7474,7 @@ def build_dns_map() -> dict:
             "nodes": [
                 {"label": "Tailscale client", "detail": "via exit node", "ok": None},
                 {"label": "DNS redirect", "detail": "tailscale0 → :53", "ok": exit_filter if run_exit else None},
-                {"label": "AdGuard", "ok": ag if run_exit else None},
+                {"label": "AdGuard", "detail": ag_addr, "ok": ag if run_exit else None},
                 {"label": "Pi-hole", "ok": pi if run_exit else None},
                 {"label": "Unbound", "ok": un if run_exit else None},
                 {"label": "Internet", "ok": None},
@@ -7452,6 +7490,14 @@ def build_dns_map() -> dict:
         "ok": True,
         "paths": paths,
         "auto_disable_exit": load_ts_portal_state().get("auto_disable_exit", True),
+        "probes": {
+            "adguard": {"addr": ag_addr, "ok": ag},
+            "guest_dns": {"addr": guest_addr, "ok": guest},
+            "pihole": {"addr": "172.30.0.4", "ok": pi},
+            "unbound": {"addr": "172.30.0.2", "ok": un},
+            "coredns": {"ok": coredns},
+            "vip_dns": {"addr": "10.11.0.1", "ok": vip_dns},
+        },
         "tailscale": {
             "enabled": ts.get("enabled"),
             "run_exit_node": run_exit,
