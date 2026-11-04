@@ -39,10 +39,9 @@ export async function PUT(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }
 
-  const designId =
-    typeof body.designId === "string" && isDesignId(body.designId)
-      ? body.designId
-      : existing.designId || DEFAULT_DESIGN_ID;
+  // Always use the clean classroom design (legacy AI packs removed).
+  const designId = DEFAULT_DESIGN_ID;
+  void isDesignId;
 
   const newsletter = {
     ...existing,

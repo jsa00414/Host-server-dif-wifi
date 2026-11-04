@@ -11,7 +11,6 @@ import {
 import { useRouter } from "next/navigation";
 import {
   DEFAULT_DESIGN_ID,
-  NEWSLETTER_DESIGNS,
   SECTION_TONES,
   SECTION_VARIANTS,
   getDesign,
@@ -55,7 +54,6 @@ type ClassInfo = Pick<
 >;
 
 type LeftTab =
-  | "templates"
   | "elements"
   | "photos"
   | "shapes"
@@ -176,7 +174,7 @@ export function NewsletterEditor({
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [leftTab, setLeftTab] = useState<LeftTab>("templates");
+  const [leftTab, setLeftTab] = useState<LeftTab>("elements");
   const [selection, setSelection] = useState<Selection>({ kind: "page" });
   const [zoom, setZoom] = useState(0.82);
   const [showPdf, setShowPdf] = useState(false);
@@ -197,9 +195,7 @@ export function NewsletterEditor({
     initial?.issueDate || new Date().toISOString().slice(0, 10),
   );
   const [published, setPublished] = useState(initial?.published ?? true);
-  const [designId, setDesignId] = useState(
-    initial?.designId || DEFAULT_DESIGN_ID,
-  );
+  const [designId, setDesignId] = useState(DEFAULT_DESIGN_ID);
   const [sections, setSections] = useState<NewsletterSection[]>(() =>
     ensureSectionFrames(
       initial?.sections?.length
@@ -259,7 +255,7 @@ export function NewsletterEditor({
       sections,
       layers,
       pageBackground,
-      designId,
+      designId: DEFAULT_DESIGN_ID,
       slideshowToken: initial?.slideshowToken || "preview-token",
       createdAt: initial?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -453,13 +449,6 @@ export function NewsletterEditor({
     };
   }, [drag, zoom]);
 
-  function applyDesign(nextId: string, loadStarter: boolean) {
-    setDesignId(nextId);
-    if (loadStarter) setSections(sectionsFromStarter(nextId));
-    setPageBackground(undefined);
-    setLeftTab("templates");
-  }
-
   function addShape(shape: ShapeKind) {
     const layer = createShapeLayer(shape, layers, shapeFill);
     layer.zIndex = nextSectionZIndex(sections, layers);
@@ -572,7 +561,7 @@ export function NewsletterEditor({
       footerNote,
       issueDate,
       published,
-      designId,
+      designId: DEFAULT_DESIGN_ID,
       sections,
       layers,
       pageBackground,
@@ -635,7 +624,7 @@ export function NewsletterEditor({
               {title || "Untitled newsletter"}
             </p>
             <p className="truncate text-[11px] text-[#8090a3]">
-              {selectedDesign.name} · Canva-style editor
+              Newsletter editor
             </p>
           </div>
         </div>
@@ -730,7 +719,6 @@ export function NewsletterEditor({
         <nav className="canva-rail flex flex-col items-center gap-2 py-3">
           {(
             [
-              ["templates", "Design", "▦"],
               ["elements", "Elements", "＋"],
               ["photos", "Photos", "▣"],
               ["shapes", "Shapes", "◇"],
@@ -757,92 +745,29 @@ export function NewsletterEditor({
         <aside className="canva-panel flex min-h-0 flex-col overflow-hidden">
           <div className="border-b border-white/10 px-4 py-3">
             <p className="text-sm font-bold text-white">
-              {leftTab === "templates"
-                ? "Templates"
-                : leftTab === "elements"
-                  ? "Elements"
-                  : leftTab === "photos"
-                    ? "Photos"
-                    : leftTab === "shapes"
-                      ? "Shapes"
-                      : leftTab === "background"
-                        ? "Backgrounds"
-                        : "Text & page"}
+              {leftTab === "elements"
+                ? "Elements"
+                : leftTab === "photos"
+                  ? "Photos"
+                  : leftTab === "shapes"
+                    ? "Shapes"
+                    : leftTab === "background"
+                      ? "Backgrounds"
+                      : "Text & page"}
             </p>
             <p className="mt-0.5 text-[11px] text-[#8090a3]">
-              {leftTab === "templates"
-                ? "Click a design to restyle the page"
-                : leftTab === "elements"
-                  ? "Add colorful blocks to the canvas"
-                  : leftTab === "photos"
-                    ? "Upload photos and stack them on the page"
-                    : leftTab === "shapes"
-                      ? "Add rectangles, stars, hearts, and more"
-                      : leftTab === "background"
-                        ? "Pick a solid color or patterned page"
-                        : "Edit title, banner, and footer"}
+              {leftTab === "elements"
+                ? "Add blocks to the canvas"
+                : leftTab === "photos"
+                  ? "Upload photos and stack them on the page"
+                  : leftTab === "shapes"
+                    ? "Add rectangles, stars, hearts, and more"
+                    : leftTab === "background"
+                      ? "Pick a solid color or patterned page"
+                      : "Edit title, banner, and footer"}
             </p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {leftTab === "templates" ? (
-              <div className="grid grid-cols-2 gap-2">
-                {NEWSLETTER_DESIGNS.map((design) => {
-                  const active = design.id === designId;
-                  return (
-                    <button
-                      key={design.id}
-                      type="button"
-                      onClick={() => applyDesign(design.id, !initial)}
-                      className={`overflow-hidden rounded-xl border text-left ${
-                        active
-                          ? "border-violet-400 ring-2 ring-violet-500/50"
-                          : "border-white/10 hover:border-white/25"
-                      }`}
-                    >
-                      <div
-                        className="relative p-1.5"
-                        style={{ background: design.swatches[3] || "#fff" }}
-                      >
-                        <div
-                          className="mb-1 flex h-5 items-center justify-center rounded-md text-[8px] font-black tracking-wide text-white"
-                          style={{ background: design.swatches[0] }}
-                        >
-                          NEWS
-                        </div>
-                        <div className="grid grid-cols-2 gap-1">
-                          <div
-                            className="h-8 rounded-md border border-black/5"
-                            style={{ background: design.swatches[1] }}
-                          />
-                          <div
-                            className="h-8 rounded-md border border-black/5"
-                            style={{ background: design.swatches[2] }}
-                          />
-                        </div>
-                        <div className="mt-1 flex gap-0.5">
-                          {design.swatches.map((c) => (
-                            <span
-                              key={c}
-                              className="h-1.5 flex-1 rounded-full"
-                              style={{ background: c }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      <div className="px-2 py-1.5">
-                        <p className="text-[11px] font-bold text-white">
-                          {design.name}
-                        </p>
-                        <p className="truncate text-[10px] text-[#8090a3]">
-                          {design.tagline}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-
             {leftTab === "elements" ? (
               <div className="space-y-2">
                 {(
@@ -885,9 +810,13 @@ export function NewsletterEditor({
                 <button
                   type="button"
                   className="mt-2 w-full rounded-xl border border-dashed border-white/20 px-3 py-2 text-xs font-bold text-[#9fb0c3] hover:bg-white/5"
-                  onClick={() => applyDesign(designId, true)}
+                  onClick={() => {
+                    setDesignId(DEFAULT_DESIGN_ID);
+                    setSections(sectionsFromStarter(DEFAULT_DESIGN_ID));
+                    setPageBackground(undefined);
+                  }}
                 >
-                  Reset to template starter blocks
+                  Reset to starter blocks
                 </button>
               </div>
             ) : null}
@@ -1201,40 +1130,6 @@ export function NewsletterEditor({
                   onClick={() => setSelection({ kind: "page" })}
                 >
                   {/* Decorative accents by design */}
-                  <div className="pointer-events-none absolute right-5 top-4 z-[1]">
-                    {selectedDesign.decorations === "sun" ? (
-                      <span className="text-4xl">☀️</span>
-                    ) : selectedDesign.decorations === "daisy" ||
-                      selectedDesign.decorations === "gingham" ? (
-                      <span className="text-3xl">🌼</span>
-                    ) : selectedDesign.decorations === "rainbow" ||
-                      selectedDesign.decorations === "boho-rainbow" ? (
-                      <span className="text-4xl">🌈</span>
-                    ) : selectedDesign.decorations === "hearts" ? (
-                      <span className="text-3xl">💕</span>
-                    ) : selectedDesign.decorations === "paperclip" ? (
-                      <span className="text-3xl">📎</span>
-                    ) : selectedDesign.decorations === "spots" ? (
-                      <div className="flex gap-1">
-                        {[0, 1, 2, 3].map((i) => (
-                          <span
-                            key={i}
-                            className="h-2.5 w-2.5 rounded-full bg-neutral-900"
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex gap-1">
-                        {letterColors.slice(0, 6).map((c, i) => (
-                          <span
-                            key={i}
-                            className="h-3 w-3 rounded-full"
-                            style={{ background: c }}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
 
                   <div
                     className="canva-selectable relative z-[1] px-8 pb-3 pt-7"
@@ -1537,17 +1432,6 @@ export function NewsletterEditor({
                                 draggable={false}
                               />
                             ) : null}
-                            {variant === "learning" ? (
-                              <div className="pointer-events-none absolute bottom-2 right-3 text-2xl">
-                                {selectedDesign.decorations === "hearts"
-                                  ? "💕"
-                                  : selectedDesign.decorations === "daisy"
-                                    ? "🌼"
-                                    : selectedDesign.decorations === "ink"
-                                      ? "★"
-                                      : "🌈"}
-                              </div>
-                            ) : null}
                           </div>
                         )}
                       </div>
@@ -1776,12 +1660,10 @@ export function NewsletterEditor({
             {selection.kind === "page" ? (
               <>
                 <p className="text-xs leading-relaxed text-[#9fb0c3]">
-                  Drag text boxes, photos, and shapes freely like Canva. Text
-                  boxes grow with content — no scrollbars inside cards.
+                  Drag text boxes, photos, and shapes freely. Text boxes grow
+                  with content — no scrollbars inside cards.
                 </p>
                 <div className="rounded-xl bg-white/5 p-3 text-xs text-[#c5d0dc]">
-                  Design: <strong>{selectedDesign.name}</strong>
-                  <br />
                   Blocks: {sections.length}
                   <br />
                   Photos: {layers.filter((l) => l.type === "image").length}
@@ -1789,7 +1671,7 @@ export function NewsletterEditor({
                   Shapes: {layers.filter((l) => l.type === "shape").length}
                   <br />
                   Background:{" "}
-                  {pageBackground?.pattern || selectedDesign.pagePattern || "default"}
+                  {pageBackground?.pattern || pageBackground?.color || "white"}
                 </div>
               </>
             ) : null}

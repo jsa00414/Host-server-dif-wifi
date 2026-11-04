@@ -36,10 +36,8 @@ export async function POST(request: Request) {
   }
 
   const now = new Date().toISOString();
-  const designId =
-    typeof body.designId === "string" && isDesignId(body.designId)
-      ? body.designId
-      : DEFAULT_DESIGN_ID;
+  const designId = DEFAULT_DESIGN_ID;
+  void isDesignId;
 
   const newsletter: Newsletter = {
     id: randomUUID(),
