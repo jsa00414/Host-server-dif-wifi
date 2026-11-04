@@ -7,7 +7,7 @@ import {
   saveNewsletter,
   savePdf,
 } from "@/lib/storage";
-import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { DEFAULT_DESIGN_ID } from "@/lib/designs";
 import { normalizePageBackground } from "@/lib/backgrounds";
 import { normalizeLayers } from "@/lib/layers";
 import { materializeNewsletterImages } from "@/lib/materializeImages";
@@ -41,7 +41,6 @@ export async function PUT(request: Request, { params }: Params) {
 
   // Always use the clean classroom design (legacy AI packs removed).
   const designId = DEFAULT_DESIGN_ID;
-  void isDesignId;
 
   const newsletter = {
     ...existing,

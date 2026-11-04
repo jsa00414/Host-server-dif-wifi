@@ -7,7 +7,7 @@ import {
   savePdf,
 } from "@/lib/storage";
 import { buildNewsletterPdf } from "@/lib/pdf";
-import { DEFAULT_DESIGN_ID, isDesignId } from "@/lib/designs";
+import { DEFAULT_DESIGN_ID } from "@/lib/designs";
 import { normalizePageBackground } from "@/lib/backgrounds";
 import { normalizeLayers } from "@/lib/layers";
 import { materializeNewsletterImages } from "@/lib/materializeImages";
@@ -37,7 +37,6 @@ export async function POST(request: Request) {
 
   const now = new Date().toISOString();
   const designId = DEFAULT_DESIGN_ID;
-  void isDesignId;
 
   const newsletter: Newsletter = {
     id: randomUUID(),
