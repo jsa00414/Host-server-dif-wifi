@@ -1,0 +1,110 @@
+services:
+  unbound:
+    image: mvance/unbound:1.17.1
+    container_name: sm-unbound
+    restart: unless-stopped
+    networks:
+      sm_dns:
+        ipv4_address: 172.30.0.2
+
+  pihole:
+    image: pihole/pihole:2026.07.2
+    container_name: sm-pihole
+    restart: unless-stopped
+    depends_on:
+      - unbound
+    environment:
+      TZ: UTC
+      FTLCONF_webserver_api_password: ${WEBPASSWORD}
+      FTLCONF_dns_upstreams: 172.30.0.2#53
+      FTLCONF_dns_listeningMode: ALL
+      FTLCONF_dns_dnssec: "false"
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+    networks:
+      sm_dns:
+        ipv4_address: 172.30.0.4
+      truemail_truemail: {}
+    ports:
+      - "127.0.0.1:8089:80/tcp"
+    cap_add:
+      - NET_ADMIN
+    dns:
+      - 172.30.0.2
+      - 1.1.1.1
+
+  adguard:
+    image: adguard/adguardhome:v0.107.61
+    container_name: sm-adguard
+    restart: unless-stopped
+    depends_on:
+      - pihole
+    networks:
+      sm_dns:
+        ipv4_address: 172.30.0.3
+      wireguard_wg:
+        ipv4_address: 10.42.42.44
+      truemail_truemail: {}
+    ports:
+      - "127.0.0.1:3000:3000/tcp"
+    volumes:
+      - ./adguard/work:/opt/adguardhome/work
+      - ./adguard/conf:/opt/adguardhome/conf
+
+  pihole-sso:
+    image: python:3.12-alpine
+    container_name: sm-pihole-sso
+    restart: unless-stopped
+    depends_on:
+      - pihole
+    command: ["python3", "/app/pihole_sso.py"]
+    environment:
+      PIHOLE_URL: http://sm-pihole:80
+      PIHOLE_PASSWORD_FILE: /secrets/PIHOLE_PASSWORD.txt
+      PIHOLE_SSO_SECRET_FILE: /secrets/PIHOLE_SSO_SECRET.txt
+      PIHOLE_SSO_PORT: "5081"
+    volumes:
+      - ./pihole_sso.py:/app/pihole_sso.py:ro
+      - ./PIHOLE_PASSWORD.txt:/secrets/PIHOLE_PASSWORD.txt:ro
+      - ./PIHOLE_SSO_SECRET.txt:/secrets/PIHOLE_SSO_SECRET.txt:ro
+    networks:
+      sm_dns:
+        ipv4_address: 172.30.0.6
+
+  guest-dns:
+    image: coredns/coredns:1.11.3
+    container_name: sm-guest-dns
+    restart: unless-stopped
+    command: ["-conf", "/Corefile"]
+    volumes:
+      - ./guest-nxdomain/Corefile:/Corefile:ro
+    networks:
+      sm_dns: {}
+      wireguard_wg:
+        ipv4_address: 10.42.42.45
+
+  inject:
+    image: nginx:1.27-alpine
+    container_name: sm-dns-inject
+    restart: unless-stopped
+    depends_on:
+      - adguard
+      - pihole
+      - pihole-sso
+    volumes:
+      - ./inject/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      sm_dns: {}
+      truemail_truemail: {}
+
+networks:
+  sm_dns:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  wireguard_wg:
+    external: true
+  truemail_truemail:
+    external: true

@@ -49,6 +49,25 @@ if ! dig_ok "$GUEST_DNS_IP"; then
   dig_ok "$GUEST_DNS_IP" && log "guest-dns recovered" || { log "guest-dns still bad"; fail=1; }
 fi
 
+# Portal embeds (dns.* / pihole.*) reverse-proxy through sm-dns-inject.
+inject_ok() {
+  docker inspect -f '{{.State.Running}}' sm-dns-inject 2>/dev/null | grep -qx true
+}
+if ! inject_ok; then
+  log "sm-dns-inject down — recreating portal AdGuard/Pi-hole gateway"
+  if [[ -f /opt/dns/docker-compose.yml ]]; then
+    docker compose -f /opt/dns/docker-compose.yml up -d inject >/dev/null 2>&1 || true
+  fi
+  docker start sm-dns-inject >/dev/null 2>&1 || true
+  sleep 2
+  if inject_ok; then
+    log "sm-dns-inject recovered"
+  else
+    log "sm-dns-inject still bad"
+    fail=1
+  fi
+fi
+
 # Keep OVPN raw allow + guest DNAT exclusion in place (docker recreate drops raw).
 if [[ -x /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh ]]; then
   /opt/wireguard/port-forward-ui/scripts/openvpn/ovpn-firewall.sh >/dev/null 2>&1 || true
