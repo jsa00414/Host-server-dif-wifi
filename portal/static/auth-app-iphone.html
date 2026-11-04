@@ -837,7 +837,7 @@
       <section class="panel network-pane" id="networkPane" hidden>
         <div class="panel-head">
           <h3>Exit</h3>
-          <p>Route one Circle device through Tailscale or Surfshark.</p>
+          <p>Route one Circle device through Tailscale or Surfshark (Surfshark always goes through Xray).</p>
         </div>
         <div class="net-control">
           <div class="label">Controlling</div>
@@ -858,7 +858,7 @@
           <div>
             <button type="button" class="choice" data-provider="surfshark" id="netBtnSs">
               <span class="title">Surfshark</span>
-              <span class="hint">Route this IP through the Surfshark WireGuard tunnel.</span>
+              <span class="hint">This IP → Xray → Surfshark WireGuard (hides exit from the path).</span>
             </button>
             <select id="netSsServer" aria-label="Surfshark server" hidden></select>
           </div>

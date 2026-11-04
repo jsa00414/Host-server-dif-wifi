@@ -11,12 +11,16 @@ TS_HOST_PROTECT="${TS_HOST_PROTECT:-/opt/dns/ts-host-protect.sh}"
 
 CHAIN="SM-DEVICE-EXIT"
 COMMENT="SM-DEV-EXIT"
+COMMENT_XRAY="SM-DEV-EXIT-XRAY"
 TS_MARK="0x174"
 SS_MARK="0x184"
 DIRECT_MARK="0x170"
 TS_TABLE="52"
 SS_TABLE="53"
 TS_IFACE="tailscale0"
+# TCP for Surfshark exits always goes device → Xray dokodemo → Surfshark.
+XRAY_SS_DOKODEMO_PORT="${XRAY_SS_DOKODEMO_PORT:-18082}"
+XRAY_SETUP="${XRAY_SETUP_SCRIPT:-/opt/wireguard/port-forward-ui/scripts/xray/setup-xray.sh}"
 # Flint site-to-site SNATs home LAN onto this OVPN VIP before packets hit the VPS.
 # Per-LAN /32 marks alone never match Wi‑Fi Circle devices — also mark the VIP.
 FLINT_OVPN_IP="${FLINT_OVPN_IP:-10.9.0.2}"
@@ -128,6 +132,75 @@ del_device_chain() {
   while iptables -t mangle -D PREROUTING -j "$CHAIN" 2>/dev/null; do :; done
   iptables -t mangle -F "$CHAIN" 2>/dev/null || true
   iptables -t mangle -X "$CHAIN" 2>/dev/null || true
+}
+
+flush_ss_xray_redirects() {
+  local nat_chain="SM-DEV-EXIT-XRAY"
+  local tmp
+  while iptables -t nat -D PREROUTING -j "$nat_chain" 2>/dev/null; do :; done
+  iptables -t nat -F "$nat_chain" 2>/dev/null || true
+  iptables -t nat -X "$nat_chain" 2>/dev/null || true
+  # Scrub any legacy inline COMMENT_XRAY rules from older builds.
+  tmp="$(mktemp)"
+  iptables -t nat -S PREROUTING 2>/dev/null \
+    | grep "comment --comment $COMMENT_XRAY" \
+    | sed 's/^-A /-D /' >"$tmp" || true
+  while read -r line; do
+    [ -n "$line" ] || continue
+    # shellcheck disable=SC2086
+    iptables -t nat $line 2>/dev/null || true
+  done <"$tmp"
+  rm -f "$tmp"
+}
+
+ensure_xray_ss_chain() {
+  # Refresh Xray so dokodemo-surfshark-exit + via-surfshark outbound exist.
+  if [ -x "$XRAY_SETUP" ]; then
+    bash "$XRAY_SETUP" >/tmp/sm-xray-ss-exit-setup.log 2>&1 || true
+  fi
+  systemctl is-active --quiet sm-xray 2>/dev/null || systemctl restart sm-xray 2>/dev/null || true
+}
+
+install_ss_xray_redirects() {
+  # $1 = newline-separated source IPs that should Surfshark via Xray.
+  local ips="$1"
+  local ip cidr
+  local nat_chain="SM-DEV-EXIT-XRAY"
+  flush_ss_xray_redirects
+  # Drop prior dedicated chain jump / contents.
+  while iptables -t nat -D PREROUTING -j "$nat_chain" 2>/dev/null; do :; done
+  iptables -t nat -F "$nat_chain" 2>/dev/null || true
+  iptables -t nat -X "$nat_chain" 2>/dev/null || true
+  [ -n "$ips" ] || return 0
+  ensure_xray_ss_chain
+
+  iptables -t nat -N "$nat_chain" 2>/dev/null || iptables -t nat -F "$nat_chain"
+
+  # Private / VPS / DNS never enter the Surfshark Xray hop.
+  for cidr in \
+    10.0.0.0/8 \
+    172.16.0.0/12 \
+    192.168.0.0/16 \
+    "${PUBLIC_IP}/32" \
+    100.64.0.0/10 \
+    10.11.0.1/32 \
+    10.42.42.44/32 \
+    10.42.42.45/32
+  do
+    iptables -t nat -A "$nat_chain" -d "$cidr" -p tcp \
+      -m comment --comment "$COMMENT_XRAY" -j RETURN
+  done
+
+  while IFS= read -r ip; do
+    [ -n "$ip" ] || continue
+    is_ipv4 "$ip" || continue
+    iptables -t nat -A "$nat_chain" -s "${ip}/32" -p tcp \
+      -m comment --comment "$COMMENT_XRAY" \
+      -j REDIRECT --to-ports "$XRAY_SS_DOKODEMO_PORT"
+  done <<<"$ips"
+
+  # Jump first so Surfshark→Xray wins over LAN circle→:18080 / guest→sing-box.
+  iptables -t nat -I PREROUTING 1 -j "$nat_chain"
 }
 
 ensure_ss_backend() {
@@ -275,8 +348,10 @@ PY
 apply_rules() {
   export STATE_JSON
   local lines need_ss=0 need_ts=0 need_flint_ts=0 need_flint_ss=0
+  local ss_xray_ips=""
   lines="$(STATE_JSON="$STATE_JSON" read_json_devices)"
   del_device_chain
+  flush_ss_xray_redirects
   iptables -t mangle -N "$CHAIN" 2>/dev/null || iptables -t mangle -F "$CHAIN"
 
   # Private / VPS destinations never take a VPN exit mark.
@@ -293,6 +368,9 @@ apply_rules() {
     case "$prov" in
       surfshark)
         need_ss=1
+        ss_xray_ips="${ss_xray_ips}${ip}"$'\n'
+        # Mark still required: Xray outbound sockopt uses SS_MARK, and UDP
+        # (not redirected) policy-routes via table 53.
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$SS_MARK"
         if is_home_lan_ipv4 "$ip"; then need_flint_ss=1; fi
         ;;
@@ -313,6 +391,7 @@ apply_rules() {
     iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$TS_MARK"
   elif [ "$need_flint_ss" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
     iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$SS_MARK"
+    ss_xray_ips="${ss_xray_ips}${FLINT_OVPN_IP}"$'\n'
   fi
 
   # Jump first so device marks win over global SM-TS / SM-SS subnet marks.
@@ -329,6 +408,8 @@ apply_rules() {
       fi
     done <<<"$lines"
     ensure_ss_backend "$ss_server" || true
+    # TCP: always Xray between the device and Surfshark.
+    install_ss_xray_redirects "$ss_xray_ips"
   fi
   if [ "$need_ts" -eq 1 ]; then
     local ts_exit=""
@@ -343,7 +424,7 @@ apply_rules() {
     clear_ts_backend || true
   fi
 
-  echo "applied device-exit ($(echo "$lines" | grep -c . || true) device(s)); need_ss=$need_ss need_ts=$need_ts"
+  echo "applied device-exit ($(echo "$lines" | grep -c . || true) device(s)); need_ss=$need_ss need_ts=$need_ts xray_ss_tcp=$XRAY_SS_DOKODEMO_PORT"
 }
 
 status_out() {

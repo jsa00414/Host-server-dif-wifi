@@ -35,3 +35,16 @@ sudo bash /opt/wireguard/port-forward-ui/scripts/xray/setup-xray.sh
 Import the `vless://` share link into v2rayN / v2rayNG / Streisand / Hiddify.
 DNS on the client can stay default; for circle admin names over Xray, point
 DNS at AdGuard `10.42.42.44` only when also on OVPN/LAN.
+
+## Authenticator Surfshark exit (always via Xray)
+
+When Exit → Surfshark is selected in the Authenticator app for a Circle
+device, TCP is redirected into Xray dokodemo `:18082`, then Xray’s
+`via-surfshark` outbound (fwmark `0x184`) leaves through the Surfshark
+WireGuard interface:
+
+`device → Xray → Surfshark → internet`
+
+UDP still policy-routes with the same mark (not redirected). Direct
+circle LAN traffic (no Surfshark exit) continues to use dokodemo `:18080`
+→ VPS public IP.

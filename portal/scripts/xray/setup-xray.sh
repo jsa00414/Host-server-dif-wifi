@@ -12,6 +12,10 @@ XRAY_SNI="${XRAY_SNI:-www.microsoft.com}"
 XRAY_DEST="${XRAY_DEST:-www.microsoft.com:443}"
 # Transparent dokodemo for Flint LAN circle users (iptables REDIRECT).
 XRAY_DOKODEMO_PORT="${XRAY_DOKODEMO_PORT:-18080}"
+# Authenticator Surfshark exit: device → Xray → Surfshark (fwmark 0x184).
+XRAY_SS_DOKODEMO_PORT="${XRAY_SS_DOKODEMO_PORT:-18082}"
+# iptables mark used by sm-device-exit / ss-vpn-exit (0x184).
+XRAY_SS_FWMARK="${XRAY_SS_FWMARK:-388}"
 CLIENTS_FILE="${XRAY_CLIENTS_FILE:-$XRAY_DIR/clients.json}"
 KEYS_FILE="${XRAY_KEYS_FILE:-$XRAY_DIR/reality.keys}"
 CONFIG_FILE="${XRAY_CONFIG_FILE:-$XRAY_DIR/config.json}"
@@ -100,6 +104,7 @@ PY
 
 write_config() {
   export XRAY_DIR XRAY_PORT XRAY_HOST XRAY_SNI XRAY_DEST XRAY_DOKODEMO_PORT
+  export XRAY_SS_DOKODEMO_PORT XRAY_SS_FWMARK
   export CLIENTS_FILE KEYS_FILE CONFIG_FILE XRAY_BIN
   python3 - <<'PY'
 import json
@@ -131,6 +136,8 @@ for row in clients_raw.get("clients") or []:
 
 port = int(os.environ.get("XRAY_PORT", "8444"))
 dokodemo = int(os.environ.get("XRAY_DOKODEMO_PORT", "18080"))
+ss_dokodemo = int(os.environ.get("XRAY_SS_DOKODEMO_PORT", "18082"))
+ss_mark = int(os.environ.get("XRAY_SS_FWMARK", "388"))
 sni = os.environ.get("XRAY_SNI", "www.microsoft.com")
 dest = os.environ.get("XRAY_DEST", "www.microsoft.com:443")
 cfg = {
@@ -180,22 +187,54 @@ cfg = {
                 "destOverride": ["http", "tls", "quic"],
             },
         },
+        {
+            # Authenticator Surfshark exit: always Xray between device and Surfshark.
+            "tag": "dokodemo-surfshark-exit",
+            "listen": "127.0.0.1",
+            "port": ss_dokodemo,
+            "protocol": "dokodemo-door",
+            "settings": {
+                "network": "tcp",
+                "followRedirect": True,
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+            },
+        },
     ],
     "outbounds": [
         {"protocol": "freedom", "tag": "direct"},
+        {
+            "protocol": "freedom",
+            "tag": "via-surfshark",
+            "streamSettings": {"sockopt": {"mark": ss_mark}},
+        },
         {"protocol": "blackhole", "tag": "block"},
     ],
     "routing": {
         "domainStrategy": "AsIs",
         "rules": [
-            {"type": "field", "inboundTag": ["dokodemo-lan-circle"], "outboundTag": "direct"},
+            {
+                "type": "field",
+                "inboundTag": ["dokodemo-surfshark-exit"],
+                "outboundTag": "via-surfshark",
+            },
+            {
+                "type": "field",
+                "inboundTag": ["dokodemo-lan-circle"],
+                "outboundTag": "direct",
+            },
             {"type": "field", "ip": ["geoip:private"], "outboundTag": "block"},
         ],
     },
 }
 Path(os.environ["CONFIG_FILE"]).write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 os.chmod(os.environ["CONFIG_FILE"], 0o600)
-print(f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)} dokodemo={dokodemo}")
+print(
+    f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)} "
+    f"dokodemo={dokodemo} ss_dokodemo={ss_dokodemo} ss_mark={ss_mark}"
+)
 PY
 }
 
