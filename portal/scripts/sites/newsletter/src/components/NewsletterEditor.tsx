@@ -24,7 +24,6 @@ import {
 import {
   TONE_FILL,
   designToneCss,
-  letterColorCss,
   rgbCss,
 } from "@/lib/editorTheme";
 import {
@@ -224,10 +223,6 @@ export function NewsletterEditor({
   const [previewBusy, setPreviewBusy] = useState(false);
 
   const selectedDesign = useMemo(() => getDesign(designId), [designId]);
-  const letterColors = useMemo(
-    () => letterColorCss(selectedDesign),
-    [selectedDesign],
-  );
   const sortedSections = useMemo(
     () =>
       [...sections].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)),
@@ -1176,44 +1171,21 @@ export function NewsletterEditor({
                           CLASSROOM NEWSLETTER
                         </p>
                       </div>
-                    ) : selectedDesign.headerStyle === "boho" ? (
+                    ) : (
                       <>
                         <input
-                          className="canva-editable font-[Georgia,Times,serif] text-[32px] italic leading-none"
+                          className="canva-editable text-center font-[Georgia,Times,serif] text-[32px] font-bold leading-none"
                           style={{ color: rgbCss(selectedDesign.scriptColor) }}
                           value={title}
                           onChange={(e) => setTitle(e.target.value)}
                           placeholder="Classroom"
                         />
                         <p
-                          className="mt-2 text-lg font-black tracking-wide"
+                          className="mt-2 text-center text-sm font-extrabold uppercase tracking-[0.18em]"
                           style={{ color: rgbCss(selectedDesign.bannerBar) }}
                         >
-                          OUR CLASS NEWS
+                          Newsletter
                         </p>
-                      </>
-                    ) : (
-                      <>
-                        <input
-                          className="canva-editable font-[Georgia,Times,serif] text-[34px] italic leading-none"
-                          style={{ color: rgbCss(selectedDesign.scriptColor) }}
-                          value={title}
-                          onChange={(e) => setTitle(e.target.value)}
-                          placeholder="Classroom"
-                        />
-                        <div className="mt-2 flex flex-wrap gap-[2px] font-black tracking-wide">
-                          {"NEWSLETTER".split("").map((ch, i) => (
-                            <span
-                              key={`${ch}-${i}`}
-                              className="text-[34px] leading-none"
-                              style={{
-                                color: letterColors[i % letterColors.length],
-                              }}
-                            >
-                              {ch}
-                            </span>
-                          ))}
-                        </div>
                       </>
                     )}
                     <p className="mt-2 text-[11px]" style={{ color: rgbCss(selectedDesign.muted) }}>

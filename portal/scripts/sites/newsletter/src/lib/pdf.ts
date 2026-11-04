@@ -566,21 +566,23 @@ function drawHeader(
 
   if (design.headerStyle === "soft-pill") {
     rgb(doc, design.scriptColor, "text");
-    doc.setFont("times", "italic");
+    doc.setFont("helvetica", "bold");
     doc.setFontSize(28);
-    doc.text(script, margin, 54);
-    drawMulticolorTitle(doc, "Newsletter", margin, 88, design.letterColors, 30);
+    doc.text(script, pageWidth / 2, 54, { align: "center" });
+    doc.setFontSize(12);
+    rgb(doc, design.bannerBar, "text");
+    doc.text("NEWSLETTER", pageWidth / 2, 76, { align: "center" });
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     rgb(doc, design.muted, "text");
-    doc.text(meta, margin, 108);
+    doc.text(meta, pageWidth / 2, 98, { align: "center" });
     rgb(doc, design.bannerBar, "fill");
-    doc.roundedRect(margin, 122, pageWidth - margin * 2, 28, 14, 14, "F");
+    doc.roundedRect(margin, 114, pageWidth - margin * 2, 28, 14, 14, "F");
     rgb(doc, design.bannerText, "text");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text(label, pageWidth / 2, 140, { align: "center" });
-    return 164;
+    doc.text(label, pageWidth / 2, 132, { align: "center" });
+    return 156;
   }
 
   // rainbow-letters (default)
