@@ -5,11 +5,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DEST="${GRAFANA_DIR:-/opt/grafana}"
 PORT="${GRAFANA_PORT:-3016}"
-DOMAIN="${GF_DOMAIN:-grafana.vpstruelord.com}"
-ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}}"
+DOMAIN="${GF_DOMAIN:-portal.vpstruelord.com}"
+ROOT_URL="${GF_ROOT_URL:-https://${DOMAIN}/grafana/}"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$DEST/prometheus"
 cp -f "$ROOT/docker-compose.yml" "$DEST/docker-compose.yml"
+if [[ -f "$ROOT/prometheus.yml" ]]; then
+  cp -f "$ROOT/prometheus.yml" "$DEST/prometheus/prometheus.yml"
+fi
 
 ENV_FILE="$DEST/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -39,5 +42,6 @@ docker compose pull
 docker compose up -d
 sleep 2
 docker compose ps
-echo "Grafana listening on 0.0.0.0:${PORT} → ${ROOT_URL}"
+echo "Grafana portal embed → ${ROOT_URL} (host port ${PORT})"
 curl -sS -o /dev/null -w "health_http=%{http_code}\n" "http://127.0.0.1:${PORT}/api/health" || true
+curl -sS -o /dev/null -w "subpath_login=%{http_code}\n" "http://127.0.0.1:${PORT}/grafana/login" || true

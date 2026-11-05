@@ -1,0 +1,14 @@
+[Unit]
+Description=ServerManager boot heal (compose, VPN Caddy site, IMAP)
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+ConditionPathExists=/opt/truemail/docker-compose.yml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sm-boot-heal
+RemainAfterExit=yes
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
