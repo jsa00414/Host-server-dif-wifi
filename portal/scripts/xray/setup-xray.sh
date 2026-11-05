@@ -174,8 +174,10 @@ cfg = {
             },
         },
         {
+            # Must listen on 0.0.0.0: iptables REDIRECT delivers to the
+            # ingress iface address (e.g. tun0 10.9.0.1), not 127.0.0.1.
             "tag": "dokodemo-lan-circle",
-            "listen": "127.0.0.1",
+            "listen": "0.0.0.0",
             "port": dokodemo,
             "protocol": "dokodemo-door",
             "settings": {
@@ -189,8 +191,9 @@ cfg = {
         },
         {
             # Authenticator Surfshark exit: always Xray between device and Surfshark.
+            # Same REDIRECT/iface-IP rule as dokodemo-lan-circle above.
             "tag": "dokodemo-surfshark-exit",
-            "listen": "127.0.0.1",
+            "listen": "0.0.0.0",
             "port": ss_dokodemo,
             "protocol": "dokodemo-door",
             "settings": {
@@ -304,6 +307,32 @@ open_firewall() {
   # iptables fallback idempotent accept
   iptables -C INPUT -p tcp --dport "$XRAY_PORT" -m comment --comment SM-XRAY -j ACCEPT 2>/dev/null \
     || iptables -I INPUT 1 -p tcp --dport "$XRAY_PORT" -m comment --comment SM-XRAY -j ACCEPT
+
+  # Dokodemo listens on 0.0.0.0 so iptables REDIRECT (iface IP:port) works.
+  # Never expose those ports on the public address/NIC — VPN iface REDIRECT only.
+  public_if="$(ip -4 route show default 0.0.0.0/0 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
+  public_if="${public_if:-ens6}"
+  public_ip="$(ip -4 -o addr show dev "$public_if" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1)"
+  public_ip="${public_ip:-74.208.76.213}"
+  while iptables -D INPUT -i "$public_if" -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-DENY" -j DROP 2>/dev/null; do :; done
+  while iptables -D INPUT -d "$public_ip" -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-DENY-IP" -j DROP 2>/dev/null; do :; done
+  while iptables -D INPUT -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-ALLOW" -j ACCEPT 2>/dev/null; do :; done
+  # Deny public destination/NIC first, then allow VPN/local REDIRECT targets.
+  iptables -I INPUT 1 -d "$public_ip" -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-DENY-IP" -j DROP
+  iptables -I INPUT 2 -i "$public_if" -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-DENY" -j DROP
+  iptables -I INPUT 3 -p tcp \
+    -m multiport --dports "${XRAY_DOKODEMO_PORT},${XRAY_SS_DOKODEMO_PORT}" \
+    -m comment --comment "SM-XRAY-DOKO-ALLOW" -j ACCEPT
 }
 
 install_xray_binary
@@ -315,4 +344,4 @@ write_env_hints
 open_firewall
 systemctl restart sm-xray.service
 systemctl --no-pager --full status sm-xray.service | head -20
-echo "xray ready on :${XRAY_PORT} (VLESS REALITY SNI=${XRAY_SNI})"
+echo "xray ready on :${XRAY_PORT} (VLESS REALITY SNI=${XRAY_SNI}); dokodemo :${XRAY_DOKODEMO_PORT}/:${XRAY_SS_DOKODEMO_PORT} on 0.0.0.0 (public NIC denied)"

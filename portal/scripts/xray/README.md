@@ -45,6 +45,11 @@ WireGuard interface:
 
 `device → Xray → Surfshark → internet`
 
+Both dokodemo inbounds listen on `0.0.0.0` because iptables `REDIRECT`
+delivers to the ingress interface address (e.g. `10.9.0.1:18082` on
+`tun0`), not loopback. `setup-xray.sh` drops those ports on the public
+NIC so they stay VPN/local-only.
+
 UDP still policy-routes with the same mark (not redirected). Direct
 circle LAN traffic (no Surfshark exit) continues to use dokodemo `:18080`
 → VPS public IP.
