@@ -5031,11 +5031,18 @@ def ensure_plex_hookup(rules: list[dict]) -> list[dict]:
 
 
 def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
-    """Guarantee grafana.* exists only as a redirect to the portal embed."""
+    """Guarantee grafana.* exists as a redirect to the portal embed.
+
+    Honor Domains-tab VPN only / Circle only — do not force them off on save.
+    """
     out = [dict(r) for r in (rules or [])]
     domain = GRAFANA_PUBLIC_HOST.lower()
     for i, rule in enumerate(out):
         if str(rule.get("domain") or "").strip().lower() == domain:
+            vpn_only = _as_bool(rule.get("vpn_only", False))
+            circle_only = _as_bool(rule.get("circle_only", False))
+            if circle_only:
+                vpn_only = True
             out[i] = _normalize_hookup_rule(
                 {
                     **rule,
@@ -5044,9 +5051,10 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
                     "target_host": GRAFANA_HOST,
                     "target_port": GRAFANA_PORT,
                     "name": rule.get("name") or "grafana",
-                    # Standalone hostname is retired; portal /grafana/ is the only UI.
-                    "vpn_only": False,
-                    "circle_only": False,
+                    # Hostname still redirects into portal /grafana/; access
+                    # gates control who can hit grafana.* at all.
+                    "vpn_only": vpn_only,
+                    "circle_only": circle_only,
                 }
             )
             return out
@@ -5068,20 +5076,36 @@ def ensure_grafana_hookup(rules: list[dict]) -> list[dict]:
 
 
 def _grafana_hookup_site_lines(rule: dict) -> list[str]:
-    """grafana.* only redirects into the portal — no direct Grafana UI."""
+    """grafana.* redirects into the portal embed; optional VPN/Circle gate."""
     public = GRAFANA_PUBLIC_HOST
     portal = (PORTAL_HOST or "portal.vpstruelord.com").strip() or "portal.vpstruelord.com"
-    return [
+    vpn_only = _hookup_is_access_gated(rule)
+    lines = [
         f"{public} {{",
-        f"\tredir https://{portal}/ 302",
-        "\theader {",
-        '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
-        "\t\tX-Content-Type-Options nosniff",
-        "\t\tReferrer-Policy strict-origin-when-cross-origin",
-        "\t}",
-        "}",
-        "",
     ]
+    if vpn_only:
+        lines.extend(_caddy_denied_wan_lines("\t"))
+        lines.append(f"\t@vpn_clients client_ip {_hookup_client_ip_cidrs(rule)}")
+        lines.append("\thandle @vpn_clients {")
+        lines.append(f"\t\tredir https://{portal}/ 302")
+        lines.append("\t}")
+        lines.append("\thandle {")
+        lines.extend(_caddy_unreachable_respond_lines("\t\t"))
+        lines.append("\t}")
+    else:
+        lines.append(f"\tredir https://{portal}/ 302")
+    lines.extend(
+        [
+            "\theader {",
+            '\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains; preload"',
+            "\t\tX-Content-Type-Options nosniff",
+            "\t\tReferrer-Policy strict-origin-when-cross-origin",
+            "\t}",
+            "}",
+            "",
+        ]
+    )
+    return lines
 
 
 def keys_public_base() -> str:
