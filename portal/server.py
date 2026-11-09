@@ -5805,6 +5805,8 @@ def validate_hookups(rules: list[dict], *, allow_external: bool = True) -> list[
         }
         if target_hosts:
             entry["target_hosts"] = target_hosts
+        if _as_bool(rule.get("upstream_https", False)):
+            entry["upstream_https"] = True
         cleaned.append(_normalize_hookup_rule(entry))
     return cleaned
 
@@ -6894,6 +6896,10 @@ def write_and_apply(payload: dict) -> dict:
     router_in = payload.get("router") or {}
     hookups_in = payload.get("hookups") or {}
     firewall_in = payload.get("firewall") or {}
+    # Validate Domains before mutating VPS/router so a bad hookup row cannot
+    # leave a half-applied Save & Apply.
+    if "rules" in hookups_in:
+        ensure_managed_hookups(validate_hookups(hookups_in.get("rules") or []))
     with _apply_lock:
         vps_result = write_vps_state(vps_in.get("rules", []), vps_in.get("comments"))
         router_result = write_router_state(

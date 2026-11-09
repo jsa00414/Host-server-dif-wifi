@@ -2629,13 +2629,6 @@
                 </div>
                 <label class="switch"><input type="checkbox" id="settingsAutoRefresh" /><span></span></label>
               </div>
-              <div class="settings-row">
-                <div class="meta">
-                  <strong>Confirm Save &amp; Apply</strong>
-                  <small>Ask before applying Internet / Domains / Firewall changes</small>
-                </div>
-                <label class="switch"><input type="checkbox" id="settingsConfirmSave" checked /><span></span></label>
-              </div>
             </div>
           </div>
         </div>
@@ -3015,6 +3008,7 @@
         loadNasFilesFrame(true);
       }
       if (name === "overview") { refreshVpsStatus(); refreshSecurity(true); }
+      if (name === "domains") { renderHookups(); updateCounts(); }
       if (name === "dnsmap") { refreshDnsMap(); }
       if (name === "tailscale") { refreshTailscale(); }
       if (name === "surfshark") { refreshSurfshark(); }
@@ -3273,18 +3267,27 @@
       return [...document.querySelectorAll("#hookupMine .rule, #hookupSystem .rule")]
         .sort((a, b) => Number(a.dataset.idx) - Number(b.dataset.idx))
         .map((el) => {
+          const idx = Number(el.dataset.idx);
+          const prev = (Number.isFinite(idx) && hookupRules[idx]) ? hookupRules[idx] : {};
           const circleOnly = !!el.querySelector('[data-k="circle_only"]')?.checked;
           const vpnOnly = circleOnly || !!el.querySelector('[data-k="vpn_only"]')?.checked;
-          return {
-            enabled: el.querySelector('[data-k="enabled"]').checked,
+          const enabledEl = el.querySelector('[data-k="enabled"]');
+          const row = {
+            enabled: enabledEl ? !!enabledEl.checked : prev.enabled !== false,
             vpn_only: vpnOnly,
             circle_only: circleOnly,
-            domain: el.querySelector('[data-k="domain"]').value.trim(),
-            target_host: el.querySelector('[data-k="target_host"]').value.trim(),
-            target_port: el.querySelector('[data-k="target_port"]').value.trim(),
-            name: el.querySelector('[data-k="name"]').value.trim(),
-            external: el.dataset.external === "1",
+            domain: (el.querySelector('[data-k="domain"]')?.value || "").trim(),
+            target_host: (el.querySelector('[data-k="target_host"]')?.value || "").trim(),
+            target_port: (el.querySelector('[data-k="target_port"]')?.value || "").trim(),
+            name: (el.querySelector('[data-k="name"]')?.value || "").trim(),
+            external: el.dataset.external === "1" || !!prev.external,
           };
+          // Keep server-only fields the form does not edit (Proxmox HTTPS upstream, etc.).
+          if (prev.upstream_https) row.upstream_https = true;
+          if (Array.isArray(prev.target_hosts) && prev.target_hosts.length) {
+            row.target_hosts = prev.target_hosts.slice();
+          }
+          return row;
         });
     }
     function readFwForm() {
@@ -3512,6 +3515,14 @@
       lanDevices = data.lan_devices?.devices || [];
       dmzIpEl.value = data.router?.dmz_ip || "";
       document.getElementById("routerHint").textContent = "";
+      const hookupsHint = document.getElementById("hookupsHint");
+      if (hookupsHint) {
+        const hint = String(data.hookups?.dns_hint || "").trim();
+        const n = hookupRules.filter((r) => !r.external).length;
+        hookupsHint.hidden = false;
+        hookupsHint.textContent = hint
+          || `${n} managed domain${n === 1 ? "" : "s"} — edit then Save & Apply (applies immediately).`;
+      }
       pathLabel.textContent = "tap to expand";
       renderAll();
       refreshVpsStatus();
@@ -3569,16 +3580,20 @@
     }
 
     async function save(codeFromPopup) {
-      const prefs = readSettingsPrefs();
-      if (!codeFromPopup && prefs.confirmSave) {
-        const ok = window.confirm("Apply Internet / Domains / Firewall / Router changes now?");
-        if (!ok) return;
-      }
       vpsRules = readVpsForm();
       routerRules = readRouterForm();
       hookupRules = readHookupForm();
       fwRules = readFwForm();
       const domainRe = /^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$/;
+      // Abandoned "Add domain" drafts (blank domain) used to block every Apply.
+      const droppedDrafts = [];
+      hookupRules = hookupRules.filter((r) => {
+        if (r.external) return true;
+        const d = String(r.domain || "").trim();
+        if (d) return true;
+        droppedDrafts.push(r);
+        return false;
+      });
       const badDomains = hookupRules
         .filter((r) => !r.external)
         .map((r, i) => ({ r, i }))
@@ -3594,6 +3609,10 @@
         const idx = hookupRules.findIndex((r) => r === first);
         renderHookups({ focusIdx: idx >= 0 ? idx : undefined });
         return;
+      }
+      if (droppedDrafts.length) {
+        renderHookups();
+        updateCounts();
       }
       const totpDigits = String(codeFromPopup || "").replace(/\D+/g, "").slice(0, 6);
       if (hookupAccessGatesChanged(hookupRules) && totpDigits.length !== 6) {
@@ -5293,17 +5312,14 @@
       let remember = false;
       let expandLog = false;
       let autoRefresh = false;
-      let confirmSave = true;
       try {
         defaultView = localStorage.getItem("sm_default_view") || "overview";
         remember = localStorage.getItem("sm_remember_view") === "1";
         expandLog = localStorage.getItem("sm_expand_log") === "1";
         autoRefresh = localStorage.getItem("sm_auto_refresh") === "1";
-        const cs = localStorage.getItem("sm_confirm_save");
-        confirmSave = cs === null ? true : cs === "1";
       } catch (e) {}
       if (!SETTINGS_VIEWS.has(defaultView)) defaultView = "overview";
-      return { defaultView, remember, expandLog, autoRefresh, confirmSave };
+      return { defaultView, remember, expandLog, autoRefresh };
     }
     function applySettingsPrefsToForm() {
       const prefs = readSettingsPrefs();
@@ -5311,25 +5327,22 @@
       const rem = document.getElementById("settingsRememberView");
       const exp = document.getElementById("settingsExpandLog");
       const ar = document.getElementById("settingsAutoRefresh");
-      const cs = document.getElementById("settingsConfirmSave");
       if (def) def.value = prefs.defaultView;
       if (rem) rem.checked = prefs.remember;
       if (exp) exp.checked = prefs.expandLog;
       if (ar) ar.checked = prefs.autoRefresh;
-      if (cs) cs.checked = prefs.confirmSave;
     }
     function persistSettingsPrefs() {
       const def = document.getElementById("settingsDefaultView");
       const rem = document.getElementById("settingsRememberView");
       const exp = document.getElementById("settingsExpandLog");
       const ar = document.getElementById("settingsAutoRefresh");
-      const cs = document.getElementById("settingsConfirmSave");
       try {
         if (def) localStorage.setItem("sm_default_view", def.value || "overview");
         if (rem) localStorage.setItem("sm_remember_view", rem.checked ? "1" : "0");
         if (exp) localStorage.setItem("sm_expand_log", exp.checked ? "1" : "0");
         if (ar) localStorage.setItem("sm_auto_refresh", ar.checked ? "1" : "0");
-        if (cs) localStorage.setItem("sm_confirm_save", cs.checked ? "1" : "0");
+        localStorage.removeItem("sm_confirm_save");
       } catch (e) {}
       if (exp) drawer.classList.toggle("collapsed", !exp.checked);
       syncOverviewAutoRefresh();
@@ -7079,7 +7092,6 @@
     document.getElementById("settingsRememberView")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsExpandLog")?.addEventListener("change", () => persistSettingsPrefs());
     document.getElementById("settingsAutoRefresh")?.addEventListener("change", () => persistSettingsPrefs());
-    document.getElementById("settingsConfirmSave")?.addEventListener("change", () => persistSettingsPrefs());
 
     function renderBond(data) {  }
     async function loadBond(){  }

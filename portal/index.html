@@ -1487,13 +1487,6 @@
                 </div>
                 <label class="switch"><input type="checkbox" id="settingsAutoRefresh" /><span></span></label>
               </div>
-              <div class="settings-row">
-                <div class="meta">
-                  <strong>Confirm Save &amp; Apply</strong>
-                  <small>Ask before applying Internet / Domains / Firewall changes</small>
-                </div>
-                <label class="switch"><input type="checkbox" id="settingsConfirmSave" checked /><span></span></label>
-              </div>
             </div>
           </div>
         </div>
@@ -2282,14 +2275,9 @@
     }
 
     async function save() {
-      const prefs = readSettingsPrefs();
-      if (prefs.confirmSave) {
-        const ok = window.confirm("Apply Internet / Domains / Firewall / Router changes now?");
-        if (!ok) return;
-      }
       vpsRules = readVpsForm();
       routerRules = readRouterForm();
-      hookupRules = readHookupForm();
+      hookupRules = readHookupForm().filter((r) => r.external || String(r.domain || "").trim());
       fwRules = readFwForm();
       [saveBtn, reloadBtn].forEach((b) => (b.disabled = true));
       setStatus("Applying…");
