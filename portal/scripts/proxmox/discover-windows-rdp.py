@@ -118,8 +118,8 @@ qm config 100 | grep -iE 'net0|agent|vga|hostpci'
     print(
         run(
             f"python3 -c \"import base64,pathlib; pathlib.Path('/tmp/prox-scan.sh').write_bytes(base64.b64decode('{b64}'))\"; "
-            "scp -o StrictHostKeyChecking=no /tmp/prox-scan.sh root@192.168.8.162:/tmp/; "
-            "ssh -o StrictHostKeyChecking=no root@192.168.8.162 bash /tmp/prox-scan.sh",
+            "scp -o StrictHostKeyChecking=no /tmp/prox-scan.sh root@192.168.8.160:/tmp/; "
+            "ssh -o StrictHostKeyChecking=no root@192.168.8.160 bash /tmp/prox-scan.sh",
             timeout=180,
         )
     )

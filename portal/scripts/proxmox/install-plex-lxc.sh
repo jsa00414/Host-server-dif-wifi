@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create / update a Plex Media Server LXC on the Proxmox host.
-# Run on the Proxmox host (or: ssh root@192.168.8.162 bash -s < install-plex-lxc.sh)
+# Run on the Proxmox host (or: ssh root@192.168.8.160 bash -s < install-plex-lxc.sh)
 set -euo pipefail
 
 CTID="${CTID:-101}"

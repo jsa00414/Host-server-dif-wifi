@@ -6,7 +6,7 @@ Home LAN DNS normally goes:
 
 `device → Flint → VPN → AdGuard → Pi-hole → Unbound`
 
-That path can break Proxmox updates. These scripts send **only** the Proxmox host (`192.168.8.162`) to public DNS (`1.1.1.1`).
+That path can break Proxmox updates. These scripts send **only** the Proxmox host (`192.168.8.160`) to public DNS (`1.1.1.1`).
 
 ### Apply
 
@@ -35,9 +35,9 @@ Plex is **not** embedded in the portal. Use the Proxmox container (and optional 
 ./configure-plex-server.sh
 
 # Or from the VPS:
-scp install-plex-lxc.sh configure-plex-server.sh root@192.168.8.162:/tmp/
-ssh root@192.168.8.162 bash /tmp/install-plex-lxc.sh
-ssh root@192.168.8.162 bash /tmp/configure-plex-server.sh
+scp install-plex-lxc.sh configure-plex-server.sh root@192.168.8.160:/tmp/
+ssh root@192.168.8.160 bash /tmp/install-plex-lxc.sh
+ssh root@192.168.8.160 bash /tmp/configure-plex-server.sh
 ```
 
 - **Claim/setup (use this):** **https://plex.vpstruelord.com/web**

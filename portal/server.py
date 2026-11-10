@@ -1837,7 +1837,7 @@ PROXMOX_PUBLIC_HOST = (
     os.environ.get("PROXMOX_PUBLIC_HOST", "proxmox.vpstruelord.com").strip()
     or "proxmox.vpstruelord.com"
 )
-PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.162").strip() or "192.168.8.162"
+PROXMOX_HOST = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
 PROXMOX_PORT = int(os.environ.get("PROXMOX_PORT", "8006") or "8006")
 PLEX_PUBLIC_HOST = (
     os.environ.get("PLEX_PUBLIC_HOST", "plex.vpstruelord.com").strip()
@@ -5558,7 +5558,7 @@ def _plex_local_admin_token() -> str:
                 "StrictHostKeyChecking=no",
                 "-o",
                 "ConnectTimeout=5",
-                f"root@{os.environ.get('PROXMOX_HOST', '192.168.8.162').strip() or '192.168.8.162'}",
+                f"root@{os.environ.get('PROXMOX_HOST', '192.168.8.160').strip() or '192.168.8.160'}",
                 "pct",
                 "exec",
                 PLEX_CTID,
@@ -5606,7 +5606,7 @@ def _plex_claim_via_token(claim_token: str) -> dict:
     http_status = 0
     via = "lan"
     try:
-        prox = os.environ.get("PROXMOX_HOST", "192.168.8.162").strip() or "192.168.8.162"
+        prox = os.environ.get("PROXMOX_HOST", "192.168.8.160").strip() or "192.168.8.160"
         r = subprocess.run(
             [
                 "ssh",

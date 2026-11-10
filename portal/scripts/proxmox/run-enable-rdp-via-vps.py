@@ -38,7 +38,7 @@ def main() -> int:
     run("ip route replace 192.168.8.0/24 via 10.9.0.2 dev tun0 metric 5 2>/dev/null || true")
     # kill prior hung enables
     run(
-        "ssh -o StrictHostKeyChecking=no root@192.168.8.162 "
+        "ssh -o StrictHostKeyChecking=no root@192.168.8.160 "
         "\"pkill -9 -f enable-windows-rdp-offline || true; "
         "qemu-nbd -d /dev/nbd0 2>/dev/null || true; "
         "umount -l /mnt/win-rdp-edit 2>/dev/null || true\""
@@ -54,8 +54,8 @@ def main() -> int:
 
     code, out, err = run(
         "scp -o StrictHostKeyChecking=no /tmp/enable-windows-rdp-offline.sh "
-        "root@192.168.8.162:/tmp/enable-windows-rdp-offline.sh && "
-        "ssh -o StrictHostKeyChecking=no root@192.168.8.162 "
+        "root@192.168.8.160:/tmp/enable-windows-rdp-offline.sh && "
+        "ssh -o StrictHostKeyChecking=no root@192.168.8.160 "
         "\": > /tmp/enable-rdp.log; nohup bash /tmp/enable-windows-rdp-offline.sh "
         ">> /tmp/enable-rdp.log 2>&1 & echo STARTED\""
     )
@@ -64,7 +64,7 @@ def main() -> int:
     for i in range(90):
         time.sleep(5)
         code, out, err = run(
-            "ssh -o StrictHostKeyChecking=no root@192.168.8.162 "
+            "ssh -o StrictHostKeyChecking=no root@192.168.8.160 "
             "\"echo '---LOG---'; tail -40 /tmp/enable-rdp.log; "
             "echo '---PROC---'; "
             "if pgrep -f '/tmp/enable-windows-rdp-offline.sh' >/dev/null; "

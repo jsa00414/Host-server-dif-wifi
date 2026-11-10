@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "proxmox" / "bt-usb-owner"
 LED_OWNER = ROOT / "scripts" / "proxmox" / "aw-elc-usb-owner"
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.162"
+PROXMOX = "192.168.8.160"
 
 
 def _client() -> paramiko.SSHClient:

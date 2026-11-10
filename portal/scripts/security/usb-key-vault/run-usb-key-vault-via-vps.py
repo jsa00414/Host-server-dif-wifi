@@ -14,7 +14,7 @@ import paramiko
 
 SCRIPTS = Path(__file__).resolve().parent
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.162"
+PROXMOX = "192.168.8.160"
 # ~128GB Norelsys flash drive (not WD Elements)
 DEFAULT_USB_BY_ID = "/dev/disk/by-id/usb-NORELSYS_1081_F9CB2147CF3A-0:0"
 

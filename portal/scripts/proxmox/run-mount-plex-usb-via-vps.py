@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "proxmox" / "mount-plex-usb.sh"
 ADD_LIBS = ROOT / "scripts" / "proxmox" / "add-plex-usb-libraries.sh"
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.162"
+PROXMOX = "192.168.8.160"
 
 
 def _client() -> paramiko.SSHClient:

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Configure Flint so Proxmox (192.168.8.162) DNS skips AdGuard → Pi-hole.
+# Configure Flint so Proxmox (192.168.8.160) DNS skips AdGuard → Pi-hole.
 # Safe to re-run. Requires ROUTER_HOST + ROUTER_PASS (or ROUTER_PASS_B64).
 set -euo pipefail
 
-PVE_IP="${PVE_IP:-192.168.8.162}"
+PVE_IP="${PVE_IP:-192.168.8.160}"
 PVE_DNS="${PVE_DNS:-1.1.1.1}"
 PVE_DNS2="${PVE_DNS2:-8.8.8.8}"
 TAG="${TAG:-proxmox_nopihole}"

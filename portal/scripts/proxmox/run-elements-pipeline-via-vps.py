@@ -13,7 +13,7 @@ import paramiko
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts" / "proxmox"
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.162"
+PROXMOX = "192.168.8.160"
 
 UPLOADS = [
     (SCRIPTS / "elements-media-pipeline", "/usr/local/sbin/elements-media-pipeline"),
