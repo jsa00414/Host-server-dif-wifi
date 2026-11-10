@@ -13,7 +13,7 @@ import paramiko
 
 SCRIPT = Path(__file__).resolve().parent / "create-rdp-target-vm.sh"
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.160"
+PROXMOX = "192.168.8.162"
 VMID = os.environ.get("RDP_VMID", "102").strip() or "102"
 
 

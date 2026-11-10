@@ -84,12 +84,12 @@ def main() -> int:
         sftp.close()
         run(
             c,
-            "scp -o StrictHostKeyChecking=no /tmp/plex-disable-remote-sec.py root@192.168.8.160:/tmp/",
+            "scp -o StrictHostKeyChecking=no /tmp/plex-disable-remote-sec.py root@192.168.8.162:/tmp/",
             timeout=60,
         )
         run(
             c,
-            """ssh -o StrictHostKeyChecking=no root@192.168.8.160 '
+            """ssh -o StrictHostKeyChecking=no root@192.168.8.162 '
 pct push 101 /tmp/plex-disable-remote-sec.py /tmp/plex-disable-remote-sec.py
 pct exec 101 -- bash -lc "
 systemctl stop plexmediaserver

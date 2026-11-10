@@ -13,7 +13,7 @@ import paramiko
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "proxmox" / "xbox-usb-owner"
 DEFAULT_HOST = "74.208.76.213"
-PROXMOX = "192.168.8.160"
+PROXMOX = "192.168.8.162"
 
 
 def _client() -> paramiko.SSHClient:

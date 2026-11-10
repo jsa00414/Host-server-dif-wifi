@@ -67,8 +67,8 @@ def main() -> int:
             f.write(PREFS)
         sftp.close()
         cmd = r"""
-scp -o StrictHostKeyChecking=no /tmp/plex-widen-local.py root@192.168.8.160:/tmp/
-ssh -o StrictHostKeyChecking=no root@192.168.8.160 'pct push 101 /tmp/plex-widen-local.py /tmp/plex-widen-local.py; pct exec 101 -- bash -lc "
+scp -o StrictHostKeyChecking=no /tmp/plex-widen-local.py root@192.168.8.162:/tmp/
+ssh -o StrictHostKeyChecking=no root@192.168.8.162 'pct push 101 /tmp/plex-widen-local.py /tmp/plex-widen-local.py; pct exec 101 -- bash -lc "
 systemctl stop plexmediaserver
 python3 /tmp/plex-widen-local.py
 chown plex:plex \"/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml\"
