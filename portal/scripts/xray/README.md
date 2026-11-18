@@ -36,6 +36,17 @@ Import the `vless://` share link into v2rayN / v2rayNG / Streisand / Hiddify.
 DNS on the client can stay default; for circle admin names over Xray, point
 DNS at AdGuard `10.42.42.44` only when also on OVPN/LAN.
 
+## Cloudflare CDN bypass
+
+When campus blocks the VPS IP / `:8444`, use the **CF CDN** link on the same
+Xray page (`cdn.vpstruelord.com:443` via orange-cloud WebSocket).
+
+```bash
+sudo bash /opt/wireguard/port-forward-ui/scripts/cloudflare-cdn/setup-cf-cdn.sh
+```
+
+See `scripts/cloudflare-cdn/README.md`.
+
 ## Authenticator Surfshark exit (always via Xray)
 
 When Exit → Surfshark is selected in the Authenticator app for a Circle

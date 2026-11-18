@@ -1980,6 +1980,16 @@ XRAY_CONFIG_FILE = Path(os.environ.get("XRAY_CONFIG_FILE", str(XRAY_DIR / "confi
 XRAY_PORT = int(os.environ.get("XRAY_PORT", "8444") or "8444")
 XRAY_HOST = os.environ.get("XRAY_HOST", "vpn.vpstruelord.com").strip() or "vpn.vpstruelord.com"
 XRAY_SNI = os.environ.get("XRAY_SNI", "www.microsoft.com").strip() or "www.microsoft.com"
+# Cloudflare CDN bypass (VLESS+WS via orange-cloud host).
+XRAY_CF_HOST = (
+    os.environ.get("XRAY_CF_HOST", "cdn.vpstruelord.com").strip() or "cdn.vpstruelord.com"
+)
+XRAY_CF_WS_PATH = (
+    os.environ.get("XRAY_CF_WS_PATH", "/vless-cf").strip() or "/vless-cf"
+)
+if not XRAY_CF_WS_PATH.startswith("/"):
+    XRAY_CF_WS_PATH = "/" + XRAY_CF_WS_PATH
+XRAY_CF_WS_PORT = int(os.environ.get("XRAY_CF_WS_PORT", "18444") or "18444")
 XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "sm-xray").strip() or "sm-xray"
 XRAY_SETUP_SCRIPT = Path(
     os.environ.get(
@@ -2289,7 +2299,20 @@ def _xray_rebuild_and_reload() -> None:
                     },
                 },
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]},
-            }
+            },
+            {
+                "tag": "vless-cf-ws",
+                "listen": "127.0.0.1",
+                "port": XRAY_CF_WS_PORT,
+                "protocol": "vless",
+                "settings": {"clients": clients, "decryption": "none"},
+                "streamSettings": {
+                    "network": "ws",
+                    "security": "none",
+                    "wsSettings": {"path": XRAY_CF_WS_PATH},
+                },
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]},
+            },
         ],
         "outbounds": [
             {"protocol": "freedom", "tag": "direct"},
@@ -2308,7 +2331,7 @@ def _xray_rebuild_and_reload() -> None:
 
 
 def xray_share_link(row: dict) -> str:
-    """Build a vless:// share URI for a client row."""
+    """Build a vless:// share URI for a client row (direct REALITY)."""
     keys = _xray_read_keys()
     uid = str(row.get("uuid") or "").strip()
     name = str(row.get("name") or "circle").strip() or "circle"
@@ -2325,6 +2348,23 @@ def xray_share_link(row: dict) -> str:
     return f"vless://{uid}@{XRAY_HOST}:{XRAY_PORT}?{qs}#{quote(name)}"
 
 
+def xray_cf_cdn_share_link(row: dict) -> str:
+    """Build vless:// URI via Cloudflare CDN (WS+TLS on orange-cloud host)."""
+    uid = str(row.get("uuid") or "").strip()
+    name = str(row.get("name") or "circle").strip() or "circle"
+    if not uid:
+        return ""
+    from urllib.parse import quote
+
+    path_q = quote(XRAY_CF_WS_PATH, safe="")
+    host_q = quote(XRAY_CF_HOST, safe="")
+    qs = (
+        f"encryption=none&security=tls&sni={host_q}&fp=chrome&alpn=http%2F1.1"
+        f"&type=ws&host={host_q}&path={path_q}"
+    )
+    return f"vless://{uid}@{XRAY_CF_HOST}:443?{qs}#{quote(name + '-cf')}"
+
+
 def list_xray_clients() -> list[dict]:
     out = []
     for row in _xray_read_clients().get("clients") or []:
@@ -2338,6 +2378,7 @@ def list_xray_clients() -> list[dict]:
             "circle": bool(row.get("circle")),
             "created_at": int(row.get("created_at") or 0),
             "link": xray_share_link(row),
+            "cf_link": xray_cf_cdn_share_link(row),
             "download": f"/api/xray/clients/{name}/link",
         }
         out.append(item)
@@ -2362,6 +2403,18 @@ def build_xray_status() -> dict:
         detail = str(exc)
     keys = _xray_read_keys()
     clients = list_xray_clients()
+    cf_ready = False
+    try:
+        if XRAY_CONFIG_FILE.is_file():
+            cfg = json.loads(XRAY_CONFIG_FILE.read_text(encoding="utf-8"))
+            tags = {
+                str(i.get("tag") or "")
+                for i in (cfg.get("inbounds") or [])
+                if isinstance(i, dict)
+            }
+            cf_ready = "vless-cf-ws" in tags
+    except Exception:
+        cf_ready = False
     return {
         "ok": True,
         "service": XRAY_SERVICE,
@@ -2370,16 +2423,23 @@ def build_xray_status() -> dict:
         "host": XRAY_HOST,
         "port": XRAY_PORT,
         "sni": XRAY_SNI,
+        "cf_host": XRAY_CF_HOST,
+        "cf_path": XRAY_CF_WS_PATH,
+        "cf_port": 443,
+        "cf_ws_local_port": XRAY_CF_WS_PORT,
+        "cf_ready": cf_ready,
         "public_key": keys.get("public") or "",
         "short_id": keys.get("short_id") or "",
         "protocol": "vless+reality",
+        "cf_protocol": "vless+ws+tls (Cloudflare CDN)",
         "client_count": len(clients),
         "clients": clients,
         "circle_dns": OVPN_DNS_ADGUARD,
         "installed": XRAY_BIN.is_file() and XRAY_CONFIG_FILE.is_file(),
         "hint": (
-            "Import the vless:// link in v2rayN / v2rayNG / Streisand / Hiddify. "
-            "Links are for trust-circle members (portal login required)."
+            "REALITY link talks to the VPS directly (:8444). "
+            "CF CDN link goes through Cloudflare orange-cloud when campus "
+            "blocks the VPS IP/ports. Portal login required."
         ),
     }
 
@@ -2404,7 +2464,15 @@ def create_xray_client(name: str, *, note: str = "", circle: bool = True) -> dic
     data.setdefault("clients", []).append(row)
     _xray_write_clients(data)
     _xray_rebuild_and_reload()
-    return {"ok": True, "client": {**row, "link": xray_share_link(row)}, "clients": list_xray_clients()}
+    return {
+        "ok": True,
+        "client": {
+            **row,
+            "link": xray_share_link(row),
+            "cf_link": xray_cf_cdn_share_link(row),
+        },
+        "clients": list_xray_clients(),
+    }
 
 
 def revoke_xray_client(name: str) -> dict:
@@ -11302,7 +11370,7 @@ def build_portal_settings() -> dict:
         {"id": "portal", "label": "Portal", "url": f"https://{host}/"},
         {"id": "wg-easy", "label": "WireGuard (wg-easy)", "url": "/wg-ui/"},
         {"id": "openvpn-ui", "label": "OpenVPN admin", "url": f"https://{host}/openvpn.html"},
-        {"id": "xray-ui", "label": "Xray (VLESS Reality)", "url": f"https://{host}/xray.html"},
+        {"id": "xray-ui", "label": "Xray (REALITY + CF CDN)", "url": f"https://{host}/xray.html"},
         {
             "id": "singbox-ui",
             "label": "Sing-box (guest DNS)",
@@ -21711,6 +21779,7 @@ document.getElementById('f').onsubmit = async (e) => {
                 if not row:
                     raise ValueError(f"client {name_n} not found")
                 link = xray_share_link(row)
+                cf_link = xray_cf_cdn_share_link(row)
                 self._json(
                     200,
                     {
@@ -21718,9 +21787,12 @@ document.getElementById('f').onsubmit = async (e) => {
                         "name": name_n,
                         "uuid": str(row.get("uuid") or ""),
                         "link": link,
+                        "cf_link": cf_link,
                         "host": XRAY_HOST,
                         "port": XRAY_PORT,
                         "sni": XRAY_SNI,
+                        "cf_host": XRAY_CF_HOST,
+                        "cf_path": XRAY_CF_WS_PATH,
                     },
                 )
             except ValueError as exc:
