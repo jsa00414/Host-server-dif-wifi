@@ -39,6 +39,31 @@ iptables -C FORWARD -s 10.9.0.0/24 -d 10.42.42.0/24 -m comment --comment SM-OVPN
 iptables -C FORWARD -s 10.42.42.0/24 -d 10.9.0.0/24 -m comment --comment SM-OVPN-DNS -j ACCEPT 2>/dev/null \
   || iptables -I FORWARD 1 -s 10.42.42.0/24 -d 10.9.0.0/24 -m comment --comment SM-OVPN-DNS -j ACCEPT
 
+# Docker's DOCKER chain DROPs any forward into the wireguard_wg bridge that is
+# not a published port. AdGuard (.44) / guest-dns (.45) only publish UI ports,
+# so Flint→AdGuard DNS/ICMP dies inside DOCKER-FORWARD before SM-OVPN-DNS
+# FORWARD ACCEPTs can run. ACCEPT in DOCKER-USER (evaluated first).
+if iptables -nL DOCKER-USER >/dev/null 2>&1; then
+  if ! iptables -C DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment SM-OVPN-DNS-EST -j ACCEPT 2>/dev/null; then
+    iptables -I DOCKER-USER 1 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment SM-OVPN-DNS-EST -j ACCEPT
+  fi
+  for dns in "$ADGUARD_DNS" "$GUEST_DNS"; do
+    [ -n "$dns" ] || continue
+    for src in 10.9.0.0/24 10.10.0.0/24 10.8.0.0/24 192.168.8.0/24; do
+      if ! iptables -C DOCKER-USER -s "$src" -d "${dns}/32" -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT 2>/dev/null; then
+        iptables -I DOCKER-USER 2 -s "$src" -d "${dns}/32" -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT
+      fi
+    done
+    # Return path from DNS containers to VPN clients.
+    if ! iptables -C DOCKER-USER -s "${dns}/32" -d 10.9.0.0/24 -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT 2>/dev/null; then
+      iptables -I DOCKER-USER 2 -s "${dns}/32" -d 10.9.0.0/24 -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT
+    fi
+    if ! iptables -C DOCKER-USER -s "${dns}/32" -d 192.168.8.0/24 -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT 2>/dev/null; then
+      iptables -I DOCKER-USER 2 -s "${dns}/32" -d 192.168.8.0/24 -m comment --comment SM-OVPN-DNS-DOCKER -j ACCEPT
+    fi
+  done
+fi
+
 # Force OVPN client DNS to circle AdGuard, but do NOT rewrite queries already
 # aimed at guest DNS (Flint SM-LAN-GUEST-DNS / out-of-circle clients).
 while iptables -t nat -C PREROUTING -i tun0 -p udp --dport 53 -m comment --comment SM-OVPN-DNS -j DNAT --to-destination "${ADGUARD_DNS}:53" 2>/dev/null; do
