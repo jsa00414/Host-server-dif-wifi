@@ -35,19 +35,36 @@ fi
   echo "persist-key"
   echo "persist-tun"
   echo "remote-cert-tls server"
+  echo "data-ciphers AES-128-GCM:CHACHA20-POLY1305:AES-256-GCM:AES-256-CBC"
+  echo "data-ciphers-fallback AES-256-CBC"
   echo "cipher AES-256-CBC"
   echo "auth SHA256"
   echo "key-direction 1"
   echo "verb 3"
   echo "mute 20"
   echo "connect-retry 2"
+  echo "sndbuf 8388608"
+  echo "rcvbuf 8388608"
+  echo "txqueuelen 10000"
+  if [ "$PROTO" = "tcp" ] || [ "$PROTO" = "tcp-client" ]; then
+    echo "tcp-nodelay"
+  fi
   if [ "$REDIRECT" = "1" ] || [ "$REDIRECT" = "true" ] || [ "$REDIRECT" = "yes" ]; then
     echo "redirect-gateway def1 bypass-dhcp"
-    echo "dhcp-option DNS 1.1.1.1"
-    echo "dhcp-option DNS 8.8.8.8"
+    # Prefer VPN DNS (AdGuard) so portal/admin resolve to lo VIP 10.11.0.1
+    # (public A is excluded from the tunnel → campus @denied_wan abort).
+    echo "dhcp-option DNS 10.42.42.44"
+    # Windows: keep Chrome/DoH from bypassing AdGuard (public A → denied_wan).
+    if [ "$NAME" = "windows" ] || [ "$NAME" = "james-iphone" ]; then
+      echo "block-outside-dns"
+    fi
   fi
   echo "route 192.168.8.0 255.255.255.0 vpn_gateway"
   echo "route 10.8.0.0 255.255.255.0 vpn_gateway"
+  echo "route 10.42.42.0 255.255.255.0 vpn_gateway"
+  # Portal/admin split-DNS VIP (AdGuard → 10.11.0.1); keep on tunnel even if
+  # redirect-gateway is cleared by the client OS.
+  echo "route 10.11.0.1 255.255.255.255 vpn_gateway"
   echo "<ca>"
   cat "$PKI/ca.crt"
   echo "</ca>"

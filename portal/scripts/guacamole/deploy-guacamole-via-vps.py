@@ -15,7 +15,7 @@ from pathlib import Path
 import paramiko
 
 ROOT = Path(__file__).resolve().parent
-WIN_IP = os.environ.get("WINDOWS_VM_IP", "192.168.8.181").strip() or "192.168.8.181"
+WIN_IP = os.environ.get("WINDOWS_VM_IP", "192.168.8.163").strip() or "192.168.8.163"
 
 
 def client() -> paramiko.SSHClient:

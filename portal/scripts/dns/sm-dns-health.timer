@@ -1,0 +1,11 @@
+[Unit]
+Description=Run DNS health check every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+Unit=sm-dns-health.service
+
+[Install]
+WantedBy=timers.target

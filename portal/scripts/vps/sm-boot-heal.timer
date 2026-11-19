@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-run ServerManager boot heal shortly after boot
+After=sm-boot-heal.service
+
+[Timer]
+OnBootSec=2min
+AccuracySec=30s
+Unit=sm-boot-heal.service
+
+[Install]
+WantedBy=timers.target

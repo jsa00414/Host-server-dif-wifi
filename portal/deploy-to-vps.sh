@@ -23,13 +23,30 @@ if [[ -n "${VPS_SSH_KEY_FILE:-}" && -f "${VPS_SSH_KEY_FILE}" ]]; then
 fi
 
 echo "Deploying portal to ${VPS}:${REMOTE_UI} …"
-ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static ${REMOTE_UI}/scripts/nas"
+ssh "${SSH_OPTS[@]}" "$VPS" "mkdir -p ${REMOTE_UI}/static/truemailor ${REMOTE_UI}/sm ${REMOTE_UI}/scripts/nas ${REMOTE_UI}/scripts/truemail ${REMOTE_UI}/scripts/xray ${REMOTE_UI}/scripts/singbox ${REMOTE_UI}/scripts/openvpn"
 scp "${SSH_OPTS[@]}" "$ROOT/server.py" "${VPS}:${REMOTE_UI}/server.py"
+scp "${SSH_OPTS[@]}" "$ROOT/media_tmdb.py" "${VPS}:${REMOTE_UI}/media_tmdb.py"
+scp "${SSH_OPTS[@]}" "$ROOT/sm/__init__.py" "$ROOT/sm/auth.py" "$ROOT/sm/nas.py" "$ROOT/sm/vpn_circle.py" "$ROOT/sm/twilio_sms.py" "${VPS}:${REMOTE_UI}/sm/"
 scp "${SSH_OPTS[@]}" "$ROOT/static/index.html" "${VPS}:${REMOTE_UI}/static/index.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/login.html" "${VPS}:${REMOTE_UI}/static/login.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/files.html" "${VPS}:${REMOTE_UI}/static/files.html"
 scp "${SSH_OPTS[@]}" "$ROOT/static/nas-windows.html" "${VPS}:${REMOTE_UI}/static/nas-windows.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/xray.html" "${VPS}:${REMOTE_UI}/static/xray.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/singbox.html" "${VPS}:${REMOTE_UI}/static/singbox.html"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/xray/setup-xray.sh" "$ROOT/scripts/xray/ensure-xray-config.sh" "$ROOT/scripts/xray/README.md" "${VPS}:${REMOTE_UI}/scripts/xray/"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/singbox/setup-singbox.sh" "$ROOT/scripts/singbox/ensure-singbox-config.sh" "$ROOT/scripts/singbox/README.md" "${VPS}:${REMOTE_UI}/scripts/singbox/"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/openvpn/ensure-lan-xray-singbox-split.sh" "$ROOT/scripts/openvpn/ensure-flint-lan-vpn-internet.sh" "$ROOT/scripts/openvpn/ensure-flint-lan-wan-internet.sh" "$ROOT/scripts/openvpn/ovpn-firewall.sh" "$ROOT/scripts/openvpn/README.md" "${VPS}:${REMOTE_UI}/scripts/openvpn/"
+ssh "${SSH_OPTS[@]}" "$VPS" "chmod +x ${REMOTE_UI}/scripts/xray/*.sh ${REMOTE_UI}/scripts/singbox/*.sh ${REMOTE_UI}/scripts/openvpn/*.sh"
+scp "${SSH_OPTS[@]}" "$ROOT/static/email-code-test.html" "${VPS}:${REMOTE_UI}/static/email-code-test.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/sms-code-test.html" "${VPS}:${REMOTE_UI}/static/sms-code-test.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/privacy.html" "${VPS}:${REMOTE_UI}/static/privacy.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/terms.html" "${VPS}:${REMOTE_UI}/static/terms.html"
+scp "${SSH_OPTS[@]}" "$ROOT/static/truemailor/index.html" "${VPS}:${REMOTE_UI}/static/truemailor/index.html"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/truemail/install-legal-pages.sh" "${VPS}:${REMOTE_UI}/scripts/truemail/install-legal-pages.sh"
+scp "${SSH_OPTS[@]}" "$ROOT/scripts/truemail/remove-traceface.sh" "${VPS}:${REMOTE_UI}/scripts/truemail/remove-traceface.sh"
 scp "${SSH_OPTS[@]}" "$ROOT/scripts/nas/Setup-ServerManagerNas.ps1" "${VPS}:${REMOTE_UI}/scripts/nas/Setup-ServerManagerNas.ps1"
+# Replace TraceFace on truemailor.com with Truemailor landing + A2P legal pages.
+ssh "${SSH_OPTS[@]}" "$VPS" "chmod +x ${REMOTE_UI}/scripts/truemail/remove-traceface.sh && bash ${REMOTE_UI}/scripts/truemail/remove-traceface.sh" || true
 # Keep public-IP literals aligned with the target host when present in server.py
 case "$VPS" in
   *74.208.76.213*)

@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sky: #4ba3c3;
+  --sky-deep: #2f7ea0;
+  --sun: #f5d76e;
+  --leaf: #5dae8b;
+  --coral: #e07a5f;
+  --ink: #1e3a5f;
+  --ink-soft: #4a6278;
+  --paper: #f3f8fb;
+  --cloud: #ffffff;
+  --shadow: 0 18px 40px rgba(30, 58, 95, 0.12);
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(245, 215, 110, 0.35), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(75, 163, 195, 0.28), transparent 28%),
+    radial-gradient(circle at 70% 88%, rgba(93, 174, 139, 0.22), transparent 34%),
+    linear-gradient(160deg, #e8f4fa 0%, #f7fbf8 48%, #eef6f2 100%);
+  background-attachment: fixed;
+}
+
+.paper-card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(75, 163, 195, 0.18);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.hero-plane {
+  background:
+    linear-gradient(120deg, rgba(47, 126, 160, 0.92), rgba(93, 174, 139, 0.85)),
+    url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.08'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes draw-line {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.animate-float {
+  animation: float-soft 5s ease-in-out infinite;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.7s ease-out both;
+}
+
+.animate-fade-up-delay {
+  animation: fade-up 0.8s ease-out 0.15s both;
+}
+
+.animate-underline {
+  transform-origin: left;
+  animation: draw-line 0.9s ease-out 0.35s both;
+}
+
+.input-field {
+  @apply w-full rounded-xl border border-sky-200/80 bg-white px-4 py-3 text-[var(--ink)] outline-none transition focus:border-[var(--sky)] focus:ring-4 focus:ring-[rgba(75,163,195,0.2)];
+}
+
+.btn-primary {
+  @apply inline-flex items-center justify-center rounded-xl bg-[var(--sky-deep)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--sky)] focus:outline-none focus:ring-4 focus:ring-[rgba(75,163,195,0.35)];
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center rounded-xl border border-[rgba(75,163,195,0.35)] bg-white/80 px-5 py-3 font-semibold text-[var(--ink)] transition hover:bg-white;
+}
+
+.btn-accent {
+  @apply inline-flex items-center justify-center rounded-xl bg-[var(--coral)] px-5 py-3 font-semibold text-white transition hover:brightness-105 focus:outline-none focus:ring-4 focus:ring-[rgba(224,122,95,0.3)];
+}
+
+/* Canva-style editor shell */
+.canva-shell {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #0f1720;
+  color: #e8eef4;
+}
+
+.canva-topbar {
+  height: 56px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #151c26;
+}
+
+.canva-rail {
+  width: 72px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: #121821;
+}
+
+.canva-panel {
+  width: 300px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: #171e29;
+}
+
+.canva-props {
+  width: 300px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: #171e29;
+}
+
+.canva-stage {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(75, 163, 195, 0.12), transparent 28%),
+    linear-gradient(180deg, #1a222e 0%, #141b25 100%);
+}
+
+.canva-page {
+  position: relative;
+  width: 612px;
+  height: 792px;
+  min-height: 792px;
+  background: #fff;
+  color: #222;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.canva-selectable {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.canva-selectable[data-selected="true"] {
+  outline-color: #8b5cf6;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2);
+}
+
+.canva-editable {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.canva-editable:focus {
+  background: rgba(139, 92, 246, 0.06);
+  border-radius: 6px;
+}
+
+/* Auto-growing text — never show an inner scrollbar */
+.canva-autogrow {
+  display: block;
+  overflow: hidden !important;
+  overflow-y: hidden !important;
+  resize: none !important;
+  min-height: 24px;
+  field-sizing: content;
+}
+
+.canva-chip {
+  @apply rounded-lg px-3 py-2 text-left text-xs font-semibold transition;
+}
+
+.canva-chip-active {
+  background: rgba(139, 92, 246, 0.28);
+  color: #fff;
+}
+
+.canva-chip-idle {
+  background: rgba(255, 255, 255, 0.04);
+  color: #c5d0dc;
+}
+
+.canva-chip-idle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}

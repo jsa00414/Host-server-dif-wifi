@@ -15,6 +15,43 @@ Snapshot of the VPS panel at `/opt/wireguard/port-forward-ui/`.
 - `POST /api/surfshark` — enable/disable Surfshark WireGuard VPN exit for WG clients only
 - Scripts deployed to `/opt/surfshark/` (`ss-vpn-exit.sh`, `ss-manage.sh`)
 
+## Twilio SMS (Truemailor)
+
+Portal two-factor can use Twilio SMS alongside Authenticator and Truemailor email codes.
+Put these in `/opt/truemail/.env` (or the portal env):
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_NUMBER` (E.164) and/or `TWILIO_MESSAGING_SERVICE_SID`
+- `SMS_CODE_TO` (E.164 destination)
+
+US long codes need an approved **A2P 10DLC** brand/campaign (Twilio error `30034` otherwise).
+
+### A2P Privacy Policy / Terms URLs
+
+Public pages (no login):
+
+- Site: `https://truemailor.com/`
+- Privacy: `https://truemailor.com/privacy.html`
+- Terms: `https://truemailor.com/terms.html`
+- Mail aliases: `https://mail.truemailor.com/privacy.html`
+- Portal fallback: `https://portal.vpstruelord.com/privacy.html`
+
+Remove TraceFace and publish the Truemailor site on the VPS:
+
+```bash
+sudo bash /opt/wireguard/port-forward-ui/scripts/truemail/remove-traceface.sh
+```
+
+Apply Twilio env (with SSH access):
+
+```bash
+set -a; source ./twilio.env; set +a
+VPS=root@74.208.76.213 ./portal/scripts/configure-twilio-truemail.sh
+```
+
+Smoke test: `/sms-code-test.html` → `POST /api/sms-code/send` + `/api/sms-code/verify`.
+
 ## NAS Files (WebAccess)
 
 - Sidebar / Overview **Files** tile embeds Buffalo WebAccess

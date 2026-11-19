@@ -77,6 +77,21 @@ Motherboard lighting can only be owned by **one** side at a time (host script vs
 
 AW-ELC uses USB slot **`usb5`** by default (Bluetooth occupies **`usb4`**).
 
+## Windows RDP target (VM 102)
+
+`create-rdp-target-vm.sh` builds **win11-rdp** (`Admin` / `RdpTarget2026!` by default) for Remote Desktop from VM 100.
+
+If RDP says the password expired, keep the **same** password and run on Proxmox:
+
+```bash
+# On Proxmox host:
+./fix-rdp-password-expiry.sh
+# Optional overrides:
+# RDP_ADMIN_USER=Admin RDP_ADMIN_PASS='RdpTarget2026!' VMID=102 ./fix-rdp-password-expiry.sh
+```
+
+That sets **Password never expires**, clears “must change password”, and re-applies the existing password via a one-shot AutoLogon script.
+
 ## Bluetooth (Windows VM)
 
 `bt-usb-owner` hands the Realtek Bluetooth Radio USB `0bda:2852` (RTL8852 companion) between the Proxmox host and **Windows VM 100**, so controllers / headsets work in Windows when you use the PC over VPN / remote.

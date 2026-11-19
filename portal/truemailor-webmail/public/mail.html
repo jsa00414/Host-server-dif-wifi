@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1f6b4a">
+  <title>Sign in · Truemailor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/truemail.css">
+</head>
+<body class="app-page">
+  <div id="loginScreen" class="auth-page login-screen" hidden>
+    <div class="tm-login">
+      <div class="tm-login-sky" aria-hidden="true"></div>
+      <div class="tm-login-shell">
+        <p class="tm-login-brand">Truemailor</p>
+        <h1 class="tm-login-headline">Sign in to your mail.</h1>
+        <p class="tm-login-lead">Private inbox for truemailor.com</p>
+        <form id="loginForm" class="tm-login-form" autocomplete="on">
+          <label class="tm-field">
+            <span>Email</span>
+            <input id="email" name="email" type="email" autocomplete="username" required placeholder="you@truemailor.com" autofocus>
+          </label>
+          <label class="tm-field">
+            <span>Password</span>
+            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+          </label>
+          <p id="loginError" class="form-error tm-login-error" hidden role="alert"></p>
+          <button type="submit" class="tm-login-submit" id="loginBtn">Sign in</button>
+        </form>
+        <p class="tm-login-foot">
+          <a href="https://truemailor.com/privacy.html">Privacy</a>
+          <a href="https://truemailor.com/terms.html">Terms</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div id="bootScreen" class="boot-screen is-open">
+    <div class="tm-boot-brand">Truemailor</div>
+    <p id="bootStatus">Loading…</p>
+    <p id="bootError" class="form-error" hidden></p>
+    <button type="button" id="bootRetry" class="tm-login-submit" hidden>Try again</button>
+  </div>
+
+  <div id="adminApp" class="admin-app" hidden>
+    <header class="admin-top app-topbar">
+      <div class="admin-brand topbar-left">
+        <a class="gmail-brand" href="/mail" title="Truemailor">
+          <span class="tm-mark" aria-hidden="true">T</span>
+          <span>Truemailor</span>
+        </a>
+        <span class="admin-badge">Admin</span>
+      </div>
+      <div class="admin-top-actions topbar-right">
+        <button type="button" class="admin-inbox-btn" id="adminOpenInboxBtn">Open inbox</button>
+        <div class="account-menu" id="adminAccountMenu">
+          <button type="button" class="account-menu-btn" id="adminAccountMenuBtn" aria-haspopup="menu" aria-expanded="false" title="Account">
+            <span class="account-avatar" id="adminAccountAvatar">A</span>
+          </button>
+          <div class="account-menu-panel" id="adminAccountMenuPanel" role="menu" hidden>
+            <div class="account-menu-email" id="adminSignedAs"></div>
+            <button type="button" class="account-menu-item" id="adminLogoutBtn" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+    <main class="admin-main">
+      <section class="admin-hero">
+        <h1>Admin dashboard</h1>
+        <p>Manage mailboxes, forwards, and your Truemailor server.</p>
+      </section>
+      <section class="admin-cards" id="adminCards">
+        <article class="admin-card">
+          <h2>Domain</h2>
+          <p id="adminDomain">—</p>
+        </article>
+        <article class="admin-card">
+          <h2>Hostname</h2>
+          <p id="adminHostname">—</p>
+        </article>
+        <article class="admin-card">
+          <h2>Mailboxes</h2>
+          <p id="adminAccountCount">—</p>
+        </article>
+        <article class="admin-card admin-card-wide" id="adminOutboundCard">
+          <h2>Outbound SMTP (port 25)</h2>
+          <p id="adminOutboundStatus">Checking…</p>
+        </article>
+      </section>
+      <section class="admin-panel">
+        <div class="admin-panel-head">
+          <h2>Mailboxes</h2>
+          <button type="button" class="text-link" id="adminRefreshAccounts">Refresh</button>
+        </div>
+        <form id="adminCreateForm" class="admin-create">
+          <input id="adminNewEmail" type="email" required placeholder="newuser@truemailor.com">
+          <input id="adminNewPass" type="password" required minlength="8" placeholder="Password (min 8)">
+          <button type="submit" class="btn-google-primary">Create mailbox</button>
+        </form>
+        <p id="adminFormError" class="form-error" hidden></p>
+        <p id="adminFormOk" class="admin-ok" hidden></p>
+        <div id="adminAccountList" class="admin-account-list"></div>
+      </section>
+      <section class="admin-panel admin-panel-spaced">
+        <div class="admin-panel-head">
+          <h2>Mail forwarding</h2>
+          <button type="button" class="text-link" id="adminRefreshAliases">Refresh</button>
+        </div>
+        <p class="admin-panel-note">Forward mail from an address on your domain to another inbox. Optional: keep a local copy when the From address is a mailbox. Tip: do not test by emailing an alias that forwards back to the same Gmail you sent from — Gmail often hides those. Use a different destination, or check Spam.</p>
+        <form id="adminForwardForm" class="admin-create admin-forward-form">
+          <input id="adminForwardFrom" type="email" required placeholder="from@truemailor.com">
+          <input id="adminForwardTo" type="email" required placeholder="destination@gmail.com">
+          <button type="submit" class="btn-google-primary">Add forward</button>
+        </form>
+        <label class="admin-check">
+          <input type="checkbox" id="adminForwardKeepCopy">
+          <span>Keep a copy in the local mailbox</span>
+        </label>
+        <p id="adminForwardError" class="form-error" hidden></p>
+        <p id="adminForwardOk" class="admin-ok" hidden></p>
+        <div id="adminForwardList" class="admin-account-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="app" class="mail-app">
+    <header class="gmail-header app-topbar">
+      <div class="gh-left topbar-left">
+        <button type="button" class="icon-btn" id="openSidebarBtn" aria-label="Main menu">
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+        </button>
+        <a class="gmail-brand" href="/mail" title="Truemailor">
+          <span class="tm-mark" aria-hidden="true">T</span>
+          <span>Truemailor</span>
+        </a>
+      </div>
+      <div class="gh-search">
+        <div class="search-shell">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input type="search" id="searchInput" placeholder="Search mail" aria-label="Search mail">
+        </div>
+      </div>
+      <div class="gh-right topbar-right">
+        <button type="button" class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-1.76-4.24L14 10h7V3l-3.35 3.35z"/></svg>
+        </button>
+        <div class="account-menu" id="mailAccountMenu">
+          <button type="button" class="account-menu-btn" id="mailAccountMenuBtn" aria-haspopup="menu" aria-expanded="false" title="Account">
+            <span class="account-avatar" id="accountAvatar">A</span>
+          </button>
+          <div class="account-menu-panel" id="mailAccountMenuPanel" role="menu" hidden>
+            <div class="account-menu-email" id="signedAs"></div>
+            <button type="button" class="account-menu-item" id="adminDashBtn" role="menuitem" hidden>Admin</button>
+            <button type="button" class="account-menu-item" id="logoutBtn" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <aside class="gmail-nav" id="sidebar">
+      <button type="button" class="compose-btn" id="composeBtn">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
+        <span>Compose</span>
+      </button>
+      <nav class="folder-nav" id="folderNav" aria-label="Folders"></nav>
+    </aside>
+
+    <section class="gmail-list" aria-label="Message list">
+      <div class="list-toolbar">
+        <h1 class="list-title" id="listTitle">Inbox</h1>
+      </div>
+      <div id="listLoading" class="pane-status" hidden>Loading…</div>
+      <div id="listEmpty" class="pane-status" hidden>No messages in Inbox.</div>
+      <div id="messageList" class="message-list" role="list"></div>
+    </section>
+
+    <section class="gmail-read" aria-label="Reading pane" id="readPane">
+      <div id="readEmpty" class="read-empty">
+        <svg viewBox="0 0 24 24" width="64" height="64" aria-hidden="true"><path fill="#dadce0" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
+        <p>No conversations selected</p>
+      </div>
+      <article id="readView" class="read-view" hidden>
+        <header class="read-toolbar">
+          <button type="button" class="icon-btn mobile-only" id="backToListBtn" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="archiveBtn" title="Archive" aria-label="Archive">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20.54 5.23 19.15 3.55A1.5 1.5 0 0 0 17.96 3H6.04c-.47 0-.92.22-1.19.55L3.46 5.23c-.24.3-.36.67-.36 1.05V19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.28c0-.38-.12-.75-.36-1.05zM12 17.5 6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="deleteBtn" title="Delete" aria-label="Delete">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="starBtn" title="Star" aria-label="Star">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+          </button>
+          <button type="button" class="btn-reply" id="replyBtn">Reply</button>
+        </header>
+        <div class="read-scroll">
+          <h2 id="readSubject" class="read-subject"></h2>
+          <div class="read-meta">
+            <div class="read-avatar" id="readAvatar" aria-hidden="true"></div>
+            <div class="read-people">
+              <div id="readFrom" class="read-from"></div>
+              <div id="readTo" class="read-to"></div>
+              <div id="readDate" class="read-date"></div>
+            </div>
+          </div>
+          <div id="readBody" class="read-body"></div>
+          <div id="readAttachments" class="read-attachments" hidden></div>
+        </div>
+      </article>
+    </section>
+  </div>
+
+  <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+
+  <div id="composeModal" class="modal" aria-hidden="true">
+    <div class="modal-panel compose-panel" role="dialog" aria-modal="true" aria-labelledby="composeTitle">
+      <header class="modal-header">
+        <h2 id="composeTitle">New Message</h2>
+        <button type="button" class="icon-btn light" id="closeComposeBtn" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </header>
+      <form id="composeForm" class="compose-form">
+        <label class="compose-row">
+          <span>To</span>
+          <input id="composeTo" name="to" type="text" inputmode="email" autocomplete="email" required placeholder="recipient@example.com">
+        </label>
+        <label class="compose-row">
+          <span>Cc</span>
+          <input id="composeCc" name="cc" type="text" autocomplete="email">
+        </label>
+        <label class="compose-row">
+          <span>Subject</span>
+          <input id="composeSubject" name="subject" type="text">
+        </label>
+        <textarea id="composeBody" name="text" rows="12" placeholder="Message"></textarea>
+        <div class="compose-footer">
+          <button type="submit" class="btn-send" id="sendBtn">Send</button>
+          <button type="button" class="icon-btn" id="discardComposeBtn" title="Discard" aria-label="Discard">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+          <p id="composeError" class="form-error" hidden role="alert"></p>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+
+  <script src="/js/mail-app.js"></script>
+</body>
+</html>

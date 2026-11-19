@@ -5,8 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=notify
+ExecStartPre=/opt/openvpn/scripts/openvpn-speed-tune.sh
 ExecStartPre=/opt/openvpn/scripts/ovpn-firewall.sh
 ExecStart=/usr/sbin/openvpn --config /opt/openvpn/server.conf
+ExecStartPost=/bin/bash -c 'for i in 1 2 3 4 5 6 7 8 9 10; do ip link show tun0 >/dev/null 2>&1 && ip link set dev tun0 txqueuelen 10000 && break; sleep 1; done'
 WorkingDirectory=/opt/openvpn
 Restart=on-failure
 RestartSec=3

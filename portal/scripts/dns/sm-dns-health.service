@@ -1,0 +1,7 @@
+[Unit]
+Description=ServerManager DNS health (Unbound/AdGuard)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dns/scripts/sm-dns-health.sh
