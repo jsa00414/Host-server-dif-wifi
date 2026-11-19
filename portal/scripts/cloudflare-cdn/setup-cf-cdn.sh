@@ -15,6 +15,8 @@ XRAY_SETUP="${XRAY_SETUP_SCRIPT:-$ROOT/scripts/xray/setup-xray.sh}"
 XRAY_CF_HOST="${XRAY_CF_HOST:-cdn.vpstruelord.com}"
 XRAY_CF_WS_PORT="${XRAY_CF_WS_PORT:-18444}"
 XRAY_CF_WS_PATH="${XRAY_CF_WS_PATH:-/vless-cf}"
+# Host IP as seen from truemail-caddy Docker network (not 127.0.0.1).
+XRAY_CF_WS_LISTEN="${XRAY_CF_WS_LISTEN:-172.18.0.1}"
 CADDYFILE="${CADDYFILE_PATH:-/opt/truemail/Caddyfile}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
 VPS_PUBLIC_IP="${VPS_PUBLIC_IP:-74.208.76.213}"
@@ -28,7 +30,8 @@ if [[ -f "$ENV_FILE" ]]; then
 from pathlib import Path
 want = {
     "CF_API_TOKEN", "CF_ZONE_ID", "CF_ZONE_NAME", "VPS_PUBLIC_IP",
-    "XRAY_CF_HOST", "XRAY_CF_WS_PORT", "XRAY_CF_WS_PATH", "CADDYFILE_PATH",
+    "XRAY_CF_HOST", "XRAY_CF_WS_PORT", "XRAY_CF_WS_PATH", "XRAY_CF_WS_LISTEN",
+    "CADDYFILE_PATH",
 }
 for line in Path("$ENV_FILE").read_text(encoding="utf-8", errors="replace").splitlines():
     s = line.strip()
@@ -47,11 +50,12 @@ fi
 XRAY_CF_HOST="${XRAY_CF_HOST:-cdn.vpstruelord.com}"
 XRAY_CF_WS_PORT="${XRAY_CF_WS_PORT:-18444}"
 XRAY_CF_WS_PATH="${XRAY_CF_WS_PATH:-/vless-cf}"
+XRAY_CF_WS_LISTEN="${XRAY_CF_WS_LISTEN:-172.18.0.1}"
 [[ "$XRAY_CF_WS_PATH" == /* ]] || XRAY_CF_WS_PATH="/$XRAY_CF_WS_PATH"
 CADDYFILE="${CADDYFILE_PATH:-$CADDYFILE}"
 
 echo "=== 1/4 refresh Xray (includes vless-cf-ws inbound) ==="
-export XRAY_CF_HOST XRAY_CF_WS_PORT XRAY_CF_WS_PATH
+export XRAY_CF_HOST XRAY_CF_WS_PORT XRAY_CF_WS_PATH XRAY_CF_WS_LISTEN
 bash "$XRAY_SETUP"
 
 echo "=== 2/4 Caddy site for ${XRAY_CF_HOST} ==="
@@ -69,12 +73,13 @@ end = "$MARKER_END"
 host = "$XRAY_CF_HOST"
 port = "$XRAY_CF_WS_PORT"
 path = "$XRAY_CF_WS_PATH"
+listen = "$XRAY_CF_WS_LISTEN"
 block = f"""{begin}
 {host} {{
 \tencode gzip
 \t@cfws path {path} {path}/*
 \thandle @cfws {{
-\t\treverse_proxy 127.0.0.1:{port}
+\t\treverse_proxy {listen}:{port}
 \t}}
 \thandle {{
 \t\trespond "cf-cdn" 200
@@ -190,6 +195,7 @@ wanted = {
     "XRAY_CF_HOST": "$XRAY_CF_HOST",
     "XRAY_CF_WS_PORT": "$XRAY_CF_WS_PORT",
     "XRAY_CF_WS_PATH": "$XRAY_CF_WS_PATH",
+    "XRAY_CF_WS_LISTEN": "$XRAY_CF_WS_LISTEN",
 }
 lines = p.read_text(encoding="utf-8").splitlines()
 out, seen = [], set()
@@ -213,6 +219,6 @@ echo
 echo "Cloudflare CDN bypass ready."
 echo "  Host:  ${XRAY_CF_HOST}:443 (orange-cloud)"
 echo "  Path:  ${XRAY_CF_WS_PATH}"
-echo "  Local: 127.0.0.1:${XRAY_CF_WS_PORT}"
+echo "  Local: ${XRAY_CF_WS_LISTEN}:${XRAY_CF_WS_PORT}"
 echo "Import the CF CDN link from portal Xray page (same UUID as REALITY)."
 echo "SSL/TLS mode in Cloudflare dashboard should be Full (strict)."

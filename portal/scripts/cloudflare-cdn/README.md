@@ -8,7 +8,7 @@ your origin over the orange-cloud proxy.
 phone/laptop
   → Cloudflare edge :443  (cdn.vpstruelord.com)
   → Caddy on VPS (TLS)
-  → Xray VLESS+WebSocket on 127.0.0.1:18444
+  → Xray VLESS+WebSocket on 172.18.0.1:18444 (docker-bridge host IP)
   → internet
 ```
 
@@ -27,8 +27,8 @@ for portal DNS). Creates/updates:
 | Piece | Value |
 |-------|--------|
 | DNS | `cdn.vpstruelord.com` A → VPS IP, **Proxied** |
-| Caddy | site block reverse-proxying `/vless-cf` → `127.0.0.1:18444` |
-| Xray | inbound `vless-cf-ws` (localhost WS) |
+| Caddy | site block reverse-proxying `/vless-cf` → `172.18.0.1:18444` |
+| Xray | inbound `vless-cf-ws` (docker-bridge WS; Caddy is containerized) |
 
 ## Cloudflare dashboard
 

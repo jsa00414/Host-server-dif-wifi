@@ -1990,6 +1990,10 @@ XRAY_CF_WS_PATH = (
 if not XRAY_CF_WS_PATH.startswith("/"):
     XRAY_CF_WS_PATH = "/" + XRAY_CF_WS_PATH
 XRAY_CF_WS_PORT = int(os.environ.get("XRAY_CF_WS_PORT", "18444") or "18444")
+# Docker Caddy reaches host Xray via the truemail bridge gateway, not loopback.
+XRAY_CF_WS_LISTEN = (
+    os.environ.get("XRAY_CF_WS_LISTEN", "172.18.0.1").strip() or "172.18.0.1"
+)
 XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "sm-xray").strip() or "sm-xray"
 XRAY_SETUP_SCRIPT = Path(
     os.environ.get(
@@ -2302,7 +2306,7 @@ def _xray_rebuild_and_reload() -> None:
             },
             {
                 "tag": "vless-cf-ws",
-                "listen": "127.0.0.1",
+                "listen": XRAY_CF_WS_LISTEN,
                 "port": XRAY_CF_WS_PORT,
                 "protocol": "vless",
                 "settings": {"clients": clients, "decryption": "none"},

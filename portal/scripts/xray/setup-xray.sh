@@ -11,10 +11,12 @@ XRAY_HOST="${XRAY_HOST:-vpn.vpstruelord.com}"
 XRAY_SNI="${XRAY_SNI:-www.microsoft.com}"
 XRAY_DEST="${XRAY_DEST:-www.microsoft.com:443}"
 # Cloudflare CDN bypass (VLESS+WS behind Caddy; orange-cloud DNS).
-# Listen localhost only — Caddy terminates TLS for XRAY_CF_HOST.
+# Listen on docker-bridge host IP (not 127.0.0.1): Caddy runs in Docker and
+# reaches the host via 172.18.0.1. Caddy terminates TLS for XRAY_CF_HOST.
 XRAY_CF_WS_PORT="${XRAY_CF_WS_PORT:-18444}"
 XRAY_CF_WS_PATH="${XRAY_CF_WS_PATH:-/vless-cf}"
 XRAY_CF_HOST="${XRAY_CF_HOST:-cdn.vpstruelord.com}"
+XRAY_CF_WS_LISTEN="${XRAY_CF_WS_LISTEN:-172.18.0.1}"
 # Transparent dokodemo for Flint LAN circle users (iptables REDIRECT).
 XRAY_DOKODEMO_PORT="${XRAY_DOKODEMO_PORT:-18080}"
 # Authenticator Surfshark exit: device → Xray → Surfshark (fwmark 0x184).
@@ -110,7 +112,7 @@ PY
 write_config() {
   export XRAY_DIR XRAY_PORT XRAY_HOST XRAY_SNI XRAY_DEST XRAY_DOKODEMO_PORT
   export XRAY_SS_DOKODEMO_PORT XRAY_SS_FWMARK
-  export XRAY_CF_WS_PORT XRAY_CF_WS_PATH XRAY_CF_HOST
+  export XRAY_CF_WS_PORT XRAY_CF_WS_PATH XRAY_CF_HOST XRAY_CF_WS_LISTEN
   export CLIENTS_FILE KEYS_FILE CONFIG_FILE XRAY_BIN
   python3 - <<'PY'
 import json
@@ -146,6 +148,7 @@ ss_dokodemo = int(os.environ.get("XRAY_SS_DOKODEMO_PORT", "18082"))
 ss_mark = int(os.environ.get("XRAY_SS_FWMARK", "388"))
 cf_ws_port = int(os.environ.get("XRAY_CF_WS_PORT", "18444"))
 cf_ws_path = (os.environ.get("XRAY_CF_WS_PATH") or "/vless-cf").strip() or "/vless-cf"
+cf_ws_listen = (os.environ.get("XRAY_CF_WS_LISTEN") or "172.18.0.1").strip() or "172.18.0.1"
 if not cf_ws_path.startswith("/"):
     cf_ws_path = "/" + cf_ws_path
 sni = os.environ.get("XRAY_SNI", "www.microsoft.com")
@@ -187,7 +190,7 @@ cfg = {
             # Cloudflare CDN bypass: Caddy terminates TLS on XRAY_CF_HOST,
             # reverse_proxies WebSocket here. Same UUIDs as REALITY inbound.
             "tag": "vless-cf-ws",
-            "listen": "127.0.0.1",
+            "listen": cf_ws_listen,
             "port": cf_ws_port,
             "protocol": "vless",
             "settings": {
@@ -270,7 +273,7 @@ os.chmod(os.environ["CONFIG_FILE"], 0o600)
 print(
     f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)} "
     f"dokodemo={dokodemo} ss_dokodemo={ss_dokodemo} ss_mark={ss_mark} "
-    f"cf_ws=127.0.0.1:{cf_ws_port}{cf_ws_path}"
+    f"cf_ws={cf_ws_listen}:{cf_ws_port}{cf_ws_path}"
 )
 PY
 }
@@ -313,6 +316,7 @@ wanted = {
     "XRAY_CF_HOST": "$XRAY_CF_HOST",
     "XRAY_CF_WS_PORT": "$XRAY_CF_WS_PORT",
     "XRAY_CF_WS_PATH": "$XRAY_CF_WS_PATH",
+    "XRAY_CF_WS_LISTEN": "$XRAY_CF_WS_LISTEN",
     "XRAY_PUBLIC_KEY": "",
 }
 # fill public key from keys file
@@ -381,4 +385,4 @@ write_env_hints
 open_firewall
 systemctl restart sm-xray.service
 systemctl --no-pager --full status sm-xray.service | head -20
-echo "xray ready on :${XRAY_PORT} (VLESS REALITY SNI=${XRAY_SNI}); CF-WS 127.0.0.1:${XRAY_CF_WS_PORT}${XRAY_CF_WS_PATH} (cdn host ${XRAY_CF_HOST}); dokodemo :${XRAY_DOKODEMO_PORT}/:${XRAY_SS_DOKODEMO_PORT} on 0.0.0.0 (public NIC denied)"
+echo "xray ready on :${XRAY_PORT} (VLESS REALITY SNI=${XRAY_SNI}); CF-WS ${XRAY_CF_WS_LISTEN}:${XRAY_CF_WS_PORT}${XRAY_CF_WS_PATH} (cdn host ${XRAY_CF_HOST}); dokodemo :${XRAY_DOKODEMO_PORT}/:${XRAY_SS_DOKODEMO_PORT} on 0.0.0.0 (public NIC denied)"
