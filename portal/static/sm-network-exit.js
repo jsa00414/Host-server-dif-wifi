@@ -335,10 +335,15 @@
       els.btnSs?.classList.toggle("active", prov === "surfshark");
       els.btnSocks?.classList.toggle("active", prov === "socks");
       if (els.btnSocks) {
-        els.btnSocks.hidden = !state.socks_ready;
+        // Only hide after status says SOCKS is not configured.
+        if (state && Object.prototype.hasOwnProperty.call(state, "socks_ready")) {
+          els.btnSocks.hidden = !state.socks_ready;
+        } else {
+          els.btnSocks.hidden = false;
+        }
         const hint = els.btnSocks.querySelector(".hint");
         if (hint && state.socks_host) {
-          hint.textContent = `This IP → Xray → ${state.socks_host}:${
+          hint.textContent = `This device IP → Xray → ${state.socks_host}:${
             state.socks_port || ""
           } (TCP).`;
         }

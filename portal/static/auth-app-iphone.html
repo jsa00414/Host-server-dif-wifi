@@ -13,7 +13,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="sm-auth-layout" content="v33-circle-counts" />
-  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=33" />
+  <link rel="manifest" href="/static/auth-app-iphone.webmanifest?v=34" />
   <link rel="apple-touch-icon" href="/static/auth-app-icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/auth-app-icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -837,7 +837,7 @@
       <section class="panel network-pane" id="networkPane" hidden>
         <div class="panel-head">
           <h3>Exit</h3>
-          <p>Route one Circle device through Tailscale, Surfshark, or SOCKS5 (Surfshark/SOCKS go through Xray).</p>
+          <p>Pick a Circle device IP, then choose its network exit: Tailscale, Surfshark, SOCKS5, or Direct.</p>
         </div>
         <div class="net-control">
           <div class="label">Controlling</div>
@@ -862,9 +862,9 @@
             </button>
             <select id="netSsServer" aria-label="Surfshark server" hidden></select>
           </div>
-          <button type="button" class="choice" data-provider="socks" id="netBtnSocks" hidden>
+          <button type="button" class="choice" data-provider="socks" id="netBtnSocks">
             <span class="title">SOCKS5 proxy</span>
-            <span class="hint">This IP → Xray → dedicated SOCKS5 exit (TCP).</span>
+            <span class="hint">This device IP → Xray → 178.169.40.91:3501 (TCP).</span>
           </button>
           <button type="button" class="choice" data-provider="direct" id="netBtnDirect">
             <span class="title">Direct / default</span>
@@ -1810,7 +1810,7 @@
     })();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
-        .register("/static/auth-app-iphone-sw.js?v=33")
+        .register("/static/auth-app-iphone-sw.js?v=34")
         .then((reg) => reg.update())
         .catch(() => {});
     }
