@@ -1994,6 +1994,14 @@ XRAY_CF_WS_PORT = int(os.environ.get("XRAY_CF_WS_PORT", "18444") or "18444")
 XRAY_CF_WS_LISTEN = (
     os.environ.get("XRAY_CF_WS_LISTEN", "172.18.0.1").strip() or "172.18.0.1"
 )
+# Campus/dedicated SOCKS5 exit (Authenticator Network Exit + portal share).
+SOCKS_EXIT_HOST = (os.environ.get("SOCKS_EXIT_HOST") or "").strip()
+SOCKS_EXIT_PORT = int(os.environ.get("SOCKS_EXIT_PORT", "3501") or "3501")
+SOCKS_EXIT_USER = (os.environ.get("SOCKS_EXIT_USER") or "").strip()
+SOCKS_EXIT_PASS = (os.environ.get("SOCKS_EXIT_PASS") or "").strip()
+XRAY_SOCKS_DOKODEMO_PORT = int(
+    os.environ.get("XRAY_SOCKS_DOKODEMO_PORT", "18083") or "18083"
+)
 XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "sm-xray").strip() or "sm-xray"
 XRAY_SETUP_SCRIPT = Path(
     os.environ.get(
@@ -2323,6 +2331,46 @@ def _xray_rebuild_and_reload() -> None:
             {"protocol": "blackhole", "tag": "block"},
         ],
     }
+    # Keep Surfshark dokodemo/outbound if already present in live config; full
+    # fidelity comes from setup-xray.sh. Add SOCKS exit when credentials exist.
+    if SOCKS_EXIT_HOST and SOCKS_EXIT_PORT > 0:
+        cfg["inbounds"].append(
+            {
+                "tag": "dokodemo-socks-exit",
+                "listen": "0.0.0.0",
+                "port": XRAY_SOCKS_DOKODEMO_PORT,
+                "protocol": "dokodemo-door",
+                "settings": {"network": "tcp", "followRedirect": True},
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls", "quic"],
+                },
+            }
+        )
+        server = {"address": SOCKS_EXIT_HOST, "port": SOCKS_EXIT_PORT}
+        if SOCKS_EXIT_USER or SOCKS_EXIT_PASS:
+            server["users"] = [
+                {"user": SOCKS_EXIT_USER, "pass": SOCKS_EXIT_PASS, "level": 0}
+            ]
+        cfg["outbounds"].insert(
+            -1,
+            {
+                "protocol": "socks",
+                "tag": "via-socks-exit",
+                "settings": {"servers": [server]},
+            },
+        )
+        cfg.setdefault("routing", {"domainStrategy": "AsIs", "rules": []})
+        rules = list(cfg["routing"].get("rules") or [])
+        rules.insert(
+            0,
+            {
+                "type": "field",
+                "inboundTag": ["dokodemo-socks-exit"],
+                "outboundTag": "via-socks-exit",
+            },
+        )
+        cfg["routing"]["rules"] = rules
     XRAY_DIR.mkdir(parents=True, exist_ok=True)
     XRAY_CONFIG_FILE.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
@@ -2408,6 +2456,7 @@ def build_xray_status() -> dict:
     keys = _xray_read_keys()
     clients = list_xray_clients()
     cf_ready = False
+    socks_doko_ready = False
     try:
         if XRAY_CONFIG_FILE.is_file():
             cfg = json.loads(XRAY_CONFIG_FILE.read_text(encoding="utf-8"))
@@ -2417,8 +2466,12 @@ def build_xray_status() -> dict:
                 if isinstance(i, dict)
             }
             cf_ready = "vless-cf-ws" in tags
+            socks_doko_ready = "dokodemo-socks-exit" in tags
     except Exception:
         cf_ready = False
+        socks_doko_ready = False
+    socks = socks_exit_status()
+    socks["xray_ready"] = bool(socks.get("ready") and socks_doko_ready)
     return {
         "ok": True,
         "service": XRAY_SERVICE,
@@ -2432,6 +2485,7 @@ def build_xray_status() -> dict:
         "cf_port": 443,
         "cf_ws_local_port": XRAY_CF_WS_PORT,
         "cf_ready": cf_ready,
+        "socks": socks,
         "public_key": keys.get("public") or "",
         "short_id": keys.get("short_id") or "",
         "protocol": "vless+reality",
@@ -2443,7 +2497,8 @@ def build_xray_status() -> dict:
         "hint": (
             "REALITY link talks to the VPS directly (:8444). "
             "CF CDN link goes through Cloudflare orange-cloud when campus "
-            "blocks the VPS IP/ports. Portal login required."
+            "blocks the VPS IP/ports. SOCKS5 is a dedicated proxy exit. "
+            "Portal login required."
         ),
     }
 
@@ -12565,9 +12620,40 @@ def _provider_label(provider: str) -> str:
     return {
         "surfshark": "Surfshark",
         "tailscale": "Tailscale exit node",
+        "socks": "SOCKS5 proxy",
         "direct": "Direct / default",
         "clear": "Direct / default",
     }.get(str(provider or "").strip().lower(), "Direct / default")
+
+
+def socks_exit_status() -> dict:
+    ready = bool(SOCKS_EXIT_HOST and SOCKS_EXIT_PORT > 0)
+    user = SOCKS_EXIT_USER
+    # Share URL for campus clients (direct to proxy, not via VPS).
+    link = ""
+    if ready:
+        from urllib.parse import quote
+
+        auth = ""
+        if user or SOCKS_EXIT_PASS:
+            auth = f"{quote(user, safe='')}:{quote(SOCKS_EXIT_PASS, safe='')}@"
+        link = f"socks5://{auth}{SOCKS_EXIT_HOST}:{SOCKS_EXIT_PORT}"
+    return {
+        "ready": ready,
+        "host": SOCKS_EXIT_HOST,
+        "port": SOCKS_EXIT_PORT if ready else None,
+        "user": user if ready else "",
+        "has_pass": bool(SOCKS_EXIT_PASS) if ready else False,
+        "link": link,
+        "dokodemo_port": XRAY_SOCKS_DOKODEMO_PORT,
+        "protocol": "socks5",
+        "hint": (
+            "Dedicated SOCKS5 exit. Use from campus apps directly, or pick "
+            "SOCKS5 proxy in Authenticator → Exit (TCP via Xray)."
+            if ready
+            else "Set SOCKS_EXIT_HOST/PORT/USER/PASS in port-forward-ui.env"
+        ),
+    }
 
 
 def _global_exit_summary() -> str:
@@ -12885,6 +12971,7 @@ def build_device_exit_status(
     member = bool(circle_member or proven)
     ts = _read_vpn_exit_state()
     ss_servers = list_surfshark_servers()
+    socks = socks_exit_status()
     keys_host = (KEYS_PUBLIC_HOST or KEYS_HOST or "keys.vpstruelord.com").strip()
     base = {
         "ok": True,
@@ -12892,6 +12979,9 @@ def build_device_exit_status(
         "lan_ip": lan_n,
         "surfshark_server": ss_servers[0]["id"] if ss_servers else "",
         "surfshark_servers": ss_servers,
+        "socks_ready": bool(socks.get("ready")),
+        "socks_host": socks.get("host") or "",
+        "socks_port": socks.get("port"),
         "tailscale_exit_ip": str(ts.get("exit_ip") or "100.94.32.63"),
         "global_exit": _global_exit_summary(),
         "hosts": {"keys": keys_host},
@@ -12980,8 +13070,10 @@ def set_device_exit(
     if prov in ("", "default", "off", "none", "clear", "direct"):
         # Remove per-IP override so the device follows the global exit path.
         prov = "clear"
-    if prov not in ("surfshark", "tailscale", "clear"):
-        raise ValueError("provider must be surfshark, tailscale, or direct")
+    if prov not in ("surfshark", "tailscale", "socks", "clear"):
+        raise ValueError("provider must be surfshark, tailscale, socks, or direct")
+    if prov == "socks" and not (SOCKS_EXIT_HOST and SOCKS_EXIT_PORT > 0):
+        raise ValueError("SOCKS5 exit is not configured on the VPS")
     if not DEVICE_EXIT_SCRIPT.is_file():
         raise ValueError(f"device-exit script missing: {DEVICE_EXIT_SCRIPT}")
     extra = ""
@@ -12995,6 +13087,8 @@ def set_device_exit(
             _read_vpn_exit_state().get("exit_ip") or ""
         ).strip()
         extra = extra or "100.94.32.63"
+    elif prov == "socks":
+        extra = f"{SOCKS_EXIT_HOST}:{SOCKS_EXIT_PORT}"
     # Individual device (+ same-key Wi‑Fi/OpenVPN siblings), not the whole Circle.
     targets = _circle_sibling_device_ips(control_ip) or [control_ip]
     target_set = set(targets)

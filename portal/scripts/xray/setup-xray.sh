@@ -23,10 +23,41 @@ XRAY_DOKODEMO_PORT="${XRAY_DOKODEMO_PORT:-18080}"
 XRAY_SS_DOKODEMO_PORT="${XRAY_SS_DOKODEMO_PORT:-18082}"
 # iptables mark used by sm-device-exit / ss-vpn-exit (0x184).
 XRAY_SS_FWMARK="${XRAY_SS_FWMARK:-388}"
+# Authenticator SOCKS5 exit: device → Xray dokodemo → upstream SOCKS.
+XRAY_SOCKS_DOKODEMO_PORT="${XRAY_SOCKS_DOKODEMO_PORT:-18083}"
 CLIENTS_FILE="${XRAY_CLIENTS_FILE:-$XRAY_DIR/clients.json}"
 KEYS_FILE="${XRAY_KEYS_FILE:-$XRAY_DIR/reality.keys}"
 CONFIG_FILE="${XRAY_CONFIG_FILE:-$XRAY_DIR/config.json}"
 ENV_FILE="${PORTAL_ENV_FILE:-/opt/wireguard/port-forward-ui.env}"
+
+# Pull SOCKS exit + related keys from portal env when present.
+if [[ -f "$ENV_FILE" ]]; then
+  eval "$(
+    python3 - <<PY
+from pathlib import Path
+want = {
+    "SOCKS_EXIT_HOST", "SOCKS_EXIT_PORT", "SOCKS_EXIT_USER", "SOCKS_EXIT_PASS",
+    "XRAY_SOCKS_DOKODEMO_PORT", "XRAY_CF_WS_LISTEN", "XRAY_CF_WS_PORT",
+    "XRAY_CF_WS_PATH", "XRAY_CF_HOST",
+}
+for line in Path("$ENV_FILE").read_text(encoding="utf-8", errors="replace").splitlines():
+    s = line.strip()
+    if not s or s.startswith("#") or "=" not in s:
+        continue
+    k, v = s.split("=", 1)
+    k = k.strip()
+    if k not in want:
+        continue
+    v = v.strip().strip('"').strip("'")
+    print(f"export {k}={v!r}")
+PY
+  )"
+fi
+SOCKS_EXIT_HOST="${SOCKS_EXIT_HOST:-}"
+SOCKS_EXIT_PORT="${SOCKS_EXIT_PORT:-3501}"
+SOCKS_EXIT_USER="${SOCKS_EXIT_USER:-}"
+SOCKS_EXIT_PASS="${SOCKS_EXIT_PASS:-}"
+XRAY_SOCKS_DOKODEMO_PORT="${XRAY_SOCKS_DOKODEMO_PORT:-18083}"
 
 mkdir -p "$XRAY_DIR" "$XRAY_DIR/logs"
 chmod 750 "$XRAY_DIR"
@@ -113,6 +144,8 @@ write_config() {
   export XRAY_DIR XRAY_PORT XRAY_HOST XRAY_SNI XRAY_DEST XRAY_DOKODEMO_PORT
   export XRAY_SS_DOKODEMO_PORT XRAY_SS_FWMARK
   export XRAY_CF_WS_PORT XRAY_CF_WS_PATH XRAY_CF_HOST XRAY_CF_WS_LISTEN
+  export XRAY_SOCKS_DOKODEMO_PORT
+  export SOCKS_EXIT_HOST SOCKS_EXIT_PORT SOCKS_EXIT_USER SOCKS_EXIT_PASS
   export CLIENTS_FILE KEYS_FILE CONFIG_FILE XRAY_BIN
   python3 - <<'PY'
 import json
@@ -149,6 +182,12 @@ ss_mark = int(os.environ.get("XRAY_SS_FWMARK", "388"))
 cf_ws_port = int(os.environ.get("XRAY_CF_WS_PORT", "18444"))
 cf_ws_path = (os.environ.get("XRAY_CF_WS_PATH") or "/vless-cf").strip() or "/vless-cf"
 cf_ws_listen = (os.environ.get("XRAY_CF_WS_LISTEN") or "172.18.0.1").strip() or "172.18.0.1"
+socks_dokodemo = int(os.environ.get("XRAY_SOCKS_DOKODEMO_PORT", "18083"))
+socks_host = (os.environ.get("SOCKS_EXIT_HOST") or "").strip()
+socks_port = int(os.environ.get("SOCKS_EXIT_PORT") or "3501" or "3501")
+socks_user = (os.environ.get("SOCKS_EXIT_USER") or "").strip()
+socks_pass = (os.environ.get("SOCKS_EXIT_PASS") or "").strip()
+socks_ready = bool(socks_host and socks_port > 0)
 if not cf_ws_path.startswith("/"):
     cf_ws_path = "/" + cf_ws_path
 sni = os.environ.get("XRAY_SNI", "www.microsoft.com")
@@ -268,12 +307,42 @@ cfg = {
         ],
     },
 }
+if socks_ready:
+    cfg["inbounds"].append(
+        {
+            "tag": "dokodemo-socks-exit",
+            "listen": "0.0.0.0",
+            "port": socks_dokodemo,
+            "protocol": "dokodemo-door",
+            "settings": {"network": "tcp", "followRedirect": True},
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+            },
+        }
+    )
+    server = {"address": socks_host, "port": socks_port}
+    if socks_user or socks_pass:
+        server["users"] = [{"user": socks_user, "pass": socks_pass, "level": 0}]
+    cfg["outbounds"].insert(
+        -1,
+        {"protocol": "socks", "tag": "via-socks-exit", "settings": {"servers": [server]}},
+    )
+    cfg["routing"]["rules"].insert(
+        0,
+        {
+            "type": "field",
+            "inboundTag": ["dokodemo-socks-exit"],
+            "outboundTag": "via-socks-exit",
+        },
+    )
 Path(os.environ["CONFIG_FILE"]).write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 os.chmod(os.environ["CONFIG_FILE"], 0o600)
 print(
     f"wrote {os.environ['CONFIG_FILE']} clients={len(clients)} "
     f"dokodemo={dokodemo} ss_dokodemo={ss_dokodemo} ss_mark={ss_mark} "
     f"cf_ws={cf_ws_listen}:{cf_ws_port}{cf_ws_path}"
+    + (f" socks={socks_host}:{socks_port} doko={socks_dokodemo}" if socks_ready else "")
 )
 PY
 }

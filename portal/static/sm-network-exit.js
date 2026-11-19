@@ -2,7 +2,7 @@
  * Per-device Surfshark / Tailscale exit UI for Authenticator (keys.*).
  * Expects markup ids: netControlIp, netMeta, netDeviceRow, netDevicePick,
  * netDeviceManual, netUseDeviceBtn, netChoices, netSsServer, netBtnTs,
- * netBtnSs, netBtnDirect. Optional toast via opts.toast(msg, err?).
+ * netBtnSs, netBtnSocks, netBtnDirect. Optional toast via opts.toast(msg, err?).
  */
 (function (global) {
   "use strict";
@@ -191,6 +191,7 @@
       ssServer: $("netSsServer"),
       btnTs: $("netBtnTs"),
       btnSs: $("netBtnSs"),
+      btnSocks: $("netBtnSocks"),
       btnDirect: $("netBtnDirect"),
     };
     if (!els.controlIp || !els.choices) {
@@ -332,6 +333,16 @@
       els.btnTs?.classList.toggle("active", prov === "tailscale");
       els.btnTs?.classList.toggle("ts", prov === "tailscale");
       els.btnSs?.classList.toggle("active", prov === "surfshark");
+      els.btnSocks?.classList.toggle("active", prov === "socks");
+      if (els.btnSocks) {
+        els.btnSocks.hidden = !state.socks_ready;
+        const hint = els.btnSocks.querySelector(".hint");
+        if (hint && state.socks_host) {
+          hint.textContent = `This IP → Xray → ${state.socks_host}:${
+            state.socks_port || ""
+          } (TCP).`;
+        }
+      }
       els.btnDirect?.classList.toggle(
         "active",
         prov === "direct" || prov === "clear" || !prov
@@ -515,6 +526,7 @@
       }
       if (els.btnTs) els.btnTs.onclick = () => setProvider("tailscale");
       if (els.btnSs) els.btnSs.onclick = () => setProvider("surfshark");
+      if (els.btnSocks) els.btnSocks.onclick = () => setProvider("socks");
       if (els.btnDirect) els.btnDirect.onclick = () => setProvider("direct");
     }
 

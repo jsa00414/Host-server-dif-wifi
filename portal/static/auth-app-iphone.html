@@ -837,7 +837,7 @@
       <section class="panel network-pane" id="networkPane" hidden>
         <div class="panel-head">
           <h3>Exit</h3>
-          <p>Route one Circle device through Tailscale or Surfshark (Surfshark always goes through Xray).</p>
+          <p>Route one Circle device through Tailscale, Surfshark, or SOCKS5 (Surfshark/SOCKS go through Xray).</p>
         </div>
         <div class="net-control">
           <div class="label">Controlling</div>
@@ -862,6 +862,10 @@
             </button>
             <select id="netSsServer" aria-label="Surfshark server" hidden></select>
           </div>
+          <button type="button" class="choice" data-provider="socks" id="netBtnSocks" hidden>
+            <span class="title">SOCKS5 proxy</span>
+            <span class="hint">This IP → Xray → dedicated SOCKS5 exit (TCP).</span>
+          </button>
           <button type="button" class="choice" data-provider="direct" id="netBtnDirect">
             <span class="title">Direct / default</span>
             <span class="hint">Clear this device’s override (follow the normal exit).</span>

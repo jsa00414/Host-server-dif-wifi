@@ -20,11 +20,14 @@ SS_TABLE="53"
 TS_IFACE="tailscale0"
 # TCP for Surfshark exits always goes device → Xray dokodemo → Surfshark.
 XRAY_SS_DOKODEMO_PORT="${XRAY_SS_DOKODEMO_PORT:-18082}"
+# TCP for SOCKS5 exits: device → Xray dokodemo → upstream SOCKS.
+XRAY_SOCKS_DOKODEMO_PORT="${XRAY_SOCKS_DOKODEMO_PORT:-18083}"
 XRAY_SETUP="${XRAY_SETUP_SCRIPT:-/opt/wireguard/port-forward-ui/scripts/xray/setup-xray.sh}"
 # Flint site-to-site SNATs home LAN onto this OVPN VIP before packets hit the VPS.
 # Per-LAN /32 marks alone never match Wi‑Fi Circle devices — also mark the VIP.
 FLINT_OVPN_IP="${FLINT_OVPN_IP:-10.9.0.2}"
 TS_EXIT_DNS="${TS_EXIT_DNS:-/opt/dns/ts-exit-dns.sh}"
+COMMENT_SOCKS="SM-DEV-EXIT-SOCKS"
 
 ACTION="${1:-status}"
 IP="${2:-}"
@@ -65,7 +68,7 @@ for ip, row in sorted(devs.items()):
     if not isinstance(row, dict):
         continue
     prov = str(row.get("provider") or "").strip().lower()
-    if prov not in ("surfshark", "tailscale", "direct"):
+    if prov not in ("surfshark", "tailscale", "socks", "direct"):
         continue
     extra = str(row.get("server") or row.get("exit_ip") or "").strip()
     print(f"{ip}|{prov}|{extra}")
@@ -200,6 +203,58 @@ install_ss_xray_redirects() {
   done <<<"$ips"
 
   # Jump first so Surfshark→Xray wins over LAN circle→:18080 / guest→sing-box.
+  iptables -t nat -I PREROUTING 1 -j "$nat_chain"
+}
+
+flush_socks_xray_redirects() {
+  local nat_chain="SM-DEV-EXIT-SOCKS"
+  while iptables -t nat -D PREROUTING -j "$nat_chain" 2>/dev/null; do :; done
+  iptables -t nat -F "$nat_chain" 2>/dev/null || true
+  iptables -t nat -X "$nat_chain" 2>/dev/null || true
+  tmp="$(mktemp)"
+  iptables -t nat -S PREROUTING 2>/dev/null \
+    | grep "comment --comment $COMMENT_SOCKS" \
+    | sed 's/^-A /-D /' >"$tmp" || true
+  while read -r line; do
+    [ -n "$line" ] || continue
+    # shellcheck disable=SC2086
+    iptables -t nat $line 2>/dev/null || true
+  done <"$tmp"
+  rm -f "$tmp"
+}
+
+install_socks_xray_redirects() {
+  # $1 = newline-separated source IPs that should exit via upstream SOCKS through Xray.
+  local ips="$1"
+  local ip cidr
+  local nat_chain="SM-DEV-EXIT-SOCKS"
+  flush_socks_xray_redirects
+  [ -n "$ips" ] || return 0
+  ensure_xray_ss_chain
+
+  iptables -t nat -N "$nat_chain" 2>/dev/null || iptables -t nat -F "$nat_chain"
+  for cidr in \
+    10.0.0.0/8 \
+    172.16.0.0/12 \
+    192.168.0.0/16 \
+    "${PUBLIC_IP}/32" \
+    100.64.0.0/10 \
+    10.11.0.1/32 \
+    10.42.42.44/32 \
+    10.42.42.45/32
+  do
+    iptables -t nat -A "$nat_chain" -d "$cidr" -p tcp \
+      -m comment --comment "$COMMENT_SOCKS" -j RETURN
+  done
+
+  while IFS= read -r ip; do
+    [ -n "$ip" ] || continue
+    is_ipv4 "$ip" || continue
+    iptables -t nat -A "$nat_chain" -s "${ip}/32" -p tcp \
+      -m comment --comment "$COMMENT_SOCKS" \
+      -j REDIRECT --to-ports "$XRAY_SOCKS_DOKODEMO_PORT"
+  done <<<"$ips"
+
   iptables -t nat -I PREROUTING 1 -j "$nat_chain"
 }
 
@@ -347,11 +402,12 @@ PY
 
 apply_rules() {
   export STATE_JSON
-  local lines need_ss=0 need_ts=0 need_flint_ts=0 need_flint_ss=0
-  local ss_xray_ips=""
+  local lines need_ss=0 need_ts=0 need_socks=0 need_flint_ts=0 need_flint_ss=0 need_flint_socks=0
+  local ss_xray_ips="" socks_xray_ips=""
   lines="$(STATE_JSON="$STATE_JSON" read_json_devices)"
   del_device_chain
   flush_ss_xray_redirects
+  flush_socks_xray_redirects
   iptables -t mangle -N "$CHAIN" 2>/dev/null || iptables -t mangle -F "$CHAIN"
 
   # Private / VPS destinations never take a VPN exit mark.
@@ -374,6 +430,13 @@ apply_rules() {
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$SS_MARK"
         if is_home_lan_ipv4 "$ip"; then need_flint_ss=1; fi
         ;;
+      socks)
+        need_socks=1
+        socks_xray_ips="${socks_xray_ips}${ip}"$'\n'
+        # TCP-only via Xray→SOCKS; mark as direct so UDP does not take TS/SS.
+        iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$DIRECT_MARK"
+        if is_home_lan_ipv4 "$ip"; then need_flint_socks=1; fi
+        ;;
       tailscale)
         need_ts=1
         iptables -t mangle -A "$CHAIN" -s "${ip}/32" -m comment --comment "$COMMENT" -j MARK --set-mark "$TS_MARK"
@@ -392,6 +455,9 @@ apply_rules() {
   elif [ "$need_flint_ss" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
     iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$SS_MARK"
     ss_xray_ips="${ss_xray_ips}${FLINT_OVPN_IP}"$'\n'
+  elif [ "$need_flint_socks" -eq 1 ] && is_ipv4 "$FLINT_OVPN_IP"; then
+    iptables -t mangle -A "$CHAIN" -s "${FLINT_OVPN_IP}/32" -m comment --comment "$COMMENT-FLINT" -j MARK --set-mark "$DIRECT_MARK"
+    socks_xray_ips="${socks_xray_ips}${FLINT_OVPN_IP}"$'\n'
   fi
 
   # Jump first so device marks win over global SM-TS / SM-SS subnet marks.
@@ -411,6 +477,9 @@ apply_rules() {
     # TCP: always Xray between the device and Surfshark.
     install_ss_xray_redirects "$ss_xray_ips"
   fi
+  if [ "$need_socks" -eq 1 ]; then
+    install_socks_xray_redirects "$socks_xray_ips"
+  fi
   if [ "$need_ts" -eq 1 ]; then
     local ts_exit=""
     while IFS='|' read -r ip prov extra; do
@@ -424,7 +493,7 @@ apply_rules() {
     clear_ts_backend || true
   fi
 
-  echo "applied device-exit ($(echo "$lines" | grep -c . || true) device(s)); need_ss=$need_ss need_ts=$need_ts xray_ss_tcp=$XRAY_SS_DOKODEMO_PORT"
+  echo "applied device-exit ($(echo "$lines" | grep -c . || true) device(s)); need_ss=$need_ss need_ts=$need_ts need_socks=$need_socks xray_ss_tcp=$XRAY_SS_DOKODEMO_PORT xray_socks_tcp=$XRAY_SOCKS_DOKODEMO_PORT"
 }
 
 status_out() {
@@ -441,12 +510,12 @@ status_out() {
 case "$ACTION" in
   set)
     if ! is_ipv4 "$IP"; then
-      echo "usage: $0 set <ipv4> <surfshark|tailscale|direct|clear> [server|exit-ip]" >&2
+      echo "usage: $0 set <ipv4> <surfshark|tailscale|socks|direct|clear> [server|exit-ip]" >&2
       exit 2
     fi
     case "$PROVIDER" in
-      surfshark|tailscale|direct|clear|default|off|none|"") ;;
-      *) echo "provider must be surfshark|tailscale|direct|clear" >&2; exit 2 ;;
+      surfshark|tailscale|socks|direct|clear|default|off|none|"") ;;
+      *) echo "provider must be surfshark|tailscale|socks|direct|clear" >&2; exit 2 ;;
     esac
     write_device "$IP" "$PROVIDER" "$EXTRA"
     apply_rules
@@ -466,7 +535,7 @@ case "$ACTION" in
     status_out
     ;;
   *)
-    echo "usage: $0 set <ip> <surfshark|tailscale|direct|clear> [extra]|apply|clear <ip>|status" >&2
+    echo "usage: $0 set <ip> <surfshark|tailscale|socks|direct|clear> [extra]|apply|clear <ip>|status" >&2
     exit 2
     ;;
 esac

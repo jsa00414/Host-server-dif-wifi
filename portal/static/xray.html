@@ -98,14 +98,26 @@
   <div class="wrap">
     <p class="eyebrow">ServerManager · trust circle</p>
     <h1>Xray</h1>
-    <p class="sub">VLESS + REALITY for circle users, plus a <strong>Cloudflare CDN</strong> bypass when campus blocks the VPS IP. Same UUID — use CF CDN if REALITY fails. Portal login required.</p>
+    <p class="sub">VLESS + REALITY for circle users, plus <strong>Cloudflare CDN</strong> and a dedicated <strong>SOCKS5</strong> exit when campus blocks the VPS. Same UUID for REALITY/CF — use CF CDN if REALITY fails. Portal login required.</p>
     <div id="statusPill" class="pill"><span class="dot"></span><span>Checking…</span></div>
 
     <div class="grid">
       <div class="metric"><div class="k">REALITY</div><div class="v" id="mHost">—</div><div class="s" id="mPort">—</div></div>
       <div class="metric"><div class="k">CF CDN</div><div class="v" id="mCfHost">—</div><div class="s" id="mCfPath">—</div></div>
-      <div class="metric"><div class="k">Clients</div><div class="v" id="mCount">—</div><div class="s">circle UUIDs</div></div>
+      <div class="metric"><div class="k">SOCKS5</div><div class="v" id="mSocksHost">—</div><div class="s" id="mSocksPort">—</div></div>
       <div class="metric"><div class="k">Service</div><div class="v" id="mState">—</div><div class="s" id="mDetail">—</div></div>
+    </div>
+
+    <div class="panel" id="socksPanel" hidden>
+      <div class="panel-head"><h2>SOCKS5 campus exit</h2></div>
+      <div class="panel-body">
+        <p class="hint">Dedicated proxy (not the VPS IP). Point apps at this SOCKS5 endpoint, or pick <strong>SOCKS5 proxy</strong> in Authenticator → Exit.</p>
+        <pre class="link" id="socksLink">—</pre>
+        <div class="create-row" style="margin-top:10px">
+          <button type="button" class="btn primary" id="btnCopySocks">Copy SOCKS URL</button>
+          <span class="hint" id="socksCreds" style="margin:0"></span>
+        </div>
+      </div>
     </div>
 
     <div class="panel">
@@ -129,7 +141,7 @@
       </div>
     </div>
 
-    <p class="foot">REALITY · vpn.vpstruelord.com:8444 (SNI www.microsoft.com) · CF CDN · cdn.vpstruelord.com:443 /vless-cf</p>
+    <p class="foot">REALITY · vpn.vpstruelord.com:8444 · CF CDN · cdn.vpstruelord.com:443 /vless-cf · SOCKS5 when configured</p>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -213,20 +225,41 @@
       const ok = !!data.active;
       const pill = $("statusPill");
       pill.className = "pill " + (ok ? "ok" : "err");
-      const cfBit = data.cf_ready ? " · CF CDN ready" : " · CF CDN pending setup";
-      pill.innerHTML = `<span class="dot"></span><span>${ok ? "Xray online" : "Xray offline"}${cfBit}</span>`;
+      const socks = data.socks || {};
+      const cfBit = data.cf_ready ? " · CF CDN ready" : " · CF CDN pending";
+      const skBit = socks.ready ? " · SOCKS ready" : "";
+      pill.innerHTML = `<span class="dot"></span><span>${ok ? "Xray online" : "Xray offline"}${cfBit}${skBit}</span>`;
       $("mHost").textContent = data.host || "—";
       $("mPort").textContent = data.port ? `TCP ${data.port}` : "—";
       $("mCfHost").textContent = data.cf_host || "—";
       $("mCfPath").textContent = data.cf_path
         ? `${data.cf_path} · ${data.cf_ready ? "ready" : "run setup-cf-cdn.sh"}`
         : "—";
-      $("mCount").textContent = String(data.client_count ?? (data.clients || []).length);
+      $("mSocksHost").textContent = socks.host || "—";
+      $("mSocksPort").textContent = socks.port
+        ? `TCP ${socks.port}${socks.xray_ready ? " · exit ready" : ""}`
+        : "not configured";
       $("mState").textContent = ok ? "active" : (data.installed ? "down" : "not installed");
-      $("mDetail").textContent = data.detail || data.service || "—";
+      $("mDetail").textContent = `${data.client_count ?? 0} clients · ${data.detail || data.service || "—"}`;
+      const panel = $("socksPanel");
+      if (socks.ready && socks.link) {
+        panel.hidden = false;
+        $("socksLink").textContent = socks.link;
+        $("socksCreds").textContent = socks.user
+          ? `user ${socks.user}${socks.has_pass ? " · password set" : ""}`
+          : "";
+        window.__socksLink = socks.link;
+      } else {
+        panel.hidden = true;
+        window.__socksLink = "";
+      }
       renderClients(data.clients || []);
       return data;
     }
+    $("btnCopySocks").onclick = async () => {
+      const ok = await copyText(window.__socksLink || "");
+      setMsg(ok ? "SOCKS URL copied" : "Copy failed", ok ? "ok" : "err");
+    };
     $("btnRefresh").onclick = () => refresh().catch((e) => setMsg(String(e.message || e), "err"));
     $("btnCreate").onclick = async () => {
       const name = ($("clientName").value || "").trim();
