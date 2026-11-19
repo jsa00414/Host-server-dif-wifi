@@ -21408,6 +21408,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/auth-app/circle-lease",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
+            "/download/ServerManager-Muse-Briefing.pdf",
+            "/static/ServerManager-Muse-Briefing.pdf",
             "/static/sm-circle-crypto.js",
             "/static/sm-network-exit.js",
             # Caddy forward_auth for Grafana SSO (returns 401 itself when logged out).
@@ -21692,6 +21694,32 @@ document.getElementById('f').onsubmit = async (e) => {
             except Exception as exc:
                 self._json(404, {"ok": False, "error": str(exc)})
             return
+        if path == "/download/ServerManager-Muse-Briefing.pdf":
+            try:
+                from urllib.parse import quote
+
+                candidates = (
+                    STATIC_DIR / "ServerManager-Muse-Briefing.pdf",
+                    Path("/opt/wireguard/port-forward-ui/static/ServerManager-Muse-Briefing.pdf"),
+                )
+                target = next((p for p in candidates if p.is_file()), None)
+                if target is None:
+                    raise FileNotFoundError("ServerManager-Muse-Briefing.pdf missing")
+                body = target.read_bytes()
+                name = "ServerManager-Muse-Briefing.pdf"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header(
+                    "Content-Disposition",
+                    f"inline; filename=\"{name}\"; filename*=UTF-8''{quote(name)}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=300")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._json(404, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             target = (STATIC_DIR / rel).resolve()
@@ -21711,6 +21739,8 @@ document.getElementById('f').onsubmit = async (e) => {
                 ctype = "image/png"
             elif target.suffix == ".svg":
                 ctype = "image/svg+xml"
+            elif target.suffix == ".pdf":
+                ctype = "application/pdf"
             return self._serve_file(target, ctype)
         if path == "/api/vps-status":
             if not self._require_auth(api=True):
@@ -22611,6 +22641,8 @@ document.getElementById('f').onsubmit = async (e) => {
             "/api/network/exit",
             "/api/auth-app/windows-exe",
             "/download/ServerManagerAuthenticator.exe",
+            "/download/ServerManager-Muse-Briefing.pdf",
+            "/static/ServerManager-Muse-Briefing.pdf",
             "/static/sm-circle-crypto.js",
             "/static/sm-network-exit.js",
         ) or path.startswith("/static/") or path.startswith("/api/auth-app/"):
